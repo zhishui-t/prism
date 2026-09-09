@@ -8,11 +8,14 @@ import { useAsync } from '../components/useAsync.ts'
 /**
  * 知识库 = 图书馆（星图隐喻）
  *
- * 三级下钻，语义与视觉一一对应：
- *   ① 星系视图：每「书」一个星系，星体大小 = 条目数（走进图书馆，看到一片星图）
- *   ② 大陆视图：进入某本书，每个「模块」是一块大陆/星座（放大后的地表）
- *   ③ 星体视图：进入某模块，条目间关系是一张知识图谱（具体的大陆细节）
- *   ④ 条目详情：正文 + 元数据 + 关系边
+ * **统一术语（用户裁决 2026-09-10）**：表现形式叫「星系」，点开就是「书」。
+ * 不再混用「星体/书星」——同一个东西只叫一个名字。
+ *
+ * 三级下钻：
+ *   ① 图书馆：一团星云，每「书」一个星系（星系大小 = 条目数）
+ *   ② 书内：每「模块」一个星系（书的地表，模块是大陆）
+ *   ③ 模块内：每「条目」一个星系 + 关系连线（知识图谱）
+ *   ④ 条目详情：正文 + 元数据 + 关系
  *
  * 视觉语言：深空背景 + 星点 + 辉光；层级用半径/亮度/颜色区分，不靠表格。
  */
@@ -20,7 +23,7 @@ import { useAsync } from '../components/useAsync.ts'
 const WORLD_W = 1200
 const WORLD_H = 700
 
-/** 类型 → 星体颜色（与知识图谱页保持同一语义）。 */
+/** 条目类型 → 颜色（与知识图谱页保持同一语义）。 */
 const TYPE_COLOR: Record<string, string> = {
   rule: '#ff6b6b',
   doc: '#5b8cff',
@@ -56,7 +59,7 @@ export function KnowledgePage() {
 
   const catalog = useAsync(() => api.kbCatalog({ limit: 1000 }), [])
   const stats = useAsync(() => api.kbStats(), [])
-  // 全图边表（星体视图画关系线用；catalog 本身不带边）
+  // 全图边表（条目图谱画关系线用；catalog 本身不带边）
   const graph = useAsync(() => api.kbGraph({ limit: 500 }), [])
 
   return (
@@ -65,10 +68,10 @@ export function KnowledgePage() {
         <div className="row" style={{ justifyContent: 'space-between' }}>
           <div>
             <h2 className="page-title" style={{ marginBottom: 2 }}>
-              知识库 <span className="mono small muted">图书馆 · 星图</span>
+              知识库 <span className="mono small muted">图书馆</span>
             </h2>
             <div className="small muted">
-              分类分层给定位，图谱联系给发现。点星体进入下一层，滚轮缩放，拖拽平移，双击复位。
+              分类分层给定位，图谱联系给发现。每个星系就是一本「书」，点开进入下一层；滚轮缩放，拖拽平移，双击复位。
             </div>
           </div>
           <div className="row" style={{ gap: 10 }}>
@@ -118,7 +121,7 @@ function Breadcrumb({ level, onNavigate }: { level: Level; onNavigate: (l: Level
   return (
     <nav className="crumbs">
       <button className={`crumb${level.kind === 'galaxies' ? ' active' : ''}`} onClick={() => onNavigate({ kind: 'galaxies' })}>
-        ◎ 全部星系
+        ◎ 图书馆
       </button>
       {level.kind !== 'galaxies' && (
         <>
@@ -142,7 +145,7 @@ function Breadcrumb({ level, onNavigate }: { level: Level; onNavigate: (l: Level
   )
 }
 
-/** 一级/二级：星系（书）与大陆（模块）共用同一套星体渲染。 */
+/** 各级共用同一套星系渲染（只是数据源不同）。 */
 function GalaxyView({
   entries,
   allEdges,
@@ -158,7 +161,7 @@ function GalaxyView({
   selectedId: string
   onSelect: (id: string) => void
 }) {
-  // 按层级切出当前要展示的星体集合
+  // 按层级切出当前要展示的星系集合
   const { bodies, edges, backTarget } = useMemo(
     () => buildBodies(entries, allEdges, level),
     [entries, allEdges, level],
@@ -169,7 +172,12 @@ function GalaxyView({
   return (
     <div className="star-wrap">
       <div className="star-hint mono small">
-        缩放 {Math.round(vp.k * 100)}% · 星体 {bodies.length} 个
+        缩放 {Math.round(vp.k * 100)}% ·{' '}
+        {level.kind === 'galaxies'
+          ? `书 ${bodies.length} 本`
+          : level.kind === 'book'
+            ? `模块 ${bodies.length} 个`
+            : `条目 ${bodies.length} 条`}
         {level.kind !== 'galaxies' && <span> · 双击空白返回上一层</span>}
       </div>
       <StarCanvas
@@ -190,10 +198,10 @@ function GalaxyView({
               ))}
             </g>
 
-            {/* 一级：图书馆本体 —— 一团巨大的星云，书是团内的星 */}
+            {/* 一级：图书馆本体 —— 一团巨大的星云，每个星系就是一本「书」 */}
             {level.kind === 'galaxies' && <LibraryNebula count={bodies.length} />}
 
-            {/* 关系边（仅星体视图有） */}
+            {/* 关系边（仅条目图谱有） */}
             {edges.map((e) => {
               const a = bodies.find((b) => b.id === e.from_id)
               const b = bodies.find((b) => b.id === e.to_id)
@@ -212,7 +220,7 @@ function GalaxyView({
               )
             })}
 
-            {/* 星体 */}
+            {/* 星系 */}
             {bodies.map((body) => (
               <StarBody
                 key={body.id}
@@ -244,13 +252,13 @@ interface Body {
   r: number
   color: string
   count: number
-  /** 点击后下钻的目标（星体视图的条目没有） */
+  /** 点击后下钻的目标（条目层没有下一级） */
   drill?: Level
 }
 
 /**
  * 图书馆本体：一团巨大的星云（走进图书馆的第一眼）。
- * 中心辉光 + 多层半透明环 + 旋臂点尘，书星在其内部环绕。
+ * 中心辉光 + 多层半透明环 + 旋臂点尘，各「书」的星系在其内部环绕。
  * 纯装饰、不拦截事件（pointer-events: none）。
  */
 function LibraryNebula({ count }: { count: number }) {
@@ -296,11 +304,11 @@ function LibraryNebula({ count }: { count: number }) {
       {dust.map((d, i) => (
         <circle key={i} cx={d.x} cy={d.y} r={d.r} fill="#cfe0ff" opacity={d.o} />
       ))}
-      {/* 中心「图书馆」标识 */}
-      <text x={0} y={-8} textAnchor="middle" fontSize={17} fill="#dbe6ff" opacity={0.85} style={{ letterSpacing: 6 }}>
+      {/* 「图书馆」标识：放星云上部，避免被中心星盖住（单书时星在正中） */}
+      <text x={0} y={-300} textAnchor="middle" fontSize={18} fill="#dbe6ff" opacity={0.9} style={{ letterSpacing: 6 }}>
         图书馆
       </text>
-      <text x={0} y={16} textAnchor="middle" fontSize={11} fill="#8b93a7" opacity={0.9}>
+      <text x={0} y={-276} textAnchor="middle" fontSize={11.5} fill="#8b93a7" opacity={0.9}>
         {count} 本书 · 分类分层给定位
       </text>
     </g>
@@ -308,7 +316,7 @@ function LibraryNebula({ count }: { count: number }) {
 }
 
 /**
- * 把目录条目折叠成当前层级的星体。
+ * 把目录条目折叠成当前层级的星系。
  * 位置用**确定性环形布局**（无随机，每次渲染稳定）。
  */
 function buildBodies(
@@ -317,7 +325,7 @@ function buildBodies(
   level: Level,
 ): { bodies: Body[]; edges: KbGraphEdge[]; backTarget: Level | null } {
   if (level.kind === 'galaxies') {
-    // 每「层/owner/书」一个星系
+    // 每「层/owner/书」一个星系（点开就是这本书）
     const groups = new Map<string, { layer: string; owner?: string; book: string; count: number; types: Set<string> }>()
     for (const e of entries) {
       const key = `${e.layer}|${e.owner ?? ''}|${e.book}`
@@ -384,7 +392,7 @@ function buildBodies(
     return { bodies, edges: [], backTarget }
   }
 
-  // 模块视图：条目即星体，边即关系
+  // 模块视图：条目即星系，边即关系
   const inModule = inBook.filter((e) => e.module === level.module)
   const ids = new Set(inModule.map((e) => e.id))
   const bodies = ringLayout(
@@ -404,7 +412,7 @@ function buildBodies(
   return { bodies, edges, backTarget }
 }
 
-/** 星系/大陆色板（按排序后位置分配，保证同层不撞色且稳定）。 */
+/** 星系色板（按排序后位置分配，保证同层不撞色且稳定）。 */
 const BOOK_PALETTE = ['#5b8cff', '#35c46b', '#e0c23a', '#a06bff', '#3ac0c4', '#e06ba0', '#ff6b6b', '#e08a3a', '#7c8cff', '#4fd1c5']
 function paletteAt(index: number): string {
   return BOOK_PALETTE[index % BOOK_PALETTE.length]!
@@ -414,7 +422,7 @@ function paletteAt(index: number): string {
  * 确定性环形布局：按数量分环，**自适应铺满视野**（避免小数据时挤在中心一小团）。
  * - 单环（n ≤ 8）：等角分布，半径按数量微调；
  * - 多环（n > 8）：内外两环错开，外环半径随数量增大。
- * 星体半径随 count 开方增长（视觉上「大星系更亮更大」），并保证标签有空间。
+ * 星系半径随 count 开方增长（条目越多越亮越大），并保证标签有空间。
  */
 function ringLayout(
   items: Array<{ id: string; label: string; sublabel?: string; count: number; color: string; drill?: Level }>,
@@ -435,7 +443,7 @@ function ringLayout(
   if (n <= 8) {
     const radius = maxR * 0.72
     if (n === 2) {
-      // 两个星体水平并排（纵向排列会让画面失衡）
+      // 两个星系水平并排（纵向排列会让画面失衡）
       bodies.push(bodyOf(items[0]!, -radius * 0.62, 0, starR(items[0]!.count)))
       bodies.push(bodyOf(items[1]!, radius * 0.62, 0, starR(items[1]!.count)))
       return bodies
@@ -467,7 +475,7 @@ function ringLayout(
   return bodies
 }
 
-/** 组装一个星体。 */
+/** 组装一个星系。 */
 function bodyOf(
   it: { id: string; label: string; sublabel?: string; count: number; color: string; drill?: Level },
   x: number,
@@ -487,7 +495,7 @@ function bodyOf(
   }
 }
 
-/** 星体：辉光 + 核心 + 标签。 */
+/** 星系：辉光 + 核心 + 标签。 */
 function StarBody({ body, selected, onClick }: { body: Body; selected: boolean; onClick: () => void }) {
   return (
     <g
