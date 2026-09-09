@@ -33,6 +33,8 @@ export {
   type KbGraphExportOptions,
   type KbGraphExportResult,
 } from './kb/graph-export.js'
+// 文档转换探测（doctor 用）；实现与 anydoc 同在 @prism/knowledge
+export { probeConverter } from '@prism/knowledge'
 export {
   DEFAULT_IGNORE_DIRS,
   extractTitle,

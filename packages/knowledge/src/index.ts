@@ -65,6 +65,7 @@ export {
   TEXT_EXTENSIONS,
   extensionOf,
   isSupported,
+  probeConverter,
   toMarkdown,
   type ConvertResult,
   type ConvertStatus,

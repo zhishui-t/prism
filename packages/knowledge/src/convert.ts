@@ -60,6 +60,22 @@ export function isSupported(path: string): boolean {
 }
 
 /**
+ * 探测文档转换依赖是否可用（`prism doctor` 用）。
+ * 返回 null 表示可用，否则返回错误信息（便于直接展示给用户）。
+ */
+export async function probeConverter(): Promise<string | null> {
+  try {
+    const anydoc = await import('@firecrawl/anydoc')
+    if (typeof anydoc.toMarkdownBytes !== 'function') {
+      return '@firecrawl/anydoc 已加载但缺少 toMarkdownBytes（版本不匹配）'
+    }
+    return null
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error)
+  }
+}
+
+/**
  * 把任意支持格式转成 Markdown。
  *
  * @param bytes 文件内容

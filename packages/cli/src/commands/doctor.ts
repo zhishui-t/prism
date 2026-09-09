@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { openPersistence, prismPaths } from '@prism/core'
-import { resolveGraphifyCommand, runGraphify, vendoredGraphifyVersion } from '@prism/server'
+import { probeConverter, resolveGraphifyCommand, runGraphify, vendoredGraphifyVersion } from '@prism/server'
 
 import type { ArgValues, CommandContext } from '../argv.js'
 
@@ -78,7 +78,18 @@ export async function runDoctor(ctx: CommandContext, _args: string[], values: Ar
     checks.push({ name: 'graphify', ok: false, detail: `${msg(error)}（可设 GRAPHIFY_BIN）` })
   }
 
-  // 5) 端口占用
+  // 5) 文档转换（@firecrawl/anydoc）：kb sync 转 docx/pdf 等的前提
+  const converterError = await probeConverter()
+  checks.push({
+    name: 'anydoc',
+    ok: converterError === null,
+    detail:
+      converterError === null
+        ? '文档转换可用（docx/pdf/xlsx/pptx/csv → Markdown）'
+        : `${converterError}（kb sync 只能处理 md/txt；重新 pnpm install 或从 tarball 解压）`,
+  })
+
+  // 6) 端口占用
   const port = values.port !== undefined ? Number(values.port) : 7777
   const portFree = await probePort(port, values.host)
   checks.push({

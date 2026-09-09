@@ -104,6 +104,15 @@ async function main() {
       initReport.value.seededTeam,
     )
 
+    // 1.5 doctor 自检全绿（含 anydoc 文档转换可用性）
+    const doctor = await cli(['doctor', '--home', home, '--port', '7799', '--json'], env)
+    const doctorChecks = JSON.parse(doctor.stdout).value
+    check(
+      '1.5 doctor 全绿（含 anydoc）',
+      doctor.code === 0 && doctorChecks.every((c) => c.ok),
+      doctorChecks.filter((c) => !c.ok).map((c) => c.name).join(',') || `${doctorChecks.length} 项通过`,
+    )
+
     // ===== 2. 知识库：import → search → 知识图谱 =====
     const docA = join(workRoot, 'a.md')
     const docB = join(workRoot, 'b.md')
