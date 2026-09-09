@@ -8,16 +8,16 @@ import { useAsync } from '../components/useAsync.ts'
 /**
  * 知识库 = 图书馆（星图隐喻）
  *
- * **统一术语（用户裁决 2026-09-10）**：表现形式叫「星系」，点开就是「书」。
- * 不再混用「星体/书星」——同一个东西只叫一个名字。
+ * **尺度无关（用户裁决 2026-09-08）**：远处看，书柜/书/模块/条目都是同样的光点；
+ * 点开就放大一层，露出内部。**层级由数据决定，代码不预设深度**。
  *
- * 三级下钻：
- *   ① 图书馆：一团星云，每「书」一个星系（星系大小 = 条目数）
- *   ② 书内：每「模块」一个星系（书的地表，模块是大陆）
- *   ③ 模块内：每「条目」一个星系 + 关系连线（知识图谱）
- *   ④ 条目详情：正文 + 元数据 + 关系
+ * 实现：不再硬编码「一级/二级/三级」，而是一个有序的 **scope 路径**
+ * （`layer → owner → book → module → 条目`）。每个节点点开 = 路径延长一段，
+ * 直到没有更细的分组为止。项目规模不同，自然呈现不同深度：
+ *   - 简单项目：书 → 条目（两级）
+ *   - 微服务项目：项目(书柜) → 服务(书) → 章节 → 条目（多级）
  *
- * 视觉语言：深空背景 + 星点 + 辉光；层级用半径/亮度/颜色区分，不靠表格。
+ * 视觉语言：深空背景 + 星点 + 辉光；所有层级的节点都是星体，表现一致。
  */
 
 const WORLD_W = 1200
@@ -48,13 +48,52 @@ const TYPE_LABEL: Record<string, string> = {
 
 const LAYER_LABEL: Record<string, string> = { global: '全局', project: '项目', role: '专家' }
 
-type Level =
-  | { kind: 'galaxies' }
-  | { kind: 'book'; layer: string; owner?: string; book: string }
-  | { kind: 'module'; layer: string; owner?: string; book: string; module: string }
+/**
+ * 作用域路径：当前所在的位置。空数组 = 最外层（全部）。
+ * 每一段是「按哪个维度分组的哪个值」，顺序固定为 layer → owner → book → module。
+ */
+type ScopeSegment = { dim: ScopeDim; value: string; label: string }
+type ScopeDim = 'layer' | 'owner' | 'book' | 'module'
+type Scope = ScopeSegment[]
+
+/** 维度顺序（决定下钻路径）。 */
+const DIM_ORDER: ScopeDim[] = ['layer', 'owner', 'book', 'module']
+
+/** 某条目录条目在给定维度上的值。 */
+function valueOf(entry: CatalogEntry, dim: ScopeDim): string {
+  switch (dim) {
+    case 'layer':
+      return entry.layer
+    case 'owner':
+      return entry.owner ?? ''
+    case 'book':
+      return entry.book
+    case 'module':
+      return entry.module
+  }
+}
+
+/** 维度的展示名（面包屑用）。 */
+function dimLabel(dim: ScopeDim, value: string): string {
+  if (dim === 'layer') return LAYER_LABEL[value] ?? value
+  if (dim === 'module') return value === '' ? '待归类' : value
+  return value
+}
+
+/** 条目是否落在当前 scope 内。 */
+function inScope(entry: CatalogEntry, scope: Scope): boolean {
+  return scope.every((seg) => valueOf(entry, seg.dim) === seg.value)
+}
+
+/** 从 scope 推导「还剩哪些维度」——即下级可以按什么分组。 */
+function remainingDims(scope: Scope): ScopeDim[] {
+  const used = new Set(scope.map((s) => s.dim))
+  return DIM_ORDER.filter((d) => !used.has(d))
+}
 
 export function KnowledgePage() {
-  const [level, setLevel] = useState<Level>({ kind: 'galaxies' })
+  // scope 路径（空 = 顶层）。下钻 = 追加一段；返回 = 截断。
+  const [scope, setScope] = useState<Scope>([])
   const [selectedId, setSelectedId] = useState<string>('')
 
   const catalog = useAsync(() => api.kbCatalog({ limit: 1000 }), [])
@@ -71,7 +110,7 @@ export function KnowledgePage() {
               知识库
             </h2>
             <div className="small muted">
-              分类分层给定位，图谱联系给发现。每个星系就是一本「书」，点开进入下一层；滚轮缩放，拖拽平移，双击复位。
+              每个光点都可以点开——近处是书，再近是模块与条目。滚轮缩放，拖拽平移，双击空白返回上一层。
             </div>
           </div>
           <div className="row" style={{ gap: 10 }}>
@@ -89,7 +128,7 @@ export function KnowledgePage() {
           </div>
         </div>
 
-        <Breadcrumb level={level} onNavigate={setLevel} />
+        <Breadcrumb scope={scope} onNavigate={setScope} />
       </header>
 
       <State loading={catalog.loading} error={catalog.error}>
@@ -97,17 +136,17 @@ export function KnowledgePage() {
           <GalaxyView
             entries={catalog.data}
             allEdges={graph.data?.edges ?? []}
-            level={level}
-            onLevelChange={setLevel}
+            scope={scope}
+            onScopeChange={setScope}
             selectedId={selectedId}
             onSelect={setSelectedId}
           />
         )}
       </State>
 
-      {/* 书/模块详情：该层级的知识图谱 + 关联架构图（图谱归属到书内，不再是一级页） */}
-      {level.kind !== 'galaxies' && (
-        <ScopePanel level={level} entries={catalog.data ?? []} />
+      {/* 下钻到书/模块后：该层级的知识图谱 + 关联架构图（图谱归属到书内，不再是一级页） */}
+      {scope.length > 0 && (
+        <ScopePanel scope={scope} entries={catalog.data ?? []} />
       )}
     </div>
   )
@@ -122,54 +161,48 @@ function Stat({ label, value }: { label: string; value: number }) {
   )
 }
 
-function Breadcrumb({ level, onNavigate }: { level: Level; onNavigate: (l: Level) => void }) {
+/** 面包屑 = scope 路径。点任意一段回到那一层；「全部」回到顶层。 */
+function Breadcrumb({ scope, onNavigate }: { scope: Scope; onNavigate: (s: Scope) => void }) {
   return (
     <nav className="crumbs">
-      <button className={`crumb${level.kind === 'galaxies' ? ' active' : ''}`} onClick={() => onNavigate({ kind: 'galaxies' })}>
+      <button className={`crumb${scope.length === 0 ? ' active' : ''}`} onClick={() => onNavigate([])}>
         ◎ 全部
       </button>
-      {level.kind !== 'galaxies' && (
-        <>
+      {scope.map((seg, i) => (
+        <span key={`${seg.dim}:${seg.value}`} className="row" style={{ gap: 0 }}>
           <span className="crumb-sep">›</span>
           <button
-            className={`crumb${level.kind === 'book' ? ' active' : ''}`}
-            onClick={() => onNavigate({ kind: 'book', layer: level.layer, ...(level.owner !== undefined ? { owner: level.owner } : {}), book: level.book })}
+            className={`crumb${i === scope.length - 1 ? ' active' : ''}`}
+            onClick={() => onNavigate(scope.slice(0, i + 1))}
           >
-            {level.layer}
-            {level.owner ? `/${level.owner}` : ''}/{level.book}
+            {dimLabel(seg.dim, seg.value)}
           </button>
-        </>
-      )}
-      {level.kind === 'module' && (
-        <>
-          <span className="crumb-sep">›</span>
-          <span className="crumb active">{level.module === '' ? '_inbox' : level.module}</span>
-        </>
-      )}
+        </span>
+      ))}
     </nav>
   )
 }
 
-/** 各级共用同一套星系渲染（只是数据源不同）。 */
+/** 各级共用同一套星体渲染（数据由 scope 决定，渲染逻辑完全一致）。 */
 function GalaxyView({
   entries,
   allEdges,
-  level,
-  onLevelChange,
+  scope,
+  onScopeChange,
   selectedId,
   onSelect,
 }: {
   entries: CatalogEntry[]
   allEdges: KbGraphEdge[]
-  level: Level
-  onLevelChange: (l: Level) => void
+  scope: Scope
+  onScopeChange: (s: Scope) => void
   selectedId: string
   onSelect: (id: string) => void
 }) {
-  // 按层级切出当前要展示的星系集合
+  // 按 scope 切出当前要展示的星体集合
   const { bodies, edges, backTarget, hub } = useMemo(
-    () => buildBodies(entries, allEdges, level),
-    [entries, allEdges, level],
+    () => buildBodies(entries, allEdges, scope),
+    [entries, allEdges, scope],
   )
   const stars = useStarfield(220, WORLD_W, WORLD_H)
   const [vp, setVp] = useState<Viewport>({ k: 1, x: 0, y: 0 })
@@ -177,20 +210,15 @@ function GalaxyView({
   return (
     <div className="star-wrap">
       <div className="star-hint mono small">
-        缩放 {Math.round(vp.k * 100)}% ·{' '}
-        {level.kind === 'galaxies'
-          ? `书 ${bodies.length} 本`
-          : level.kind === 'book'
-            ? `模块 ${bodies.length} 个`
-            : `条目 ${bodies.length} 条`}
-        {level.kind !== 'galaxies' && <span> · 双击空白返回上一层</span>}
+        缩放 {Math.round(vp.k * 100)}% · {bodies.length} 个光点
+        {backTarget !== null && <span> · 双击空白返回上一层</span>}
       </div>
       <StarCanvas
         width={WORLD_W}
         height={WORLD_H}
         onViewportChange={setVp}
         onBackgroundClick={() => {
-          if (backTarget !== null) onLevelChange(backTarget)
+          if (backTarget !== null) onScopeChange(backTarget)
           else onSelect('')
         }}
       >
@@ -203,12 +231,11 @@ function GalaxyView({
               ))}
             </g>
 
-            {/* 一级：图书馆本体 —— 一团巨大的星云，每个星系就是一本「书」 */}
-            {level.kind === 'galaxies' && <LibraryNebula />}
-            {/* 二级/三级：当前书/模块作为中心星云，下级在其内部环绕 */}
+            {/* 顶层：图书馆本体星云；下钻后：当前位置作为中心星云 */}
+            {scope.length === 0 && <LibraryNebula />}
             {hub !== null && <HubNebula hub={hub} />}
 
-            {/* 关系边（仅条目图谱有） */}
+            {/* 关系边（仅条目层有） */}
             {edges.map((e) => {
               const a = bodies.find((b) => b.id === e.from_id)
               const b = bodies.find((b) => b.id === e.to_id)
@@ -227,14 +254,14 @@ function GalaxyView({
               )
             })}
 
-            {/* 星系 */}
+            {/* 星体（所有层级表现一致） */}
             {bodies.map((body) => (
               <StarBody
                 key={body.id}
                 body={body}
                 selected={selectedId === body.id}
                 onClick={() => {
-                  if (body.drill !== undefined) onLevelChange(body.drill)
+                  if (body.drill !== undefined) onScopeChange(body.drill)
                   else onSelect(body.id === selectedId ? '' : body.id)
                 }}
               />
@@ -243,9 +270,7 @@ function GalaxyView({
         )}
       </StarCanvas>
 
-      {selectedId !== '' && level.kind === 'module' && (
-        <EntryPanel id={selectedId} onClose={() => onSelect('')} onSelect={onSelect} />
-      )}
+      {selectedId !== '' && <EntryPanel id={selectedId} onClose={() => onSelect('')} onSelect={onSelect} />}
     </div>
   )
 }
@@ -259,8 +284,8 @@ interface Body {
   r: number
   color: string
   count: number
-  /** 点击后下钻的目标（条目层没有下一级） */
-  drill?: Level
+  /** 点击后下钻的 scope（叶子节点没有） */
+  drill?: Scope
 }
 
 /**
@@ -328,116 +353,82 @@ interface Hub {
   count: number
 }
 
+/**
+ * 递归分组：把当前 scope 内的条目，按**下一个可用维度**折叠成星体。
+ *
+ * 关键设计（尺度无关）：不硬编码深度。规则只有一条——
+ * 若 scope 内还存在「取值多于一个」的维度，就按它分组（每个值一个星体，点开继续深入）；
+ * 否则这些条目本身就是叶子（直接显示为条目星体）。
+ *
+ * 单值维度自动跳过：某维度只有一个取值时，分组只会产生一个星体，
+ * 再点进去还是自己——所以直接跳过，避免「点了个寂寞」。
+ */
 function buildBodies(
   entries: CatalogEntry[],
   allEdges: KbGraphEdge[],
-  level: Level,
-): { bodies: Body[]; edges: KbGraphEdge[]; backTarget: Level | null; hub: Hub | null } {
-  if (level.kind === 'galaxies') {
-    // 每「层/owner/书」一个星系（点开就是这本书）
-    const groups = new Map<string, { layer: string; owner?: string; book: string; count: number; types: Set<string> }>()
-    for (const e of entries) {
-      const key = `${e.layer}|${e.owner ?? ''}|${e.book}`
-      let g = groups.get(key)
-      if (g === undefined) {
-        g = { layer: e.layer, ...(e.owner !== undefined ? { owner: e.owner } : {}), book: e.book, count: 0, types: new Set() }
-        groups.set(key, g)
-      }
-      g.count++
-      g.types.add(e.type)
-    }
-    const list = [...groups.values()].sort((a, b) => b.count - a.count || a.book.localeCompare(b.book))
-    const bodies = ringLayout(
-      list.map((g, i) => ({
-        id: `${g.layer}/${g.owner ?? ''}/${g.book}`,
-        label: g.book,
-        sublabel: `${LAYER_LABEL[g.layer] ?? g.layer}${g.owner ? ` · ${g.owner}` : ''} · ${g.count} 条`,
-        count: g.count,
-        color: paletteAt(i),
-        drill: { kind: 'book', layer: g.layer, ...(g.owner !== undefined ? { owner: g.owner } : {}), book: g.book } as Level,
-      })),
-      Math.max(3, list.length),
-    )
-    return { bodies, edges: [], backTarget: null, hub: null }
-  }
+  scope: Scope,
+): { bodies: Body[]; edges: KbGraphEdge[]; backTarget: Scope | null; hub: Hub | null } {
+  const backTarget: Scope | null = scope.length === 0 ? null : scope.slice(0, -1)
+  const scoped = entries.filter((e) => inScope(e, scope))
+  const current = scope[scope.length - 1]
 
-  // 书视图 / 模块视图
-  const inBook = entries.filter(
-    (e) =>
-      e.layer === level.layer &&
-      (e.owner ?? '') === (level.owner ?? '') &&
-      e.book === level.book,
-  )
-  const backTarget: Level =
-    level.kind === 'module'
-      ? { kind: 'book', layer: level.layer, ...(level.owner !== undefined ? { owner: level.owner } : {}), book: level.book }
-      : { kind: 'galaxies' }
-
-  if (level.kind === 'book') {
-    // 模块 → 大陆
-    const groups = new Map<string, { count: number; types: Set<string> }>()
-    for (const e of inBook) {
-      const key = e.module === '' ? '_inbox' : e.module
-      let g = groups.get(key)
-      if (g === undefined) {
-        g = { count: 0, types: new Set() }
-        groups.set(key, g)
-      }
-      g.count++
-      g.types.add(e.type)
-    }
-    const list = [...groups.entries()].sort((a, b) => b[1].count - a[1].count || a[0].localeCompare(b[0]))
-    const bodies = ringLayout(
-      list.map(([name, g], i) => ({
-        id: `${level.book}/${name}`,
-        label: name === '_inbox' ? '待归类' : name,
-        sublabel: `${g.count} 条`,
-        count: g.count,
-        color: paletteAt(i),
-        drill: { kind: 'module', layer: level.layer, ...(level.owner !== undefined ? { owner: level.owner } : {}), book: level.book, module: name === '_inbox' ? '' : name } as Level,
-      })),
-      Math.max(3, list.length),
-    )
-    // 书作为中心：模块是这本书内部的「区域」，环绕在中心星云内
-    return {
-      bodies,
-      edges: [],
-      backTarget,
-      hub: {
-        label: level.book,
-        sublabel: `${inBook.length} 条 · ${list.length} 个模块`,
-        count: inBook.length,
-      },
+  // 找下一个「有区分度」的维度：候选维度中，取值多于一个的第一个
+  const candidates = remainingDims(scope)
+  let splitDim: ScopeDim | null = null
+  for (const dim of candidates) {
+    const values = new Set(scoped.map((e) => valueOf(e, dim)))
+    if (values.size > 1) {
+      splitDim = dim
+      break
     }
   }
 
-  // 模块视图：条目即星系，边即关系
-  const inModule = inBook.filter((e) => e.module === level.module)
-  const ids = new Set(inModule.map((e) => e.id))
+  // 叶子层：没有可再分的维度 → 每个条目一个星体（带关系边）
+  if (splitDim === null) {
+    const ids = new Set(scoped.map((e) => e.id))
+    const bodies = ringLayout(
+      [...scoped]
+        .sort((a, b) => b.in_degree + b.out_degree - (a.in_degree + a.out_degree) || a.id.localeCompare(b.id))
+        .map((e) => ({
+          id: e.id,
+          label: e.title,
+          sublabel: `${TYPE_LABEL[e.type] ?? e.type} · 入${e.in_degree}/出${e.out_degree}`,
+          count: 1,
+          color: TYPE_COLOR[e.type] ?? '#8b93a7',
+        })),
+      Math.max(3, scoped.length),
+    )
+    const edges = allEdges.filter((e) => ids.has(e.from_id) && ids.has(e.to_id))
+    return { bodies, edges, backTarget, hub: hubOf(current, scoped.length) }
+  }
+
+  // 分组层：按 splitDim 折叠
+  const groups = new Map<string, { count: number }>()
+  for (const e of scoped) {
+    const key = valueOf(e, splitDim)
+    const g = groups.get(key)
+    if (g === undefined) groups.set(key, { count: 1 })
+    else g.count++
+  }
+  const list = [...groups.entries()].sort((a, b) => b[1].count - a[1].count || a[0].localeCompare(b[0]))
   const bodies = ringLayout(
-    inModule
-      .sort((a, b) => b.in_degree + b.out_degree - (a.in_degree + a.out_degree) || a.id.localeCompare(b.id))
-      .map((e) => ({
-        id: e.id,
-        label: e.title,
-        sublabel: `${TYPE_LABEL[e.type] ?? e.type} · 入${e.in_degree}/出${e.out_degree}`,
-        count: 1,
-        color: TYPE_COLOR[e.type] ?? '#8b93a7',
-      })),
-    Math.max(3, inModule.length),
+    list.map(([value, g], i) => ({
+      id: `${scope.map((s) => s.value).join('/')}/${value}`,
+      label: dimLabel(splitDim!, value),
+      sublabel: `${g.count} 条`,
+      count: g.count,
+      color: paletteAt(i),
+      drill: [...scope, { dim: splitDim!, value, label: dimLabel(splitDim!, value) }],
+    })),
+    Math.max(3, list.length),
   )
-  // 只保留两端都在本模块内的边
-  const edges = allEdges.filter((e) => ids.has(e.from_id) && ids.has(e.to_id))
-  return {
-    bodies,
-    edges,
-    backTarget,
-    hub: {
-      label: level.module === '' ? '待归类' : level.module,
-      sublabel: `${inModule.length} 条`,
-      count: inModule.length,
-    },
-  }
+  return { bodies, edges: [], backTarget, hub: hubOf(current, scoped.length) }
+}
+
+/** 当前位置的中心星云信息（顶层没有中心）。 */
+function hubOf(current: ScopeSegment | undefined, count: number): Hub | null {
+  if (current === undefined) return null
+  return { label: current.label, sublabel: `${count} 条`, count }
 }
 
 /**
@@ -522,7 +513,7 @@ function paletteAt(index: number): string {
  * 星系半径随 count 开方增长（条目越多越亮越大），并保证标签有空间。
  */
 function ringLayout(
-  items: Array<{ id: string; label: string; sublabel?: string; count: number; color: string; drill?: Level }>,
+  items: Array<{ id: string; label: string; sublabel?: string; count: number; color: string; drill?: Scope }>,
   _slots: number,
 ): Body[] {
   const n = items.length
@@ -575,7 +566,7 @@ function ringLayout(
 
 /** 组装一个星系。 */
 function bodyOf(
-  it: { id: string; label: string; sublabel?: string; count: number; color: string; drill?: Level },
+  it: { id: string; label: string; sublabel?: string; count: number; color: string; drill?: Scope },
   x: number,
   y: number,
   r: number,
@@ -672,21 +663,16 @@ function dedupeRelations(
 }
 
 /**
- * 书/模块详情：该层级的知识图谱 + 关联架构图。
+ * 当前位置的详情：知识图谱 + 关联架构图。
  *
  * 用户裁决（2026-09-10）：知识图谱、架构图谱**属于书内部**，不再是一级菜单。
- * 这里按当前层级过滤图谱（book / book+module），架构图列出该层级相关的
- * `type: diagram` 条目与已渲染产物。
+ * 按当前 scope 过滤图谱与产物（scope 里有什么维度就传什么维度）。
  */
-type ScopeLevel =
-  | { kind: 'book'; layer: string; owner?: string; book: string }
-  | { kind: 'module'; layer: string; owner?: string; book: string; module: string }
-
 function ScopePanel({
-  level,
+  scope,
   entries,
 }: {
-  level: ScopeLevel
+  scope: Scope
   entries: CatalogEntry[]
 }) {
   const [tab, setTab] = useState<'graph' | 'arch' | 'entries'>('graph')
@@ -694,41 +680,37 @@ function ScopePanel({
   // 架构图面板的子标签：预览 | IR | 元数据（knowledge-base.md §384）
   const [archTab, setArchTab] = useState<'preview' | 'ir' | 'meta'>('preview')
 
-  const scopeLabel =
-    level.kind === 'module'
-      ? `${level.book} / ${level.module === '' ? '_inbox' : level.module}`
-      : level.book
+  const scopeLabel = scope.map((s) => s.label).join(' / ')
+  // scope → 服务端过滤参数（只传 scope 里出现过的维度）
+  const scopeParams = useMemo(() => {
+    const out: { layer?: string; owner?: string; book?: string; module?: string } = {}
+    for (const seg of scope) {
+      if (seg.dim === 'layer') out.layer = seg.value
+      else if (seg.dim === 'owner') out.owner = seg.value
+      else if (seg.dim === 'book') out.book = seg.value
+      else out.module = seg.value
+    }
+    return out
+  }, [scope])
+  const scopeKey = scope.map((s) => `${s.dim}:${s.value}`).join('|')
 
-  // 该层级的知识图谱（服务端按 book/module 过滤）
+  // 该层级的知识图谱（服务端按 scope 过滤）
   const view = useAsync(
-    () =>
-      api.kbGraph({
-        ...(level.kind === 'module'
-          ? { book: level.book, module: level.module, depth: 2 }
-          : { book: level.book, depth: 2 }),
-        limit: 200,
-      }),
-    [level.kind, level.book, level.kind === 'module' ? level.module : ''],
+    () => api.kbGraph({ ...scopeParams, depth: 2, limit: 200 }),
+    [scopeKey],
   )
 
   // 该层级的条目（diagram 类型用于「架构图」标签）
-  const scoped = entries.filter(
-    (e) =>
-      e.layer === level.layer &&
-      (e.owner ?? '') === (level.owner ?? '') &&
-      e.book === level.book &&
-      (level.kind === 'book' || e.module === level.module),
-  )
+  const scoped = entries.filter((e) => inScope(e, scope))
   const diagrams = scoped.filter((e) => e.type === 'diagram')
-  // 产物按当前作用域过滤：书详情看整本书的图，模块详情只看该模块的图
+  // 产物按当前作用域过滤（book/module 有则传）
   const archAssets = useAsync(
     () =>
-      api.archDiagrams(
-        level.kind === 'module'
-          ? { book: level.book, module: level.module }
-          : { book: level.book },
-      ),
-    [level.kind, level.book, level.kind === 'module' ? level.module : ''],
+      api.archDiagrams({
+        ...(scopeParams.book !== undefined ? { book: scopeParams.book } : {}),
+        ...(scopeParams.module !== undefined ? { module: scopeParams.module } : {}),
+      }),
+    [scopeKey],
   )
   // 自动选中最新产物，免去用户多点一次
   useEffect(() => {
@@ -746,8 +728,7 @@ function ScopePanel({
     <div className="card scope-panel">
       <div className="row" style={{ justifyContent: 'space-between' }}>
         <h3 style={{ margin: 0 }}>
-          {level.kind === 'module' ? '模块详情' : '书详情'}{' '}
-          <span className="mono small muted">{scopeLabel}</span>
+          当前位置 <span className="mono small muted">{scopeLabel}</span>
         </h3>
         <div className="row" style={{ gap: 6 }}>
           <button className={tab === 'graph' ? 'primary' : ''} onClick={() => setTab('graph')}>
@@ -778,14 +759,15 @@ function ScopePanel({
           </div>
           {diagrams.length === 0 ? (
             <div className="empty">
-              该{level.kind === 'module' ? '模块' : '书'}还没有 <span className="mono">type: diagram</span> 条目。
+              当前位置还没有 <span className="mono">type: diagram</span> 条目。
               <div className="small muted" style={{ marginTop: 6 }}>
                 用{' '}
                 <span className="mono">
-                  prism arch render &lt;type&gt; &lt;ir.json&gt; --book {level.book}
-                  {level.kind === 'module' && level.module !== '' ? ` --module ${level.module}` : ''}
+                  prism arch render &lt;type&gt; &lt;ir.json&gt;
+                  {scopeParams.book !== undefined ? ` --book ${scopeParams.book}` : ''}
+                  {scopeParams.module !== undefined ? ` --module ${scopeParams.module}` : ''}
                 </span>{' '}
-                渲染后，产物会自动归到这本书。
+                渲染后，产物会自动归到这里。
               </div>
             </div>
           ) : (
@@ -816,7 +798,7 @@ function ScopePanel({
           <State loading={archAssets.loading} error={archAssets.error}>
             {(archAssets.data?.length ?? 0) === 0 ? (
               <div className="small muted">
-                （本书还没有渲染产物。加 <span className="mono">--book {level.book}</span> 渲染即可归到此处）
+                （这里还没有渲染产物。加 <span className="mono">--book {scopeParams.book ?? '<书>'}</span> 渲染即可归到此处）
               </div>
             ) : (
               <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
