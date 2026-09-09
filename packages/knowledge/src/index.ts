@@ -15,6 +15,8 @@ export type {
   GraphPath,
   GraphQuery,
   GraphView,
+  IndexInput,
+  IndexResult,
   KbStats,
   KnowledgeEdge,
   KnowledgeEntry,
@@ -22,6 +24,7 @@ export type {
   KnowledgeServiceOptions,
   Layer,
   ReindexReport,
+  RemoveResult,
   SearchQuery,
   SearchResult,
 } from './types.js'

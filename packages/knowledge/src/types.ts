@@ -79,6 +79,34 @@ export interface IndexResult {
   action: 'created' | 'updated' | 'unchanged'
 }
 
+/** 删除结果（B1）。 */
+export interface RemoveResult {
+  id: string
+  /** soft = 置 deprecated 保留审计；hard = 真删行（仅无引用时允许） */
+  mode: 'soft' | 'hard'
+  /** 被多少条边引用（软删时给出，便于提示影响面） */
+  references: number
+}
+
+/**
+ * 层间冲突（B2，§12.3）。
+ *
+ * Prism **不做审核**：冲突只记录、只提示，不阻断落库、不静默取胜。
+ * 判据（零 LLM、保守）：同一 book/module 下存在**同名条目**跨层共存，
+ * 且高层未显式声明 `overrides: [低层ID]` → 记录一条 conflict。
+ */
+export interface KnowledgeConflict {
+  id: string
+  /** 高优先级层条目（project/role） */
+  high_id: string
+  /** 低优先级层条目（global） */
+  low_id: string
+  /** 冲突类型：same_title（同名跨层） */
+  kind: string
+  resolved: boolean
+  detected_at: string
+}
+
 /** 知识条目（design.md §3.2 KnowledgeEntry）。 */
 export interface KnowledgeEntry {
   id: string
@@ -285,6 +313,15 @@ export interface KnowledgeService {
   path(fromId: string, toId: string, relations?: EdgeRelation[]): Promise<GraphPath | null>
   /** 以文件为真相重建索引（Z2；内存桩可不实现）。 */
   reindex?(): Promise<ReindexReport>
+  /**
+   * 软删：把条目最新版置 `deprecated`（B1）。被引用过的条目**禁止硬删**，
+   * 只允许软删；`hard=true` 且无引用时才真删行与文件。
+   */
+  remove?(id: string, options?: { hard?: boolean }): Promise<RemoveResult>
+  /** 层间冲突列表（B2）；未解决在前。 */
+  conflicts?(options?: { includeResolved?: boolean }): Promise<KnowledgeConflict[]>
+  /** 标记冲突已处理（B2）。 */
+  resolveConflict?(conflictId: string): Promise<boolean>
 }
 
 /**

@@ -160,3 +160,32 @@ describe('scanProject 端到端（A3）', () => {
     kb.close()
   })
 })
+
+/** 回归：引用型条目正文必须取转换结果，不能读二进制原件。 */
+describe('引用型正文读取（二进制原件）', () => {
+  it('path 指向二进制文件时，get/search 返回转换后的内容而非原始字节', async () => {
+    const { PrismKnowledgeService } = await import('../src/service.js')
+    const { makeTempDir } = await import('../../server/test/helpers.js')
+    const kb = new PrismKnowledgeService({ home: await makeTempDir('prism-idx-body-') })
+
+    // 模拟 docx：path 指向不存在的二进制文件，正文只存在于索引里
+    await kb.index({
+      id: 'IDX-doc',
+      title: '规格说明',
+      layer: 'project',
+      owner: 'p',
+      book: 'p',
+      path: 'D:/proj/spec.docx',
+      source_hash: 'h',
+      content: '转换后的中文内容，含关键词 契约',
+    })
+
+    const entry = await kb.get('IDX-doc')
+    expect(entry?.content).toContain('契约')
+    expect(entry?.content).not.toContain('PK')
+
+    const hits = await kb.search({ q: '契约' })
+    expect(hits[0]?.excerpt).toContain('契约')
+    kb.close()
+  })
+})

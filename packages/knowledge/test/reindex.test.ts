@@ -84,3 +84,41 @@ describe('kb reindex（Z2：以文件为真相重建索引）', () => {
     }
   })
 })
+
+/** QA BLK-1 回归：reindex 只重建自有型，引用型必须存活。 */
+describe('reindex 与引用型共存（BLK-1 回归）', () => {
+  it('混合库 reindex 后：引用型仍在、自有型被重建', async () => {
+    const { PrismKnowledgeService } = await import('../src/service.js')
+    const { makeTempDir } = await import('../../server/test/helpers.js')
+    const kb = new PrismKnowledgeService({ home: await makeTempDir('prism-reindex-mix-') })
+
+    // 自有型（写版次文件，reindex 会重建）
+    await kb.deposit({ id: 'OWN-1', title: '自有规则', type: 'rule', layer: 'global', book: 'b', content: '自有内容' })
+    // 引用型（不写版次文件，path 指向项目原件）
+    await kb.index({
+      id: 'IDX-1',
+      title: '项目文档',
+      layer: 'project',
+      owner: 'p',
+      book: 'p',
+      path: 'D:/proj/README.md',
+      source_hash: 'h1',
+      content: '项目文档内容，含关键词 订单',
+    })
+
+    const report = await kb.reindex()
+    expect(report.scanned).toBe(1) // 只有自有型的 v01.md
+    expect(report.indexed).toBe(1)
+
+    // 引用型必须存活（这是 BLK-1 的核心断言）
+    const indexed = await kb.get('IDX-1')
+    expect(indexed).not.toBeNull()
+    expect(indexed?.origin).toBe('indexed')
+    expect(indexed?.source_hash).toBe('h1')
+    expect((await kb.search({ q: '订单' })).length).toBe(1)
+
+    // 自有型重建后仍可检索
+    expect((await kb.search({ q: '自有' })).length).toBe(1)
+    kb.close()
+  })
+})

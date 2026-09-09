@@ -13,7 +13,7 @@
  */
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
-import { join, sep } from 'node:path'
+import { dirname, join, sep } from 'node:path'
 
 import { AuditLog, openPersistence, PrismError, prismPaths } from '@prism/core'
 import type { DatabaseSync } from 'node:sqlite'
@@ -25,6 +25,7 @@ import {
   INBOX_DIR,
   isValidSegment,
   ownerFromPath,
+  readContentFile,
   readEntryContent,
   writeEntryFiles,
 } from './store.js'
@@ -49,6 +50,7 @@ import type {
   KbStats,
   Layer,
   ReindexReport,
+  RemoveResult,
   SearchQuery,
   SearchResult,
 } from './types.js'
@@ -148,6 +150,8 @@ interface ReindexRow {
   version: number
   title: string
   type: string
+  /** 文件里记录的 status（BLK-2：软删后 reindex 不能复活） */
+  status: 'active' | 'deprecated'
   layer: Layer
   owner: string | null
   book: string
@@ -542,6 +546,100 @@ export class PrismKnowledgeService implements KnowledgeService {
     return { id: address.id, action }
   }
 
+  // ===== remove（B1：软删优先，被引用禁硬删） =====
+
+  /**
+   * 删除条目（§12.6）。
+   *
+   * - **默认软删**：最新版 `status = 'deprecated'`，保留行与文件（可追溯、可恢复）；
+   * - **硬删**（`hard: true`）：仅当**没有任何边引用它**时才允许——被引用过的条目
+   *   硬删会让别人的双链变悬空，直接拒绝（`referenced`）。硬删会一并删掉
+   *   该 id 的全部版次行、FTS 行、边，以及版次文件目录。
+   */
+  async remove(id: string, options: { hard?: boolean } = {}): Promise<RemoveResult> {
+    const raw = this.persistence.knowledge.raw
+    const latest = raw
+      .prepare(`SELECT ${ENTRY_COLUMNS} FROM knowledge_entries WHERE id = ? AND is_latest = 1`)
+      .get(id) as EntryRow | undefined
+    if (latest === undefined) {
+      throw new PrismError('not_found', `条目不存在: ${id}`)
+    }
+
+    const refCount = (
+      raw
+        .prepare(
+          `SELECT COUNT(*) AS c FROM knowledge_edges WHERE (from_id = ? OR to_id = ?) AND from_id != to_id`,
+        )
+        .get(id, id) as { c: number }
+    ).c
+
+    // 硬删：有引用直接拒绝（不静默破坏别人的双链）
+    if (options.hard === true && refCount > 0) {
+      throw new PrismError(
+        'referenced',
+        `条目被 ${refCount} 条边引用，禁止硬删（先解除引用，或用默认软删）: ${id}`,
+        { id, references: refCount },
+      )
+    }
+
+    const nowIso = this.#now().toISOString()
+
+    if (options.hard !== true) {
+      // BLK-2：软删状态必须写进版次文件 frontmatter——否则 reindex（以文件为真相）
+      // 重建时 status 由 is_latest 推导，deprecated 会「复活」。
+      const fileText = readContentFile(latest.path)
+      if (fileText !== null) {
+        const { data, body } = splitFrontmatter(fileText)
+        if (data !== null) {
+          writeFileSync(latest.path, renderMarkdownFile({ ...data, status: 'deprecated' }, body), 'utf-8')
+        }
+      }
+      raw
+        .prepare(`UPDATE knowledge_entries SET status = 'deprecated', updated_at = ? WHERE id = ? AND is_latest = 1`)
+        .run(nowIso, id)
+      await this.audit.record({
+        type: 'knowledge.deprecated',
+        knowledge_id: id,
+        layer: latest.layer,
+        source: 'manual',
+      })
+      return { id, mode: 'soft', references: refCount }
+    }
+
+    // 硬删：收集文件路径（事务外删除文件）
+    const rows = raw.prepare('SELECT rowid, path FROM knowledge_entries WHERE id = ?').all(id) as Array<{
+      rowid: number
+      path: string
+    }>
+    await this.persistence.knowledge.run((tx) => {
+      tx.exec('BEGIN IMMEDIATE')
+      try {
+        for (const row of rows) tx.prepare('DELETE FROM kb_fts WHERE rowid = ?').run(row.rowid)
+        tx.prepare('DELETE FROM knowledge_entries WHERE id = ?').run(id)
+        tx.prepare('DELETE FROM knowledge_edges WHERE from_id = ? OR to_id = ?').run(id, id)
+        tx.exec('COMMIT')
+      } catch (error) {
+        try {
+          tx.exec('ROLLBACK')
+        } catch {
+          // 事务已终止时忽略
+        }
+        throw error
+      }
+    })
+    // 文件删除（尽力而为；索引已删，残留文件不影响一致性，reindex 时按路径归属）
+    const { rm } = await import('node:fs/promises')
+    for (const row of rows) {
+      try {
+        await rm(dirname(row.path), { recursive: true, force: true })
+      } catch {
+        // 文件已不在 → 忽略
+      }
+    }
+    await this.audit.record({ type: 'knowledge.deleted', knowledge_id: id, layer: latest.layer })
+    return { id, mode: 'hard', references: 0 }
+  }
+
   // ===== reindex（Z2：以文件为真相重建索引） =====
 
   /**
@@ -575,18 +673,23 @@ export class PrismKnowledgeService implements KnowledgeService {
     await this.persistence.knowledge.run((raw) => {
       raw.exec('BEGIN IMMEDIATE')
       try {
-        raw.exec('DELETE FROM kb_fts')
-        raw.exec('DELETE FROM knowledge_entries')
-        raw.exec('DELETE FROM knowledge_edges')
+        // **只重建自有型**（origin='owned'）：引用型条目的真相在项目文件，
+        // 不产生版次文件、不在本次扫描范围内，必须原样保留（QA BLK-1）。
+        raw.exec(
+          `DELETE FROM kb_fts WHERE rowid IN (SELECT rowid FROM knowledge_entries WHERE origin = 'owned')`,
+        )
+        raw.exec(`DELETE FROM knowledge_edges WHERE from_id IN (SELECT id FROM knowledge_entries WHERE origin = 'owned')`)
+        raw.exec(`DELETE FROM knowledge_entries WHERE origin = 'owned'`)
         const insert = raw.prepare(
           `INSERT INTO knowledge_entries
            (id, version, is_latest, title, type, layer, owner, book, module, status, risk, confidence,
-            freshness, visibility, tags, path, content_hash, overrides, supersedes, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            freshness, visibility, tags, path, content_hash, origin, overrides, supersedes, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'owned', ?, ?, ?, ?)`,
         )
         for (const r of parsedRows) {
           const isLatest = latestByid.get(r.id) === r.version
-          const status = isLatest ? 'active' : 'superseded'
+          // 最新版沿用文件记录的 status（软删不复活）；历史版恒 superseded
+          const status = isLatest ? r.status : 'superseded'
           const supersedes = isLatest ? null : `${r.id}@v${r.version - 1}`
           insert.run(
             r.id,
@@ -699,6 +802,7 @@ export class PrismKnowledgeService implements KnowledgeService {
         owner,
         book,
         module: moduleRaw ?? '',
+        status: str('status') === 'deprecated' ? 'deprecated' : 'active',
         risk: str('risk') ?? 'low',
         confidence: typeof data['confidence'] === 'number' ? data['confidence'] : 0.5,
         freshness: typeof data['freshness'] === 'number' ? data['freshness'] : 1.0,
@@ -733,7 +837,7 @@ export class PrismKnowledgeService implements KnowledgeService {
     const clauses: string[] = []
     const params: string[] = []
     if (!query.all_versions) {
-      clauses.push('e.is_latest = 1')
+      clauses.push("e.is_latest = 1 AND e.status != 'deprecated'")
     }
     if (layers) {
       clauses.push(`e.layer IN (${layers.map(() => '?').join(', ')})`)
@@ -805,7 +909,7 @@ export class PrismKnowledgeService implements KnowledgeService {
     options: { layer?: Layer; owner?: string; book?: string; limit?: number } = {},
   ): Promise<CatalogEntry[]> {
     if (options.layer !== undefined) this.#validateLayers([options.layer])
-    const clauses = ['is_latest = 1']
+    const clauses = ["is_latest = 1 AND status != 'deprecated'"]
     const params: string[] = []
     if (options.layer !== undefined) {
       clauses.push('layer = ?')
@@ -879,7 +983,7 @@ export class PrismKnowledgeService implements KnowledgeService {
 
   async tree(layer?: Layer, owner?: string): Promise<BookNode[]> {
     this.#validateLayers(layer ? [layer] : undefined)
-    const clauses = ['is_latest = 1']
+    const clauses = ["is_latest = 1 AND status != 'deprecated'"]
     const params: string[] = []
     if (layer !== undefined) {
       clauses.push('layer = ?')
@@ -1200,7 +1304,7 @@ export class PrismKnowledgeService implements KnowledgeService {
       query.owner !== undefined ||
       query.module !== undefined
     if (!hasFilter) return null
-    const clauses = ['is_latest = 1']
+    const clauses = ["is_latest = 1 AND status != 'deprecated'"]
     const params: string[] = []
     if (query.layer !== undefined) {
       clauses.push('layer = ?')
@@ -1392,8 +1496,12 @@ export class PrismKnowledgeService implements KnowledgeService {
   }
 
   #toEntry(raw: DatabaseSync, row: EntryRow): KnowledgeEntry {
-    // 文件为真相（取剥离 frontmatter 后的正文）；版次文件缺失时兜底读 FTS body 副本
-    const content = readEntryContent(row.path) ?? bodyForRowid(raw, row.rowid) ?? ''
+    // 自有型：文件为真相（读版次文件正文）。
+    // 引用型：path 指向项目原件（可能是 docx/pdf 二进制），正文取 FTS body 里的转换结果。
+    const content =
+      row.origin === 'indexed'
+        ? (bodyForRowid(raw, row.rowid) ?? '')
+        : (readEntryContent(row.path) ?? bodyForRowid(raw, row.rowid) ?? '')
     const owner = row.owner ?? ownerFromPath(this.knowledgeDir, row.path)
     const entry: KnowledgeEntry = {
       id: row.id,
@@ -1429,7 +1537,10 @@ export class PrismKnowledgeService implements KnowledgeService {
     query: string,
   ): SearchResult {
     const owner = row.owner ?? ownerFromPath(this.knowledgeDir, row.path)
-    const content = readEntryContent(row.path) ?? bodyForRowid(raw, row.rowid) ?? ''
+    const content =
+      row.origin === 'indexed'
+        ? (bodyForRowid(raw, row.rowid) ?? '')
+        : (readEntryContent(row.path) ?? bodyForRowid(raw, row.rowid) ?? '')
     const source = [
       row.layer,
       ...(owner !== undefined ? [owner] : []),

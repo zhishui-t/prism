@@ -12,6 +12,8 @@ export const AUDIT_EVENT_TYPES = [
   'knowledge.status_changed',
   'knowledge.superseded',
   'knowledge.deposited',
+  'knowledge.deprecated',
+  'knowledge.deleted',
   'knowledge.approved',
   'knowledge.rejected',
   'knowledge.conflict_detected',
@@ -37,6 +39,8 @@ export type AuditEvent =
   | (AuditEventBase & { type: 'knowledge.status_changed'; knowledge_id: string; from: string; to: string })
   | (AuditEventBase & { type: 'knowledge.superseded'; new_id: string; old_id: string; reason: string })
   | (AuditEventBase & { type: 'knowledge.deposited'; knowledge_id: string; layer: string; source: string })
+  | (AuditEventBase & { type: 'knowledge.deprecated'; knowledge_id: string; layer: string; source: string })
+  | (AuditEventBase & { type: 'knowledge.deleted'; knowledge_id: string; layer: string })
   | (AuditEventBase & { type: 'knowledge.approved'; knowledge_id: string; subject: string; degraded: boolean })
   | (AuditEventBase & { type: 'knowledge.rejected'; knowledge_id: string; subject: string; reason: string })
   | (AuditEventBase & { type: 'knowledge.conflict_detected'; high_id: string; low_id: string; kind: string })
@@ -59,6 +63,8 @@ export const AUDIT_EVENT_REQUIRED_FIELDS: Record<AuditEventType, readonly string
   'knowledge.status_changed': ['knowledge_id', 'from', 'to'],
   'knowledge.superseded': ['new_id', 'old_id', 'reason'],
   'knowledge.deposited': ['knowledge_id', 'layer', 'source'],
+  'knowledge.deprecated': ['knowledge_id', 'layer', 'source'],
+  'knowledge.deleted': ['knowledge_id', 'layer'],
   'knowledge.approved': ['knowledge_id', 'subject', 'degraded'],
   'knowledge.rejected': ['knowledge_id', 'subject', 'reason'],
   'knowledge.conflict_detected': ['high_id', 'low_id', 'kind'],

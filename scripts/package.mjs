@@ -19,12 +19,13 @@
  *   └── package.json
  *
  * 设计要点：
- * - **零外部运行时依赖**（各包只依赖 workspace 内部包），故无需装 node_modules；
+ * - **仅 workspace 内部包 + 少量外部运行时依赖**（如 @firecrawl/anydoc 做文档转换），
+ *   二者都会物化进 tarball，解压后无需 `pnpm install`；
  * - workspace 包在开发态是符号链接，打包时**物化**为真实目录，避免解压后链接失效；
  * - graphify 的 Python 依赖（tree-sitter 等）需目标机 `pnpm run 3rd:build` 安装——
  *   tarball 不携带 Python 环境，bin/prism.js 启动时会检测并给出提示。
  */
-import { cp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -43,6 +44,66 @@ async function exists(p) {
   } catch {
     return false
   }
+}
+
+/**
+ * 物化一个外部依赖到目标 node_modules（含其运行时依赖闭包）。
+ * pnpm 布局下依赖可能只装在**声明它的包**的 node_modules 里（而非仓库根），
+ * 故按 `fromDir` 逐级向上查找，找不到再回落根 node_modules。
+ */
+async function materializeDependency(dep, nodeModulesDir, fromDir = ROOT) {
+  const src = await resolveDependencyDir(dep, fromDir)
+  if (src === null) {
+    log(`  跳过（未安装）: ${dep}`)
+    return
+  }
+  const dst = join(nodeModulesDir, ...dep.split('/'))
+  await mkdir(join(dst, '..'), { recursive: true })
+  await cp(src, dst, { recursive: true, dereference: true })
+  // 递归带上该依赖自身的运行时依赖
+  const pkgJsonPath = join(dst, 'package.json')
+  if (!(await exists(pkgJsonPath))) return
+  const pkgJson = JSON.parse(await readFile(pkgJsonPath, 'utf-8'))
+  // optionalDependencies 也要带（anydoc 的平台原生绑定走这里，缺了会报
+  // "Cannot find native binding"）；但只带**本机已安装**的那些。
+  const childDeps = { ...(pkgJson.dependencies ?? {}), ...(pkgJson.optionalDependencies ?? {}) }
+  for (const child of Object.keys(childDeps)) {
+    if (child.startsWith('@prism/')) continue
+    const childDst = join(nodeModulesDir, ...child.split('/'))
+    if (await exists(childDst)) continue
+    await materializeDependency(child, nodeModulesDir, src)
+  }
+}
+
+/** 逐级向上查找依赖目录（pnpm 常把它装在声明方包的 node_modules 下）。 */
+async function resolveDependencyDir(dep, fromDir) {
+  let dir = fromDir
+  for (;;) {
+    const candidate = join(dir, 'node_modules', ...dep.split('/'))
+    if (await exists(join(candidate, 'package.json'))) return candidate
+    const parent = resolve(dir, '..')
+    if (parent === dir) break
+    dir = parent
+  }
+  // pnpm 布局：optional 平台包只落在 `.pnpm/<pkg>@<ver>/node_modules/` 下，
+  // 不在任何逐级路径上——扫一遍 .pnpm 目录找它。
+  return await findInPnpmStore(dep)
+}
+
+/** 在 pnpm 虚拟 store（node_modules/.pnpm 下的各包目录）里查找依赖。 */
+async function findInPnpmStore(dep) {
+  const store = join(ROOT, 'node_modules', '.pnpm')
+  let entries
+  try {
+    entries = await readdir(store)
+  } catch {
+    return null
+  }
+  for (const entry of entries) {
+    const candidate = join(store, entry, 'node_modules', ...dep.split('/'))
+    if (await exists(join(candidate, 'package.json'))) return candidate
+  }
+  return null
 }
 
 function run(cmd, args, cwd) {
@@ -113,6 +174,25 @@ async function main() {
     await cp(join(stageDir, 'packages', name), target, { recursive: true })
   }
   log(`物化 workspace 依赖: ${PKG_NAMES.length} 个包`)
+
+  // 5b) 物化**外部运行时依赖**（IMP-1）：@prism/knowledge 依赖 @firecrawl/anydoc，
+  //     不带上的话解压环境里 kb sync 转 docx/pdf 会静默降级为失败（动态 import 被 catch）。
+  //     只带 dependencies 的运行时闭包，不含 devDependencies。
+  const externalDeps = new Set()
+  for (const name of PKG_NAMES) {
+    const pkgDir = join(ROOT, 'packages', name)
+    const pkgJson = JSON.parse(await readFile(join(pkgDir, 'package.json'), 'utf-8'))
+    for (const dep of Object.keys(pkgJson.dependencies ?? {})) {
+      if (!dep.startsWith('@prism/')) externalDeps.add(`${dep}\u0000${pkgDir}`)
+    }
+  }
+  for (const entry of externalDeps) {
+    const [dep, fromDir] = entry.split('\u0000')
+    await materializeDependency(dep, join(stageDir, 'node_modules'), fromDir)
+  }
+  if (externalDeps.size > 0) {
+    log(`物化外部运行时依赖: ${[...externalDeps].map((e) => e.split('\u0000')[0]).join(', ')}`)
+  }
 
   // 6) 控制台静态资源
   await cp(join(ROOT, 'apps', 'web', 'dist'), join(stageDir, 'apps', 'web', 'dist'), { recursive: true })

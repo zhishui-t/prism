@@ -45,6 +45,8 @@ export async function runKb(ctx: CommandContext, args: string[], values: ArgValu
       return await kbReindex(ctx)
     case 'sync':
       return await kbSync(ctx, rest, values)
+    case 'remove':
+      return await kbRemove(ctx, rest, values)
     case 'export':
       return await kbExport(ctx, rest, values)
     default:
@@ -379,6 +381,45 @@ function makeDryRunKb(real: KnowledgeService): KnowledgeService {
       return { id: input.id, action: 'created' as const }
     },
   } as KnowledgeService
+}
+
+/**
+ * `prism kb remove <id> [--hard] [--yes]`
+ * 软删（默认）：置 deprecated，保留审计；硬删需 --hard 且无引用。
+ */
+async function kbRemove(ctx: CommandContext, args: string[], values: ArgValues): Promise<number> {
+  const id = args[0]
+  if (id === undefined) {
+    ctx.stderr('用法: prism kb remove <id> [--hard] [--yes]')
+    return 1
+  }
+  const kb = await getKb(ctx)
+  if (kb.remove === undefined) {
+    ctx.stderr('错误 [unsupported] 当前知识服务未实现 remove')
+    return 1
+  }
+  const hard = values.hard === true
+  if (hard && values.yes !== true) {
+    ctx.stderr(`硬删会永久删除条目 ${id} 的所有版次与文件，确认请加 --yes`)
+    return 1
+  }
+  try {
+    const result = await kb.remove(id, { hard })
+    if (ctx.json) {
+      ctx.stdout(JSON.stringify({ ok: true, value: result }))
+    } else if (result.mode === 'soft') {
+      ctx.stdout(`已软删 ${id}（status=deprecated，保留审计；被 ${result.references} 条边引用）`)
+    } else {
+      ctx.stdout(`已硬删 ${id}（版次行、边、文件均已移除）`)
+    }
+    return 0
+  } catch (error) {
+    if (error instanceof PrismError) {
+      ctx.stderr(`错误 [${error.code}] ${error.message}`)
+      return 1
+    }
+    throw error
+  }
 }
 
 /** `prism kb reindex`：以文件为真相重建索引（Z2；手工编辑/迁移知识文件后收敛漂移）。 */async function kbReindex(ctx: CommandContext): Promise<number> {  const kb = await getKb(ctx)
