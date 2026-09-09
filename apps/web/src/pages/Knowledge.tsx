@@ -167,7 +167,7 @@ function GalaxyView({
   onSelect: (id: string) => void
 }) {
   // 按层级切出当前要展示的星系集合
-  const { bodies, edges, backTarget } = useMemo(
+  const { bodies, edges, backTarget, hub } = useMemo(
     () => buildBodies(entries, allEdges, level),
     [entries, allEdges, level],
   )
@@ -205,6 +205,8 @@ function GalaxyView({
 
             {/* 一级：图书馆本体 —— 一团巨大的星云，每个星系就是一本「书」 */}
             {level.kind === 'galaxies' && <LibraryNebula />}
+            {/* 二级/三级：当前书/模块作为中心星云，下级在其内部环绕 */}
+            {hub !== null && <HubNebula hub={hub} />}
 
             {/* 关系边（仅条目图谱有） */}
             {edges.map((e) => {
@@ -318,11 +320,19 @@ function LibraryNebula() {
  * 把目录条目折叠成当前层级的星系。
  * 位置用**确定性环形布局**（无随机，每次渲染稳定）。
  */
+/** 当前层级的中心（书 / 模块）：画成星云中心，下级围绕它环绕。 */
+interface Hub {
+  label: string
+  sublabel: string
+  /** 该中心包含的条目数 */
+  count: number
+}
+
 function buildBodies(
   entries: CatalogEntry[],
   allEdges: KbGraphEdge[],
   level: Level,
-): { bodies: Body[]; edges: KbGraphEdge[]; backTarget: Level | null } {
+): { bodies: Body[]; edges: KbGraphEdge[]; backTarget: Level | null; hub: Hub | null } {
   if (level.kind === 'galaxies') {
     // 每「层/owner/书」一个星系（点开就是这本书）
     const groups = new Map<string, { layer: string; owner?: string; book: string; count: number; types: Set<string> }>()
@@ -348,7 +358,7 @@ function buildBodies(
       })),
       Math.max(3, list.length),
     )
-    return { bodies, edges: [], backTarget: null }
+    return { bodies, edges: [], backTarget: null, hub: null }
   }
 
   // 书视图 / 模块视图
@@ -388,7 +398,17 @@ function buildBodies(
       })),
       Math.max(3, list.length),
     )
-    return { bodies, edges: [], backTarget }
+    // 书作为中心：模块是这本书内部的「区域」，环绕在中心星云内
+    return {
+      bodies,
+      edges: [],
+      backTarget,
+      hub: {
+        label: level.book,
+        sublabel: `${inBook.length} 条 · ${list.length} 个模块`,
+        count: inBook.length,
+      },
+    }
   }
 
   // 模块视图：条目即星系，边即关系
@@ -408,7 +428,85 @@ function buildBodies(
   )
   // 只保留两端都在本模块内的边
   const edges = allEdges.filter((e) => ids.has(e.from_id) && ids.has(e.to_id))
-  return { bodies, edges, backTarget }
+  return {
+    bodies,
+    edges,
+    backTarget,
+    hub: {
+      label: level.module === '' ? '待归类' : level.module,
+      sublabel: `${inModule.length} 条`,
+      count: inModule.length,
+    },
+  }
+}
+
+/**
+ * 标签折行：最多两行完整显示。
+ * 中文按字符数切，英文优先在空格/连字符处断；仍放不下才截断加省略号。
+ */
+function wrapLabel(label: string, maxChars = 14): string[] {
+  if (label.length <= maxChars) return [label]
+  // 优先找空格或连字符
+  const breakAt = (from: number): number => {
+    for (let i = Math.min(from + maxChars, label.length); i > from; i--) {
+      const c = label[i - 1]
+      if (c === ' ' || c === '-' || c === '_' || c === '/') return i
+    }
+    return Math.min(from + maxChars, label.length)
+  }
+  const first = label.slice(0, breakAt(0)).trimEnd()
+  const rest = label.slice(first.length).trimStart()
+  if (rest.length <= maxChars) return [first, rest]
+  return [first, `${rest.slice(0, maxChars - 1)}…`]
+}
+
+/** 当前层级中心星云：把「书 / 模块」画成中心，下级在内部环绕（保留层级感）。 */
+function HubNebula({ hub }: { hub: Hub }) {
+  const dust = useMemo(() => {
+    const rand = seededRandom(9911)
+    return Array.from({ length: 90 }, () => {
+      const angle = rand() * Math.PI * 2
+      const radius = Math.pow(rand(), 0.6) * 340
+      return {
+        x: Math.cos(angle) * radius,
+        y: Math.sin(angle) * radius * 0.68,
+        r: 0.5 + rand() * 1.4,
+        o: 0.1 + rand() * 0.42,
+      }
+    })
+  }, [])
+  return (
+    <g style={{ pointerEvents: 'none' }}>
+      <defs>
+        <radialGradient id="hub-core">
+          <stop offset="0%" stopColor="#8fb3ff" stopOpacity={0.26} />
+          <stop offset="45%" stopColor="#5b8cff" stopOpacity={0.12} />
+          <stop offset="100%" stopColor="#0a0c11" stopOpacity={0} />
+        </radialGradient>
+      </defs>
+      <ellipse cx={0} cy={0} rx={430} ry={290} fill="url(#hub-core)" />
+      <ellipse cx={0} cy={0} rx={240} ry={162} fill="#5b8cff" opacity={0.055} />
+      {dust.map((d, i) => (
+        <circle key={i} cx={d.x} cy={d.y} r={d.r} fill="#cfe0ff" opacity={d.o} />
+      ))}
+      {/* 中心标识：书/模块名放在星云顶部，避开内部星体（曾经挤在正中会被星体压住） */}
+      <text x={0} y={-WORLD_H / 2 + 62} textAnchor="middle" fontSize={17} fill="#dbe6ff" opacity={0.94}>
+        {hub.label}
+      </text>
+      <text x={0} y={-WORLD_H / 2 + 82} textAnchor="middle" fontSize={11} fill="#8b93a7" opacity={0.9}>
+        {hub.sublabel}
+      </text>
+      <line
+        x1={-60}
+        y1={-WORLD_H / 2 + 94}
+        x2={60}
+        y2={-WORLD_H / 2 + 94}
+        stroke="#5b8cff"
+        strokeOpacity={0.35}
+        strokeWidth={1}
+      />
+    </g>
+  )
 }
 
 /** 星系色板（按排序后位置分配，保证同层不撞色且稳定）。 */
@@ -432,7 +530,7 @@ function ringLayout(
   // 可用半径：世界的一半再留出标签边距
   const maxR = Math.min(WORLD_W, WORLD_H) / 2 - 110
   const bodies: Body[] = []
-  const starR = (count: number): number => 22 + Math.min(46, Math.sqrt(count) * 14)
+  const starR = (count: number): number => 18 + Math.min(38, Math.sqrt(count) * 12)
 
   if (n === 1) {
     bodies.push(bodyOf(items[0]!, 0, 0, starR(items[0]!.count)))
@@ -440,7 +538,8 @@ function ringLayout(
   }
 
   if (n <= 8) {
-    const radius = maxR * 0.72
+    // 环绕半径：收在中心星云内（星云 rx=430），且避开中心文字区域
+    const radius = maxR * 0.66
     if (n === 2) {
       // 两个星系水平并排，间距取可用半径的 0.78（再远会超出星云视觉范围）
       bodies.push(bodyOf(items[0]!, -radius * 0.78, 0, starR(items[0]!.count)))
@@ -517,19 +616,35 @@ function StarBody({ body, selected, onClick }: { body: Body; selected: boolean; 
         stroke={selected ? '#fff' : 'transparent'}
         strokeWidth={2}
       />
-      {/* 标签 */}
-      <text
-        x={body.x}
-        y={body.y + body.r + 15}
-        textAnchor="middle"
-        fontSize={13}
-        fill="#e6e9ef"
-        style={{ pointerEvents: 'none' }}
-      >
-        {body.label.length > 16 ? `${body.label.slice(0, 16)}…` : body.label}
-      </text>
+      {/* 标签：放在辉光之外（否则被光晕糊住），最多两行完整显示，字号随长度自适应 */}
+      {wrapLabel(body.label).map((line, li) => (
+        <text
+          key={li}
+          x={body.x}
+          y={body.y + body.r * 1.55 + 16 + li * 16}
+          textAnchor="middle"
+          fontSize={body.label.length > 14 ? 12 : 13.5}
+          fill="#eef1f7"
+          stroke="#0a0c11"
+          strokeWidth={3.5}
+          paintOrder="stroke"
+          style={{ pointerEvents: 'none' }}
+        >
+          {line}
+        </text>
+      ))}
       {body.sublabel !== undefined && (
-        <text x={body.x} y={body.y + body.r + 30} textAnchor="middle" fontSize={10.5} fill="#8b93a7" style={{ pointerEvents: 'none' }}>
+        <text
+          x={body.x}
+          y={body.y + body.r * 1.55 + 16 + wrapLabel(body.label).length * 16}
+          textAnchor="middle"
+          fontSize={10.5}
+          fill="#9aa3b5"
+          stroke="#0a0c11"
+          strokeWidth={3}
+          paintOrder="stroke"
+          style={{ pointerEvents: 'none' }}
+        >
           {body.sublabel}
         </text>
       )}
