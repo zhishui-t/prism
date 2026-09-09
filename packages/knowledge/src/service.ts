@@ -43,6 +43,7 @@ import type {
   GraphView,
   IndexInput,
   IndexResult,
+  KnowledgeConflict,
   KnowledgeEdge,
   KnowledgeEntry,
   KnowledgeService,
@@ -390,6 +391,16 @@ export class PrismKnowledgeService implements KnowledgeService {
       })
     }
 
+    // B2：层间冲突检测（只记录不阻断，§12.3）
+    await this.#detectConflicts(this.persistence.knowledge.raw, {
+      id: deposited.id,
+      layer: address.layer,
+      book: address.book,
+      module: address.module,
+      title: address.title,
+      overrides: address.overrides,
+    })
+
     // A4：落库后投递富化任务（默认未注入 = 不入队；由 server 按 prism.yaml 决定）
     if (this.#enqueueEnrichment !== undefined) {
       await this.#enqueueEnrichment({
@@ -546,8 +557,96 @@ export class PrismKnowledgeService implements KnowledgeService {
     return { id: address.id, action }
   }
 
-  // ===== remove（B1：软删优先，被引用禁硬删） =====
+  // ===== 层间冲突（B2，§12.3：只记录不阻断） =====
 
+  /**
+   * 检测层间冲突：同一 book/module 下**标题相同**的条目跨层共存，
+   * 且高层未显式声明 `overrides: [低层ID]` → 记一条 `same_title` 冲突。
+   *
+   * 为什么用标题判据：Prism 零 LLM，无法判断「语义冲突」；标题相同是**确定性**
+   * 的强信号（同名规则覆盖），且不会误报。只记录，不改状态、不阻断落库。
+   */
+  async #detectConflicts(
+    raw: DatabaseSync,
+    input: {
+      id: string
+      layer: Layer
+      book: string
+      module: string
+      title: string
+      overrides: string[]
+    },
+  ): Promise<void> {
+    // 只在 project/role 层检查（global 是最底层，没有「更低层」）
+    if (input.layer === 'global') return
+    const lows = raw
+      .prepare(
+        `SELECT id, title FROM knowledge_entries
+         WHERE is_latest = 1 AND layer = 'global' AND book = ? AND module = ?
+           AND status != 'deprecated' AND title = ? AND id != ?`,
+      )
+      .all(input.book, input.module, input.title, input.id) as Array<{ id: string; title: string }>
+    const nowIso = this.#now().toISOString()
+    for (const low of lows) {
+      // 已显式声明 overrides → 不算冲突（就近覆盖是有意为之）
+      if (input.overrides.includes(low.id)) continue
+      const existing = raw
+        .prepare(
+          `SELECT id FROM knowledge_conflicts WHERE high_id = ? AND low_id = ? AND kind = 'same_title'`,
+        )
+        .get(input.id, low.id) as { id: string } | undefined
+      if (existing !== undefined) continue
+      raw
+        .prepare(
+          `INSERT INTO knowledge_conflicts (id, high_id, low_id, kind, resolved, detected_at)
+           VALUES (?, ?, ?, 'same_title', 0, ?)`,
+        )
+        .run(`CF-${randomUUID().slice(0, 12)}`, input.id, low.id, nowIso)
+      await this.audit.record({
+        type: 'knowledge.conflict_detected',
+        high_id: input.id,
+        low_id: low.id,
+        kind: 'same_title',
+      })
+    }
+  }
+
+  /** 列出层间冲突（未解决在前）。 */
+  async conflicts(options: { includeResolved?: boolean } = {}): Promise<KnowledgeConflict[]> {
+    const raw = this.persistence.knowledge.raw
+    const where = options.includeResolved === true ? '' : 'WHERE resolved = 0'
+    const rows = raw
+      .prepare(
+        `SELECT id, high_id, low_id, kind, resolved, detected_at FROM knowledge_conflicts
+         ${where} ORDER BY resolved ASC, detected_at DESC`,
+      )
+      .all() as Array<{
+      id: string
+      high_id: string
+      low_id: string
+      kind: string
+      resolved: number
+      detected_at: string
+    }>
+    return rows.map((r) => ({
+      id: r.id,
+      high_id: r.high_id,
+      low_id: r.low_id,
+      kind: r.kind,
+      resolved: r.resolved === 1,
+      detected_at: r.detected_at,
+    }))
+  }
+
+  /** 标记冲突已处理（只改标记，不删记录）。 */
+  async resolveConflict(conflictId: string): Promise<boolean> {
+    const result = this.persistence.knowledge.raw
+      .prepare('UPDATE knowledge_conflicts SET resolved = 1 WHERE id = ?')
+      .run(conflictId)
+    return Number(result.changes) > 0
+  }
+
+  // ===== remove（B1：软删优先，被引用禁硬删） =====
   /**
    * 删除条目（§12.6）。
    *
@@ -843,6 +942,11 @@ export class PrismKnowledgeService implements KnowledgeService {
       clauses.push(`e.layer IN (${layers.map(() => '?').join(', ')})`)
       params.push(...layers)
     }
+    // B3：visibility 过滤（opt-in，不传即不过滤，保证既有行为逐字节不变）
+    if (query.visibilities !== undefined && query.visibilities.length > 0) {
+      clauses.push(`e.visibility IN (${query.visibilities.map(() => '?').join(', ')})`)
+      params.push(...query.visibilities)
+    }
     if (query.book !== undefined) {
       clauses.push('e.book = ?')
       params.push(query.book)
@@ -906,11 +1010,22 @@ export class PrismKnowledgeService implements KnowledgeService {
    * 与 search 的区别是不需要检索词；上限 2000（超大库时分页/截断）。
    */
   async catalog(
-    options: { layer?: Layer; owner?: string; book?: string; limit?: number } = {},
+    options: {
+      layer?: Layer
+      owner?: string
+      book?: string
+      limit?: number
+      /** B3：按 visibility 过滤（opt-in；不传即不过滤） */
+      visibilities?: Array<'global' | 'project' | 'role'>
+    } = {},
   ): Promise<CatalogEntry[]> {
     if (options.layer !== undefined) this.#validateLayers([options.layer])
     const clauses = ["is_latest = 1 AND status != 'deprecated'"]
     const params: string[] = []
+    if (options.visibilities !== undefined && options.visibilities.length > 0) {
+      clauses.push(`visibility IN (${options.visibilities.map(() => '?').join(', ')})`)
+      params.push(...options.visibilities)
+    }
     if (options.layer !== undefined) {
       clauses.push('layer = ?')
       params.push(options.layer)

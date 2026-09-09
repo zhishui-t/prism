@@ -18,6 +18,7 @@ export type {
   IndexInput,
   IndexResult,
   KbStats,
+  KnowledgeConflict,
   KnowledgeEdge,
   KnowledgeEntry,
   KnowledgeService,

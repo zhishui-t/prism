@@ -321,6 +321,18 @@ export function createMcpTools(deps: McpDeps): McpTool[] {
           content: { type: 'string' },
           tags: { type: 'array', items: { type: 'string' } },
           risk: { enum: ['low', 'medium', 'high'] },
+          confidence: { type: 'number', minimum: 0, maximum: 1 },
+          overrides: { type: 'array', items: { type: 'string' }, description: '显式声明的层间覆盖（低层条目 id）' },
+          visibility: { enum: ['global', 'project', 'role'] },
+          source: {
+            type: 'object',
+            properties: { kind: { enum: ['import', 'agent', 'manual'] }, ref: { type: 'string' } },
+          },
+          deposited_by: {
+            type: 'object',
+            properties: { subject: { type: 'string' }, team: { type: 'string' } },
+            description: '留痕：谁/哪个团队落库',
+          },
         },
         required: ['title', 'type', 'layer', 'book', 'content'],
       },
@@ -342,6 +354,10 @@ export function createMcpTools(deps: McpDeps): McpTool[] {
             items: { enum: ['references', 'overrides', 'supersedes', 'related'] },
           },
           limit: { type: 'integer', minimum: 1, maximum: 500, description: '节点上限，默认 50' },
+          layer: { enum: ['global', 'project', 'role'], description: '限定层' },
+          owner: { type: 'string', description: '限定 owner（project/role 层）' },
+          book: { type: 'string', description: '限定书' },
+          module: { type: 'string', description: '限定模块（_inbox 表示待归类）' },
         },
       },
       call: async (args) => {
@@ -350,9 +366,31 @@ export function createMcpTools(deps: McpDeps): McpTool[] {
           depth: typeof args.depth === 'number' ? args.depth : undefined,
           limit: typeof args.limit === 'number' ? args.limit : undefined,
           relations: Array.isArray(args.relations) ? (args.relations as GraphQuery['relations']) : undefined,
+          layer: asString(args.layer) as GraphQuery['layer'],
+          owner: asString(args.owner),
+          book: asString(args.book),
+          module: asString(args.module),
         }
         return await (await kb()).graph(query)
       },
+    },
+    {
+      name: 'prism_kb_tree',
+      description: '知识库结构树（层→书→模块的计数），回答「知识库里有什么」',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          layer: { enum: ['global', 'project', 'role'] },
+          owner: { type: 'string', description: '限定 owner（project/role 层）' },
+        },
+      },
+      call: async (args) =>
+        await (
+          await kb()
+        ).tree(
+          asString(args.layer) as 'global' | 'project' | 'role' | undefined,
+          asString(args.owner),
+        ),
     },
     {
       name: 'prism_graph_query',

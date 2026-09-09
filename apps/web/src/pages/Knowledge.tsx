@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 
-import { api, type ArchDiagram, type CatalogEntry, type KbGraphEdge, type KbGraphNode, type KbGraphView } from '../api.ts'
+import { api, type ArchDiagram, type CatalogEntry, type KbGraphEdge, type KbGraphNode, type KbGraphView, type SearchResult } from '../api.ts'
 import { StarCanvas, seededRandom, useStarfield, type Viewport } from '../components/StarCanvas.tsx'
 import { State } from '../components/State.tsx'
 import { useAsync } from '../components/useAsync.ts'
@@ -129,6 +129,25 @@ export function KnowledgePage() {
         </div>
 
         <Breadcrumb scope={scope} onNavigate={setScope} />
+        <SearchBox
+          onPick={(entry) => {
+            // 命中后直接跳到该条目所在的书/模块，并选中它
+            const next: Scope = [
+              { dim: 'layer', value: entry.layer, label: LAYER_LABEL[entry.layer] ?? entry.layer },
+              ...(entry.owner !== undefined && entry.owner !== ''
+                ? [{ dim: 'owner' as const, value: entry.owner, label: entry.owner }]
+                : []),
+              { dim: 'book', value: entry.book, label: entry.book },
+              {
+                dim: 'module',
+                value: entry.module,
+                label: entry.module === '' ? '待归类' : entry.module,
+              },
+            ]
+            setScope(next)
+            setSelectedId(entry.id)
+          }}
+        />
       </header>
 
       <State loading={catalog.loading} error={catalog.error}>
@@ -180,6 +199,78 @@ function Breadcrumb({ scope, onNavigate }: { scope: Scope; onNavigate: (s: Scope
         </span>
       ))}
     </nav>
+  )
+}
+
+/**
+ * 检索框（C2）：命中后直接定位到条目的书/模块（跳转 + 选中）。
+ * 用「防抖 + 显式回车」避免每次击键都打服务端；无命中给出明确提示（不静默）。
+ */
+function SearchBox({ onPick }: { onPick: (entry: SearchResult) => void }) {
+  const [q, setQ] = useState('')
+  const [results, setResults] = useState<SearchResult[] | null>(null)
+  const [loading, setLoading] = useState(false)
+
+  const run = async () => {
+    const query = q.trim()
+    if (query === '') {
+      setResults(null)
+      return
+    }
+    setLoading(true)
+    try {
+      setResults(await api.kbSearch({ q: query, limit: 8 }))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div className="row" style={{ gap: 8 }}>
+        <input
+          type="search"
+          placeholder="检索知识（回车）…"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void run()
+          }}
+          style={{ flex: 1, maxWidth: 420 }}
+        />
+        <button onClick={() => void run()} disabled={loading}>
+          {loading ? '检索中…' : '检索'}
+        </button>
+        {results !== null && (
+          <button
+            onClick={() => {
+              setQ('')
+              setResults(null)
+            }}
+          >
+            清除
+          </button>
+        )}
+      </div>
+      {results !== null && (
+        <div style={{ marginTop: 8 }}>
+          {results.length === 0 ? (
+            <div className="small muted">知识库没有匹配「{q}」的条目</div>
+          ) : (
+            <ul className="rel-list">
+              {results.map((r) => (
+                <li key={`${r.id}@${r.version}`} className="small">
+                  <button className="rel-link" onClick={() => onPick(r)} title={r.source}>
+                    {r.title}
+                  </button>{' '}
+                  <span className="mono muted small">{r.source}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
   )
 }
 

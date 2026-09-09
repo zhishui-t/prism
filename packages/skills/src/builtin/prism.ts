@@ -98,18 +98,18 @@ prism serve --port 7777            # 起 HTTP 服务 + 控制台
 - **不编边**：图谱没有的关系不要推断；\`confidence\` 字段（EXTRACTED/INFERRED）照实呈现；
 - **不读全图**：用查询拿子图（\`limit\`/\`depth\` 有界），避免把整张图塞进上下文。
 
-## 5. 工具速查（21 个 MCP 工具）
+## 5. 工具速查（22 个 MCP 工具）
 
 | 分组 | 工具 |
 | :--- | :--- |
-| 知识库（4） | \`prism_kb_search\` \`prism_kb_get\` \`prism_kb_deposit\` \`prism_kb_graph\` |
+| 知识库（5） | \`prism_kb_search\` \`prism_kb_get\` \`prism_kb_deposit\` \`prism_kb_graph\` \`prism_kb_tree\` |
 | 代码图谱（7） | \`prism_graph_query\` \`prism_graph_path\` \`prism_graph_explain\` \`prism_graph_affected\` \`prism_graph_god_nodes\` \`prism_graph_summary\` \`prism_graph_status\` |
 | 角色团队（4） | \`prism_role_list\` \`prism_role_render\` \`prism_team_get\` \`prism_team_activate\` |
 | 工作队列（3） | \`prism_work_pending\` \`prism_work_claim\` \`prism_work_complete\` |
 | 任务台账（3） | \`prism_task_register\` \`prism_task_report\` \`prism_task_status\` |
 
 > **MCP 与 CLI 的分工**：需要结构化调用（宿主 agent 用）优先 MCP；一次性/交互式操作（人在终端用）
-> 走 CLI。知识树（\`prism kb tree\`）与架构图渲染（\`prism arch render\`）**只有 CLI/HTTP，没有 MCP 工具**。
+> 走 CLI。架构图渲染（\`prism arch render\`）只有 CLI/HTTP，没有 MCP 工具。
 
 ## 6. CLI 速查
 
@@ -118,8 +118,9 @@ prism init [--zcode-dir <宿主根>] [--yes]     # 接入：注册 MCP + 装 Ski
 prism serve [--port 7777]                     # HTTP API + 控制台
 prism doctor                                   # 环境自检
 prism harness list | show                      # 运行时宿主适配器
-prism kb     import/search/get/tree/stats/graph/path/reindex
+prism kb     import/sync/search/get/tree/stats/graph/path/remove/reindex
 prism graph  build/query/path/explain/affected/god-nodes/summary/status
+prism project add/list/show/remove          项目台账（登记后 kb sync 可扫）
 prism arch   types/validate/render             # 架构图谱（五类图）
 prism role   list/show/init/import/validate/render/install
 prism team   list/show/validate/install/activate
@@ -166,10 +167,9 @@ const PRISM_SKILL_ASSETS: SkillAsset[] = [
 - **沉淀必须带 \`deposited_by\`**（\`{ subject, team? }\`）；
 - 安全红线类知识强制 \`layer: global\`。
 
-## 结构树（prism kb tree，仅 CLI）
+## 结构树（prism_kb_tree / prism kb tree）
 
-\`层→书→模块\` 的计数结构，用于回答「知识库里有什么」。**没有对应的 MCP 工具**——
-宿主需要它时执行 \`prism kb tree [--layer <层>]\`，或直接用 \`prism_kb_search\` / \`prism_kb_graph\` 概览。
+\`层→书→模块\` 的计数结构，用于回答「知识库里有什么」。MCP 工具 \`prism_kb_tree\` 与 CLI \`prism kb tree [--layer <层>]\` 等价。
 
 ## 知识图谱（prism_kb_graph）
 

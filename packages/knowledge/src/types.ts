@@ -147,6 +147,11 @@ export interface SearchQuery {
   limit?: number
   /** 默认 false（只返回每个 id 的最新版） */
   all_versions?: boolean
+  /**
+   * 按 visibility 过滤（B3，§12.7）。**opt-in**：不传 = 不过滤（保持既有行为）；
+   * 传入可见性集合时只返回 `visibility IN (...)` 的条目。用于按角色/项目收窄读取面。
+   */
+  visibilities?: Array<'global' | 'project' | 'role'>
 }
 
 /** 检索结果（design.md §3.2 SearchResult）。score 越大越相关（-bm25）。 */
