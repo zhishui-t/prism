@@ -16,6 +16,7 @@ export function CodeGraphPage() {
   const [queryResult, setQueryResult] = useState<string>('')
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<string>('')
+  const [exporting, setExporting] = useState(false)
 
   // 首次加载后自动选中第一个项目
   useEffect(() => {
@@ -71,7 +72,23 @@ export function CodeGraphPage() {
     }
   }
 
-  const studioUrl = current ? `/studio/${encodeURIComponent(current)}/index.html` : ''
+  /** 导出为其他格式（obsidian/wiki/svg/graphml…）。 */
+  const onExport = async (format: string) => {
+    if (!current) return
+    setExporting(true)
+    setNotice('')
+    try {
+      const result = await api.graphExport(current, format)
+      setNotice(`已导出 ${format} → ${result.output}（${result.files.length} 个文件）`)
+    } catch (e) {
+      setNotice(`导出失败：${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  // Python 版 graphify 产物是 graph.html（非 npm fork 的 studio/index.html）
+  const studioUrl = current ? `/studio/${encodeURIComponent(current)}/graph.html` : ''
 
   return (
     <>
@@ -102,8 +119,25 @@ export function CodeGraphPage() {
           </button>
           {current && (
             <a href={studioUrl} target="_blank" rel="noreferrer">
-              <button type="button">新窗口打开 Studio</button>
+              <button type="button">新窗口打开图谱</button>
             </a>
+          )}
+          {current && (
+            <select
+              value=""
+              disabled={exporting}
+              onChange={(e) => {
+                if (e.target.value !== '') void onExport(e.target.value)
+              }}
+              title="导出为其他格式"
+            >
+              <option value="">{exporting ? '导出中…' : '导出…'}</option>
+              <option value="obsidian">Obsidian 仓库</option>
+              <option value="svg">SVG 矢量图</option>
+              <option value="graphml">GraphML</option>
+              <option value="wiki">Wiki Markdown</option>
+              <option value="callflow-html">调用流 HTML</option>
+            </select>
           )}
         </div>
 

@@ -57,13 +57,23 @@ export function studioRoute(registry: ProjectRegistry) {
     }
     let filePath = target
     if (targetStat.isDirectory()) {
-      filePath = join(target, 'index.html')
-      try {
-        targetStat = await stat(filePath)
-      } catch {
-        sendJson(ctx.res, 404, fail('not_found', `文件不存在: ${rel}/index.html`))
+      // 目录默认页：graph.html（Python 版 graphify 产物）优先，兼容 index.html（旧 npm fork studio）
+      const candidates = [join(target, 'graph.html'), join(target, 'index.html')]
+      let found: string | null = null
+      for (const candidate of candidates) {
+        try {
+          targetStat = await stat(candidate)
+          found = candidate
+          break
+        } catch {
+          // 继续试下一个
+        }
+      }
+      if (found === null) {
+        sendJson(ctx.res, 404, fail('not_found', `目录内无默认页: ${rel}`))
         return
       }
+      filePath = found
     }
     const type = MIME[extname(filePath).toLowerCase()] ?? 'application/octet-stream'
     ctx.res.writeHead(200, { 'Content-Type': type, 'Content-Length': targetStat.size, 'Cache-Control': 'no-cache' })

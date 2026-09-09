@@ -474,3 +474,86 @@ export async function graphSummary(
     return { exists: false, nodes: 0, edges: 0, communities: 0, path }
   }
 }
+
+// ===== 导出命令封装（graphify export <format>） =====
+
+/** graphify 支持的导出格式（Python 版 export 子命令）。 */
+export const GRAPHIFY_EXPORT_FORMATS = [
+  'obsidian',
+  'wiki',
+  'svg',
+  'graphml',
+  'neo4j',
+  'falkordb',
+  'callflow-html',
+] as const
+
+export type GraphifyExportFormat = (typeof GRAPHIFY_EXPORT_FORMATS)[number]
+
+export const EXPORT_FORMAT_LABELS: Record<GraphifyExportFormat, string> = {
+  obsidian: 'Obsidian 仓库（笔记 + Canvas）',
+  wiki: 'Wiki Markdown 文章',
+  svg: 'SVG 矢量图',
+  graphml: 'GraphML（Gephi/yEd）',
+  neo4j: 'Neo4j Cypher',
+  falkordb: 'FalkorDB Cypher',
+  'callflow-html': '调用流 HTML（Mermaid）',
+}
+
+export interface GraphExportResult {
+  format: GraphifyExportFormat
+  /** 产物路径（目录或文件） */
+  output: string
+  /** 产物文件清单（目录型格式） */
+  files: string[]
+  raw: string
+}
+
+/**
+ * 导出图谱为其他格式（`graphify export <format> --graph <path>`）。
+ * obsidian → `<root>/graphify-out/obsidian/`（笔记 + graph.canvas）；
+ * svg/graphml → `<root>/graphify-out/graph.<ext>`；wiki → `<root>/graphify-out/wiki/`。
+ */
+export async function graphExport(
+  root: string,
+  format: GraphifyExportFormat,
+  options: GraphQueryOptions = {},
+): Promise<GraphExportResult> {
+  if (!GRAPHIFY_EXPORT_FORMATS.includes(format)) {
+    throw new PrismError('bad_request', `不支持的导出格式: ${format}`, {
+      allowed: GRAPHIFY_EXPORT_FORMATS,
+    })
+  }
+  const graphPath = defaultGraphPath(root)
+  const outDir = join(root, 'graphify-out')
+  const args = ['export', format, '--graph', graphPath]
+  if (format === 'obsidian') args.push('--dir', join(outDir, 'obsidian'))
+
+  const { stdout } = await runGraphQuery(args, options)
+
+  // 产物定位：目录型（obsidian/wiki）与文件型（svg/graphml/neo4j/falkordb）分开处理
+  const dirFormats: GraphifyExportFormat[] = ['obsidian', 'wiki']
+  let output: string
+  let files: string[] = []
+  if (dirFormats.includes(format)) {
+    output = join(outDir, format)
+    try {
+      const { readdir } = await import('node:fs/promises')
+      files = (await readdir(output)).sort()
+    } catch {
+      files = []
+    }
+  } else if (format === 'svg') {
+    output = join(outDir, 'graph.svg')
+    files = ['graph.svg']
+  } else if (format === 'graphml') {
+    output = join(outDir, 'graph.graphml')
+    files = ['graph.graphml']
+  } else {
+    // neo4j / falkordb / callflow-html：Cypher 或 HTML，路径由 CLI 决定
+    output = outDir
+    const match = stdout.match(/(?:written|saved|Cypher|HTML)[^\n]*?([A-Za-z]:[\\/][^\s]+)/)
+    files = match !== null ? [match[1]!] : []
+  }
+  return { format, output, files, raw: stdout }
+}

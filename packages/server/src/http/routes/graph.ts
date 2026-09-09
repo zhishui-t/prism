@@ -14,6 +14,8 @@ import {
   graphAffected as queryGraphAffected,
   graphGodNodes as queryGraphGodNodes,
   graphSummary as queryGraphSummary,
+  graphExport as runGraphExport,
+  GRAPHIFY_EXPORT_FORMATS,
 } from '../../graph/graphify.js'
 import { BuildJobManager, type BuildRunner } from '../../graph/jobs.js'
 import { inspectGraphStatus, ProjectRegistry, type ProjectInfo } from '../../graph/registry.js'
@@ -55,6 +57,7 @@ export function graphRoutes(deps: GraphDeps): {
   affected: (ctx: RouteContext) => Promise<Envelope>
   godNodes: (ctx: RouteContext) => Promise<Envelope>
   summary: (ctx: RouteContext) => Promise<Envelope>
+  exportGraph: (ctx: RouteContext) => Promise<Envelope>
   status: (ctx: RouteContext) => Promise<Envelope>
 } {
   const projects = async (_ctx: RouteContext): Promise<Envelope> => {
@@ -179,6 +182,28 @@ export function graphRoutes(deps: GraphDeps): {
     return ok({ project: project.project, ...result })
   }
 
+  /** 导出图谱为其他格式：`POST /api/graph/export { project, format }`。 */
+  const exportGraph = async (ctx: RouteContext): Promise<Envelope> => {
+    const body = (await ctx.body()) as { project?: unknown; format?: unknown }
+    const format = typeof body.format === 'string' ? body.format.trim() : ''
+    if (format === '') {
+      throw new PrismError('bad_request', `缺少 format（可用: ${GRAPHIFY_EXPORT_FORMATS.join('/')}）`)
+    }
+    if (!GRAPHIFY_EXPORT_FORMATS.includes(format as never)) {
+      throw new PrismError('bad_request', `不支持的导出格式: ${format}`, {
+        allowed: GRAPHIFY_EXPORT_FORMATS,
+      })
+    }
+    const name = typeof body.project === 'string' ? body.project.trim() : ''
+    if (name === '') {
+      throw new PrismError('bad_request', '缺少 project 参数')
+    }
+    const project = await deps.registry.get(name)
+    await ensureGraph(project)
+    const result = await runGraphExport(project.root, format as never, queryOpts(project, deps))
+    return ok({ project: project.project, ...result })
+  }
+
   const status = async (ctx: RouteContext): Promise<Envelope> => {
     const project = await requireProject(ctx)
     return ok(await inspectGraphStatus(project.project, project.root, project.built_at))
@@ -192,7 +217,7 @@ export function graphRoutes(deps: GraphDeps): {
     return await deps.registry.get(name)
   }
 
-  return { projects, build, jobStatus, query, path, explain, affected, godNodes, summary, status }
+  return { projects, build, jobStatus, query, path, explain, affected, godNodes, summary, exportGraph, status }
 }
 
 /** 查询命令共用选项（cwd=项目根、超时与 env 透传）。 */

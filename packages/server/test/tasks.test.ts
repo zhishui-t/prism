@@ -1,3 +1,5 @@
+import { join } from 'node:path'
+
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { startServer } from '../src/app.js'
@@ -127,6 +129,28 @@ describe('studio 路径越界防护', () => {
     // '../secret.txt' 经 resolve 后逃出 base → 归一化为 'K:/proj/secret.txt' 必须拒绝
     expect(isInside(base, 'K:/proj/secret.txt')).toBe(false)
     expect(isInside(base, 'K:/other/index.html')).toBe(false)
+  })
+
+  it('目录默认页：graph.html 优先（Python 版 graphify 产物），兼容 index.html', async () => {
+    const home = await makeTempDir('prism-studio-default-')
+    const root = await makeTempDir('prism-studio-proj-')
+    // 只放 graph.html（Python 版 graphify 产物形态）
+    await putFile(join(root, 'graphify-out', 'graph.html'), '<html>graph</html>')
+    const registry = new ProjectRegistry(home)
+    await registry.register('demo', root)
+    const app = await startServer({ home, kb: undefined as never, port: 0 })
+    try {
+      const base = `http://127.0.0.1:${app.port}`
+      const res = await fetch(`${base}/studio/demo/`)
+      expect(res.status).toBe(200)
+      expect(await res.text()).toContain('graph')
+      // 显式文件名也可取
+      expect((await fetch(`${base}/studio/demo/graph.html`)).status).toBe(200)
+      // 不存在的文件 → 404
+      expect((await fetch(`${base}/studio/demo/nope.html`)).status).toBe(404)
+    } finally {
+      await app.close()
+    }
   })
 })
 

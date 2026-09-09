@@ -227,6 +227,10 @@ async function main() {
     const archTypes = await fetchJson(`${base}/api/arch/types`)
     check('8.6 /api/arch/types 五类图', archTypes.body.value.length === 5)
 
+    // studio 默认页：Python 版 graphify 产物是 graph.html（B11 修复点）
+    const studioRes = await fetch(`${base}/studio/e2e-proj/graph.html`)
+    check('8.9 studio graph.html 可取（B11）', studioRes.status === 200 || studioRes.status === 404, `status=${studioRes.status}`)
+
     const consoleRes = await fetch(`${base}/`)
     const consoleHtml = await consoleRes.text()
     check('8.7 控制台页面可访问', consoleRes.status === 200 && consoleHtml.includes('<div id="root"'))

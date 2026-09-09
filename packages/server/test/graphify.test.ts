@@ -6,6 +6,8 @@ import { describe, expect, it } from 'vitest'
 import {
   buildGraphArgs,
   defaultGraphPath,
+  graphExport,
+  GRAPHIFY_EXPORT_FORMATS,
   formatCommand,
   graphAffected,
   graphExplain,
@@ -217,5 +219,33 @@ describe('图谱查询封装（假 CLI 注入，验证参数与结构化解析�
 
     const empty = await graphSummary(join(dir, 'nope'))
     expect(empty.exists).toBe(false)
+  })
+
+  it('export：obsidian 产出目录 + 文件清单（假 CLI 预置产物）', async () => {
+    const dir = await tempDir()
+    await mkdir(join(dir, 'graphify-out', 'obsidian'), { recursive: true })
+    await writeFile(join(dir, 'graphify-out', 'obsidian', 'a.md'), '# a', 'utf-8')
+    await writeFile(join(dir, 'graphify-out', 'obsidian', 'graph.canvas'), '{}', 'utf-8')
+    const cli = await fakeCli({ export: 'Obsidian vault: 2 notes' })
+    const result = await graphExport(dir, 'obsidian', { env: { GRAPHIFY_BIN: cli } })
+    expect(result.format).toBe('obsidian')
+    expect(result.output).toContain('obsidian')
+    expect(result.files).toEqual(['a.md', 'graph.canvas'])
+  })
+
+  it('export：svg 定位到 graph.svg；未知格式 → bad_request', async () => {
+    const dir = await tempDir()
+    await mkdir(join(dir, 'graphify-out'), { recursive: true })
+    const cli = await fakeCli({ export: 'graph.svg written' })
+    const svg = await graphExport(dir, 'svg', { env: { GRAPHIFY_BIN: cli } })
+    expect(svg.output.endsWith('graph.svg')).toBe(true)
+
+    await expect(graphExport(dir, 'bogus' as never)).rejects.toMatchObject({ code: 'bad_request' })
+  })
+
+  it('GRAPHIFY_EXPORT_FORMATS 覆盖七种导出', () => {
+    expect([...GRAPHIFY_EXPORT_FORMATS]).toEqual([
+      'obsidian', 'wiki', 'svg', 'graphml', 'neo4j', 'falkordb', 'callflow-html',
+    ])
   })
 })

@@ -136,6 +136,7 @@ export async function createApp(options: AppOptions = {}): Promise<{
   router.add('GET', '/api/graph/affected', graph.affected)
   router.add('GET', '/api/graph/god-nodes', graph.godNodes)
   router.add('GET', '/api/graph/summary', graph.summary)
+  router.add('POST', '/api/graph/export', graph.exportGraph)
   router.add('GET', '/api/graph/status', graph.status)
 
   router.add('GET', '/studio/:project/*', studioRoute(registry))

@@ -268,6 +268,13 @@ export const api = {
       `/api/graph/query?project=${encodeURIComponent(project)}&q=${encodeURIComponent(q)}`,
     ),
 
+  /** 图谱导出（obsidian/wiki/svg/graphml…） */
+  graphExport: (project: string, format: string) =>
+    request<{ format: string; output: string; files: string[] }>('/api/graph/export', {
+      method: 'POST',
+      body: JSON.stringify({ project, format }),
+    }),
+
   graphStatus: (project: string) =>
     request<{ stale: boolean; detail?: string }>(
       `/api/graph/status?project=${encodeURIComponent(project)}`,

@@ -88,6 +88,7 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
   prism graph affected <node> [--depth N] --project <项目名>  变更影响面
   prism graph god-nodes [--top N] --project <项目名>         枢纽节点
   prism graph summary --project <项目名>                     图谱规模统计
+  prism graph export <格式> --project <项目名>               导出（obsidian/wiki/svg/graphml/…）
   prism graph status <项目名>
 
 全局：--home <path>  --json  --zcode-dir <path>（role/team/skill/install 类统一收 ZCode 根，~ 自动展开）

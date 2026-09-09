@@ -14,6 +14,9 @@ import {
   graphAffected as queryAffected,
   graphGodNodes as queryGodNodes,
   graphSummary as querySummary,
+  graphExport,
+  GRAPHIFY_EXPORT_FORMATS,
+  EXPORT_FORMAT_LABELS,
   type BuildRunner,
 } from '@prism/server'
 
@@ -39,11 +42,13 @@ export async function runGraph(ctx: CommandContext, args: string[], values: ArgV
       return await graphGodNodesCmd(ctx, rest, values)
     case 'summary':
       return await graphSummaryCmd(ctx, rest, values)
+    case 'export':
+      return await graphExportCmd(ctx, rest, values)
     case 'status':
       return await graphStatus(ctx, rest)
     default:
       ctx.stderr(
-        '用法: prism graph <build|query|path|explain|affected|god-nodes|summary|status> ...',
+        '用法: prism graph <build|query|path|explain|affected|god-nodes|summary|export|status> ...',
       )
       return 1
   }
@@ -254,6 +259,39 @@ async function graphSummaryCmd(ctx: CommandContext, _args: string[], values: Arg
   }
   ctx.stdout(`项目: ${target.project}（${target.root}）`)
   ctx.stdout(`节点 ${summary.nodes}  边 ${summary.edges}  社区 ${summary.communities}`)
+  return 0
+}
+
+/** `prism graph export <格式> --project <名>`（obsidian/wiki/svg/graphml/…）。 */
+async function graphExportCmd(ctx: CommandContext, args: string[], values: ArgValues): Promise<number> {
+  const format = args[0]
+  if (format === undefined) {
+    ctx.stderr(
+      `用法: prism graph export <格式> --project <项目名>
+  可用格式: ${GRAPHIFY_EXPORT_FORMATS.join(' / ')}`,
+    )
+    return 1
+  }
+  if (!GRAPHIFY_EXPORT_FORMATS.includes(format as never)) {
+    ctx.stderr(`错误 [bad_request] 不支持的导出格式: ${format}（可用: ${GRAPHIFY_EXPORT_FORMATS.join('/')}）`)
+    return 1
+  }
+  const target = await resolveProject(ctx, values, undefined, '用法: prism graph export <格式> --project <项目名>')
+  if (target === null || !(await ensureGraph(ctx, target.root))) return 1
+
+  const result = await graphExport(target.root, format as never, { cwd: target.root })
+  if (ctx.json) {
+    ctx.stdout(JSON.stringify({ ok: true, value: { project: target.project, ...result } }))
+    return 0
+  }
+  ctx.stdout(`已导出 ${EXPORT_FORMAT_LABELS[format as never]}`)
+  ctx.stdout(`  产物: ${result.output}`)
+  if (result.files.length > 0) {
+    ctx.stdout(`  文件: ${result.files.slice(0, 8).join(', ')}${result.files.length > 8 ? ` …共 ${result.files.length} 个` : ''}`)
+  }
+  if (format === 'obsidian') {
+    ctx.stdout('  用法: 把该目录作为 vault 在 Obsidian 中打开')
+  }
   return 0
 }
 
