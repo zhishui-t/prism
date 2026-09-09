@@ -106,4 +106,78 @@ describe('架构图谱路由（Archify 封装：types/validate/render/preview）
     expect((await post('/api/arch/validate', { type: 'architecture' })).status).toBe(400)
     expect((await post('/api/arch/validate', { type: 'bogus', ir: VALID_IR })).status).toBe(400)
   })
+
+  it('render 带作用域 → sidecar 元数据落盘，diagrams 按 book/module 过滤', async () => {
+    // 两个不同作用域的产物：java-standards/exception 与 java-standards/naming
+    const a = (await (
+      await post('/api/arch/render', {
+        type: 'architecture',
+        ir: VALID_IR,
+        name: 'scoped-a',
+        book: 'java-standards',
+        module: 'exception',
+        layer: 'global',
+      })
+    ).json()) as {
+      ok: boolean
+      value: { meta: { book?: string; module?: string; ir_hash: string; archify_version: string } }
+    }
+    expect(a.ok).toBe(true)
+    expect(a.value.meta.book).toBe('java-standards')
+    expect(a.value.meta.module).toBe('exception')
+    expect(a.value.meta.archify_version).toBe('2.16.0')
+    expect(a.value.meta.ir_hash).toMatch(/^[0-9a-f]{16}$/)
+
+    await post('/api/arch/render', {
+      type: 'architecture',
+      ir: VALID_IR,
+      name: 'scoped-b',
+      book: 'java-standards',
+      module: 'naming',
+      layer: 'global',
+    })
+    // 另一本书，确保过滤真的按书隔离
+    await post('/api/arch/render', {
+      type: 'architecture',
+      ir: VALID_IR,
+      name: 'scoped-c',
+      book: 'other-book',
+      module: 'misc',
+      layer: 'global',
+    })
+
+    const byBook = (await (
+      await fetch(`${base}/api/arch/diagrams?book=${encodeURIComponent('java-standards')}`)
+    ).json()) as { value: Array<{ name: string; book?: string; title?: string; has_ir: boolean }> }
+    expect(byBook.value.map((d) => d.name).sort()).toEqual(['scoped-a.html', 'scoped-b.html'])
+    expect(byBook.value.every((d) => d.book === 'java-standards')).toBe(true)
+    // 标题取自 IR meta.title；IR 源存在
+    expect(byBook.value[0]?.title).toBe('HTTP 测试架构')
+    expect(byBook.value.every((d) => d.has_ir)).toBe(true)
+
+    const byModule = (await (
+      await fetch(`${base}/api/arch/diagrams?book=java-standards&module=exception`)
+    ).json()) as { value: Array<{ name: string }> }
+    expect(byModule.value.map((d) => d.name)).toEqual(['scoped-a.html'])
+
+    // 未指定作用域的旧产物仍出现在全量列表
+    const all = (await (await fetch(`${base}/api/arch/diagrams`)).json()) as { value: Array<{ name: string }> }
+    expect(all.value.map((d) => d.name)).toContain('demo.html')
+  })
+
+  it('GET /api/arch/ir/:type/:file → IR 源 + 元数据；防穿越', async () => {
+    const res = await fetch(`${base}/api/arch/ir/architecture/scoped-a.html`)
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      ok: boolean
+      value: { ir: { meta: { title: string } }; meta: { book?: string; module?: string } | null }
+    }
+    expect(body.ok).toBe(true)
+    expect(body.value.ir.meta.title).toBe('HTTP 测试架构')
+    expect(body.value.meta?.book).toBe('java-standards')
+    expect(body.value.meta?.module).toBe('exception')
+
+    expect((await fetch(`${base}/api/arch/ir/architecture/..%2F..%2Fetc%2Fpasswd`)).status).toBeGreaterThanOrEqual(400)
+    expect((await fetch(`${base}/api/arch/ir/architecture/nope.html`)).status).toBe(404)
+  })
 })

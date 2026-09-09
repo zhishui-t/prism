@@ -121,12 +121,44 @@ export interface ArchType {
   label: string
 }
 
-/** 已渲染的架构图产物。 */
+/** 已渲染的架构图产物（带作用域，供按书/模块过滤）。 */
 export interface ArchDiagram {
   type: string
   name: string
   bytes: number
   mtime: string
+  /** 图标题（IR meta.title） */
+  title?: string
+  layer?: string
+  owner?: string
+  book?: string
+  module?: string
+  archify_version?: string
+  /** 同目录是否有 IR 源 */
+  has_ir: boolean
+}
+
+/** 产物元数据（sidecar <name>.meta.json）。 */
+export interface ArchArtifactMeta {
+  type: string
+  name: string
+  archify_version: string
+  ir_hash: string
+  ir_file: string
+  title?: string
+  layer?: string
+  owner?: string
+  book?: string
+  module?: string
+  created_at: string
+}
+
+/** 产物 IR + 元数据。 */
+export interface ArchIrResult {
+  type: string
+  name: string
+  ir: unknown
+  meta: ArchArtifactMeta | null
 }
 
 /** 渲染结果。 */
@@ -354,7 +386,16 @@ export const api = {
 
   archTypes: () => request<ArchType[]>('/api/arch/types'),
 
-  archDiagrams: () => request<ArchDiagram[]>('/api/arch/diagrams'),
+  archDiagrams: (params?: { book?: string; module?: string }) => {
+    const qs = new URLSearchParams()
+    if (params?.book !== undefined) qs.set('book', params.book)
+    if (params?.module !== undefined) qs.set('module', params.module)
+    const suffix = qs.toString()
+    return request<ArchDiagram[]>(`/api/arch/diagrams${suffix ? `?${suffix}` : ''}`)
+  },
+
+  archIr: (type: string, name: string) =>
+    request<ArchIrResult>(`/api/arch/ir/${encodeURIComponent(type)}/${encodeURIComponent(name)}`),
 
   archValidate: (type: string, ir: unknown) =>
     request<ArchValidation>('/api/arch/validate', {

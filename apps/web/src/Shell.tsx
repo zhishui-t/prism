@@ -8,10 +8,11 @@ import { RolesPage } from './pages/Roles.tsx'
 import { TeamsPage } from './pages/Teams.tsx'
 import { SkillsPage } from './pages/Skills.tsx'
 
-export type PageKey = 'knowledge' | 'kbgraph' | 'graph' | 'arch' | 'roles' | 'teams' | 'skills' | 'tasks' | 'work'
+// 知识图谱/架构图谱没有一级页：它们归入「知识库 → 书内」（用户裁决）。
+// 注意 pages/KnowledgeGraph.tsx 与 pages/Arch.tsx 已无引用，保留仅作参考。
+export type PageKey = 'knowledge' | 'graph' | 'roles' | 'teams' | 'skills' | 'tasks' | 'work'
 
 const NAV: Array<{ key: PageKey; label: string; group?: string }> = [
-  // 知识图谱/架构图谱已归入「知识库 → 书内」（用户裁决：它们属于具体的书，不是一级页）
   { key: 'knowledge', label: '知识库' },
   { key: 'graph', label: '代码图谱' },
   { key: 'roles', label: '角色', group: '团队' },

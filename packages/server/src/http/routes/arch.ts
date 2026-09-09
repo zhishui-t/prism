@@ -6,12 +6,40 @@ import { PrismError } from '@prism/core'
 import { prismPaths } from '@prism/core'
 
 import { ok, type Envelope } from '../envelope.js'
-import { ARCHIFY_DIAGRAM_TYPES, ARCHIFY_TYPE_LABELS, renderDiagram, validateDiagram } from '../../graph/archify.js'
+import {
+  ARCHIFY_DIAGRAM_TYPES,
+  ARCHIFY_TYPE_LABELS,
+  artifactStat,
+  isInside,
+  readArtifactMeta,
+  readIrCopy,
+  renderDiagram,
+  validateDiagram,
+  writeArtifactMeta,
+} from '../../graph/archify.js'
 import type { RouteContext } from '../router.js'
 
 export interface ArchDeps {
   /** PRISM_HOME（产物落 <home>/archify/<type>/） */
   home: string
+}
+
+/** 产物列表项（带作用域，供界面按书/模块过滤）。 */
+export interface ArchArtifact {
+  type: string
+  name: string
+  bytes: number
+  mtime: string
+  /** 图标题（取自 IR meta.title 或 sidecar） */
+  title?: string
+  layer?: string
+  owner?: string
+  book?: string
+  module?: string
+  /** 渲染器版本（sidecar） */
+  archify_version?: string
+  /** IR 是否可读（同目录 <name>.ir.json 存在） */
+  has_ir: boolean
 }
 
 /** 图类型守卫。 */
@@ -35,6 +63,7 @@ export function archRoutes(deps: ArchDeps): {
   diagrams: (ctx: RouteContext) => Promise<Envelope>
   validate: (ctx: RouteContext) => Promise<Envelope>
   render: (ctx: RouteContext) => Promise<Envelope>
+  ir: (ctx: RouteContext) => Promise<Envelope>
   preview: (ctx: RouteContext) => Promise<void>
 } {
   const baseDir = (): string => join(prismPaths(deps.home).home, 'archify')
@@ -42,9 +71,12 @@ export function archRoutes(deps: ArchDeps): {
   const types = async (): Promise<Envelope> =>
     ok(ARCHIFY_DIAGRAM_TYPES.map((type) => ({ type, label: ARCHIFY_TYPE_LABELS[type] })))
 
-  const diagrams = async (): Promise<Envelope> => {
+  const diagrams = async (ctx: RouteContext): Promise<Envelope> => {
     const { readdir } = await import('node:fs/promises')
-    const out: Array<{ type: string; name: string; bytes: number; mtime: string }> = []
+    // 过滤条件：?book=&module=（module 为空串表示只看「待归类」）
+    const bookFilter = ctx.query.get('book')
+    const moduleFilter = ctx.query.get('module')
+    const out: ArchArtifact[] = []
     for (const type of ARCHIFY_DIAGRAM_TYPES) {
       const dir = join(baseDir(), type)
       let entries: string[]
@@ -57,10 +89,29 @@ export function archRoutes(deps: ArchDeps): {
         if (!entry.endsWith('.html')) continue
         const full = join(dir, entry)
         const info = await stat(full)
-        out.push({ type, name: entry, bytes: info.size, mtime: info.mtime.toISOString() })
+        const meta = await readArtifactMeta(full)
+        out.push({
+          type,
+          name: entry,
+          bytes: info.size,
+          mtime: info.mtime.toISOString(),
+          ...(meta?.title !== undefined ? { title: meta.title } : {}),
+          ...(meta?.layer !== undefined ? { layer: meta.layer } : {}),
+          ...(meta?.owner !== undefined ? { owner: meta.owner } : {}),
+          ...(meta?.book !== undefined ? { book: meta.book } : {}),
+          ...(meta?.module !== undefined ? { module: meta.module } : {}),
+          ...(meta?.archify_version !== undefined ? { archify_version: meta.archify_version } : {}),
+          has_ir: (await artifactStat(full.replace(/\.html$/i, '.ir.json'))) !== null,
+        })
       }
     }
-    return ok(out.sort((a, b) => b.mtime.localeCompare(a.mtime)))
+    // 作用域过滤：指定 book 时只留该书的产物；再指定 module 时按模块收窄。
+    const filtered = out.filter((a) => {
+      if (bookFilter !== null && a.book !== bookFilter) return false
+      if (moduleFilter !== null && (a.module ?? '') !== moduleFilter) return false
+      return true
+    })
+    return ok(filtered.sort((a, b) => b.mtime.localeCompare(a.mtime)))
   }
 
   const validate = async (ctx: RouteContext): Promise<Envelope> => {
@@ -89,6 +140,14 @@ export function archRoutes(deps: ArchDeps): {
     await renderDiagram(type, body['ir'], htmlPath)
     const irCopy = join(dir, `${name}.ir.json`)
     await writeFile(irCopy, `${JSON.stringify(body['ir'], null, 2)}\n`, 'utf-8')
+    // sidecar：作用域（可选）+ 版本 + IR 哈希，让界面能按书/模块过滤产物
+    const scope = {
+      ...(typeof body['layer'] === 'string' ? { layer: body['layer'] } : {}),
+      ...(typeof body['owner'] === 'string' ? { owner: body['owner'] } : {}),
+      ...(typeof body['book'] === 'string' ? { book: body['book'] } : {}),
+      ...(typeof body['module'] === 'string' ? { module: body['module'] } : {}),
+    }
+    const meta = await writeArtifactMeta(htmlPath, body['ir'], scope)
     const info = await stat(htmlPath)
     return ok({
       type,
@@ -96,7 +155,28 @@ export function archRoutes(deps: ArchDeps): {
       bytes: info.size,
       preview: `/api/arch/preview/${type}/${name}.html`,
       ir: irCopy,
+      meta,
     })
+  }
+
+  /** 取产物 IR 源（`<name>.ir.json`）与 sidecar 元数据，供界面「IR / 元数据」子标签展示。 */
+  const ir = async (ctx: RouteContext): Promise<Envelope> => {
+    const type = ctx.params.type ?? ''
+    const file = ctx.params.file ?? ''
+    assertType(type)
+    if (!/^[A-Za-z0-9_.-]+\.html$/.test(file)) {
+      throw new PrismError('bad_request', `非法文件名: ${file}`)
+    }
+    const root = resolve(join(baseDir(), type))
+    const htmlPath = resolve(join(root, file))
+    if (!isInside(root, htmlPath)) {
+      throw new PrismError('bad_request', '路径越界')
+    }
+    const [irValue, meta] = await Promise.all([readIrCopy(htmlPath), readArtifactMeta(htmlPath)])
+    if (irValue === null && meta === null) {
+      throw new PrismError('not_found', `该产物没有 IR 源或元数据: ${type}/${file}`)
+    }
+    return ok({ type, name: file, ir: irValue, meta })
   }
 
   /** 预览：只允许 <home>/archify/<type>/<file>，且解析后仍在根内（防穿越）。 */
@@ -109,7 +189,7 @@ export function archRoutes(deps: ArchDeps): {
     }
     const root = resolve(join(baseDir(), type))
     const target = resolve(join(root, file))
-    if (!target.startsWith(root)) {
+    if (!isInside(root, target)) {
       throw new PrismError('bad_request', '路径越界')
     }
     let info
@@ -127,7 +207,7 @@ export function archRoutes(deps: ArchDeps): {
     createReadStream(target).pipe(res)
   }
 
-  return { types, diagrams, validate, render, preview }
+  return { types, diagrams, validate, render, ir, preview }
 }
 
 /** 读取本地 IR 文件（供上层测试/脚本复用）。 */

@@ -11,8 +11,9 @@
  */
 
 import { constants as fsConstants } from 'node:fs'
-import { access, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { access, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -40,6 +41,9 @@ export const ARCHIFY_TYPE_LABELS: Record<ArchifyDiagramType, string> = {
 
 /** 默认超时（渲染是纯计算，比建图快得多）。 */
 export const DEFAULT_ARCHIFY_TIMEOUT_MS = 120_000
+
+/** vendored archify 版本（与 3rd/archify/package.json 对齐，写进产物元数据供溯源）。 */
+export const ARCHIFY_VERSION = '2.16.0'
 
 export interface ArchifyCommand {
   command: string
@@ -339,4 +343,119 @@ export function isInside(root: string, target: string): boolean {
 /** 产物目录的父级（用于相对路径展示）。 */
 export function parentDir(path: string): string {
   return dirname(path)
+}
+
+/**
+ * 渲染产物元数据（sidecar `<name>.meta.json`，与 HTML/IR 同目录）。
+ *
+ * 为什么用 sidecar 而不是数据库：产物是「派生文件」，跟着 HTML 一起走才不会失联——
+ * 把文件拷到别处、或换一个 PRISM_HOME，元数据仍在。作用域字段（book/module）让
+ * 界面能回答「这张图属于哪本书」，而不必依赖条目正文里的人工约定。
+ */
+export interface ArchifyArtifactMeta {
+  type: ArchifyDiagramType
+  /** 文件名（含 .html） */
+  name: string
+  /** 渲染器版本，溯源用 */
+  archify_version: string
+  /** IR 内容哈希（sha256 前 16 位），判断产物是否与当前 IR 同步 */
+  ir_hash: string
+  /** IR 副本文件名（同目录） */
+  ir_file: string
+  /** 图标题（取 IR 的 meta.title） */
+  title?: string
+  /** 知识库作用域：这本书 / 这个模块（可缺省——产物可以不属于任何书） */
+  layer?: string
+  owner?: string
+  book?: string
+  module?: string
+  created_at: string
+}
+
+/** 产物的 sidecar 元数据路径：`<name>.html` → `<name>.meta.json`。 */
+export function artifactMetaPath(htmlPath: string): string {
+  return htmlPath.replace(/\.html$/i, '.meta.json')
+}
+
+/** IR 内容哈希（sha256 前 16 位十六进制）。 */
+export function irHash(ir: unknown): string {
+  return createHash('sha256').update(JSON.stringify(ir)).digest('hex').slice(0, 16)
+}
+
+/** 从 IR 里尽力取 `meta.title`（五类图都有该字段）。 */
+export function irTitle(ir: unknown): string | undefined {
+  if (typeof ir !== 'object' || ir === null) return undefined
+  const meta = (ir as Record<string, unknown>)['meta']
+  if (typeof meta !== 'object' || meta === null) return undefined
+  const title = (meta as Record<string, unknown>)['title']
+  return typeof title === 'string' && title.trim() !== '' ? title.trim() : undefined
+}
+
+/** 写产物 sidecar 元数据（渲染后调用）。 */
+export async function writeArtifactMeta(
+  htmlPath: string,
+  ir: unknown,
+  scope: { layer?: string; owner?: string; book?: string; module?: string } = {},
+): Promise<ArchifyArtifactMeta> {
+  const type = resolveDiagramTypeFromPath(htmlPath)
+  const name = htmlPath.split(/[/\\]/).pop() ?? 'diagram.html'
+  const title = irTitle(ir)
+  const meta: ArchifyArtifactMeta = {
+    type,
+    name,
+    archify_version: ARCHIFY_VERSION,
+    ir_hash: irHash(ir),
+    ir_file: name.replace(/\.html$/i, '.ir.json'),
+    ...(title !== undefined ? { title } : {}),
+    ...(scope.layer !== undefined ? { layer: scope.layer } : {}),
+    ...(scope.owner !== undefined ? { owner: scope.owner } : {}),
+    ...(scope.book !== undefined ? { book: scope.book } : {}),
+    ...(scope.module !== undefined ? { module: scope.module } : {}),
+    created_at: new Date().toISOString(),
+  }
+  await writeFile(artifactMetaPath(htmlPath), `${JSON.stringify(meta, null, 2)}\n`, 'utf-8')
+  return meta
+}
+
+/** 读产物 sidecar 元数据；不存在或非法返回 null（旧产物没有 sidecar 属正常）。 */
+export async function readArtifactMeta(htmlPath: string): Promise<ArchifyArtifactMeta | null> {
+  try {
+    const text = await readFile(artifactMetaPath(htmlPath), 'utf-8')
+    const parsed = JSON.parse(text) as unknown
+    if (typeof parsed !== 'object' || parsed === null) return null
+    const record = parsed as Record<string, unknown>
+    const type = record['type']
+    if (typeof type !== 'string' || !ARCHIFY_DIAGRAM_TYPES.includes(type as ArchifyDiagramType)) return null
+    return parsed as ArchifyArtifactMeta
+  } catch {
+    return null
+  }
+}
+
+/** 从产物路径反推图类型（`.../archify/<type>/<name>.html`）。 */
+function resolveDiagramTypeFromPath(htmlPath: string): ArchifyDiagramType {
+  const parent = dirname(resolve(htmlPath)).split(/[/\\]/).pop() ?? ''
+  return ARCHIFY_DIAGRAM_TYPES.includes(parent as ArchifyDiagramType)
+    ? (parent as ArchifyDiagramType)
+    : 'architecture'
+}
+
+/** 读 IR 副本文件（`<name>.ir.json`）；缺失返回 null。 */
+export async function readIrCopy(htmlPath: string): Promise<unknown | null> {
+  try {
+    const text = await readFile(htmlPath.replace(/\.html$/i, '.ir.json'), 'utf-8')
+    return JSON.parse(text) as unknown
+  } catch {
+    return null
+  }
+}
+
+/** 产物文件信息（大小 + mtime），供列表展示。 */
+export async function artifactStat(htmlPath: string): Promise<{ bytes: number; mtime: string } | null> {
+  try {
+    const info = await stat(htmlPath)
+    return { bytes: info.size, mtime: info.mtime.toISOString() }
+  } catch {
+    return null
+  }
 }

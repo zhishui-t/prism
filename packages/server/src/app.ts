@@ -150,6 +150,7 @@ export async function createApp(options: AppOptions = {}): Promise<{
   router.add('GET', '/api/arch/diagrams', arch.diagrams)
   router.add('POST', '/api/arch/validate', arch.validate)
   router.add('POST', '/api/arch/render', arch.render)
+  router.add('GET', '/api/arch/ir/:type/:file', arch.ir)
   router.add('GET', '/api/arch/preview/:type/:file', arch.preview)
 
   const tasks = taskRoutes(home)

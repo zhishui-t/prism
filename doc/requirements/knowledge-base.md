@@ -383,6 +383,12 @@ uploaded → converting → converted → previewing → active
 
 **图谱显示**：**代码图谱是独立一级页**（不并入知识库，见 §11）；知识图谱在知识库内自绘（条目/模块/书切换）；架构图 iframe 预览 Archify HTML，标签页切 [预览 | IR | 元数据 | 版本历史]。
 
+> **实现进度（2026-09-08）**：预览 / IR / 元数据三个子标签已落地（`apps/web/src/pages/Knowledge.tsx` 的 `ScopePanel`）。
+> 版本历史待补——它依赖「产物 ↔ diagram 条目」的绑定，当前产物通过 sidecar `<name>.meta.json`
+> 记录作用域（`layer/owner/book/module`）、`archify_version` 与 `ir_hash`，界面据此按书/模块过滤
+> （`GET /api/arch/diagrams?book=&module=`）；IR 源经 `GET /api/arch/ir/:type/:file` 读取。
+> 渲染入口：`prism arch render <type> <ir.json> --book <书> [--module <模块>]`。
+
 ---
 
 ## 8. 对外接口

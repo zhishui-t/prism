@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
-import { api, type CatalogEntry, type KbGraphEdge, type KbGraphNode, type KbGraphView } from '../api.ts'
+import { api, type ArchDiagram, type CatalogEntry, type KbGraphEdge, type KbGraphNode, type KbGraphView } from '../api.ts'
 import { StarCanvas, seededRandom, useStarfield, type Viewport } from '../components/StarCanvas.tsx'
 import { State } from '../components/State.tsx'
 import { useAsync } from '../components/useAsync.ts'
@@ -690,7 +690,9 @@ function ScopePanel({
   entries: CatalogEntry[]
 }) {
   const [tab, setTab] = useState<'graph' | 'arch' | 'entries'>('graph')
-  const [preview, setPreview] = useState<string>('')
+  const [preview, setPreview] = useState<ArchDiagram | undefined>(undefined)
+  // 架构图面板的子标签：预览 | IR | 元数据（knowledge-base.md §384）
+  const [archTab, setArchTab] = useState<'preview' | 'ir' | 'meta'>('preview')
 
   const scopeLabel =
     level.kind === 'module'
@@ -718,7 +720,27 @@ function ScopePanel({
       (level.kind === 'book' || e.module === level.module),
   )
   const diagrams = scoped.filter((e) => e.type === 'diagram')
-  const archAssets = useAsync(() => api.archDiagrams(), [])
+  // 产物按当前作用域过滤：书详情看整本书的图，模块详情只看该模块的图
+  const archAssets = useAsync(
+    () =>
+      api.archDiagrams(
+        level.kind === 'module'
+          ? { book: level.book, module: level.module }
+          : { book: level.book },
+      ),
+    [level.kind, level.book, level.kind === 'module' ? level.module : ''],
+  )
+  // 自动选中最新产物，免去用户多点一次
+  useEffect(() => {
+    if (preview === undefined && archAssets.data !== undefined && archAssets.data.length > 0) {
+      setPreview(archAssets.data[0])
+    }
+  }, [archAssets.data, preview])
+
+  const previewUrl =
+    preview === undefined
+      ? ''
+      : `/api/arch/preview/${preview.type}/${encodeURIComponent(preview.name)}`
 
   return (
     <div className="card scope-panel">
@@ -750,11 +772,20 @@ function ScopePanel({
 
       {tab === 'arch' && (
         <div style={{ marginTop: 12 }}>
+          {/* 该层级的 diagram 条目：点击即选中对应产物 */}
+          <div className="small muted" style={{ marginBottom: 6 }}>
+            diagram 条目（{diagrams.length}）
+          </div>
           {diagrams.length === 0 ? (
             <div className="empty">
               该{level.kind === 'module' ? '模块' : '书'}还没有 <span className="mono">type: diagram</span> 条目。
               <div className="small muted" style={{ marginTop: 6 }}>
-                用 <span className="mono">prism arch render &lt;type&gt; &lt;ir.json&gt;</span> 渲染后，IR 与 HTML 可作为 diagram 条目落库。
+                用{' '}
+                <span className="mono">
+                  prism arch render &lt;type&gt; &lt;ir.json&gt; --book {level.book}
+                  {level.kind === 'module' && level.module !== '' ? ` --module ${level.module}` : ''}
+                </span>{' '}
+                渲染后，产物会自动归到这本书。
               </div>
             </div>
           ) : (
@@ -778,30 +809,61 @@ function ScopePanel({
             </table>
           )}
 
-          {/* 已渲染的 Archify 产物（可预览） */}
+          {/* 已渲染产物（Archify）：按当前书/模块过滤 */}
           <div className="small muted" style={{ margin: '14px 0 6px' }}>
-            已渲染产物（Archify）
+            已渲染产物（Archify）· 归属本书 {archAssets.data?.length ?? 0} 个
           </div>
           <State loading={archAssets.loading} error={archAssets.error}>
             {(archAssets.data?.length ?? 0) === 0 ? (
-              <div className="small muted">（还没有渲染产物）</div>
+              <div className="small muted">
+                （本书还没有渲染产物。加 <span className="mono">--book {level.book}</span> 渲染即可归到此处）
+              </div>
             ) : (
               <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
                 {archAssets.data?.map((d) => (
                   <button
                     key={`${d.type}/${d.name}`}
-                    className={preview === `/api/arch/preview/${d.type}/${d.name}` ? 'primary' : ''}
-                    onClick={() => setPreview(`/api/arch/preview/${d.type}/${d.name}`)}
+                    className={preview !== undefined && preview.type === d.type && preview.name === d.name ? 'primary' : ''}
+                    onClick={() => {
+                      setPreview(d)
+                      setArchTab('preview')
+                    }}
+                    title={d.title ?? d.name}
                   >
-                    {d.type} · {d.name}
+                    {TYPE_LABEL_DIAGRAM[d.type] ?? d.type} · {d.title ?? d.name}
                   </button>
                 ))}
               </div>
             )}
           </State>
-          {preview !== '' && (
-            <div className="iframe-wrap" style={{ marginTop: 10 }}>
-              <iframe title="arch-preview" src={preview} />
+
+          {preview !== undefined && (
+            <div style={{ marginTop: 12 }}>
+              {/* 子标签：预览 | IR | 元数据（knowledge-base.md §384） */}
+              <div className="row" style={{ gap: 6, marginBottom: 8 }}>
+                {(['preview', 'ir', 'meta'] as const).map((t) => (
+                  <button key={t} className={archTab === t ? 'primary' : ''} onClick={() => setArchTab(t)}>
+                    {t === 'preview' ? '预览' : t === 'ir' ? 'IR' : '元数据'}
+                  </button>
+                ))}
+                <a
+                  href={previewUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="small"
+                  style={{ marginLeft: 'auto', alignSelf: 'center' }}
+                >
+                  新窗口打开 ↗
+                </a>
+              </div>
+
+              {archTab === 'preview' && (
+                <div className="iframe-wrap">
+                  <iframe title={`架构图 ${preview.name}`} src={previewUrl} />
+                </div>
+              )}
+              {archTab === 'ir' && <ArchIrView type={preview.type} name={preview.name} mode="ir" />}
+              {archTab === 'meta' && <ArchIrView type={preview.type} name={preview.name} mode="meta" />}
             </div>
           )}
         </div>
@@ -836,6 +898,60 @@ function ScopePanel({
         </div>
       )}
     </div>
+  )
+}
+
+/** 五类图的界面标签（产物按钮用）。 */
+const TYPE_LABEL_DIAGRAM: Record<string, string> = {
+  architecture: '架构图',
+  sequence: '时序图',
+  lifecycle: '生命周期图',
+  dataflow: '数据流图',
+  workflow: '工作流图',
+}
+
+/** 产物的 IR 源 / 元数据视图（IR 是源、HTML 是派生，两者都在这里可查）。 */
+function ArchIrView({ type, name, mode }: { type: string; name: string; mode: 'ir' | 'meta' }) {
+  const data = useAsync(() => api.archIr(type, name), [type, name])
+  return (
+    <State loading={data.loading} error={data.error}>
+      {data.data && mode === 'ir' ? (
+        data.data.ir === null ? (
+          <div className="empty small">该产物没有 IR 源文件（可能是早期渲染的）</div>
+        ) : (
+          <pre className="entry-body mono small" style={{ maxHeight: 480, overflow: 'auto' }}>
+            {JSON.stringify(data.data.ir, null, 2)}
+          </pre>
+        )
+      ) : null}
+      {data.data && mode === 'meta' ? (
+        data.data.meta === null ? (
+          <div className="empty small">该产物没有元数据（早期渲染的产物没有 sidecar）</div>
+        ) : (
+          <table>
+            <tbody>
+              {[
+                ['类型', TYPE_LABEL_DIAGRAM[data.data.meta.type] ?? data.data.meta.type],
+                ['文件', data.data.meta.name],
+                ['标题', data.data.meta.title ?? '—'],
+                ['归属', data.data.meta.book ?? '（未归属）'],
+                ['模块', data.data.meta.module ?? '—'],
+                ['Archify 版本', data.data.meta.archify_version],
+                ['IR 哈希', data.data.meta.ir_hash],
+                ['渲染时间', data.data.meta.created_at.replace('T', ' ').slice(0, 19)],
+              ].map(([k, v]) => (
+                <tr key={k}>
+                  <td className="small muted" style={{ width: 120 }}>
+                    {k}
+                  </td>
+                  <td className="mono small">{v}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )
+      ) : null}
+    </State>
   )
 }
 

@@ -15,6 +15,7 @@ import {
   ARCHIFY_TYPE_LABELS,
   renderDiagram,
   validateDiagram,
+  writeArtifactMeta,
   type ArchifyDiagramType,
 } from '@prism/server'
 
@@ -36,7 +37,8 @@ export async function runArch(ctx: CommandContext, args: string[], values: ArgVa
           `用法: prism arch <types|validate|render> ...\n` +
             `  types                                   列出五类图\n` +
             `  validate <type> <ir.json>               校验 IR（schema + 布局）\n` +
-            `  render <type> <ir.json> [--out <html>]  渲染为自包含 HTML`,
+            `  render <type> <ir.json> [--out <html>] [--book <书>] [--module <模块>]\n` +
+            `                                          渲染为自包含 HTML；--book/--module 把产物归到书内`,
         )
         return 1
     }
@@ -135,12 +137,26 @@ async function archRender(ctx: CommandContext, args: string[], values: ArgValues
   const irCopy = outPath.replace(/\.html$/i, '.ir.json')
   await writeFile(irCopy, `${JSON.stringify(ir, null, 2)}\n`, 'utf-8')
 
+  // sidecar 元数据：作用域（--book/--module）+ 版本 + IR 哈希，让界面能按书过滤产物
+  const scope = {
+    ...(values.layer !== undefined ? { layer: String(values.layer) } : {}),
+    ...(values.owner !== undefined ? { owner: String(values.owner) } : {}),
+    ...(values.book !== undefined ? { book: String(values.book) } : {}),
+    ...(values.module !== undefined ? { module: String(values.module) } : {}),
+  }
+  const meta = await writeArtifactMeta(outPath, ir, scope)
+
   if (ctx.json) {
-    ctx.stdout(JSON.stringify({ ok: true, value: { type, html: result.htmlPath, ir: irCopy } }))
+    ctx.stdout(JSON.stringify({ ok: true, value: { type, html: result.htmlPath, ir: irCopy, meta } }))
   } else {
     ctx.stdout(`已渲染 ${ARCHIFY_TYPE_LABELS[type]} → ${result.htmlPath}`)
     ctx.stdout(`  IR 源: ${irCopy}`)
-    ctx.stdout('  预览: prism serve 后打开控制台「架构图谱」页')
+    if (meta.book !== undefined) {
+      ctx.stdout(`  归属: ${meta.book}${meta.module !== undefined ? ` / ${meta.module}` : ''}`)
+    } else {
+      ctx.stdout('  归属: 未指定（加 --book <书> [--module <模块>] 可归到书内）')
+    }
+    ctx.stdout('  预览: prism serve 后在「知识库 → 点开书 → 架构图」查看')
   }
   return 0
 }

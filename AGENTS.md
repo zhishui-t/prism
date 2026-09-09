@@ -107,6 +107,7 @@ pnpm test:e2e      # 5. 端到端（涉及 CLI/HTTP/Web 时）
 | **Windows `spawn` .cmd** | EINVAL | `.cmd` 走 `shell: true`；`.js` 走 `node` + `prefixArgs` |
 | **镜像契约** | 两处定义漂移 | 单一真相源，消费方 re-export |
 | **bare sleep 测异步** | 负载下 flake | 用轮询 API（如 `waitFor(jobId, timeout)`） |
+| **架构图产物失联** | 产物不知属于哪本书 | 渲染时写 sidecar `<name>.meta.json`（`--book/--module`）；界面按作用域过滤 |
 
 ---
 
