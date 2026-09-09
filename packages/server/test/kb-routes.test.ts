@@ -250,3 +250,38 @@ describe('知识图谱导出路由（POST /api/kb/export，借 Graphify 渲染�
     }
   })
 })
+
+describe('kb 治理路由（B1/B2）', () => {
+  it('POST /api/kb/entry/:id/remove 软删 → mode=soft；再查已 deprecated', async () => {
+    const kb2 = new MemoryKb()
+    const home2 = await makeTempDir('prism-kb-rm-')
+    const app2 = await startServer({ home: home2, kb: kb2, port: 0 })
+    const base2 = `http://127.0.0.1:${app2.port}`
+    try {
+      await kb2.deposit({ id: 'R-1', title: 'T', type: 'rule', layer: 'global', book: 'b', content: 'x' })
+      const res = await fetch(`${base2}/api/kb/entry/R-1/remove`, { method: 'POST' })
+      const body = (await res.json()) as { ok: boolean; value: { mode: string } }
+      expect(res.status).toBe(200)
+      expect(body.value.mode).toBe('soft')
+      const got = (await (await fetch(`${base2}/api/kb/get/R-1`)).json()) as {
+        value: { status: string }
+      }
+      expect(got.value.status).toBe('deprecated')
+    } finally {
+      await app2.close()
+    }
+  })
+
+  it('GET /api/kb/conflicts → 数组（内存桩为空）', async () => {
+    const kb3 = new MemoryKb()
+    const app3 = await startServer({ home: await makeTempDir('prism-kb-conf-'), kb: kb3, port: 0 })
+    try {
+      const res = await fetch(`http://127.0.0.1:${app3.port}/api/kb/conflicts`)
+      const body = (await res.json()) as { ok: boolean; value: unknown[] }
+      expect(res.status).toBe(200)
+      expect(Array.isArray(body.value)).toBe(true)
+    } finally {
+      await app3.close()
+    }
+  })
+})

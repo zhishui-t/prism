@@ -121,6 +121,8 @@ export async function createApp(options: AppOptions = {}): Promise<{
   router.add('GET', '/api/kb/graph', kb.graph)
   router.add('GET', '/api/kb/path', kb.path)
   router.add('POST', '/api/kb/export', kb.exportGraph)
+  router.add('POST', '/api/kb/entry/:id/remove', kb.remove)
+  router.add('GET', '/api/kb/conflicts', kb.conflicts)
 
   const graph = graphRoutes({
     registry,

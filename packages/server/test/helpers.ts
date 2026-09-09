@@ -204,6 +204,34 @@ export class MemoryKb implements KnowledgeService {
     }
     return null
   }
+
+  /** B1 桩：软删置 deprecated；硬删从内存移除（真实服务才做引用检查）。 */
+  async remove(
+    id: string,
+    options: { hard?: boolean } = {},
+  ): Promise<{ id: string; mode: 'soft' | 'hard'; references: number }> {
+    // 注意：内部 key 是 `id@version`，与 get() 的查找口径一致
+    const keys = [...this.#entries.keys()].filter((k) => k.startsWith(`${id}@`))
+    if (keys.length === 0) {
+      const err = new Error(`条目不存在: ${id}`) as Error & { code: string }
+      err.code = 'not_found'
+      throw err
+    }
+    if (options.hard === true) {
+      for (const key of keys) this.#entries.delete(key)
+      return { id, mode: 'hard', references: 0 }
+    }
+    const latestKey = keys.sort().at(-1)!
+    this.#entries.get(latestKey)!.status = 'deprecated'
+    return { id, mode: 'soft', references: 0 }
+  }
+
+  /** B2 桩：内存桩不做冲突检测，恒为空。 */
+  async conflicts(): Promise<
+    Array<{ id: string; high_id: string; low_id: string; kind: string; resolved: boolean; detected_at: string }>
+  > {
+    return []
+  }
 }
 
 /** 临时目录（自动前缀），用于隔离 PRISM_HOME / 项目根。 */

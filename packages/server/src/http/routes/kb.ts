@@ -16,6 +16,8 @@ export function kbRoutes(getKb: () => Promise<KnowledgeService>): {
   graph: (ctx: RouteContext) => Promise<Envelope>
   path: (ctx: RouteContext) => Promise<Envelope>
   exportGraph: (ctx: RouteContext) => Promise<Envelope>
+  remove: (ctx: RouteContext) => Promise<Envelope>
+  conflicts: (ctx: RouteContext) => Promise<Envelope>
 } {
   const search = async (ctx: RouteContext): Promise<Envelope> => {
     const q = ctx.query.get('q')?.trim() ?? ''
@@ -92,6 +94,23 @@ export function kbRoutes(getKb: () => Promise<KnowledgeService>): {
     return ok(result)
   }
 
+  /** 删除条目（B1）：`?hard=true` 走硬删（需无引用）。 */
+  const remove = async (ctx: RouteContext): Promise<Envelope> => {
+    const id = ctx.params.id?.trim() ?? ''
+    if (id === '') throw new PrismError('bad_request', '缺少条目 id')
+    const kb = await getKb()
+    if (kb.remove === undefined) throw new PrismError('unsupported', '当前知识服务未实现 remove')
+    const hard = ctx.query.get('hard') === 'true'
+    return ok(await kb.remove(id, { hard }))
+  }
+
+  /** 层间冲突列表（B2）：`?include_resolved=true` 含已处理。 */
+  const conflicts = async (ctx: RouteContext): Promise<Envelope> => {
+    const kb = await getKb()
+    if (kb.conflicts === undefined) throw new PrismError('unsupported', '当前知识服务未实现 conflicts')
+    return ok(await kb.conflicts({ includeResolved: ctx.query.get('include_resolved') === 'true' }))
+  }
+
   /** 图谱邻域/概览：`?id=<节点>&depth=1&relations=references&limit=50`。 */
   const graph = async (ctx: RouteContext): Promise<Envelope> => {
     const id = ctx.query.get('id')?.trim() || undefined
@@ -155,7 +174,7 @@ export function kbRoutes(getKb: () => Promise<KnowledgeService>): {
     return ok(found)
   }
 
-  return { search, get, tree, stats, catalog, deposit, graph, path, exportGraph }
+  return { search, get, tree, stats, catalog, deposit, graph, path, exportGraph, remove, conflicts }
 }
 
 /** 关系类型查询参数（`relations=references,overrides`；非法 → bad_request）。 */
