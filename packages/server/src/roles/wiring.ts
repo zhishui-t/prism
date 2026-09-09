@@ -18,9 +18,9 @@ import { join } from 'node:path'
 
 import {
   DEFAULT_ZCODE_DIR,
+  resolveHarness,
   createRoleRegistry,
   createTeamRegistry,
-  createZcodeAdapter,
   installRoles as installAgentsRoles,
   installTeamDefinitions,
   parseRoleMarkdown,
@@ -51,8 +51,13 @@ export interface ZcodePaths {
   configFile: string
 }
 
+/**
+ * 适配器路径约定。经 `resolveHarness` 激活当前配置的适配器
+ * （prism.yaml `harness` 键 / `PRISM_HARNESS` 环境变量；默认 zcode）——
+ * 未来接入其他 harness 时，此处自动跟随，调用方无需改动。
+ */
 export function zcodePaths(zcodeDir: string): ZcodePaths {
-  const adapter = createZcodeAdapter({ zcodeDir })
+  const adapter = resolveHarness({ zcodeDir }).adapter
   return {
     root: zcodeDir,
     agentsDir: adapter.agent.globalDir,

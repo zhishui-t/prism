@@ -69,6 +69,16 @@ export {
   createRoleRegistry,
   createTeamRegistry,
   DEFAULT_ZCODE_DIR,
+  // 宿主适配器注册表（deployment-model §1：运行期只激活一个）
+  buildHarnessRegistry,
+  resolveHarness,
+  harnessSummary,
+  DEFAULT_HARNESS_ID,
+  HARNESS_ENV_VAR,
+} from '@prism/agents'
+export type {
+  PrismHarnessAdapter,
+  ResolvedHarness,
 } from '@prism/agents'
 
 // 目录解析（装配语义简化：prism.yaml 覆盖适配器默认；server 读侧同样由此取目录）

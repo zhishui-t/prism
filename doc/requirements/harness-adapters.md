@@ -579,6 +579,7 @@ model: "custom:...:GLM-5.3-Flash"   # 环境特定（导入自 ~/.zcode/agents/d
 
 **裁决**：运行时只服务一个 harness，角色/团队/Skill 的受管位置**直接就是宿主目录**（"直接住在宿主目录"）。`install` 从"复制装配"退化为"模板初始化/迁移"，源与产物合一，"装配范围"类缺陷随复制语义一并消失。
 
+- 适配器选择：`<PRISM_HOME>/prism.yaml` 的 `harness` 键（或 `PRISM_HARNESS` 环境变量覆盖）指定运行时激活的适配器，默认 `zcode`；`prism harness list/show` 可查看。
 - 目录来源：`<PRISM_HOME>/prism.yaml`（可选）三个标量键覆盖适配器默认——
   `roles_dir`（默认 `~/.zcode/agents`）、`teams_dir`（默认 `~/.zcode/teams`）、`skills_dir`（默认 `~/.zcode/skills`）；
 - 无 prism.yaml 时用适配器默认，开箱即"所见即所得"；

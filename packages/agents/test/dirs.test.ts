@@ -53,6 +53,7 @@ describe('resolveDirs（prism.yaml 覆盖适配器默认；无配置 → 默认�
       teamsDir: join('K:/tmp/zcode', 'teams'),
       skillsDir: join('K:/tmp/zcode', 'skills'),
       source: 'default',
+      harness: 'zcode',
       zcodeDir: 'K:/tmp/zcode',
       guard: { roles: true, teams: true, skills: true },
     })

@@ -70,6 +70,20 @@ export type { ImportFailures } from './registry.js'
 export { installRoles, installTeamDefinitions, initRole, migrateTeams, InstallError } from './install.js'
 export type { InstallTeamsOptions, InitRoleOptions, MigrateTeamsOptions } from './install.js'
 
+// 宿主适配器注册表（deployment-model §1：编译期多适配器，运行期只激活一个）
+export {
+  buildHarnessRegistry,
+  resolveHarness,
+  harnessSummary,
+} from './harness.js'
+export { DEFAULT_HARNESS_ID, HARNESS_ENV_VAR, ZCODE_HARNESS_ID } from './harness-id.js'
+export type {
+  PrismHarnessAdapter,
+  BuildHarnessRegistryOptions,
+  ResolveHarnessOptions,
+  ResolvedHarness,
+} from './harness.js'
+
 // 目录解析（装配语义简化：直接住在宿主目录；prism.yaml 可选覆盖）
 export {
   loadPrismConfig,
@@ -78,7 +92,7 @@ export {
   resolveDirsFromHome,
   expandTildePath,
 } from './dirs.js'
-export type { PrismDirConfig, ResolvedDirs } from './dirs.js'
+export type { PrismDirConfig, PrismDirKey, ResolvedDirs } from './dirs.js'
 
 // 内置模板
 export { ROLE_TEMPLATE_MD, ROLE_TEMPLATE_NAME_PLACEHOLDER } from './templates.js'

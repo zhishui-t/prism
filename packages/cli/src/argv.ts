@@ -13,6 +13,7 @@ import { runKb } from './commands/kb.js'
 import { runWork } from './commands/work.js'
 import { runTask } from './commands/task.js'
 import { runArch } from './commands/arch.js'
+import { runHarness } from './commands/harness.js'
 import { runGraph } from './commands/graph.js'
 import { runRole } from './commands/role.js'
 import { runTeam } from './commands/team.js'
@@ -79,6 +80,7 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
   prism task register --dag <id> --file <dag.json> --session --team --project
   prism task report <task-id> --to <STATUS> --by <who> [--from --revision]
   prism arch types | validate <type> <ir.json> | render <type> <ir.json> [--out <html>]
+  prism harness list | show               运行时宿主适配器（prism.yaml: harness 键）
   prism graph build <项目根目录> [--name <项目名>] [--timeout <秒>]
   prism graph query <q> --project <项目名>                  BFS 遍历查询
   prism graph path <from> <to> --project <项目名>            最短路径
@@ -301,6 +303,8 @@ export async function runCommand(ctx: CommandContext, argv: string[]): Promise<n
         return await runTask(effective, rest, values)
       case 'arch':
         return await runArch(effective, rest, values)
+      case 'harness':
+        return await runHarness(effective, rest, values)
       case 'graph':
         return await runGraph(effective, rest, values)
       case 'role':

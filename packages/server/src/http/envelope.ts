@@ -22,6 +22,7 @@ export const ERROR_CODES = [
   'archify_failed',
   'archify_timeout',
   'archify_validation_failed',
+  'harness_not_found',
   'internal',
 ] as const
 
@@ -58,6 +59,7 @@ const ERROR_STATUS: Record<ErrorCode, number> = {
   archify_failed: 500,
   archify_timeout: 504,
   archify_validation_failed: 422,
+  harness_not_found: 400,
   internal: 500,
 }
 

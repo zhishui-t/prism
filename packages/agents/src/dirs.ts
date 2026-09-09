@@ -1,8 +1,9 @@
 /**
  * 目录解析（装配语义简化，用户已批准）：**直接住在宿主目录**。
  *
- * `<PRISM_HOME>/prism.yaml`（可选配置，三个标量键）覆盖适配器默认值；
+ * `<PRISM_HOME>/prism.yaml`（可选配置，四个标量键）覆盖适配器默认值；
  * 无配置 → 用 ZCode 适配器默认（开箱即"所见即所得"）：
+ *   harness:    <默认 zcode>（运行时激活的宿主适配器）
  *   roles_dir:  <默认 ~/.zcode/agents>
  *   teams_dir:  <默认 ~/.zcode/teams>（roles_dir 的**同级** teams/，不在 agents/ 内）
  *   skills_dir: <默认 ~/.zcode/skills>
@@ -14,7 +15,7 @@
  * 会被静默注册成一个假 agent，污染宿主 agent 命名空间。故团队落在 roles_dir 的
  * **同级** `teams/`：仍在宿主目录树内可被人工查看，但不在任何 agent 扫描路径上。
  *
- * prism.yaml 解析为**最小实现**：逐行 `key: value`，只认上述三个标量键；
+ * prism.yaml 解析为**最小实现**：逐行 `key: value`，只认上述四个标量键；
  * `#` 注释与空行忽略，值可带单/双引号，未知键忽略（宽松，不做完整 YAML parser）。
  */
 
@@ -25,13 +26,19 @@ import { isAbsolute, dirname, join } from 'node:path'
 import { prismHome } from '@prism/core'
 
 import { DEFAULT_ZCODE_DIR } from './adapters/zcode.js'
+import { DEFAULT_HARNESS_ID } from './harness-id.js'
 
-/** prism.yaml 的三个标量键（仅此三键，多余键忽略）。 */
+/** prism.yaml 的标量键（仅这些键，多余键忽略）。 */
 export interface PrismDirConfig {
+  /** 运行时激活的宿主适配器 id（默认 zcode；见 deployment-model.md §1）。 */
+  harness?: string
   roles_dir?: string
   teams_dir?: string
   skills_dir?: string
 }
+
+/** 目录键（不含 harness）。 */
+export type PrismDirKey = 'roles_dir' | 'teams_dir' | 'skills_dir'
 
 /** 解析后的目录集。 */
 export interface ResolvedDirs {
@@ -43,6 +50,8 @@ export interface ResolvedDirs {
   skillsDir: string
   /** 来源：'config' = prism.yaml 存在（键缺省仍回落默认）；'default' = 无配置文件。 */
   source: 'config' | 'default'
+  /** 运行时激活的宿主适配器 id（prism.yaml `harness` 键；缺省 zcode）。 */
+  harness: string
   /** 作为默认推导基准的 ZCode 根。 */
   zcodeDir: string
   /**
@@ -70,25 +79,29 @@ export function loadPrismConfig(home?: string): PrismDirConfig | null {
   return parsePrismConfig(raw)
 }
 
-/** prism.yaml 最小解析：只认 roles_dir/teams_dir/skills_dir 三个标量键。 */
+/** prism.yaml 最小解析：只认 harness/roles_dir/teams_dir/skills_dir 四个标量键。 */
 export function parsePrismConfig(raw: string): PrismDirConfig {
   const config: PrismDirConfig = {}
+  const KNOWN: readonly string[] = ['harness', 'roles_dir', 'teams_dir', 'skills_dir']
   for (const rawLine of raw.replace(/\r\n/g, '\n').split('\n')) {
     const line = rawLine.trim()
     if (line === '' || line.startsWith('#')) continue
     const idx = line.indexOf(':')
     if (idx === -1) continue
     const key = line.slice(0, idx).trim()
-    if (key !== 'roles_dir' && key !== 'teams_dir' && key !== 'skills_dir') continue
+    if (!KNOWN.includes(key)) continue
     let value = line.slice(idx + 1).trim()
-    // 去行尾注释（值内不得含 " #"——三个键都是路径，足够）
+    // 去行尾注释（值内不得含 " #"——这些键都是路径/标识，足够）
     const hash = value.indexOf(' #')
     if (hash !== -1) value = value.slice(0, hash).trim()
     if (value === '') continue
     if (value.length >= 2 && ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))) {
       value = value.slice(1, -1)
     }
-    config[key] = value
+    if (key === 'harness') config.harness = value
+    else if (key === 'roles_dir') config.roles_dir = value
+    else if (key === 'teams_dir') config.teams_dir = value
+    else if (key === 'skills_dir') config.skills_dir = value
   }
   return config
 }
@@ -123,6 +136,7 @@ export function resolveDirs(
     teamsDir: join(dirname(rolesDir), 'teams'),
     skillsDir: join(zcodeDir, 'skills'),
     source: config !== null && config !== undefined ? 'config' : 'default',
+    harness: config?.harness !== undefined && config.harness !== '' ? config.harness : DEFAULT_HARNESS_ID,
     zcodeDir,
     guard: { roles: true, teams: true, skills: true },
   }
