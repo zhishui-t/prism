@@ -686,11 +686,16 @@ export class PrismKnowledgeService implements KnowledgeService {
     if (options.hard !== true) {
       // BLK-2：软删状态必须写进版次文件 frontmatter——否则 reindex（以文件为真相）
       // 重建时 status 由 is_latest 推导，deprecated 会「复活」。
-      const fileText = readContentFile(latest.path)
-      if (fileText !== null) {
-        const { data, body } = splitFrontmatter(fileText)
-        if (data !== null) {
-          writeFileSync(latest.path, renderMarkdownFile({ ...data, status: 'deprecated' }, body), 'utf-8')
+      // 仅限自有型：引用型（origin='indexed'）的 path 指向**项目原件**，绝不改写用户
+      // 文件（A3 红线：只读项目文件）；其软删状态只存 DB——reindex 不重建引用型行
+      // （见 reindex 的 origin='owned' 过滤），不会复活。
+      if (latest.origin === 'owned') {
+        const fileText = readContentFile(latest.path)
+        if (fileText !== null) {
+          const { data, body } = splitFrontmatter(fileText)
+          if (data !== null) {
+            writeFileSync(latest.path, renderMarkdownFile({ ...data, status: 'deprecated' }, body), 'utf-8')
+          }
         }
       }
       raw
@@ -705,11 +710,11 @@ export class PrismKnowledgeService implements KnowledgeService {
       return { id, mode: 'soft', references: refCount }
     }
 
-    // 硬删：收集文件路径（事务外删除文件）
-    const rows = raw.prepare('SELECT rowid, path FROM knowledge_entries WHERE id = ?').all(id) as Array<{
-      rowid: number
-      path: string
-    }>
+    // 硬删：收集自有型条目的文件路径（事务外删除文件）
+    // **引用型的 path 指向项目原件，绝不删除**——删索引是 Prism 的事，删用户文件不是。
+    const rows = raw
+      .prepare("SELECT rowid, path, origin FROM knowledge_entries WHERE id = ?")
+      .all(id) as Array<{ rowid: number; path: string; origin: string }>
     await this.persistence.knowledge.run((tx) => {
       tx.exec('BEGIN IMMEDIATE')
       try {
@@ -726,9 +731,10 @@ export class PrismKnowledgeService implements KnowledgeService {
         throw error
       }
     })
-    // 文件删除（尽力而为；索引已删，残留文件不影响一致性，reindex 时按路径归属）
+    // 只删 Prism 自己写下的版次文件目录；引用型跳过（项目文件是用户的资产）
     const { rm } = await import('node:fs/promises')
     for (const row of rows) {
+      if (row.origin !== 'owned') continue
       try {
         await rm(dirname(row.path), { recursive: true, force: true })
       } catch {
