@@ -82,7 +82,7 @@ Prism 把这些 Graphify 能力包成 MCP 工具：
 
 | 界面 | 内容 |
 | :--- | :--- |
-| **代码图谱页（独立一级页）** | iframe 嵌 `<项目根>/graphify-out/graph.html`（Python 版自包含可视化）；上方 Prism 工具栏（项目选择、建图按钮、陈旧标记、查询框） |
+| **代码图谱页（独立一级页）** | iframe 嵌 `<项目根>/graphify-out/graph.html`；上方 Prism 工具栏（项目选择、建图按钮、陈旧标记、查询框、导出）。**离线化**：graphify HTML 依赖 unpkg CDN 的 vis-network，studio 路由代理到 `3rd/graphify/vendor/` 并改写引用（B12） |
 | 单文件导出 | `studio/studio.html`（自包含，供分享） |
 | 陈旧标记 | 用 `manifest.json` 的文件哈希 + git HEAD 判断"图谱落后 N 次提交" |
 

@@ -131,6 +131,34 @@ describe('studio 路径越界防护', () => {
     expect(isInside(base, 'K:/other/index.html')).toBe(false)
   })
 
+  it('B12 离线化：/vendor/vis-network.min.js 代理到 3rd，graph.html 内 CDN 被改写', async () => {
+    const home = await makeTempDir('prism-studio-vendor-')
+    const root = await makeTempDir('prism-studio-vendor-proj-')
+    await putFile(
+      join(root, 'graphify-out', 'graph.html'),
+      '<html><head><script src="https://unpkg.com/vis-network@9.1.6/standalone/umd/vis-network.min.js" integrity="sha384-x" crossorigin="anonymous"></script></head><body>g</body></html>',
+    )
+    const registry = new ProjectRegistry(home)
+    await registry.register('v', root)
+    const app = await startServer({ home, kb: undefined as never, port: 0 })
+    try {
+      const base = `http://127.0.0.1:${app.port}`
+      // ① vendored 资源可代理（返回 JS，非 404）
+      const vendor = await fetch(`${base}/studio/v/vendor/vis-network.min.js`)
+      expect(vendor.status).toBe(200)
+      expect(vendor.headers.get('content-type')).toContain('javascript')
+      expect(Number(vendor.headers.get('content-length'))).toBeGreaterThan(100_000)
+      // ② HTML 内 CDN 引用被改写为本地路径，且无 unpkg 残留
+      const html = await (await fetch(`${base}/studio/v/graph.html`)).text()
+      expect(html).toContain('/studio/v/vendor/vis-network.min.js')
+      expect(html).not.toContain('unpkg.com')
+      // ③ 未知 vendored 资源 → 404
+      expect((await fetch(`${base}/studio/v/vendor/other.js`)).status).toBe(404)
+    } finally {
+      await app.close()
+    }
+  })
+
   it('目录默认页：graph.html 优先（Python 版 graphify 产物），兼容 index.html', async () => {
     const home = await makeTempDir('prism-studio-default-')
     const root = await makeTempDir('prism-studio-proj-')

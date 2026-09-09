@@ -64,6 +64,12 @@ pnpm run 3rd:check          # 可用性自检（archify + graphify + 依赖）
 
 **要求**：Python ≥3.10（本机 3.12）。
 
+### vendor/（离线化）
+
+`3rd/graphify/vendor/vis-network.min.js`（v9.1.6，MIT）——graphify 生成的 `graph.html`
+原本从 `unpkg.com` CDN 加载它（断网即空白页）。Prism 的 studio 路由把该请求代理到此处，
+并把 HTML 里的 CDN 引用改写为本地路径，实现**离线可用**（B12）。
+
 ## 升级流程
 
 1. 取上游新 tag：`git clone --depth 1 --branch <tag> <repo>`；
