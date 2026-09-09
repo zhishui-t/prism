@@ -839,6 +839,10 @@ export class PrismKnowledgeService implements KnowledgeService {
       relations === null ? '' : ` AND relation IN (${relations.map(() => '?').join(', ')})`
     const relParams = relations ?? []
 
+    // 书/模块内视图（书详情、模块详情页）：先把「允许的节点」算出来，再过滤边
+    // 说明：过滤只影响返回的子图，不改变边表本身（边是全局的）
+    const allowedIds = this.#allowedNodeIds(raw, query)
+
     const nodeIds = new Set<string>()
     const edges: KnowledgeEdge[] = []
     let truncated = false
@@ -860,18 +864,34 @@ export class PrismKnowledgeService implements KnowledgeService {
     }
 
     if (query.id === undefined) {
-      // 概览：度数最高的前 limit 个节点，再取其相关边
-      const topRows = raw
+      // 概览：**以节点表为准**（含孤立条目——书内视图必须看到所有条目），
+      // 按度数降序排；再取两端都在集合内的边作装饰。
+      const degRows = raw
         .prepare(
-          `SELECT id FROM (
+          `SELECT id, SUM(d) AS degree FROM (
              SELECT from_id AS id, COUNT(*) AS d FROM knowledge_edges GROUP BY from_id
              UNION ALL
              SELECT to_id AS id, COUNT(*) AS d FROM knowledge_edges GROUP BY to_id
-           ) GROUP BY id ORDER BY SUM(d) DESC, id ASC LIMIT ?`,
+           ) GROUP BY id`,
         )
-        .all(limit) as Array<{ id: string }>
-      const topIds = topRows.map((r) => r.id)
+        .all() as Array<{ id: string; degree: number }>
+      const degree = new Map(degRows.map((r) => [r.id, r.degree]))
+
+      // 候选节点：有限定条件 → 用限定集；否则用条目全表
+      let candidateIds: string[]
+      if (allowedIds !== null) {
+        candidateIds = [...allowedIds]
+      } else {
+        const entryRows = raw
+          .prepare('SELECT id FROM knowledge_entries WHERE is_latest = 1')
+          .all() as Array<{ id: string }>
+        candidateIds = entryRows.map((r) => r.id)
+      }
+      candidateIds.sort((a, b) => (degree.get(b) ?? 0) - (degree.get(a) ?? 0) || a.localeCompare(b))
+      const topIds = candidateIds.slice(0, limit)
+      truncated = candidateIds.length > topIds.length
       if (topIds.length === 0) return { nodes: [], edges: [], truncated: false }
+
       const placeholders = topIds.map(() => '?').join(', ')
       const rows = raw
         .prepare(
@@ -880,9 +900,11 @@ export class PrismKnowledgeService implements KnowledgeService {
            ORDER BY from_id, relation, to_id`,
         )
         .all(...topIds, ...topIds, ...relParams) as unknown as EdgeRow[]
-      pushEdges(rows)
-      const total = (raw.prepare('SELECT COUNT(DISTINCT id) AS c FROM (SELECT from_id AS id FROM knowledge_edges UNION SELECT to_id AS id FROM knowledge_edges)').get() as { c: number }).c
-      truncated = total > topIds.length
+      // 节点集 = 全部候选（含孤立条目，边只作装饰）
+      for (const id of topIds) nodeIds.add(id)
+      // 边两端都必须在返回的节点集内（子图自洽）
+      const topSet = new Set(topIds)
+      pushEdges(rows.filter((r) => topSet.has(r.from_id) && topSet.has(r.to_id)))
     } else {
       // 邻域 BFS（无向）
       const visited = new Set<string>([query.id])
@@ -902,6 +924,10 @@ export class PrismKnowledgeService implements KnowledgeService {
           .all(...frontier, ...frontier, ...relParams) as unknown as EdgeRow[]
         const next: string[] = []
         for (const row of rows) {
+          // 限定书/模块：越界节点不入子图（避免把别的书的内容带进来）
+          if (allowedIds !== null && (!allowedIds.has(row.from_id) || !allowedIds.has(row.to_id))) {
+            continue
+          }
           edges.push({
             from_id: row.from_id,
             to_id: row.to_id,
@@ -1001,6 +1027,41 @@ export class PrismKnowledgeService implements KnowledgeService {
       cur = step.from
     }
     return { nodes, edges }
+  }
+
+  /**
+   * 计算「允许出现在子图里的节点 id」集合（书/模块内视图用）。
+   * 无任何过滤 → null（表示全库）；有过滤但无命中 → 空集（子图为空）。
+   */
+  #allowedNodeIds(raw: DatabaseSync, query: GraphQuery): Set<string> | null {
+    const hasFilter =
+      query.book !== undefined ||
+      query.layer !== undefined ||
+      query.owner !== undefined ||
+      query.module !== undefined
+    if (!hasFilter) return null
+    const clauses = ['is_latest = 1']
+    const params: string[] = []
+    if (query.layer !== undefined) {
+      clauses.push('layer = ?')
+      params.push(query.layer)
+    }
+    if (query.book !== undefined) {
+      clauses.push('book = ?')
+      params.push(query.book)
+    }
+    if (query.owner !== undefined) {
+      clauses.push('owner = ?')
+      params.push(query.owner)
+    }
+    if (query.module !== undefined) {
+      clauses.push('module = ?')
+      params.push(query.module === INBOX_DIR ? '' : query.module)
+    }
+    const rows = raw
+      .prepare(`SELECT id FROM knowledge_entries WHERE ${clauses.join(' AND ')}`)
+      .all(...params) as Array<{ id: string }>
+    return new Set(rows.map((r) => r.id))
   }
 
   /** 校验关系类型过滤（undefined → null 表示不过滤）。 */

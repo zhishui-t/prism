@@ -1,9 +1,7 @@
 import { useState } from 'react'
 
 import { KnowledgePage } from './pages/Knowledge.tsx'
-import { KnowledgeGraphPage } from './pages/KnowledgeGraph.tsx'
 import { CodeGraphPage } from './pages/CodeGraph.tsx'
-import { ArchPage } from './pages/Arch.tsx'
 import { TasksPage } from './pages/Tasks.tsx'
 import { WorkQueuePage } from './pages/WorkQueue.tsx'
 import { RolesPage } from './pages/Roles.tsx'
@@ -13,10 +11,9 @@ import { SkillsPage } from './pages/Skills.tsx'
 export type PageKey = 'knowledge' | 'kbgraph' | 'graph' | 'arch' | 'roles' | 'teams' | 'skills' | 'tasks' | 'work'
 
 const NAV: Array<{ key: PageKey; label: string; group?: string }> = [
+  // 知识图谱/架构图谱已归入「知识库 → 书内」（用户裁决：它们属于具体的书，不是一级页）
   { key: 'knowledge', label: '知识库' },
-  { key: 'kbgraph', label: '知识图谱' },
   { key: 'graph', label: '代码图谱' },
-  { key: 'arch', label: '架构图谱' },
   { key: 'roles', label: '角色', group: '团队' },
   { key: 'teams', label: '团队', group: '团队' },
   { key: 'skills', label: '技能', group: '团队' },
@@ -54,9 +51,7 @@ export function Shell() {
       </header>
       <main className="main">
         {page === 'knowledge' && <KnowledgePage />}
-        {page === 'kbgraph' && <KnowledgeGraphPage />}
         {page === 'graph' && <CodeGraphPage />}
-        {page === 'arch' && <ArchPage />}
         {page === 'roles' && <RolesPage />}
         {page === 'teams' && <TeamsPage />}
         {page === 'skills' && <SkillsPage />}

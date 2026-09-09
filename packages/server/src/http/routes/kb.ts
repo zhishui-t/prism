@@ -97,12 +97,21 @@ export function kbRoutes(getKb: () => Promise<KnowledgeService>): {
     const id = ctx.query.get('id')?.trim() || undefined
     const depth = parsePositiveInt(ctx.query.get('depth'), 'depth', 3)
     const limit = parsePositiveInt(ctx.query.get('limit'), 'limit', 500)
+    const book = ctx.query.get('book')?.trim() || undefined
+    const owner = ctx.query.get('owner')?.trim() || undefined
+    const moduleName = ctx.query.get('module')?.trim() || undefined
+    const layerRaw = ctx.query.get('layer')?.trim() || undefined
+    const layer = layerRaw !== undefined ? parseLayer(layerRaw) : null
     const view = await (
       await getKb()
     ).graph({
       ...(id !== undefined ? { id } : {}),
       ...(depth !== null ? { depth } : {}),
       ...(limit !== null ? { limit } : {}),
+      ...(book !== undefined ? { book } : {}),
+      ...(owner !== undefined ? { owner } : {}),
+      ...(moduleName !== undefined ? { module: moduleName } : {}),
+      ...(layer !== null ? { layer } : {}),
       ...(parseRelations(ctx.query.get('relations')) !== undefined
         ? { relations: parseRelations(ctx.query.get('relations')) }
         : {}),

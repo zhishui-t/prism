@@ -176,6 +176,14 @@ export interface GraphQuery {
   relations?: EdgeRelation[]
   /** 节点数上限，默认 50，上限 500 */
   limit?: number
+  /** 限定书（书内图谱：书详情页用） */
+  book?: string
+  /** 限定层（配合 owner 使用） */
+  layer?: Layer
+  /** 限定 owner（project/role 层） */
+  owner?: string
+  /** 限定模块（模块内图谱：模块详情页用） */
+  module?: string
 }
 
 /** 路径查询结果。 */

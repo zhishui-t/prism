@@ -158,8 +158,10 @@ describe('CLI 命令（注入真实知识服务 / 假 graphify）', () => {
       }
     }
     expect(view.value.nodes.map((n) => n.id).sort()).toEqual(['GRAPH-A', 'GRAPH-B'])
+    // 概览以「条目节点」为准：悬空引用 NOPE 不是条目，故其边不出现在概览子图里
+    // （悬空边仍在边表中，邻域查询可见——见下一段断言）
     const rels = view.value.edges.map((e) => `${e.from_id}->${e.to_id}:${e.relation}`).sort()
-    expect(rels).toEqual(['GRAPH-B->GRAPH-A:references', 'GRAPH-B->NOPE:references'])
+    expect(rels).toEqual(['GRAPH-B->GRAPH-A:references'])
 
     // 邻域（含悬空边）
     lines = []

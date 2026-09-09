@@ -265,12 +265,25 @@ export const api = {
     return request<CatalogEntry[]>(`/api/kb/catalog${suffix ? `?${suffix}` : ''}`)
   },
 
-  kbGraph: (params?: { id?: string; depth?: number; relations?: string; limit?: number }) => {
+  kbGraph: (params?: {
+    id?: string
+    depth?: number
+    relations?: string
+    limit?: number
+    book?: string
+    owner?: string
+    module?: string
+    layer?: string
+  }) => {
     const qs = new URLSearchParams()
     if (params?.id) qs.set('id', params.id)
     if (params?.depth) qs.set('depth', String(params.depth))
     if (params?.relations) qs.set('relations', params.relations)
     if (params?.limit) qs.set('limit', String(params.limit))
+    if (params?.book) qs.set('book', params.book)
+    if (params?.owner) qs.set('owner', params.owner)
+    if (params?.module) qs.set('module', params.module)
+    if (params?.layer) qs.set('layer', params.layer)
     const suffix = qs.toString()
     return request<KbGraphView>(`/api/kb/graph${suffix ? `?${suffix}` : ''}`)
   },

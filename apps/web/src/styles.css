@@ -264,3 +264,14 @@ tr:last-child td { border-bottom: 0; }
   cursor: pointer;
 }
 .rel-link:hover { text-decoration: underline; }
+
+/* 书/模块详情面板 */
+.scope-panel { margin-top: 14px; }
+.mini-graph {
+  display: block;
+  width: 100%;
+  height: auto;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}

@@ -134,4 +134,41 @@ describe('知识图谱（单一边表 + 多视图，D8）', () => {
       service.close()
     }
   })
+
+  it('按书过滤：只返回该书内的节点与边（跨书边被剔除）', async () => {
+    const service = makeService()
+    try {
+      // 书 b1：A ↔ B；书 b2：C，且 C 引用 A（跨书边）
+      await service.deposit({ id: 'F-A', title: 'A', type: 'rule', layer: 'global', book: 'b1', content: 'A' })
+      await service.deposit({ id: 'F-B', title: 'B', type: 'rule', layer: 'global', book: 'b1', content: 'B [[F-A]]' })
+      await service.deposit({ id: 'F-C', title: 'C', type: 'rule', layer: 'global', book: 'b2', content: 'C [[F-A]]' })
+
+      const b1 = await service.graph({ book: 'b1' })
+      expect(b1.nodes.map((n) => n.id).sort()).toEqual(['F-A', 'F-B'])
+      expect(b1.edges.map((e) => `${e.from_id}->${e.to_id}`)).toEqual(['F-B->F-A'])
+
+      const b2 = await service.graph({ book: 'b2' })
+      expect(b2.nodes.map((n) => n.id)).toEqual(['F-C'])
+      // 跨书边被剔除（A 不在 b2 内）
+      expect(b2.edges).toEqual([])
+    } finally {
+      service.close()
+    }
+  })
+
+  it('按模块过滤 + 邻域也不越界', async () => {
+    const service = makeService()
+    try {
+      await service.deposit({ id: 'M-1', title: 'M1', type: 'rule', layer: 'global', book: 'bm', module: 'm1', content: 'M1' })
+      await service.deposit({ id: 'M-2', title: 'M2', type: 'rule', layer: 'global', book: 'bm', module: 'm1', content: 'M2 [[M-1]]' })
+      await service.deposit({ id: 'M-3', title: 'M3', type: 'rule', layer: 'global', book: 'bm', module: 'm2', content: 'M3 [[M-2]]' })
+
+      const m1 = await service.graph({ book: 'bm', module: 'm1', depth: 3 })
+      expect(m1.nodes.map((n) => n.id).sort()).toEqual(['M-1', 'M-2'])
+      // 邻域 depth=3 也不会把 m2 的 M-3 带进来
+      expect(m1.nodes.some((n) => n.id === 'M-3')).toBe(false)
+    } finally {
+      service.close()
+    }
+  })
 })

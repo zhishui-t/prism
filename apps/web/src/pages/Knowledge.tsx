@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 
-import { api, type CatalogEntry, type KbGraphEdge, type KbGraphNode } from '../api.ts'
+import { api, type CatalogEntry, type KbGraphEdge, type KbGraphNode, type KbGraphView } from '../api.ts'
 import { StarCanvas, seededRandom, useStarfield, type Viewport } from '../components/StarCanvas.tsx'
 import { State } from '../components/State.tsx'
 import { useAsync } from '../components/useAsync.ts'
@@ -104,6 +104,11 @@ export function KnowledgePage() {
           />
         )}
       </State>
+
+      {/* 书/模块详情：该层级的知识图谱 + 关联架构图（图谱归属到书内，不再是一级页） */}
+      {level.kind !== 'galaxies' && (
+        <ScopePanel level={level} entries={catalog.data ?? []} />
+      )}
     </div>
   )
 }
@@ -549,6 +554,236 @@ function dedupeRelations(
     out.push({ dir, other, relation: e.relation })
   }
   return out
+}
+
+/**
+ * 书/模块详情：该层级的知识图谱 + 关联架构图。
+ *
+ * 用户裁决（2026-09-10）：知识图谱、架构图谱**属于书内部**，不再是一级菜单。
+ * 这里按当前层级过滤图谱（book / book+module），架构图列出该层级相关的
+ * `type: diagram` 条目与已渲染产物。
+ */
+type ScopeLevel =
+  | { kind: 'book'; layer: string; owner?: string; book: string }
+  | { kind: 'module'; layer: string; owner?: string; book: string; module: string }
+
+function ScopePanel({
+  level,
+  entries,
+}: {
+  level: ScopeLevel
+  entries: CatalogEntry[]
+}) {
+  const [tab, setTab] = useState<'graph' | 'arch' | 'entries'>('graph')
+  const [preview, setPreview] = useState<string>('')
+
+  const scopeLabel =
+    level.kind === 'module'
+      ? `${level.book} / ${level.module === '' ? '_inbox' : level.module}`
+      : level.book
+
+  // 该层级的知识图谱（服务端按 book/module 过滤）
+  const view = useAsync(
+    () =>
+      api.kbGraph({
+        ...(level.kind === 'module'
+          ? { book: level.book, module: level.module, depth: 2 }
+          : { book: level.book, depth: 2 }),
+        limit: 200,
+      }),
+    [level.kind, level.book, level.kind === 'module' ? level.module : ''],
+  )
+
+  // 该层级的条目（diagram 类型用于「架构图」标签）
+  const scoped = entries.filter(
+    (e) =>
+      e.layer === level.layer &&
+      (e.owner ?? '') === (level.owner ?? '') &&
+      e.book === level.book &&
+      (level.kind === 'book' || e.module === level.module),
+  )
+  const diagrams = scoped.filter((e) => e.type === 'diagram')
+  const archAssets = useAsync(() => api.archDiagrams(), [])
+
+  return (
+    <div className="card scope-panel">
+      <div className="row" style={{ justifyContent: 'space-between' }}>
+        <h3 style={{ margin: 0 }}>
+          {level.kind === 'module' ? '模块详情' : '书详情'}{' '}
+          <span className="mono small muted">{scopeLabel}</span>
+        </h3>
+        <div className="row" style={{ gap: 6 }}>
+          <button className={tab === 'graph' ? 'primary' : ''} onClick={() => setTab('graph')}>
+            知识图谱
+          </button>
+          <button className={tab === 'arch' ? 'primary' : ''} onClick={() => setTab('arch')}>
+            架构图
+          </button>
+          <button className={tab === 'entries' ? 'primary' : ''} onClick={() => setTab('entries')}>
+            条目（{scoped.length}）
+          </button>
+        </div>
+      </div>
+
+      {tab === 'graph' && (
+        <div style={{ marginTop: 12 }}>
+          <State loading={view.loading} error={view.error}>
+            {view.data && <MiniGraph view={view.data} />}
+          </State>
+        </div>
+      )}
+
+      {tab === 'arch' && (
+        <div style={{ marginTop: 12 }}>
+          {diagrams.length === 0 ? (
+            <div className="empty">
+              该{level.kind === 'module' ? '模块' : '书'}还没有 <span className="mono">type: diagram</span> 条目。
+              <div className="small muted" style={{ marginTop: 6 }}>
+                用 <span className="mono">prism arch render &lt;type&gt; &lt;ir.json&gt;</span> 渲染后，IR 与 HTML 可作为 diagram 条目落库。
+              </div>
+            </div>
+          ) : (
+            <table>
+              <thead>
+                <tr>
+                  <th style={{ width: 160 }}>条目</th>
+                  <th>标题</th>
+                  <th style={{ width: 100 }}>标签</th>
+                </tr>
+              </thead>
+              <tbody>
+                {diagrams.map((d) => (
+                  <tr key={d.id}>
+                    <td className="mono small">{d.id}</td>
+                    <td>{d.title}</td>
+                    <td className="small muted">{d.tags.slice(0, 2).join(' ') || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+
+          {/* 已渲染的 Archify 产物（可预览） */}
+          <div className="small muted" style={{ margin: '14px 0 6px' }}>
+            已渲染产物（Archify）
+          </div>
+          <State loading={archAssets.loading} error={archAssets.error}>
+            {(archAssets.data?.length ?? 0) === 0 ? (
+              <div className="small muted">（还没有渲染产物）</div>
+            ) : (
+              <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+                {archAssets.data?.map((d) => (
+                  <button
+                    key={`${d.type}/${d.name}`}
+                    className={preview === `/api/arch/preview/${d.type}/${d.name}` ? 'primary' : ''}
+                    onClick={() => setPreview(`/api/arch/preview/${d.type}/${d.name}`)}
+                  >
+                    {d.type} · {d.name}
+                  </button>
+                ))}
+              </div>
+            )}
+          </State>
+          {preview !== '' && (
+            <div className="iframe-wrap" style={{ marginTop: 10 }}>
+              <iframe title="arch-preview" src={preview} />
+            </div>
+          )}
+        </div>
+      )}
+
+      {tab === 'entries' && (
+        <div style={{ marginTop: 12 }}>
+          <table>
+            <thead>
+              <tr>
+                <th style={{ width: 150 }}>条目</th>
+                <th>标题</th>
+                <th style={{ width: 90 }}>类型</th>
+                <th style={{ width: 150 }}>模块</th>
+              </tr>
+            </thead>
+            <tbody>
+              {scoped.map((e) => (
+                <tr key={e.id}>
+                  <td className="mono small">{e.id}</td>
+                  <td>{e.title}</td>
+                  <td>
+                    <span className="tag" style={{ color: TYPE_COLOR[e.type] }}>
+                      {TYPE_LABEL[e.type] ?? e.type}
+                    </span>
+                  </td>
+                  <td className="small muted">{e.module === '' ? '_inbox' : e.module}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** 书/模块内的紧凑图谱：SVG 力导向近似（环形 + 连线），不占满屏。 */
+function MiniGraph({ view }: { view: KbGraphView }) {
+  if (view.nodes.length === 0) {
+    return <div className="empty">该范围内还没有关系边（条目可能都是孤立的）</div>
+  }
+  const W = 640
+  const H = 320
+  const cx = W / 2
+  const cy = H / 2
+  const R = Math.min(W, H) / 2 - 46
+  const pos = new Map<string, { x: number; y: number }>()
+  view.nodes.forEach((n) => {
+    if (n.id === view.root) {
+      pos.set(n.id, { x: cx, y: cy })
+      return
+    }
+    const others = view.nodes.filter((x) => x.id !== view.root)
+    const idx = others.findIndex((x) => x.id === n.id)
+    const angle = (2 * Math.PI * idx) / Math.max(1, others.length) - Math.PI / 2
+    pos.set(n.id, { x: cx + Math.cos(angle) * R, y: cy + Math.sin(angle) * R })
+  })
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="mini-graph" role="img" aria-label="范围内知识图谱">
+      <defs>
+        <marker id="mini-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--muted)" />
+        </marker>
+      </defs>
+      {view.edges.map((e) => {
+        const a = pos.get(e.from_id)
+        const b = pos.get(e.to_id)
+        if (a === undefined || b === undefined) return null
+        return (
+          <line
+            key={`${e.from_id}-${e.to_id}-${e.relation}`}
+            x1={a.x}
+            y1={a.y}
+            x2={b.x}
+            y2={b.y}
+            stroke="var(--muted)"
+            strokeWidth={1.3}
+            strokeOpacity={0.5}
+            markerEnd="url(#mini-arrow)"
+          />
+        )
+      })}
+      {view.nodes.map((n) => {
+        const p = pos.get(n.id)!
+        const r = 9 + Math.min(n.in_degree + n.out_degree, 6) * 1.6
+        return (
+          <g key={n.id}>
+            <circle cx={p.x} cy={p.y} r={r} fill={TYPE_COLOR[n.type] ?? '#8b93a7'} />
+            <text x={p.x} y={p.y + r + 13} textAnchor="middle" fontSize={11} fill="var(--text)">
+              {n.title.length > 12 ? `${n.title.slice(0, 12)}…` : n.title}
+            </text>
+          </g>
+        )
+      })}
+    </svg>
+  )
 }
 
 /** 条目详情面板：正文 + 元数据 + 关系（含双链邻居）。 */
