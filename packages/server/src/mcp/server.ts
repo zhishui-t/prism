@@ -7,7 +7,14 @@ import { pathToFileURL } from 'node:url'
 import { prismHome, openPersistence, PrismError, WorkQueue, WORK_KINDS, BUILTIN_VALIDATORS, TaskLedger, type WorkKind } from '@prism/core'
 
 import { activateTeam, loadRole, loadRoles, loadTeam, renderZcodeRole, resolveDirsFromHome, zcodePaths } from '../roles/index.js'
-import { runGraphify } from '../graph/graphify.js'
+import {
+  runGraphify,
+  graphPath as queryGraphPath,
+  graphExplain as queryGraphExplain,
+  graphAffected as queryGraphAffected,
+  graphGodNodes as queryGraphGodNodes,
+  graphSummary as queryGraphSummary,
+} from '../graph/graphify.js'
 import { inspectGraphStatus, ProjectRegistry } from '../graph/registry.js'
 import type { DepositInput, GraphQuery, KnowledgeService, SearchQuery } from '../kb/port.js'
 import { loadKnowledgeService } from '../kb/wiring.js'
@@ -125,6 +132,72 @@ export function createMcpTools(deps: McpDeps): McpTool[] {
     }
     const info = await registry.get(projectName)
     return await inspectGraphStatus(info.project, info.root, info.built_at)
+  }
+
+  const requireProject = async (args: Record<string, unknown>, tool: string): Promise<{ project: string; root: string }> => {
+    const projectName = typeof args.project === 'string' ? args.project.trim() : ''
+    if (projectName === '') {
+      throw new Error(`${tool} 需要 { project }`)
+    }
+    return await requireProjectRoot(projectName)
+  }
+
+  const graphPath = async (args: Record<string, unknown>): Promise<unknown> => {
+    const from = typeof args.from === 'string' ? args.from.trim() : ''
+    const to = typeof args.to === 'string' ? args.to.trim() : ''
+    if (from === '' || to === '') throw new Error('prism_graph_path 需要 { from, to, project }')
+    const { project, root } = await requireProject(args, 'prism_graph_path')
+    const result = await queryGraphPath(root, from, to, {
+      cwd: root,
+      ...(deps.graphifyEnv !== undefined ? { env: deps.graphifyEnv } : {}),
+      ...(deps.graphifyTimeoutMs !== undefined ? { timeoutMs: deps.graphifyTimeoutMs } : {}),
+    })
+    return { project, ...result }
+  }
+
+  const graphExplain = async (args: Record<string, unknown>): Promise<unknown> => {
+    const node = typeof args.node === 'string' ? args.node.trim() : ''
+    if (node === '') throw new Error('prism_graph_explain 需要 { node, project }')
+    const { project, root } = await requireProject(args, 'prism_graph_explain')
+    const result = await queryGraphExplain(root, node, {
+      cwd: root,
+      ...(deps.graphifyEnv !== undefined ? { env: deps.graphifyEnv } : {}),
+      ...(deps.graphifyTimeoutMs !== undefined ? { timeoutMs: deps.graphifyTimeoutMs } : {}),
+    })
+    return { project, ...result }
+  }
+
+  const graphAffected = async (args: Record<string, unknown>): Promise<unknown> => {
+    const node = typeof args.node === 'string' ? args.node.trim() : ''
+    if (node === '') throw new Error('prism_graph_affected 需要 { node, project }')
+    const { project, root } = await requireProject(args, 'prism_graph_affected')
+    const result = await queryGraphAffected(root, node, {
+      cwd: root,
+      ...(typeof args.depth === 'number' ? { depth: args.depth } : {}),
+      ...(deps.graphifyEnv !== undefined ? { env: deps.graphifyEnv } : {}),
+      ...(deps.graphifyTimeoutMs !== undefined ? { timeoutMs: deps.graphifyTimeoutMs } : {}),
+    })
+    return { project, ...result }
+  }
+
+  const graphSummary = async (args: Record<string, unknown>): Promise<unknown> => {
+    const { project, root } = await requireProject(args, 'prism_graph_summary')
+    const summary = await queryGraphSummary(root)
+    if (!summary.exists) {
+      throw new Error(`图谱不存在: ${summary.path}（请先建图）`)
+    }
+    return { project, ...summary }
+  }
+
+  const graphGodNodes = async (args: Record<string, unknown>): Promise<unknown> => {
+    const { project, root } = await requireProject(args, 'prism_graph_god_nodes')
+    const result = await queryGraphGodNodes(root, {
+      cwd: root,
+      ...(typeof args.top === 'number' ? { top: args.top } : {}),
+      ...(deps.graphifyEnv !== undefined ? { env: deps.graphifyEnv } : {}),
+      ...(deps.graphifyTimeoutMs !== undefined ? { timeoutMs: deps.graphifyTimeoutMs } : {}),
+    })
+    return { project, ...result }
   }
 
   // ---- 角色 / 团队（design-v3 §3.4 P6：宿主拉配置主链路；数据源与 CLI 同源 resolveDirs，B8）----
@@ -300,6 +373,67 @@ export function createMcpTools(deps: McpDeps): McpTool[] {
         required: ['project'],
       },
       call: graphStatus,
+    },
+    {
+      name: 'prism_graph_path',
+      description: '代码图谱两节点最短路径（graphify path；返回跳数与链路）',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          from: { type: 'string', description: '起点节点标签' },
+          to: { type: 'string', description: '终点节点标签' },
+          project: { type: 'string' },
+        },
+        required: ['from', 'to', 'project'],
+      },
+      call: graphPath,
+    },
+    {
+      name: 'prism_graph_explain',
+      description: '解释单个节点及其邻居（graphify explain；返回 id/来源/社区/度数/连接）',
+      inputSchema: {
+        type: 'object',
+        properties: { node: { type: 'string' }, project: { type: 'string' } },
+        required: ['node', 'project'],
+      },
+      call: graphExplain,
+    },
+    {
+      name: 'prism_graph_affected',
+      description: '反向遍历求变更影响面（graphify affected；depth 默认 2）',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          node: { type: 'string' },
+          depth: { type: 'integer', minimum: 1, maximum: 10 },
+          project: { type: 'string' },
+        },
+        required: ['node', 'project'],
+      },
+      call: graphAffected,
+    },
+    {
+      name: 'prism_graph_summary',
+      description: '图谱规模统计（节点/边/社区数；读 graph.json，不调 CLI）',
+      inputSchema: {
+        type: 'object',
+        properties: { project: { type: 'string' } },
+        required: ['project'],
+      },
+      call: graphSummary,
+    },
+    {
+      name: 'prism_graph_god_nodes',
+      description: '枢纽节点排行（graphify god-nodes；度数最高的架构中心）',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          top: { type: 'integer', minimum: 1, maximum: 100 },
+          project: { type: 'string' },
+        },
+        required: ['project'],
+      },
+      call: graphGodNodes,
     },
     {
       name: 'prism_role_list',

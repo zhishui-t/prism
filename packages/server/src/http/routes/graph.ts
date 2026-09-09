@@ -4,7 +4,17 @@ import { join } from 'node:path'
 import { PrismError } from '@prism/core'
 
 import { ok, type Envelope } from '../envelope.js'
-import { buildGraphArgs, formatCommand, resolveGraphifyCommand, runGraphify } from '../../graph/graphify.js'
+import {
+  buildGraphArgs,
+  formatCommand,
+  resolveGraphifyCommand,
+  runGraphify,
+  graphPath as queryGraphPath,
+  graphExplain as queryGraphExplain,
+  graphAffected as queryGraphAffected,
+  graphGodNodes as queryGraphGodNodes,
+  graphSummary as queryGraphSummary,
+} from '../../graph/graphify.js'
 import { BuildJobManager, type BuildRunner } from '../../graph/jobs.js'
 import { inspectGraphStatus, ProjectRegistry, type ProjectInfo } from '../../graph/registry.js'
 import type { RouteContext } from '../router.js'
@@ -34,12 +44,17 @@ export function defaultGraphifyRunner(deps: { env?: NodeJS.ProcessEnv; timeoutMs
   }
 }
 
-/** graph 路由工厂（design.md §4：projects/build/job/query/status）。 */
+/** graph 路由工厂（design.md §4：projects/build/job/query/path/explain/affected/god-nodes/summary/status）。 */
 export function graphRoutes(deps: GraphDeps): {
   projects: (ctx: RouteContext) => Promise<Envelope>
   build: (ctx: RouteContext) => Promise<Envelope>
   jobStatus: (ctx: RouteContext) => Promise<Envelope>
   query: (ctx: RouteContext) => Promise<Envelope>
+  path: (ctx: RouteContext) => Promise<Envelope>
+  explain: (ctx: RouteContext) => Promise<Envelope>
+  affected: (ctx: RouteContext) => Promise<Envelope>
+  godNodes: (ctx: RouteContext) => Promise<Envelope>
+  summary: (ctx: RouteContext) => Promise<Envelope>
   status: (ctx: RouteContext) => Promise<Envelope>
 } {
   const projects = async (_ctx: RouteContext): Promise<Envelope> => {
@@ -106,6 +121,64 @@ export function graphRoutes(deps: GraphDeps): {
     return ok({ project: project.project, output: result.stdout.trim(), command: formatCommandDisplay(args) })
   }
 
+  const path = async (ctx: RouteContext): Promise<Envelope> => {
+    const from = ctx.query.get('from')?.trim() ?? ''
+    const to = ctx.query.get('to')?.trim() ?? ''
+    if (from === '' || to === '') {
+      throw new PrismError('bad_request', '缺少 from / to 参数')
+    }
+    const project = await requireProject(ctx)
+    await ensureGraph(project)
+    const result = await queryGraphPath(project.root, from, to, queryOpts(project, deps))
+    return ok({ project: project.project, ...result })
+  }
+
+  const explain = async (ctx: RouteContext): Promise<Envelope> => {
+    const node = ctx.query.get('node')?.trim() ?? ''
+    if (node === '') {
+      throw new PrismError('bad_request', '缺少 node 参数')
+    }
+    const project = await requireProject(ctx)
+    await ensureGraph(project)
+    const result = await queryGraphExplain(project.root, node, queryOpts(project, deps))
+    return ok({ project: project.project, ...result })
+  }
+
+  const affected = async (ctx: RouteContext): Promise<Envelope> => {
+    const node = ctx.query.get('node')?.trim() ?? ''
+    if (node === '') {
+      throw new PrismError('bad_request', '缺少 node 参数')
+    }
+    const project = await requireProject(ctx)
+    await ensureGraph(project)
+    const depthRaw = ctx.query.get('depth')
+    const result = await queryGraphAffected(project.root, node, {
+      ...queryOpts(project, deps),
+      ...(depthRaw !== null && depthRaw !== '' ? { depth: parsePositiveInt(depthRaw, 'depth', 10) } : {}),
+    })
+    return ok({ project: project.project, ...result })
+  }
+
+  const godNodes = async (ctx: RouteContext): Promise<Envelope> => {
+    const project = await requireProject(ctx)
+    await ensureGraph(project)
+    const topRaw = ctx.query.get('top')
+    const result = await queryGraphGodNodes(project.root, {
+      ...queryOpts(project, deps),
+      ...(topRaw !== null && topRaw !== '' ? { top: parsePositiveInt(topRaw, 'top', 100) } : {}),
+    })
+    return ok({ project: project.project, ...result })
+  }
+
+  const summary = async (ctx: RouteContext): Promise<Envelope> => {
+    const project = await requireProject(ctx)
+    const result = await queryGraphSummary(project.root)
+    if (!result.exists) {
+      throw new PrismError('graph_not_found', `图谱不存在: ${result.path}（请先建图）`)
+    }
+    return ok({ project: project.project, ...result })
+  }
+
   const status = async (ctx: RouteContext): Promise<Envelope> => {
     const project = await requireProject(ctx)
     return ok(await inspectGraphStatus(project.project, project.root, project.built_at))
@@ -119,7 +192,38 @@ export function graphRoutes(deps: GraphDeps): {
     return await deps.registry.get(name)
   }
 
-  return { projects, build, jobStatus, query, status }
+  return { projects, build, jobStatus, query, path, explain, affected, godNodes, summary, status }
+}
+
+/** 查询命令共用选项（cwd=项目根、超时与 env 透传）。 */
+function queryOpts(
+  project: ProjectInfo,
+  deps: GraphDeps,
+): { cwd: string; timeoutMs?: number; env?: NodeJS.ProcessEnv } {
+  return {
+    cwd: project.root,
+    ...(deps.graphifyTimeoutMs !== undefined ? { timeoutMs: deps.graphifyTimeoutMs } : {}),
+    ...(deps.graphifyEnv !== undefined ? { env: deps.graphifyEnv } : {}),
+  }
+}
+
+/** 图谱产物存在性校验（缺失 → graph_not_found）。 */
+async function ensureGraph(project: ProjectInfo): Promise<void> {
+  const graph = join(project.root, 'graphify-out', 'graph.json')
+  try {
+    await access(graph)
+  } catch {
+    throw new PrismError('graph_not_found', `图谱不存在: ${graph}（请先建图）`)
+  }
+}
+
+/** 正整数参数（上限 max）。 */
+function parsePositiveInt(raw: string, name: string, max: number): number {
+  const value = Number(raw)
+  if (!Number.isInteger(value) || value <= 0 || value > max) {
+    throw new PrismError('bad_request', `${name} 必须为 1~${max} 的整数: ${raw}`)
+  }
+  return value
 }
 
 /** 诊断展示用命令行（不含真实解析结果）。 */

@@ -80,7 +80,12 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
   prism task report <task-id> --to <STATUS> --by <who> [--from --revision]
   prism arch types | validate <type> <ir.json> | render <type> <ir.json> [--out <html>]
   prism graph build <项目根目录> [--name <项目名>] [--timeout <秒>]
-  prism graph query <q> --project <项目名>
+  prism graph query <q> --project <项目名>                  BFS 遍历查询
+  prism graph path <from> <to> --project <项目名>            最短路径
+  prism graph explain <node> --project <项目名>              节点解释
+  prism graph affected <node> [--depth N] --project <项目名>  变更影响面
+  prism graph god-nodes [--top N] --project <项目名>         枢纽节点
+  prism graph summary --project <项目名>                     图谱规模统计
   prism graph status <项目名>
 
 全局：--home <path>  --json  --zcode-dir <path>（role/team/skill/install 类统一收 ZCode 根，~ 自动展开）
@@ -132,6 +137,7 @@ const CLI_OPTIONS = {
   'error-type': { type: 'string' },
   status: { type: 'string' },
   out: { type: 'string' },
+  top: { type: 'string' },
 } as const
 
 export interface ParsedInvocation {
@@ -184,6 +190,7 @@ export type ArgValues = {
   'error-type'?: string
   status?: string
   out?: string
+  top?: string
 }
 
 /** `~`/`~\/` 前缀展开为用户主目录（Windows/Node 不自动展开；CLI 层统一负责，design-v3 §5 P14）。 */

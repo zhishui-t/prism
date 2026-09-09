@@ -55,12 +55,14 @@ prism
 │   ├── validate <type> <ir.json>   校验 IR（schema + 布局）
 │   └── render <type> <ir.json>     渲染为自包含 HTML
 │
-├── graph                   代码图谱
-│   ├── build <project>     建图（graphify extract + flows build）
-│   ├── query <q>           查询
+├── graph                   代码图谱（Python 版 graphify）
+│   ├── build <project>     建图（graphify <root> + cluster-only --no-label，零 LLM）
+│   ├── query <q>           BFS 遍历查询
 │   ├── path <a> <b>        最短路径
 │   ├── explain <node>      节点解释
-│   ├── affected <files>    变更影响面
+│   ├── affected <node>     变更影响面（--depth）
+│   ├── god-nodes           枢纽节点（--top）
+│   ├── summary             图谱规模统计
 │   └── status              陈旧状态
 │
 ├── task
@@ -108,7 +110,8 @@ prism
 | `prism_graph_path` | 最短路径 |
 | `prism_graph_explain` | 节点解释 |
 | `prism_graph_affected` | 变更影响面 |
-| `prism_graph_summary` | 图谱统计 |
+| `prism_graph_summary` | 图谱统计（节点/边/社区） |
+| `prism_graph_god_nodes` | 枢纽节点排行 |
 
 ### 2.3 团队与角色
 

@@ -266,3 +266,211 @@ export function formatCommand(resolved: GraphifyCommand, args: string[]): string
   )
   return parts.join(' ')
 }
+
+// ===== 查询命令封装（Python 版 graphify 的 query/path/explain/affected/god-nodes） =====
+
+/** 图谱查询选项（graph 路径缺省用 <root>/graphify-out/graph.json）。 */
+export interface GraphQueryOptions {
+  cwd?: string
+  timeoutMs?: number
+  env?: NodeJS.ProcessEnv
+}
+
+/** 解析默认 graph.json 路径（Python 版产物目录）。 */
+export function defaultGraphPath(root: string): string {
+  return join(root, 'graphify-out', 'graph.json')
+}
+
+/** 执行一次查询命令并返回原始 stdout（文本或 JSON 字符串）。 */
+async function runGraphQuery(
+  args: string[],
+  options: GraphQueryOptions,
+): Promise<{ stdout: string; stderr: string }> {
+  const result = await runGraphify(args, {
+    ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
+    ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+    ...(options.env !== undefined ? { env: options.env } : {}),
+  })
+  // Python 版会在 stderr 打 skill 版本告警，不视为错误
+  return { stdout: result.stdout, stderr: result.stderr }
+}
+
+/** BFS/DFS 遍历查询（`graphify query "<q>" --graph <path>`）。 */
+export async function graphQuery(
+  root: string,
+  question: string,
+  options: GraphQueryOptions & { dfs?: boolean; budget?: number } = {},
+): Promise<{ raw: string; nodes: Array<{ label: string; source?: string; loc?: string; community?: string }>; edges: string[] }> {
+  const args = ['query', question, '--graph', defaultGraphPath(root)]
+  if (options.dfs === true) args.push('--dfs')
+  if (options.budget !== undefined) args.push('--budget', String(options.budget))
+  const { stdout } = await runGraphQuery(args, options)
+  const nodes: Array<{ label: string; source?: string; loc?: string; community?: string }> = []
+  const edges: string[] = []
+  for (const line of stdout.split('\n')) {
+    const nodeMatch = line.match(/^NODE (.+?)(?: \[(.+)\])?$/)
+    if (nodeMatch !== null) {
+      const meta = nodeMatch[2] ?? ''
+      const src = meta.match(/src=([^\s]+)/)?.[1]
+      const loc = meta.match(/loc=([^\s]+)/)?.[1]
+      const community = meta.match(/community=([^\]]+?)(?:\s|$)/)?.[1]
+      nodes.push({
+        label: nodeMatch[1]!.trim(),
+        ...(src !== undefined ? { source: src } : {}),
+        ...(loc !== undefined ? { loc } : {}),
+        ...(community !== undefined ? { community } : {}),
+      })
+      continue
+    }
+    if (line.startsWith('EDGE ')) edges.push(line.slice(5).trim())
+  }
+  return { raw: stdout, nodes, edges }
+}
+
+/** 最短路径（`graphify path "A" "B" --graph <path>`）。 */
+export async function graphPath(
+  root: string,
+  from: string,
+  to: string,
+  options: GraphQueryOptions = {},
+): Promise<{ raw: string; hops: number | null; chain: string[]; found: boolean }> {
+  const { stdout } = await runGraphQuery(['path', from, to, '--graph', defaultGraphPath(root)], options)
+  const found = !/^No (node matching|path)/i.test(stdout.trim())
+  const hopsMatch = stdout.match(/\((\d+) hops?\)/)
+  const chainLine = stdout.split('\n').find((l) => l.includes('-->'))
+  const chain =
+    chainLine === undefined
+      ? []
+      : chainLine
+          .replace(/^\s*/, '')
+          .split(/--[^-]*-->/)
+          .map((s) => s.trim())
+          .filter((s) => s !== '')
+  return {
+    raw: stdout,
+    hops: hopsMatch !== null ? Number(hopsMatch[1]) : null,
+    chain,
+    found,
+  }
+}
+
+/** 节点解释（`graphify explain "X" --graph <path>`）。 */
+export async function graphExplain(
+  root: string,
+  node: string,
+  options: GraphQueryOptions = {},
+): Promise<{
+  raw: string
+  id: string | null
+  source: string | null
+  type: string | null
+  community: string | null
+  degree: number | null
+  connections: Array<{ direction: 'in' | 'out'; label: string; relation: string; location: string | null }>
+}> {
+  const { stdout } = await runGraphQuery(['explain', node, '--graph', defaultGraphPath(root)], options)
+  const field = (name: string): string | null => {
+    const m = stdout.match(new RegExp(`^\\s*${name}:\\s+(.+)$`, 'm'))
+    return m !== null ? m[1]!.trim() : null
+  }
+  const degreeRaw = field('Degree')
+  const connections: Array<{ direction: 'in' | 'out'; label: string; relation: string; location: string | null }> = []
+  for (const line of stdout.split('\n')) {
+    const m = line.match(/^\s*(-->|<--)\s+(.+?)\s+\[([^\]]+)\]\s+\[[^\]]*\]\s*(.*)$/)
+    if (m === null) continue
+    connections.push({
+      direction: m[1] === '-->' ? 'out' : 'in',
+      label: m[2]!.trim(),
+      relation: m[3]!,
+      location: m[4]!.trim() === '' ? null : m[4]!.trim(),
+    })
+  }
+  return {
+    raw: stdout,
+    id: field('ID'),
+    source: field('Source'),
+    type: field('Type'),
+    community: field('Community'),
+    degree: degreeRaw !== null && /^\d+$/.test(degreeRaw) ? Number(degreeRaw) : null,
+    connections,
+  }
+}
+
+/** 变更影响面（`graphify affected "X" --graph <path>`）。 */
+export async function graphAffected(
+  root: string,
+  node: string,
+  options: GraphQueryOptions & { depth?: number; relations?: string[] } = {},
+): Promise<{ raw: string; depth: number | null; nodes: Array<{ label: string; relation: string; location: string | null }> }> {
+  const args = ['affected', node, '--graph', defaultGraphPath(root)]
+  if (options.depth !== undefined) args.push('--depth', String(options.depth))
+  for (const relation of options.relations ?? []) args.push('--relation', relation)
+  const { stdout } = await runGraphQuery(args, options)
+  const depthMatch = stdout.match(/^Depth:\s+(\d+)/m)
+  const nodes: Array<{ label: string; relation: string; location: string | null }> = []
+  for (const line of stdout.split('\n')) {
+    const m = line.match(/^-\s+(.+?)\s+\[([^\]]+)\]\s*(.*)$/)
+    if (m === null) continue
+    nodes.push({
+      label: m[1]!.trim(),
+      relation: m[2]!,
+      location: m[3]!.trim() === '' ? null : m[3]!.trim(),
+    })
+  }
+  return { raw: stdout, depth: depthMatch !== null ? Number(depthMatch[1]) : null, nodes }
+}
+
+/** 枢纽节点（`graphify god-nodes --graph <path> --top N --json`）。 */
+export async function graphGodNodes(
+  root: string,
+  options: GraphQueryOptions & { top?: number } = {},
+): Promise<{ raw: string; nodes: Array<{ id: string; label: string; degree: number }> }> {
+  const args = ['god-nodes', '--graph', defaultGraphPath(root), '--json']
+  if (options.top !== undefined) args.push('--top', String(options.top))
+  const { stdout } = await runGraphQuery(args, options)
+  let nodes: Array<{ id: string; label: string; degree: number }> = []
+  try {
+    const parsed = JSON.parse(stdout) as unknown
+    if (Array.isArray(parsed)) {
+      nodes = parsed.flatMap((item) => {
+        if (typeof item !== 'object' || item === null) return []
+        const r = item as Record<string, unknown>
+        if (typeof r['label'] !== 'string') return []
+        return [
+          {
+            id: typeof r['id'] === 'string' ? r['id'] : r['label'],
+            label: r['label'],
+            degree: typeof r['degree'] === 'number' ? r['degree'] : 0,
+          },
+        ]
+      })
+    }
+  } catch {
+    // JSON 解析失败 → 仅返回 raw
+  }
+  return { raw: stdout, nodes }
+}
+
+/** 图谱统计（读 graph.json 汇总，不调 CLI；零开销）。 */
+export async function graphSummary(
+  root: string,
+): Promise<{ exists: boolean; nodes: number; edges: number; communities: number; path: string }> {
+  const path = defaultGraphPath(root)
+  try {
+    const raw = await readFile(path, 'utf-8')
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    const asArray = (v: unknown): unknown[] => (Array.isArray(v) ? v : [])
+    const nodes = asArray(parsed['nodes']).length
+    const edges = asArray(parsed['edges'] ?? parsed['links']).length
+    const communities = new Set(
+      asArray(parsed['nodes']).flatMap((n) => {
+        if (typeof n !== 'object' || n === null) return []
+        const c = (n as Record<string, unknown>)['community']
+        return c === undefined || c === null ? [] : [String(c)]
+      }),
+    ).size
+    return { exists: true, nodes, edges, communities, path }
+  } catch {
+    return { exists: false, nodes: 0, edges: 0, communities: 0, path }
+  }
+}

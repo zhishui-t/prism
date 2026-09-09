@@ -9,6 +9,11 @@ import {
   inspectGraphStatus,
   resolveGraphifyCommand,
   runGraphify,
+  graphPath as queryPath,
+  graphExplain as queryExplain,
+  graphAffected as queryAffected,
+  graphGodNodes as queryGodNodes,
+  graphSummary as querySummary,
   type BuildRunner,
 } from '@prism/server'
 
@@ -24,10 +29,22 @@ export async function runGraph(ctx: CommandContext, args: string[], values: ArgV
       return await graphBuild(ctx, rest, values)
     case 'query':
       return await graphQuery(ctx, rest, values)
+    case 'path':
+      return await graphPathCmd(ctx, rest, values)
+    case 'explain':
+      return await graphExplainCmd(ctx, rest, values)
+    case 'affected':
+      return await graphAffectedCmd(ctx, rest, values)
+    case 'god-nodes':
+      return await graphGodNodesCmd(ctx, rest, values)
+    case 'summary':
+      return await graphSummaryCmd(ctx, rest, values)
     case 'status':
       return await graphStatus(ctx, rest)
     default:
-      ctx.stderr('用法: prism graph <build|query|status> ...')
+      ctx.stderr(
+        '用法: prism graph <build|query|path|explain|affected|god-nodes|summary|status> ...',
+      )
       return 1
   }
 }
@@ -112,6 +129,131 @@ async function graphQuery(ctx: CommandContext, args: string[], values: ArgValues
   } else {
     ctx.stdout(result.stdout.trim())
   }
+  return 0
+}
+
+/** 解析已注册项目（图谱查询命令共用）：未注册 → null（已打印错误）。 */
+async function resolveProject(
+  ctx: CommandContext,
+  values: ArgValues,
+  positional: string | undefined,
+  usage: string,
+): Promise<{ project: string; root: string } | null> {
+  const projectName = values.project ?? positional
+  if (projectName === undefined) {
+    ctx.stderr(usage)
+    return null
+  }
+  const registry = new ProjectRegistry(ctx.home ?? prismHome())
+  try {
+    const info = await registry.get(projectName)
+    return { project: info.project, root: info.root }
+  } catch {
+    ctx.stderr(`错误 [not_found] 项目未注册: ${projectName}（先 prism graph build <目录>）`)
+    return null
+  }
+}
+
+/** 查询前校验图谱存在。 */
+async function ensureGraph(ctx: CommandContext, root: string): Promise<boolean> {
+  const graphPath = join(root, 'graphify-out', 'graph.json')
+  try {
+    await access(graphPath)
+    return true
+  } catch {
+    ctx.stderr(`错误 [graph_not_found] 图谱不存在: ${graphPath}（请先 prism graph build）`)
+    return false
+  }
+}
+
+/** `prism graph path <from> <to> --project <名>`。 */
+async function graphPathCmd(ctx: CommandContext, args: string[], values: ArgValues): Promise<number> {
+  const [from, to] = args
+  if (from === undefined || to === undefined) {
+    ctx.stderr('用法: prism graph path <from> <to> --project <项目名>')
+    return 1
+  }
+  const target = await resolveProject(ctx, values, undefined, '用法: prism graph path <from> <to> --project <项目名>')
+  if (target === null || !(await ensureGraph(ctx, target.root))) return 1
+  const result = await queryPath(target.root, from, to, { cwd: target.root })
+  if (ctx.json) {
+    ctx.stdout(JSON.stringify({ ok: true, value: { project: target.project, ...result } }))
+    return result.found ? 0 : 1
+  }
+  ctx.stdout(result.raw.trim())
+  return result.found ? 0 : 1
+}
+
+/** `prism graph explain <node> --project <名>`。 */
+async function graphExplainCmd(ctx: CommandContext, args: string[], values: ArgValues): Promise<number> {
+  const node = args[0]
+  if (node === undefined) {
+    ctx.stderr('用法: prism graph explain <node> --project <项目名>')
+    return 1
+  }
+  const target = await resolveProject(ctx, values, undefined, '用法: prism graph explain <node> --project <项目名>')
+  if (target === null || !(await ensureGraph(ctx, target.root))) return 1
+  const result = await queryExplain(target.root, node, { cwd: target.root })
+  if (ctx.json) {
+    ctx.stdout(JSON.stringify({ ok: true, value: { project: target.project, ...result } }))
+  } else {
+    ctx.stdout(result.raw.trim())
+  }
+  return 0
+}
+
+/** `prism graph affected <node> [--depth N] --project <名>`。 */
+async function graphAffectedCmd(ctx: CommandContext, args: string[], values: ArgValues): Promise<number> {
+  const node = args[0]
+  if (node === undefined) {
+    ctx.stderr('用法: prism graph affected <node> [--depth N] --project <项目名>')
+    return 1
+  }
+  const target = await resolveProject(ctx, values, undefined, '用法: prism graph affected <node> --project <项目名>')
+  if (target === null || !(await ensureGraph(ctx, target.root))) return 1
+  const result = await queryAffected(target.root, node, {
+    cwd: target.root,
+    ...(values.depth !== undefined ? { depth: Number(values.depth) } : {}),
+  })
+  if (ctx.json) {
+    ctx.stdout(JSON.stringify({ ok: true, value: { project: target.project, ...result } }))
+  } else {
+    ctx.stdout(result.raw.trim())
+  }
+  return 0
+}
+
+/** `prism graph god-nodes [--top N] --project <名>`。 */
+async function graphGodNodesCmd(ctx: CommandContext, _args: string[], values: ArgValues): Promise<number> {
+  const target = await resolveProject(ctx, values, undefined, '用法: prism graph god-nodes [--top N] --project <项目名>')
+  if (target === null || !(await ensureGraph(ctx, target.root))) return 1
+  const result = await queryGodNodes(target.root, {
+    cwd: target.root,
+    ...(values.top !== undefined ? { top: Number(values.top) } : {}),
+  })
+  if (ctx.json) {
+    ctx.stdout(JSON.stringify({ ok: true, value: { project: target.project, ...result } }))
+  } else {
+    ctx.stdout(result.raw.trim())
+  }
+  return 0
+}
+
+/** `prism graph summary --project <名>`：图谱规模统计（不调 CLI）。 */
+async function graphSummaryCmd(ctx: CommandContext, _args: string[], values: ArgValues): Promise<number> {
+  const target = await resolveProject(ctx, values, undefined, '用法: prism graph summary --project <项目名>')
+  if (target === null) return 1
+  const summary = await querySummary(target.root)
+  if (ctx.json) {
+    ctx.stdout(JSON.stringify({ ok: true, value: { project: target.project, ...summary } }))
+    return summary.exists ? 0 : 1
+  }
+  if (!summary.exists) {
+    ctx.stderr(`错误 [graph_not_found] 图谱不存在: ${summary.path}`)
+    return 1
+  }
+  ctx.stdout(`项目: ${target.project}（${target.root}）`)
+  ctx.stdout(`节点 ${summary.nodes}  边 ${summary.edges}  社区 ${summary.communities}`)
   return 0
 }
 

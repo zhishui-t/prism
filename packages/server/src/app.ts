@@ -131,6 +131,11 @@ export async function createApp(options: AppOptions = {}): Promise<{
   router.add('POST', '/api/graph/build', graph.build)
   router.add('GET', '/api/graph/build/:job_id', graph.jobStatus)
   router.add('GET', '/api/graph/query', graph.query)
+  router.add('GET', '/api/graph/path', graph.path)
+  router.add('GET', '/api/graph/explain', graph.explain)
+  router.add('GET', '/api/graph/affected', graph.affected)
+  router.add('GET', '/api/graph/god-nodes', graph.godNodes)
+  router.add('GET', '/api/graph/summary', graph.summary)
   router.add('GET', '/api/graph/status', graph.status)
 
   router.add('GET', '/studio/:project/*', studioRoute(registry))
