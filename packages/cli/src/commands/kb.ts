@@ -375,17 +375,20 @@ async function kbSync(ctx: CommandContext, args: string[], values: ArgValues): P
  * 否则报告 created/updated 但不落库。转换仍真实执行（验证 anydoc 能否处理）。
  */
 function makeDryRunKb(real: KnowledgeService): KnowledgeService {
-  return {
-    ...real,
-    index: async (input) => {
-      const existing = await real.get(input.id)
-      if (existing !== null) {
-        const prev = existing.source_hash
-        return { id: input.id, action: prev === input.source_hash ? ('unchanged' as const) : ('updated' as const) }
+  // 用 Object.create 保留原型方法（class 实例的方法不在自有属性上，展开会丢）
+  const wrapper = Object.create(real) as KnowledgeService
+  wrapper.index = async (input) => {
+    const existing = await real.get(input.id)
+    if (existing !== null) {
+      const prev = existing.source_hash
+      return {
+        id: input.id,
+        action: prev === input.source_hash ? ('unchanged' as const) : ('updated' as const),
       }
-      return { id: input.id, action: 'created' as const }
-    },
-  } as KnowledgeService
+    }
+    return { id: input.id, action: 'created' as const }
+  }
+  return wrapper
 }
 
 /**
