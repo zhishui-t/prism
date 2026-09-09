@@ -11,7 +11,7 @@ export interface ProjectInfo {
   root: string
   built_at: string | null
   /**
-   * 失效标记：注册项 root 下已无 `.graphify/graph.json`（产物被清理或尚未建完）。
+   * 失效标记：注册项 root 下已无 `graphify-out/graph.json`（产物被清理或尚未建完）。
    * 语义：**保留条目并标 stale:true**（不删除、不隐藏——用户能看到并重新 build），
    * studio/query 等消费方在产物缺失时各自返回 404/graph_not_found。
    */
@@ -121,7 +121,7 @@ export class ProjectRegistry {
 
 /** 项目根下是否有图谱产物。 */
 export async function graphExists(root: string): Promise<boolean> {
-  return await isFile(join(root, '.graphify', 'graph.json'))
+  return await isFile(join(root, 'graphify-out', 'graph.json'))
 }
 
 async function isFile(path: string): Promise<boolean> {
@@ -148,14 +148,14 @@ export interface GraphStatusDetail {
 }
 
 /**
- * 陈旧检测（尽力而为）：读 `.graphify/manifest.json`（Graphify 产物）。
+ * 陈旧检测（尽力而为）：读 `graphify-out/manifest.json`（Graphify 产物）。
  * 实测结构为「顶层 文件路径 → { mtime, hash }」映射（兼容 files/hashes 包裹形态）。
  * 比对策略：有 mtime 用 mtime；hash 为 64/40 位十六进制时用 SHA-256/SHA-1；
  * 无法识别的哈希算法跳过该文件并在 note 说明。git HEAD 取当前 HEAD 对比。
  */
 export async function inspectGraphStatus(project: string, root: string, builtAt: string | null): Promise<GraphStatusDetail> {
-  const graphPath = join(root, '.graphify', 'graph.json')
-  const manifestPath = join(root, '.graphify', 'manifest.json')
+  const graphPath = join(root, 'graphify-out', 'graph.json')
+  const manifestPath = join(root, 'graphify-out', 'manifest.json')
   const graphExistsFlag = await isFile(graphPath)
 
   const detail: GraphStatusDetail = {
@@ -224,7 +224,12 @@ function extractManifestEntries(manifest: unknown): ManifestEntry[] | null {
       const item = value as Record<string, unknown>
       entries.push({
         path,
-        hash: typeof item.hash === 'string' ? item.hash : undefined,
+        // hash 兼容多命名：npm 版 `hash`；Python 版 `ast_hash`/`semantic_hash`（32 位 MD5）
+        hash:
+          typeof item.hash === 'string' ? item.hash
+          : typeof item.ast_hash === 'string' ? item.ast_hash
+          : typeof item.semantic_hash === 'string' ? item.semantic_hash
+          : undefined,
         mtime: typeof item.mtime === 'number' ? item.mtime : undefined,
       })
     }
@@ -256,8 +261,10 @@ async function countChanged(root: string, entries: ManifestEntry[]): Promise<[ch
     try {
       const [content, fileStat] = await Promise.all([readFile(abs), stat(abs)])
       if (entry.mtime !== undefined) {
-        // mtime 比对（graphify 实测提供；秒级容忍）
-        if (Math.abs(fileStat.mtimeMs - entry.mtime) > 1000) {
+        // mtime 比对（秒级容忍）。单位归一：Python 版 manifest 记秒、Node stat 为毫秒——
+        // 2026 纪元值毫秒在 1.7e12 量级，小于 1e11 视为秒制 ×1000
+        const recorded = entry.mtime < 1e11 ? entry.mtime * 1000 : entry.mtime
+        if (Math.abs(fileStat.mtimeMs - recorded) > 1000) {
           changed++
         }
         continue
@@ -269,7 +276,8 @@ async function countChanged(root: string, entries: ManifestEntry[]): Promise<[ch
       }
       const matches =
         (hash.length === 64 && createHash('sha256').update(content).digest('hex') === hash) ||
-        (hash.length === 40 && createHash('sha1').update(content).digest('hex') === hash)
+        (hash.length === 40 && createHash('sha1').update(content).digest('hex') === hash) ||
+        (hash.length === 32 && createHash('md5').update(content).digest('hex') === hash)
       if (!matches) {
         changed++
       }

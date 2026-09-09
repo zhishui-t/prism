@@ -91,7 +91,7 @@ export function graphRoutes(deps: GraphDeps): {
       throw new PrismError('bad_request', '缺少查询词 q')
     }
     const project = await requireProject(ctx)
-    const graph = join(project.root, '.graphify', 'graph.json')
+    const graph = join(project.root, 'graphify-out', 'graph.json')
     try {
       await access(graph)
     } catch {

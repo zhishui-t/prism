@@ -16,8 +16,8 @@
     "lint": "eslint .",
     "web:dev": "pnpm --filter @prism/web dev",
     "web:build": "pnpm --filter @prism/web build",
-    "3rd:build": "cd 3rd/graphify && npm install && npm run build",
-    "3rd:check": "node 3rd/archify/bin/archify.mjs --help && node 3rd/graphify/dist/cli.js --version"
+    "3rd:build": "python -m pip install -q \"tree-sitter>=0.23.0,<0.26\" tree-sitter-python tree-sitter-typescript tree-sitter-javascript networkx numpy rapidfuzz",
+    "3rd:check": "node 3rd/archify/bin/archify.mjs --help && python -c \"import sys; sys.path.insert(0, '3rd/graphify'); import graphify; print('graphify import ok')\" && python -c \"import tree_sitter, networkx, rapidfuzz; print('deps ok')\""
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",

@@ -6,7 +6,7 @@ import { useAsync } from '../components/useAsync.ts'
 
 /**
  * 代码图谱页（独立一级页）：
- * 能力用 Graphify 工具、显示用 Graphify Studio 页面、产物放项目根 .graphify/。
+ * 能力用 Graphify 工具（vendored Python 子工程）、显示用其自带 HTML、产物落项目根 graphify-out/。
  * Prism 只做编排（建图触发、陈旧标记、查询），不重画图谱。
  */
 export function CodeGraphPage() {
@@ -77,7 +77,7 @@ export function CodeGraphPage() {
     <>
       <h2 className="page-title">代码图谱</h2>
       <p className="page-desc">
-        由 Graphify 构建与渲染（AST 解析，代码零 token）；产物落项目根 <span className="mono">.graphify/</span>。
+        由 Graphify 构建与渲染（AST 解析，代码零 token）；产物落项目根 <span className="mono">graphify-out/</span>。
       </p>
 
       <div className="card">

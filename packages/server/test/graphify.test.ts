@@ -37,10 +37,12 @@ describe('resolveGraphifyCommand（Windows .cmd 处理）', () => {
     ).rejects.toMatchObject({ code: 'graphify_missing' })
   })
 
-  it('默认优先仓库内 vendored 子工程（3rd/graphify/dist/cli.js）', async () => {
+  it('默认优先仓库内 vendored Python 子工程（python -m graphify + PYTHONPATH）', async () => {
     const resolved = await resolveGraphifyCommand({ PATH: '' })
     expect(resolved.shell).toBe(false)
-    expect(resolved.prefixArgs[0]).toContain(join('3rd', 'graphify', 'dist', 'cli.js'))
+    expect(resolved.command).toBe('python')
+    expect(resolved.prefixArgs).toEqual(['-m', 'graphify'])
+    expect(resolved.env?.['PYTHONPATH']).toContain(join('3rd', 'graphify'))
   })
 
   it.skipIf(!isWin)('PATH 上找到 graphify.cmd → shell 执行', async () => {
@@ -86,11 +88,11 @@ describe('runGraphify（错误映射 + 参数钉死）', () => {
     await rm(dir, { recursive: true, force: true })
   })
 
-  it('buildGraphArgs 钉死零 token 参数（禁 LLM 富化）', () => {
+  it('buildGraphArgs 钉死零 token 参数（Python 版两步，禁 LLM 富化）', () => {
     const args = buildGraphArgs('K:/proj')
     expect(args).toEqual([
-      ['extract', 'K:/proj', '--out', 'K:/proj', '--no-description', '--no-label'],
-      ['flows', 'build', '--graph', join('K:/proj', '.graphify', 'graph.json')],
+      ['K:/proj'],
+      ['cluster-only', 'K:/proj', '--no-label'],
     ])
   })
 

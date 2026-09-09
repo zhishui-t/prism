@@ -265,7 +265,7 @@ archify compare  architecture base.json head.json delta.html --json  # Before/De
 
 > `compare` **只报事实，不推断影响/风险/合并安全性**——影响面分析由 Prism 图谱分析提供，Archify 只负责把差异画清楚。
 
-**分发（D10，2026-09-10 落地）**：Archify **未发布 npm**（`archify` 这个 npm 名属另一个无关包；上游 `private: true`）。故以**子工程形式**引入 `3rd/archify/`（**v2.16.0**，MIT）：保留 `bin/` + `schemas/` + `renderers/` + `assets/` + `delta/` + `migrations/` + `scripts/` + `examples/*.json`，裁剪 `test/`、`recipes/`、`references/`、`brand-marks/` 与示例 HTML 产物。调用 `node 3rd/archify/bin/archify.mjs`（自包含零运行时依赖）。Graphify 同以子工程引入 `3rd/graphify/`（**v0.17.1**，源码 + `pnpm run 3rd:build` 构建）；两者均见 `3rd/README.md`。
+**分发（D10，2026-09-10 落地）**：Archify **未发布 npm**（`archify` 这个 npm 名属另一个无关包；上游 `private: true`）。故以**子工程形式**引入 `3rd/archify/`（**v2.16.0**，MIT）：保留 `bin/` + `schemas/` + `renderers/` + `assets/` + `delta/` + `migrations/` + `scripts/` + `examples/*.json`，裁剪 `test/`、`recipes/`、`references/`、`brand-marks/` 与示例 HTML 产物。调用 `node 3rd/archify/bin/archify.mjs`（自包含零运行时依赖）。Graphify 同以子工程引入 `3rd/graphify/`（**v0.9.56**，Python 版 Graphify-Labs 上游，免构建 `python -m graphify`）；两者均见 `3rd/README.md`。
 
 **存储**：IR 是源、HTML 是派生，两者都作为 `type: diagram` 条目；frontmatter 记录 `archify_version` + IR 哈希 + 来源图谱 commit。
 

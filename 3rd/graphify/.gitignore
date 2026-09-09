@@ -1,9 +1,0 @@
-# vendored 子工程：源码入库，构建产物与依赖本地生成
-# 上游 v0.17.1（MIT，https://github.com/rhanka/graphify）
-node_modules/
-dist/
-packages/*/node_modules/
-packages/*/dist/
-studio/node_modules/
-studio/dist/
-*.tsbuildinfo

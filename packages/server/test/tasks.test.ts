@@ -89,11 +89,11 @@ describe('ProjectRegistry（项目注册表，projects.json 持久化）', () =>
     const registry = new ProjectRegistry(home)
     const root = await makeTempDir('prism-reg-stale-')
     await registry.register('gone', root)
-    expect((await registry.get('gone')).stale).toBe(true) // 无 .graphify/graph.json
+    expect((await registry.get('gone')).stale).toBe(true) // 无 graphify-out/graph.json
     const list = await registry.list()
     expect(list[0].stale).toBe(true) // 保留条目并标注，不隐藏
 
-    await putFile(`${root}/.graphify/graph.json`, '{}')
+    await putFile(`${root}/graphify-out/graph.json`, '{}')
     expect((await registry.get('gone')).stale).toBe(false)
   })
 
@@ -121,11 +121,11 @@ describe('ProjectRegistry（项目注册表，projects.json 持久化）', () =>
 
 describe('studio 路径越界防护', () => {
   it('isInside 拒绝越界与不同根（真实调用前先 path.resolve 折叠 ..）', () => {
-    const base = 'K:/proj/.graphify/studio'
-    expect(isInside(base, 'K:/proj/.graphify/studio/index.html')).toBe(true)
-    expect(isInside(base, 'K:/proj/.graphify/studio')).toBe(true)
-    // '../secret.txt' 经 resolve 后逃出 base → 归一化为 'K:/proj/.graphify/secret.txt' 必须拒绝
-    expect(isInside(base, 'K:/proj/.graphify/secret.txt')).toBe(false)
+    const base = 'K:/proj/graphify-out'
+    expect(isInside(base, 'K:/proj/graphify-out/index.html')).toBe(true)
+    expect(isInside(base, 'K:/proj/graphify-out')).toBe(true)
+    // '../secret.txt' 经 resolve 后逃出 base → 归一化为 'K:/proj/secret.txt' 必须拒绝
+    expect(isInside(base, 'K:/proj/secret.txt')).toBe(false)
     expect(isInside(base, 'K:/other/index.html')).toBe(false)
   })
 })
@@ -143,8 +143,8 @@ describe('inspectGraphStatus（陈旧检测）', () => {
     await putFile(`${dir}/src/a.ts`, 'export const a = 1')
     const { createHash } = await import('node:crypto')
     const hash = createHash('sha256').update('export const a = 1').digest('hex')
-    await putFile(`${dir}/.graphify/manifest.json`, JSON.stringify({ files: { 'src/a.ts': hash } }))
-    await putFile(`${dir}/.graphify/graph.json`, '{}')
+    await putFile(`${dir}/graphify-out/manifest.json`, JSON.stringify({ files: { 'src/a.ts': hash } }))
+    await putFile(`${dir}/graphify-out/graph.json`, '{}')
     const detail = await inspectGraphStatus('p', dir, null)
     expect(detail.stale).toBe(false)
     expect(detail.changed_files).toBe(0)
@@ -154,11 +154,11 @@ describe('inspectGraphStatus（陈旧检测）', () => {
   it('manifest 实测形态（顶层绝对路径 + mtime）→ 未变不陈旧，改动后陈旧', async () => {
     const dir = await makeTempDir('prism-status3-')
     const src = await putFile(`${dir}/src/index.ts`, 'export const hello = () => 1')
-    await putFile(`${dir}/.graphify/graph.json`, '{}')
+    await putFile(`${dir}/graphify-out/graph.json`, '{}')
     const { stat } = await import('node:fs/promises')
     const mtime = (await stat(src)).mtimeMs
     await putFile(
-      `${dir}/.graphify/manifest.json`,
+      `${dir}/graphify-out/manifest.json`,
       JSON.stringify({ [src.replace(/\\/g, '/')]: { mtime, hash: 'db028f0956531794c6cb49a6fb422771' } }),
     )
     const fresh = await inspectGraphStatus('p', dir, null)

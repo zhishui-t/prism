@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { openPersistence, prismPaths } from '@prism/core'
-import { resolveGraphifyCommand, runGraphify } from '@prism/server'
+import { resolveGraphifyCommand, runGraphify, vendoredGraphifyVersion } from '@prism/server'
 
 import type { ArgValues, CommandContext } from '../argv.js'
 
@@ -54,16 +54,22 @@ export async function runDoctor(ctx: CommandContext, _args: string[], values: Ar
     checks.push({ name: 'knowledge_db', ok: false, detail: msg(error) })
   }
 
-  // 4) graphify 存在（PATH / GRAPHIFY_BIN）
+  // 4) graphify 存在（vendored 子工程 / PATH / GRAPHIFY_BIN）
   try {
     const resolved = await resolveGraphifyCommand(ctx.graphifyEnv ?? process.env)
     let detail = `${resolved.command}${resolved.prefixArgs.length > 0 ? ` ${resolved.prefixArgs.join(' ')}` : ''}${resolved.shell ? '（shell 模式）' : ''}`
     try {
-      const version = await runGraphify(['--version'], {
-        env: ctx.graphifyEnv ?? process.env,
-        timeoutMs: 10_000,
-      })
-      detail += ` 版本: ${version.stdout.trim().split('\n')[0] || '未知'}`
+      // vendored Python 子工程的 --version 输出 unknown，优先读 pyproject.toml
+      const fromPyproject = await vendoredGraphifyVersion()
+      if (fromPyproject !== null) {
+        detail += ` 版本: ${fromPyproject}（vendored）`
+      } else {
+        const version = await runGraphify(['--version'], {
+          env: ctx.graphifyEnv ?? process.env,
+          timeoutMs: 10_000,
+        })
+        detail += ` 版本: ${version.stdout.trim().split('\n')[0] || '未知'}`
+      }
     } catch {
       detail += '（--version 不可用，忽略）'
     }

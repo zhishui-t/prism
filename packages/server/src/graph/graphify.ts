@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { constants as fsConstants } from 'node:fs'
-import { access } from 'node:fs/promises'
+import { access, readFile } from 'node:fs/promises'
 import { delimiter, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -10,12 +10,14 @@ import { PrismError } from '@prism/core'
 export const DEFAULT_GRAPHIFY_TIMEOUT_MS = 300_000
 
 export interface GraphifyCommand {
-  /** 可执行体：.cmd/.exe 绝对路径，或 `node`（配合 prefixArgs 指向 cli.js） */
+  /** 可执行体：python / node / .cmd+.exe 绝对路径 */
   command: string
-  /** 前置参数（如经 node 调 cli.js 时的脚本路径） */
+  /** 前置参数（如 python 的 ['-m','graphify']） */
   prefixArgs: string[]
   /** 是否经 shell 执行（.cmd 必须，绕开 Windows spawn EINVAL） */
   shell: boolean
+  /** 附加环境变量（vendored 模式注入 PYTHONPATH） */
+  env?: NodeJS.ProcessEnv
 }
 
 export interface GraphifyRunOptions {
@@ -57,25 +59,39 @@ function normalizeExecPath(path: string): string {
 }
 
 /**
- * 仓库内 vendored graphify 入口（`3rd/graphify/dist/cli.js`）。
+ * 仓库内 vendored graphify 子工程目录（`3rd/graphify`，Python 包，PYTHONPATH 直跑免安装）。
  * 源码 `packages/server/src/graph/graphify.ts` 与产物 `packages/server/dist/graph/graphify.js`
  * 到仓库根都是 4 层，故统一 `../../../../3rd/...`。
  */
-export function vendoredGraphifyEntry(): string {
-  return fileURLToPath(new URL('../../../../3rd/graphify/dist/cli.js', import.meta.url))
+export function vendoredGraphifyDir(): string {
+  return fileURLToPath(new URL('../../../../3rd/graphify', import.meta.url))
+}
+
+/** 读取 vendored 子工程版本（pyproject.toml 的 version；读不到 → null）。 */
+export async function vendoredGraphifyVersion(): Promise<string | null> {
+  try {
+    const raw = await readFile(join(vendoredGraphifyDir(), 'pyproject.toml'), 'utf-8')
+    const match = raw.match(/^version\s*=\s*["']([^"']+)["']/m)
+    return match !== null ? match[1]! : null
+  } catch {
+    return null
+  }
 }
 
 /**
  * 解析 graphify 可执行入口（design.md §4 Windows 约束）：
- * 1. `GRAPHIFY_BIN` 环境变量优先（.cmd/.exe 直接用；.js/.mjs/.cjs 经 node 调用）；
- * 2. 仓库内 `3rd/graphify/dist/cli.js`（vendored 子工程，需先 `pnpm run 3rd:build`）；
- *    设 `PRISM_SKIP_VENDORED=1` 可跳过此步（供测试隔离 PATH 解析分支）；
+ * 1. `GRAPHIFY_BIN` 环境变量优先（.py 经 python；.js/.mjs/.cjs 经 node；.cmd/.bat shell 执行）；
+ * 2. 仓库内 `3rd/graphify`（Python 子工程，经 `python -m graphify` + PYTHONPATH 免安装调用；
+ *    依赖需先 `pnpm run 3rd:build` 安装；设 `PRISM_SKIP_VENDORED=1` 跳过本分支供测试隔离）；
  * 3. 否则在 PATH 上找 `graphify.cmd`/`graphify.exe`/`graphify`（Windows）；
  * 4. 找不到 → PrismError('graphify_missing')。
  */
 export async function resolveGraphifyCommand(env: NodeJS.ProcessEnv = process.env): Promise<GraphifyCommand> {
   const override = normalizeExecPath(env.GRAPHIFY_BIN?.trim() ?? '')
   if (override !== '') {
+    if (/\.py$/i.test(override)) {
+      return { command: 'python', prefixArgs: [override], shell: false }
+    }
     if (/\.(mjs|cjs|js)$/i.test(override)) {
       return { command: process.execPath, prefixArgs: [override], shell: false }
     }
@@ -85,10 +101,16 @@ export async function resolveGraphifyCommand(env: NodeJS.ProcessEnv = process.en
     return { command: override, prefixArgs: [], shell: false }
   }
 
-  // 仓库内 vendored 子工程优先于 PATH（版本可控、可审计）
-  const vendored = vendoredGraphifyEntry()
-  if (env.PRISM_SKIP_VENDORED !== '1' && (await assertFile(vendored))) {
-    return { command: process.execPath, prefixArgs: [vendored], shell: false }
+  // 仓库内 vendored Python 子工程优先于 PATH（版本可控、可审计、免安装）
+  const vendored = vendoredGraphifyDir()
+  if (env.PRISM_SKIP_VENDORED !== '1' && (await assertFile(join(vendored, 'pyproject.toml')))) {
+    return {
+      command: 'python',
+      prefixArgs: ['-m', 'graphify'],
+      shell: false,
+      // PYTHONPATH 指向子工程根：graphify 包从源码目录直接导入，不污染 site-packages
+      env: { PYTHONPATH: vendored },
+    }
   }
 
   const dirs = (env.PATH ?? env.Path ?? '').split(delimiter).filter((d) => d !== '')
@@ -105,7 +127,7 @@ export async function resolveGraphifyCommand(env: NodeJS.ProcessEnv = process.en
   }
   throw new PrismError(
     'graphify_missing',
-    `找不到 graphify：仓库内子工程未构建（${vendored}，先执行 pnpm run 3rd:build），PATH 上也没有 graphify；可设置 GRAPHIFY_BIN 覆盖`,
+    `找不到 graphify：仓库内子工程缺失（${vendored}），PATH 上也没有 graphify；可先 pnpm run 3rd:build（安装 Python 依赖），或设置 GRAPHIFY_BIN 覆盖`,
   )
 }
 
@@ -125,10 +147,11 @@ export async function runGraphify(
   args: string[],
   options: GraphifyRunOptions = {},
 ): Promise<GraphifyRunResult> {
-  // 环境覆盖必须继承完整父环境（Windows 子进程缺 SystemRoot/PATH 会启动异常）
-  const env: NodeJS.ProcessEnv = { ...process.env, ...options.env }
-  const resolved = await resolveGraphifyCommand(env)
+  const resolved = await resolveGraphifyCommand({ ...process.env, ...options.env })
   const timeoutMs = options.timeoutMs ?? DEFAULT_GRAPHIFY_TIMEOUT_MS
+  // 环境覆盖必须继承完整父环境（Windows 子进程缺 SystemRoot/PATH 会启动异常）；
+  // vendored 模式再叠加 resolved.env（PYTHONPATH 注入）
+  const env: NodeJS.ProcessEnv = { ...process.env, ...options.env, ...resolved.env }
   const fullArgs = [...resolved.prefixArgs, ...args]
 
   // shell 模式（Windows .cmd）用整串命令 + 自行加引号，避开 DEP0190（args 拼接不转义）
@@ -222,11 +245,16 @@ export async function runGraphify(
   })
 }
 
-/** 建图两步（design.md §4 钉死参数，禁 LLM 富化）：extract --no-description --no-label + flows build。 */
+/**
+ * 建图两步（Python 版 graphify，code-graph.md：零 token、零 LLM）：
+ * ① `graphify <root>` 全量提取（tree-sitter AST → graphify-out/graph.json + manifest.json）；
+ * ② `graphify cluster-only <root> --no-label` 聚类 + GRAPH_REPORT.md + graph.html（跳过 LLM 社区命名）。
+ * 产物落 `<root>/graphify-out/`。
+ */
 export function buildGraphArgs(projectRoot: string): string[][] {
   return [
-    ['extract', projectRoot, '--out', projectRoot, '--no-description', '--no-label'],
-    ['flows', 'build', '--graph', join(projectRoot, '.graphify', 'graph.json')],
+    [projectRoot],
+    ['cluster-only', projectRoot, '--no-label'],
   ]
 }
 

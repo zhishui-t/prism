@@ -34,13 +34,13 @@ export const MIME_TYPES: Record<string, string> = MIME
 
 /**
  * GET /studio/:project/*（design.md §4）：
- * project 必须来自注册表；解析后的绝对路径必须仍在 `<root>/.graphify/studio/` 内（防穿越）。
+ * project 必须来自注册表；解析后的绝对路径必须仍在 `<root>/graphify-out/` 内（防穿越）。
  */
 export function studioRoute(registry: ProjectRegistry) {
   return async (ctx: RouteContext): Promise<void> => {
     const project = ctx.params.project ?? ''
     const info = await registry.get(project)
-    const base = resolve(join(info.root, '.graphify', 'studio'))
+    const base = resolve(join(info.root, 'graphify-out'))
     const rel = ctx.wildcard ?? ''
     const target = resolve(join(base, rel))
 
@@ -81,7 +81,7 @@ export function isInside(base: string, target: string): boolean {
 
 /** 供测试/CLI 复用的 studio 基目录解析（不存在目录不报错，serve 时才 404）。 */
 export async function ensureStudioBase(root: string): Promise<string> {
-  const base = resolve(join(root, '.graphify', 'studio'))
+  const base = resolve(join(root, 'graphify-out'))
   try {
     if (!(await stat(base)).isDirectory()) {
       throw new PrismError('graph_not_found', `studio 目录不存在: ${base}`)

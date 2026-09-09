@@ -33,6 +33,8 @@ export {
   resolveGraphifyCommand,
   runGraphify,
   buildGraphArgs,
+  vendoredGraphifyDir,
+  vendoredGraphifyVersion,
   formatCommand,
   DEFAULT_GRAPHIFY_TIMEOUT_MS,
 } from './graph/graphify.js'

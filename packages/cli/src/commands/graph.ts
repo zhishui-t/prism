@@ -77,7 +77,7 @@ async function graphBuild(ctx: CommandContext, args: string[], values: ArgValues
     if (ctx.json) {
       ctx.stdout(JSON.stringify({ ok: true, value: { project: name, root, graph_exists: summary.graph_exists } }))
     } else {
-      ctx.stdout(`建图完成: ${name} → ${join(root, '.graphify')}（graph_exists=${summary.graph_exists}）`)
+      ctx.stdout(`建图完成: ${name} → ${join(root, 'graphify-out')}（graph_exists=${summary.graph_exists}）`)
     }
     return 0
   } catch (error) {
@@ -99,7 +99,7 @@ async function graphQuery(ctx: CommandContext, args: string[], values: ArgValues
   }
   const registry = new ProjectRegistry(ctx.home ?? prismHome())
   const info = await registry.get(projectName)
-  const graphPath = join(info.root, '.graphify', 'graph.json')
+  const graphPath = join(info.root, 'graphify-out', 'graph.json')
   try {
     await access(graphPath)
   } catch {

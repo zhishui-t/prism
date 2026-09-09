@@ -104,7 +104,7 @@ export function createMcpTools(deps: McpDeps): McpTool[] {
       throw new Error('prism_graph_query 需要 { q, project }')
     }
     const { root } = await requireProjectRoot(projectName)
-    const graph = join(root, '.graphify', 'graph.json')
+    const graph = join(root, 'graphify-out', 'graph.json')
     try {
       await access(graph)
     } catch {

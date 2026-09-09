@@ -137,11 +137,11 @@ prism/
 ├── packages/skills/        # Prism 内置 Skill + 校验 + 安装到宿主 Skill 目录
 ├── packages/server/        # HTTP API + MCP（10 工具）+ Graphify 封装 + 控制台静态服务
 ├── packages/cli/           # prism init/serve/doctor/kb/graph/role/team/skill（含写守卫）
-├── 3rd/                    # 第三方子工程：archify v2.16.0（自包含）/ graphify v0.17.1（源码构建）
+├── 3rd/                    # 第三方子工程：archify v2.16.0（自包含）/ graphify v0.9.56（Python，免构建）
 └── apps/web/               # React 控制台：知识库/知识图谱/代码图谱/架构图谱/角色/团队/技能/任务中心/工作队列
 ```
 
-**已实现模块**：知识库（检索/版次/导入/reindex）、**知识图谱**（单一边表：双链/覆盖/取代；邻域与路径查询 + SVG 可视化）、代码图谱（Graphify 封装，仓库内子工程优先）、角色与团队（定义/校验/装配/激活）、Skill 安装、`prism init` 接入、任务台账（登记/回报/依赖图）、**工作队列**（拉取式：宿主经 MCP/HTTP 认领执行 LLM 工作，Prism 不调 LLM）。
+**已实现模块**：知识库（检索/版次/导入/reindex）、**知识图谱**（单一边表：双链/覆盖/取代；邻域与路径查询 + SVG 可视化）、代码图谱（Graphify Python 版封装，仓库内子工程优先，产物 graphify-out/）、角色与团队（定义/校验/装配/激活）、Skill 安装、`prism init` 接入、任务台账（登记/回报/依赖图）、**工作队列**（拉取式：宿主经 MCP/HTTP 认领执行 LLM 工作，Prism 不调 LLM）。
 
 **架构图谱**（Archify v2.16.0 vendored 子工程）：五类图 IR 校验与渲染 + 控制台 iframe 预览。
 
