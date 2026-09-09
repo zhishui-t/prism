@@ -1,0 +1,30 @@
+{
+  "name": "prism",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Prism（棱镜）—— 企业级智能研发效能平台：CLI + 控制台，内置知识库 / 知识图谱 / 代码图谱 / 架构图谱 / 专家 Agent / Agent-Team / Skill 分层",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "typecheck": "pnpm -r typecheck",
+    "build": "pnpm -r build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "web:dev": "pnpm --filter @prism/web dev",
+    "web:build": "pnpm --filter @prism/web build",
+    "3rd:build": "cd 3rd/graphify && npm install && npm run build",
+    "3rd:check": "node 3rd/archify/bin/archify.mjs --help && node 3rd/graphify/dist/cli.js --version"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "@types/node": "^22.0.0",
+    "eslint": "^9.0.0",
+    "typescript": "^5.6.0",
+    "typescript-eslint": "^8.0.0",
+    "vitest": "^3.0.0"
+  }
+}

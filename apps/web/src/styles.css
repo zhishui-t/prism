@@ -1,0 +1,138 @@
+:root {
+  --bg: #0f1115;
+  --panel: #171a21;
+  --panel-2: #1e222b;
+  --border: #2a2f3a;
+  --text: #e6e9ef;
+  --muted: #8b93a7;
+  --accent: #5b8cff;
+  --ok: #35c46b;
+  --warn: #e0a13a;
+  --err: #e05555;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.55 system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+}
+
+.layout { display: flex; min-height: 100vh; }
+
+.sidebar {
+  width: 208px;
+  flex: 0 0 208px;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  padding: 18px 12px;
+}
+
+.brand {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  padding: 4px 10px 16px;
+}
+.brand span { color: var(--accent); }
+
+.nav-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 9px 10px;
+  margin-bottom: 2px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  cursor: pointer;
+}
+.nav-item:hover { background: var(--panel-2); color: var(--text); }
+.nav-item.active { background: var(--accent); color: #fff; font-weight: 500; }
+
+.nav-group {
+  margin: 14px 10px 6px;
+  font-size: 11px;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--muted);
+  opacity: 0.75;
+}
+
+.main { flex: 1; min-width: 0; padding: 22px 26px 40px; }
+
+.page-title { margin: 0 0 4px; font-size: 19px; font-weight: 600; }
+.page-desc { margin: 0 0 18px; color: var(--muted); font-size: 13px; }
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px;
+  margin-bottom: 14px;
+}
+.card h3 { margin: 0 0 10px; font-size: 14px; font-weight: 600; }
+
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.grow { flex: 1; min-width: 180px; }
+
+input, select, textarea, button {
+  font: inherit;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 7px 10px;
+  outline: none;
+}
+input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+button { cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+.muted { color: var(--muted); }
+.mono { font-family: var(--mono); font-size: 12.5px; }
+.small { font-size: 12.5px; }
+
+.tag {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 20px;
+  font-size: 11.5px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.tag.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
+.tag.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
+.tag.err { color: var(--err); border-color: color-mix(in srgb, var(--err) 40%, transparent); }
+
+.empty, .error {
+  padding: 26px;
+  text-align: center;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  color: var(--muted);
+}
+.error { color: var(--err); border-color: color-mix(in srgb, var(--err) 35%, transparent); }
+
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { color: var(--muted); font-weight: 500; font-size: 12.5px; }
+tr:last-child td { border-bottom: 0; }
+
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
+.stat { background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+.stat .n { font-size: 22px; font-weight: 600; }
+.stat .l { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+
+.iframe-wrap { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: #fff; }
+.iframe-wrap iframe { display: block; width: 100%; height: 640px; border: 0; }
+
+.dag-svg { width: 100%; height: auto; background: var(--panel-2); border-radius: 8px; }

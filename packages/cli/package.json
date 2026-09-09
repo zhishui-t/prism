@@ -1,0 +1,32 @@
+{
+  "name": "@prism/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Prism CLI：init / serve / doctor / kb / graph / role / team / skill（node:util.parseArgs，零框架）",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "prism": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@prism/agents": "workspace:*",
+    "@prism/core": "workspace:*",
+    "@prism/knowledge": "workspace:*",
+    "@prism/server": "workspace:*",
+    "@prism/skills": "workspace:*"
+  }
+}

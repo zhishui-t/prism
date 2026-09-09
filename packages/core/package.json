@@ -1,0 +1,20 @@
+{
+  "name": "@prism/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Prism 内核：任务状态机、SQLite 持久化、审计、熔断与循环保护",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  }
+}

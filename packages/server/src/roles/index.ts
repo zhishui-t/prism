@@ -1,0 +1,104 @@
+/**
+ * 角色/团队域装配点（返工单 B4：委托 `@prism/agents`，消除契约镜像漂移）。
+ *
+ * - 类型：一律 re-export agents（design-v3 §3.1 冻结契约的唯一来源，不保留第二份定义）；
+ * - 行为：解析/校验/渲染/装配/启用直接转发 agents；
+ * - wiring：仅保留目录加载 + issues 挂载（P9）、装配组合与签名兼容 shim（见 wiring.ts）；
+ * - templates：server 侧出厂团队模板（agents 无此资产）。
+ */
+
+// 冻结类型（唯一来源：@prism/agents；requirement 3：不保留两份类型定义）
+export type {
+  RoleColor,
+  KnowledgeBinding,
+  RoleDefinition,
+  TeamMember,
+  WorkflowStage,
+  DepositRule,
+  DepositPolicy,
+  TeamDefinition,
+  ValidationIssue,
+  ValidationResult,
+  TeamActivation,
+  InstallOptions,
+  InstallResult,
+} from '@prism/agents'
+
+// 行为委托：解析 / 校验 / 渲染 / 装配 / 启用 / frontmatter / 标记 / 常量
+export {
+  // 解析
+  parseRoleMarkdown,
+  parseTeamMarkdown,
+  parseWorkflowTable,
+  parseRoleCell,
+  extractPrinciple,
+  // 校验
+  validateRole,
+  validateTeam,
+  validateRoleUniqueness,
+  stripInstanceMarker,
+  // 渲染（ZCode 产物）
+  renderZcodeRole,
+  renderZcodeTeam,
+  // 装配（§5 冲突策略）+ 模板初始化/迁移（装配语义简化）
+  installRoles,
+  installTeamDefinitions,
+  initRole,
+  migrateTeams,
+  // 启用（P8：dispatch 仅由 installed 推导）
+  activateTeam,
+  // frontmatter / 标记
+  splitFrontmatter,
+  parseFrontmatter,
+  emitScalar,
+  serializeFrontmatter,
+  renderMarkdownFile,
+  roleMarker,
+  teamMarker,
+  hasPrismMarker,
+  hasTeamMarker,
+  // 常量与枚举（KNOWLEDGE_LAYERS/ENTRY_TYPES 与 knowledge 域一致）
+  ROLE_COLORS,
+  THOUGHT_LEVELS,
+  KNOWLEDGE_LAYERS,
+  ORCHESTRATOR_ROLES,
+  ENTRY_TYPES,
+  DESCRIPTION_MAX,
+  // 适配器与注册表（需要更细控制时直接消费）
+  createZcodeAdapter,
+  createRoleRegistry,
+  createTeamRegistry,
+  DEFAULT_ZCODE_DIR,
+} from '@prism/agents'
+
+// 目录解析（装配语义简化：prism.yaml 覆盖适配器默认；server 读侧同样由此取目录）
+export {
+  loadPrismConfig,
+  parsePrismConfig,
+  resolveDirs,
+  resolveDirsFromHome,
+  expandTildePath,
+  ROLE_TEMPLATE_MD,
+  type PrismDirConfig,
+  type ResolvedDirs,
+} from '@prism/agents'
+
+// server 侧 glue（目录加载 + issues、装配组合、兼容 shim、路径约定）
+export {
+  loadRoles,
+  loadRole,
+  loadTeams,
+  loadTeam,
+  installedSkillNames,
+  installTeam,
+  parseRoleFile,
+  renderPrismRole,
+  zcodePaths,
+  defaultZcodeDir,
+  type ZcodePaths,
+  type InstallTeamOptions,
+  type ParseRoleOptions,
+} from './wiring.js'
+
+// 出厂团队模板（server 侧资产）
+export { CORE_DEV_TEAM_MD } from './templates.js'

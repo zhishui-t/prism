@@ -1,0 +1,35 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# 3rd 子工程：源码 + lockfile 入库，构建产物与依赖本地生成（见 3rd/README.md）
+3rd/graphify/dist/
+3rd/graphify/node_modules/
+3rd/graphify/packages/*/node_modules/
+3rd/graphify/packages/*/dist/
+3rd/graphify/studio/node_modules/
+3rd/graphify/studio/dist/
+
+# Prism 本地运行状态（知识库/图谱/审计/团队运行态）
+.prism/
+.graphify/
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 日志与临时产物
+*.log
+.artifacts/
+
+# 本地会话产物（ZCode 计划/上下文，含会话 ID，不入库）
+.zcode/
+
+# agent-team 团队黑板（设计稿/评审/交付记录等开发过程产物，不入库）
+.agent-team/
+
+# 团队黑板：保留设计/评审/交付等 .md 文档，排除 e2e 运行痕迹（截图、临时 home、清单）
+.agent-team/e2e/

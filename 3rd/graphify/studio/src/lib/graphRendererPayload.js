@@ -1,0 +1,500 @@
+import { buildRenderGraphBuffers, buildStyleBuffers } from "@sentropic/graph";
+
+/**
+ * SINGLE source of truth for a group's (community / type) colour. Both the
+ * canvas node fill (`buildGraphRendererPayload`) AND the left-rail community
+ * legend swatch resolve a group's colour through {@link colorForGroup} over the
+ * SAME key (the group / community name). Previously the legend assigned a DS
+ * category token by sorted position while the canvas hashed the name into this
+ * palette — two independent schemes that diverged (the biggest community could
+ * render blue on the canvas but amber in the legend). Reusing one function over
+ * one key guarantees the legend dot and the node fill are byte-identical.
+ */
+export const GROUP_PALETTE = [
+  "#4f7cac",
+  "#f59e0b",
+  "#10b981",
+  "#ef4444",
+  "#8b5cf6",
+  "#14b8a6",
+  "#f97316",
+  "#64748b",
+  "#ec4899",
+  "#22c55e",
+  "#3b82f6",
+  "#a855f7",
+];
+
+const FOCUS_COLOR = "#ef4444";
+const SELECTED_COLOR = "#2563eb";
+const EDGE_COLOR = "#94a3b8";
+const WEAK_EDGE_COLOR = [203, 213, 225, 128];
+const EDGE_CURVE_FACTOR = 0.5;
+const DIM_ALPHA = Math.round(255 * 0.35); // 89
+
+// Density-aware base node sizing. The user confirmed sizes read well at ~1000
+// nodes but are too big at ~5000. We shrink only the BASE radius as the graph
+// grows (the per-node degree spread — sqrt(weight), i.e. the RADIUS_RATIO
+// god-node multiplier from graphAdapter — is preserved because it multiplies
+// the already-scaled base). At n <= DENSITY_REF the factor is 1 (unchanged);
+// for larger n it follows 1/sqrt(n) growth and clamps at DENSITY_MIN.
+const DENSITY_REF = 1000; // node count at/below which the base radius is unchanged
+const DENSITY_MIN = 0.45; // floor for the base-radius scale on very dense graphs
+
+/**
+ * Density factor for the base node radius given a node count.
+ * densityScale(n) = clamp(sqrt(DENSITY_REF / n), DENSITY_MIN, 1).
+ * @param {number} nodeCount  number of nodes in the scene
+ * @returns {number} a multiplier in [DENSITY_MIN, 1] applied to the base radius
+ */
+export function densityScale(nodeCount) {
+  const n = Number.isFinite(nodeCount) && nodeCount > 0 ? nodeCount : 1;
+  const raw = Math.sqrt(DENSITY_REF / n);
+  return Math.min(1, Math.max(DENSITY_MIN, raw));
+}
+
+function finite(value) {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function clampUnit(value) {
+  if (!finite(value)) return 0;
+  return Math.min(1, Math.max(0, value));
+}
+
+function stableHash(value) {
+  const text = String(value ?? "");
+  let hash = 2166136261;
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+/**
+ * Resolve the palette colour for a group key (community / type name). Exported
+ * so the legend (LeftRail) reuses the EXACT same mapping as the canvas — the
+ * single source of truth for community→colour (BUG B fix).
+ */
+export function colorForGroup(group) {
+  const index = stableHash(group ?? "default") % GROUP_PALETTE.length;
+  return GROUP_PALETTE[index];
+}
+
+function positionForNode(node, index, total) {
+  if (finite(node.x) && finite(node.y)) return { x: node.x, y: node.y, fixed: node.fixed === true };
+  if (finite(node.fx) && finite(node.fy)) return { x: node.fx, y: node.fy, fixed: true };
+
+  const count = Math.max(1, total);
+  const angle = (Math.PI * 2 * index) / count;
+  const radius = 90 + Math.sqrt(count) * 18;
+  return {
+    x: Math.cos(angle) * radius,
+    y: Math.sin(angle) * radius,
+    fixed: false,
+  };
+}
+
+function nodeSize(node, baseRadius, selected, focused) {
+  const weight = finite(node.weight) && node.weight > 0 ? node.weight : 1;
+  const base = baseRadius * Math.sqrt(weight);
+  if (focused) return base * 1.85;
+  if (selected) return base * 1.45;
+  return base;
+}
+
+function edgeWidth(edge) {
+  if (finite(edge.width) && edge.width > 0) return edge.width;
+  if (edge.emphasis) return 2.5;
+  if (edge.weak) return 0.75;
+  return 1;
+}
+
+/**
+ * Box-category scene shapes (legacy vis-network `shape:box` parity). Box nodes
+ * draw their OWN label inside the canvas glyph, so every other label layer
+ * (the DOM overlay in GraphCanvas) must skip them — one text per box, always.
+ * @param {unknown} shape  the scene node `shape` string
+ * @returns {boolean} true when the node renders as a labelled rounded box
+ */
+export function isBoxShape(shape) {
+  const value = String(shape ?? "").toLowerCase();
+  return value === "box" || value === "roundedbox";
+}
+
+/**
+ * Default character budget for an in-canvas / overlay node label. The renderer
+ * sizes a box glyph to its label's drawn width, so a long entity name (e.g.
+ * "Dr. John H. Watson") yields a wide box that overflows a compact recon focal
+ * slot. We cap the DRAWN text and append an ellipsis; the full, untruncated name
+ * is still reachable on hover (the GraphCanvas tooltip + the recon rail/detail
+ * `title`s carry `node.label` verbatim). Parameterizable so a view can opt into
+ * a wider/narrower budget without touching the renderer.
+ */
+export const DEFAULT_LABEL_MAX_CHARS = 22;
+
+/**
+ * Truncate a label to at most `maxChars` glyphs, appending a single-character
+ * ellipsis (…) when clipped. Trims trailing whitespace before the ellipsis so we
+ * never render "Foo …". A non-positive / non-finite `maxChars` disables clipping
+ * (returns the label unchanged) so callers can opt out explicitly.
+ * @param {unknown} label     the source label (coerced to string)
+ * @param {number} [maxChars] max visible glyphs before the ellipsis
+ * @returns {string} the display label (truncated when longer than the budget)
+ */
+export function truncateLabel(label, maxChars = DEFAULT_LABEL_MAX_CHARS) {
+  const text = String(label ?? "");
+  if (!Number.isFinite(maxChars) || maxChars <= 0) return text;
+  if (text.length <= maxChars) return text;
+  return text.slice(0, maxChars).replace(/\s+$/u, "") + "…";
+}
+
+function cloneStyle(style) {
+  return {
+    nodeSizes: new Float32Array(style.nodeSizes),
+    nodeColors: new Uint8Array(style.nodeColors),
+    nodeShapes: new Uint8Array(style.nodeShapes),
+    // Carry the legacy box labels through dim / merge re-styling so box glyphs
+    // keep their text when a node is selected, hovered, or focused.
+    nodeLabels: style.nodeLabels ? [...style.nodeLabels] : undefined,
+    // Shape variants (hollow / bold) survive dim / merge re-styling too.
+    nodeFills: style.nodeFills ? new Uint8Array(style.nodeFills) : undefined,
+    nodeBorders: style.nodeBorders ? new Uint8Array(style.nodeBorders) : undefined,
+    edgeWidths: new Float32Array(style.edgeWidths),
+    edgeColors: new Uint8Array(style.edgeColors),
+    edgeDash: new Uint8Array(style.edgeDash),
+    edgeCurvatures: new Float32Array(style.edgeCurvatures),
+  };
+}
+
+export function buildConnectedDimStyle(payload, options = {}) {
+  const graph = payload?.renderGraph;
+  const sourceStyle = payload?.baseStyle ?? payload?.style;
+  if (!graph || !sourceStyle) return payload?.style ?? null;
+
+  const style = cloneStyle(sourceStyle);
+  const selectedIds = new Set(options.selectedIds ?? []);
+  const focusId = options.focusId ?? null;
+  const hoveredNodeId = options.hoveredNodeId ?? null;
+  const activeFocusIds = new Set([...selectedIds, focusId, hoveredNodeId].filter(Boolean));
+
+  if (activeFocusIds.size === 0) return style;
+
+  const neighbourSet = new Set(activeFocusIds);
+  const edgeCount = graph.edges.length / 2;
+  for (let e = 0; e < edgeCount; e++) {
+    const srcIdx = graph.edges[e * 2];
+    const tgtIdx = graph.edges[e * 2 + 1];
+    const srcId = graph.nodeIds[srcIdx];
+    const tgtId = graph.nodeIds[tgtIdx];
+    if (activeFocusIds.has(srcId)) neighbourSet.add(tgtId);
+    if (activeFocusIds.has(tgtId)) neighbourSet.add(srcId);
+  }
+
+  for (let i = 0; i < graph.nodeIds.length; i++) {
+    const id = graph.nodeIds[i];
+    if (!neighbourSet.has(id)) {
+      style.nodeColors[i * 4 + 3] = DIM_ALPHA;
+    }
+  }
+
+  for (let e = 0; e < edgeCount; e++) {
+    const srcIdx = graph.edges[e * 2];
+    const tgtIdx = graph.edges[e * 2 + 1];
+    const srcId = graph.nodeIds[srcIdx];
+    const tgtId = graph.nodeIds[tgtIdx];
+    const isIncident = activeFocusIds.has(srcId) || activeFocusIds.has(tgtId);
+    if (!isIncident) {
+      style.edgeColors[e * 4 + 3] = DIM_ALPHA;
+    }
+  }
+
+  return style;
+}
+
+export function buildGraphRendererPayload(scene, options = {}) {
+  const selectedIds = new Set(options.selectedIds ?? []);
+  const focusId = options.focusId ?? null;
+  const hoveredNodeId = options.hoveredNodeId ?? null;
+  const requestedRadius = options.nodeRadius ?? 3;
+  // BUG-1: max DRAWN chars for in-box labels (recon focal pair). Default keeps
+  // long names from overflowing; a view can override via options.labelMaxChars.
+  const labelMaxChars = Number.isFinite(options.labelMaxChars)
+    ? options.labelMaxChars
+    : DEFAULT_LABEL_MAX_CHARS;
+  const sceneNodes = scene?.nodes ?? [];
+  const sceneEdges = scene?.edges ?? [];
+
+  // Shrink the BASE radius on dense graphs while keeping the per-node degree
+  // spread (sqrt(weight)) intact. nodeRadius is the effective base used both for
+  // the per-node sizes and the style buffer fallback size.
+  const nodeRadius = requestedRadius * densityScale(sceneNodes.length);
+
+  const nodes = sceneNodes.map((node, index) => {
+    const position = positionForNode(node, index, sceneNodes.length);
+    const focused = node.id === focusId;
+    const selected = focused || selectedIds.has(node.id);
+    return {
+      id: node.id,
+      label: node.label ?? node.id,
+      node_type: node.node_type ?? node.type ?? null,
+      x: position.x,
+      y: position.y,
+      fixed: position.fixed,
+      shape: node.shape ?? "dot",
+      // Shape variants (ontology visual_encoding): hollow / bold pass through
+      // to the style buffers; absent = solid / normal (back-compatible).
+      fill: node.fill,
+      border: node.border,
+      // Recon focal-pair override (ReconciliationView): always draw this box
+      // node's label in-box, bypassing the degree/god-class label gate.
+      forceBoxLabel: node.forceBoxLabel === true,
+      size: nodeSize(node, nodeRadius, selected, focused),
+      color: focused ? FOCUS_COLOR : selected ? SELECTED_COLOR : colorForGroup(node.group),
+    };
+  });
+
+  const edges = sceneEdges.map((edge) => ({
+    source: edge.source,
+    target: edge.target,
+    relation: edge.relation,
+    label: edge.relation,
+    weak: edge.weak === true,
+    emphasis: edge.emphasis === true,
+    width: edgeWidth(edge),
+    color: edge.weak ? WEAK_EDGE_COLOR : EDGE_COLOR,
+    dash: edge.dash ?? (edge.weak ? "dotted" : "solid"),
+    curvature: finite(edge.curvature) ? edge.curvature : 0.15,
+  }));
+
+  const input = { nodes, edges };
+  const renderGraph = buildRenderGraphBuffers(input);
+  const baseStyle = buildStyleBuffers(input, renderGraph, {
+    node: { size: nodeRadius },
+    edge: { width: 1, color: EDGE_COLOR, dash: "solid", curvature: 0.15 },
+  });
+  const nodeIndexById = new Map(nodes.map((node, index) => [node.id, index]));
+
+  // Recon focal-pair parity: nodes flagged `forceBoxLabel` (the two entities
+  // under comparison in the reconciliation view) ALWAYS carry their in-box
+  // label, overriding the degree/god-class label gate applied inside
+  // buildStyleBuffers — both twins must read as identical labelled rounded
+  // boxes. The renderer sizes a box to its label text, so forcing the same
+  // label path on both yields the same glyph. View-scoped: only the recon
+  // view sets the flag; main-view scenes never do, so the god-class gate is
+  // untouched there. Applied to baseStyle BEFORE buildConnectedDimStyle so
+  // the label survives dim / merge re-styling (cloneStyle copies nodeLabels).
+  // BUG-1 (regression fix): the renderer sizes a box glyph to its DRAWN label
+  // width, so a long entity / chapter name (e.g. "Part I, Chapter I: Being a
+  // Reprint of the Reminiscences of John H. Watson, M.D., …") overflows far past
+  // the box — on the MAIN graph, not just the recon focal slot. Truncation must
+  // cover EVERY box node, not only the `forceBoxLabel` recon pair. We truncate
+  // the SOURCE label (never an already-clipped string, so no double ellipsis);
+  // the full name stays on node.label for the hover tooltip + recon rail/detail.
+  if (baseStyle.nodeLabels) {
+    for (const node of nodes) {
+      if (!isBoxShape(node.shape)) continue;
+      const index = nodeIndexById.get(node.id);
+      if (!Number.isInteger(index)) continue;
+      const forced = node.forceBoxLabel === true;
+      const existing = baseStyle.nodeLabels[index];
+      const hasExisting = typeof existing === "string" && existing.length > 0;
+      // forceBoxLabel nodes always get a label; main-graph box nodes only carry
+      // one when buildStyleBuffers' label gate already set it. Skip the rest.
+      if (!forced && !hasExisting) continue;
+      const source = forced ? (node.label || String(node.id)) : existing;
+      baseStyle.nodeLabels[index] = truncateLabel(source, labelMaxChars);
+    }
+  }
+  const renderedEdges = Array.from(renderGraph.edgeInputIndices ?? [], (inputIndex) => edges[inputIndex]);
+
+  const payload = {
+    renderGraph,
+    baseStyle,
+    style: baseStyle,
+    edges: renderedEdges,
+    nodeById: new Map(nodes.map((node) => [node.id, node])),
+    nodeIndexById,
+    stats: {
+      nodeCount: renderGraph.nodeIds.length,
+      edgeCount: renderGraph.edges.length / 2,
+      droppedEdgeCount: renderGraph.droppedEdges,
+    },
+  };
+
+  payload.style = buildConnectedDimStyle(payload, { selectedIds, focusId, hoveredNodeId });
+  return payload;
+}
+
+export function interpolateMergePositions(payload, mergePair, progress) {
+  const graph = payload?.renderGraph;
+  if (!graph || !mergePair?.from || !mergePair?.into) return null;
+
+  const nodeIndexById =
+    payload.nodeIndexById ?? new Map((graph.nodeIds ?? []).map((id, index) => [id, index]));
+  const fromIndex = nodeIndexById.get(mergePair.from);
+  const intoIndex = nodeIndexById.get(mergePair.into);
+  if (!Number.isInteger(fromIndex) || !Number.isInteger(intoIndex)) return null;
+
+  const positions = new Float32Array(graph.positions);
+  const fromOffset = fromIndex * 2;
+  const intoOffset = intoIndex * 2;
+  const t = clampUnit(progress);
+  const fromX = graph.positions[fromOffset] ?? 0;
+  const fromY = graph.positions[fromOffset + 1] ?? 0;
+  const intoX = graph.positions[intoOffset] ?? 0;
+  const intoY = graph.positions[intoOffset + 1] ?? 0;
+
+  positions[fromOffset] = fromX + (intoX - fromX) * t;
+  positions[fromOffset + 1] = fromY + (intoY - fromY) * t;
+
+  return positions;
+}
+
+export function interpolateMergeStyle(payload, mergePair, progress) {
+  const graph = payload?.renderGraph;
+  if (!graph || !payload?.style || !mergePair?.from) return payload?.style ?? null;
+
+  const nodeIndexById =
+    payload.nodeIndexById ?? new Map((graph.nodeIds ?? []).map((id, index) => [id, index]));
+  const fromIndex = nodeIndexById.get(mergePair.from);
+  if (!Number.isInteger(fromIndex)) return payload.style;
+
+  const style = cloneStyle(payload.style);
+  const alphaScale = 1 - clampUnit(progress);
+  const nodeAlphaOffset = fromIndex * 4 + 3;
+  style.nodeColors[nodeAlphaOffset] = Math.round((style.nodeColors[nodeAlphaOffset] ?? 255) * alphaScale);
+
+  const edgeCount = graph.edges.length / 2;
+  for (let edgeIndex = 0; edgeIndex < edgeCount; edgeIndex += 1) {
+    const sourceIndex = graph.edges[edgeIndex * 2];
+    const targetIndex = graph.edges[edgeIndex * 2 + 1];
+    if (sourceIndex !== fromIndex && targetIndex !== fromIndex) continue;
+    const alphaOffset = edgeIndex * 4 + 3;
+    style.edgeColors[alphaOffset] = Math.round((style.edgeColors[alphaOffset] ?? 255) * alphaScale);
+  }
+
+  return style;
+}
+
+/**
+ * Nearest node to (worldX, worldY) within the pick zone, returning the id, the
+ * world-space distance to its centre, and its drawn world radius. The pick zone
+ * is `max(maxDistance, radius)` so a generous grab still works, while callers
+ * that need a TIGHT (on-glyph) test can compare `distance <= radius` themselves.
+ * @returns {{ id: string, distance: number, radius: number } | null}
+ */
+export function findNearestNode(payload, worldX, worldY, maxDistance = 14) {
+  const graph = payload?.renderGraph;
+  if (!graph) return null;
+
+  let best = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  let bestRadius = 0;
+  for (let index = 0; index < graph.nodeIds.length; index += 1) {
+    const offset = index * 2;
+    const dx = (graph.positions[offset] ?? 0) - worldX;
+    const dy = (graph.positions[offset + 1] ?? 0) - worldY;
+    const distance = Math.hypot(dx, dy);
+    const radius = payload.style.nodeSizes[index] ?? 4;
+    const threshold = Math.max(maxDistance, radius);
+    if (distance <= threshold && distance < bestDistance) {
+      best = graph.nodeIds[index];
+      bestDistance = distance;
+      bestRadius = radius;
+    }
+  }
+
+  return best === null ? null : { id: best, distance: bestDistance, radius: bestRadius };
+}
+
+export function findNearestNodeId(payload, worldX, worldY, maxDistance = 14) {
+  return findNearestNode(payload, worldX, worldY, maxDistance)?.id ?? null;
+}
+
+function pointToSegmentDistance(px, py, x1, y1, x2, y2) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const lengthSquared = dx * dx + dy * dy;
+  if (lengthSquared <= Number.EPSILON) return Math.hypot(px - x1, py - y1);
+
+  const t = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / lengthSquared));
+  const x = x1 + dx * t;
+  const y = y1 + dy * t;
+  return Math.hypot(px - x, py - y);
+}
+
+function quadraticPoint(source, control, target, t) {
+  const inv = 1 - t;
+  return {
+    x: inv * inv * source.x + 2 * inv * t * control.x + t * t * target.x,
+    y: inv * inv * source.y + 2 * inv * t * control.y + t * t * target.y,
+  };
+}
+
+function curveControlPoint(source, target, curvature) {
+  const midX = (source.x + target.x) / 2;
+  const midY = (source.y + target.y) / 2;
+  const dx = target.x - source.x;
+  const dy = target.y - source.y;
+  const distance = Math.max(1, Math.hypot(dx, dy));
+  return {
+    x: midX + (-dy / distance) * distance * curvature * EDGE_CURVE_FACTOR,
+    y: midY + (dx / distance) * distance * curvature * EDGE_CURVE_FACTOR,
+  };
+}
+
+function pointToQuadraticDistance(px, py, source, control, target) {
+  let best = Number.POSITIVE_INFINITY;
+  let previous = source;
+  for (let step = 1; step <= 16; step += 1) {
+    const current = quadraticPoint(source, control, target, step / 16);
+    best = Math.min(best, pointToSegmentDistance(px, py, previous.x, previous.y, current.x, current.y));
+    previous = current;
+  }
+  return best;
+}
+
+export function findNearestEdge(payload, worldX, worldY, maxDistance = 10, positions = null) {
+  const graph = payload?.renderGraph;
+  if (!graph || !payload?.style) return null;
+
+  const currentPositions = positions ?? graph.positions;
+  const edgeCount = graph.edges.length / 2;
+  let best = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+
+  for (let edgeIndex = 0; edgeIndex < edgeCount; edgeIndex += 1) {
+    const sourceIndex = graph.edges[edgeIndex * 2];
+    const targetIndex = graph.edges[edgeIndex * 2 + 1];
+    const source = {
+      x: currentPositions[sourceIndex * 2] ?? 0,
+      y: currentPositions[sourceIndex * 2 + 1] ?? 0,
+    };
+    const target = {
+      x: currentPositions[targetIndex * 2] ?? 0,
+      y: currentPositions[targetIndex * 2 + 1] ?? 0,
+    };
+    const curvature = payload.style.edgeCurvatures[edgeIndex] ?? 0;
+    const distance =
+      curvature === 0
+        ? pointToSegmentDistance(worldX, worldY, source.x, source.y, target.x, target.y)
+        : pointToQuadraticDistance(worldX, worldY, source, curveControlPoint(source, target, curvature), target);
+    const threshold = Math.max(maxDistance, (payload.style.edgeWidths[edgeIndex] ?? 1) * 1.5);
+
+    if (distance <= threshold && distance < bestDistance) {
+      const edge = payload.edges?.[edgeIndex] ?? null;
+      bestDistance = distance;
+      best = {
+        index: edgeIndex,
+        edge,
+        distance,
+        sourceLabel: payload.nodeById?.get(edge?.source)?.label ?? edge?.source ?? "",
+        targetLabel: payload.nodeById?.get(edge?.target)?.label ?? edge?.target ?? "",
+      };
+    }
+  }
+
+  return best;
+}

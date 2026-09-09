@@ -1,0 +1,136 @@
+import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+
+import { startServer, type AppHandle } from '../src/app.js'
+import { CORE_DEV_TEAM_MD } from '../src/roles/templates.js'
+
+const ZCODE_ROLE_MD = `---
+name: dev-1
+description: "开发角色：交付可运行增量，绝不扩大战场。"
+color: blue
+---
+
+# 开发 1
+
+## 核心契约
+**交付可运行的增量，绝不扩大战场。**
+
+## 职责
+- 写代码
+`
+
+/** 团队成员收敛为 dev-1（便于 activate 断言），保留工作流/沉淀/仲裁全字段。 */
+const TEAM_MD = CORE_DEV_TEAM_MD.replace(
+  /members:\n(?: {2}- role: .*\n {4}count: \d+\n)+/,
+  'members:\n  - role: dev-1\n    count: 2\n',
+).replace(/ {2}- role: (dev-2|researcher|super-dev|tester|qa-checker)\n/g, '  - role: dev-1\n')
+
+describe('people 路由（design-v3 §3.4 F11：信封 + issues + activate）', () => {
+  let app: AppHandle
+  let base: string
+  let home: string
+  let zcodeDir: string
+
+  beforeAll(async () => {
+    const tmp = await mkdtemp(join(tmpdir(), 'prism-people-routes-'))
+    home = join(tmp, 'home')
+    zcodeDir = join(tmp, 'zcode')
+    // B8：数据源与 CLI 同源（resolveDirs）——用 prism.yaml 显式指向临时目录，避免回落真实宿主
+    await mkdir(home, { recursive: true })
+    await writeFile(
+      join(home, 'prism.yaml'),
+      `roles_dir: ${join(home, 'roles').replaceAll('\\', '/')}\nteams_dir: ${join(home, 'teams').replaceAll('\\', '/')}\n`,
+      'utf-8',
+    )
+    await mkdir(join(home, 'roles', 'dev-1'), { recursive: true })
+    await writeFile(join(home, 'roles', 'dev-1', 'AGENTS.md'), ZCODE_ROLE_MD, 'utf-8')
+    await mkdir(join(home, 'teams', 'core-dev'), { recursive: true })
+    await writeFile(join(home, 'teams', 'core-dev', 'AGENTS.md'), TEAM_MD, 'utf-8')
+    app = await startServer({ home, zcodeDir, port: 0 })
+    base = `http://127.0.0.1:${app.port}`
+  })
+
+  afterAll(async () => {
+    await app.close()
+    await rm(join(home, '..'), { recursive: true, force: true }).catch(() => {})
+  })
+
+  it('GET /api/roles → 信封 ok:true，角色数组携带 issues 数组', async () => {
+    const res = await fetch(`${base}/api/roles`)
+    const body = (await res.json()) as {
+      ok: boolean
+      value: Array<{ name: string; skills: string[]; issues: Array<{ level: string; code: string }> }>
+    }
+    expect(res.status).toBe(200)
+    expect(body.ok).toBe(true)
+    expect(body.value.map((r) => r.name)).toContain('dev-1')
+    expect(Array.isArray(body.value[0].issues)).toBe(true)
+  })
+
+  it('GET /api/roles/:name → 单角色；不存在 → not_found 信封', async () => {
+    const ok = await fetch(`${base}/api/roles/dev-1`)
+    const okBody = (await ok.json()) as { ok: boolean; value: { name: string; principle: string; issues: unknown[] } }
+    expect(ok.status).toBe(200)
+    expect(okBody.value.name).toBe('dev-1')
+    expect(okBody.value.principle).toContain('绝不扩大战场')
+
+    const miss = await fetch(`${base}/api/roles/nope`)
+    const missBody = (await miss.json()) as { ok: boolean; error: { code: string } }
+    expect(miss.status).toBe(404)
+    expect(missBody).toMatchObject({ ok: false, error: { code: 'not_found' } })
+  })
+
+  it('GET /api/teams → 团队数组携带 issues；GET /api/teams/:id', async () => {
+    const list = await fetch(`${base}/api/teams`)
+    const listBody = (await list.json()) as { ok: boolean; value: Array<{ team_id: string; issues: unknown[]; workflow: unknown[] }> }
+    expect(listBody.ok).toBe(true)
+    expect(listBody.value.map((t) => t.team_id)).toContain('core-dev')
+    expect(Array.isArray(listBody.value[0].issues)).toBe(true)
+    expect(listBody.value[0].workflow.length).toBe(7)
+
+    const one = await fetch(`${base}/api/teams/core-dev`)
+    const oneBody = (await one.json()) as { ok: boolean; value: { team_id: string; deposit: Record<string, unknown> } }
+    expect(oneBody.ok).toBe(true)
+    expect(oneBody.value.deposit.default_type).toBe('pitfall')
+
+    const miss = await fetch(`${base}/api/teams/nope`)
+    expect(miss.status).toBe(404)
+  })
+
+  it('GET /api/teams/:id/activate → TeamActivation（dispatch 仅由 installed 推导，P8）', async () => {
+    const res = await fetch(`${base}/api/teams/core-dev/activate`)
+    const body = (await res.json()) as {
+      ok: boolean
+      value: {
+        team_id: string
+        members: Array<{ role: string; installed: boolean; dispatch: string; definition?: { name: string }; hint?: string }>
+        workflow: Array<{ order: number }>
+        rework_limit: number
+      }
+    }
+    expect(res.status).toBe(200)
+    expect(body.ok).toBe(true)
+    expect(body.value.team_id).toBe('core-dev')
+    expect(body.value.members[0]).toMatchObject({ role: 'dev-1', installed: false, dispatch: 'fallback' })
+    expect(body.value.members[0].definition?.name).toBe('dev-1')
+    expect(body.value.members[0].hint).toContain('prism role install')
+
+    // 装配后 → native
+    await mkdir(join(zcodeDir, 'agents'), { recursive: true })
+    await writeFile(join(zcodeDir, 'agents', 'dev-1.md'), '---\nname: dev-1\ndescription: "x"\n---\n\n<!-- generated by prism (role: dev-1) -->\n', 'utf-8')
+    const after = await fetch(`${base}/api/teams/core-dev/activate`)
+    const afterBody = (await after.json()) as { value: { members: Array<{ installed: boolean; dispatch: string }> } }
+    expect(afterBody.value.members[0]).toMatchObject({ installed: true, dispatch: 'native' })
+  })
+
+  it('GET /api/skills → 内置 PrismSkill[]（含 prism 元 skill）', async () => {
+    const res = await fetch(`${base}/api/skills`)
+    const body = (await res.json()) as { ok: boolean; value: Array<{ name: string; builtin: boolean }> }
+    expect(res.status).toBe(200)
+    expect(body.ok).toBe(true)
+    expect(body.value.map((s) => s.name)).toContain('prism')
+    expect(body.value.every((s) => s.builtin)).toBe(true)
+  })
+})

@@ -1,0 +1,56 @@
+/*
+ * Global styles for the ontology studio SPA.
+ *
+ * The DS theme CSS sets every --st-* token under [data-st-theme="entropic"];
+ * `App.svelte` puts that attribute on the shell root. We alias the handful of
+ * semantic tokens the shell leans on so component CSS stays readable.
+ */
+@import "@sentropic/design-system-themes/css/entropic.css";
+
+:root {
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  font-family:
+    "Inter", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background: var(--st-semantic-surface-subtle, #f8fafc);
+  color: var(--st-semantic-text-primary, #0f172a);
+}
+
+#app {
+  height: 100%;
+}
+
+button {
+  font: inherit;
+}
+
+/*
+ * Workaround for a @sentropic/design-system-svelte Collapsible bug: its chevron
+ * rotation rule `.st-collapsible--open .st-collapsible__icon` is a DESCENDANT
+ * selector, so an OPEN parent collapsible rotates EVERY nested icon — including
+ * collapsed sub-accordions (visible in the Types Domain → Sub-domain tree, where
+ * the collapsed domains showed an "up" chevron). Re-scope rotation to each
+ * collapsible's OWN trigger icon (the trigger is a direct child of the root;
+ * nested collapsibles live in the sibling __region, so `>` excludes them).
+ * Upstream one-line fix: scope that DS rule to `> .st-collapsible__trigger`.
+ */
+/* The DS rule uses :where() (specificity-neutral), so a plain override only ties
+ * and loses on source order — !important is required to win. */
+.st-collapsible > .st-collapsible__trigger .st-collapsible__icon {
+  transform: none !important;
+}
+.st-collapsible--open > .st-collapsible__trigger .st-collapsible__icon {
+  transform: rotate(180deg) !important;
+}

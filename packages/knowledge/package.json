@@ -1,0 +1,29 @@
+{
+  "name": "@prism/knowledge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Prism 知识库核心：分层存储（文件为真相）+ FTS5 bigram 中文检索 + 版次制落库",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@prism/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0",
+    "vitest": "^3.0.0"
+  }
+}
