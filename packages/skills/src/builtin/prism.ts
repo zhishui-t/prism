@@ -22,6 +22,18 @@ ${prismSkillMarker('prism')}
 Prism 是本机的**研发效能控制面**：知识库、知识图谱、代码图谱、架构图谱、专家角色与团队、工作队列、任务台账。
 **它不执行任务、不调 LLM、不调度 agent**——只提供资产与台账；执行归宿主（你）。
 
+## 0. 快速路径：先看状态，再决定查还是建
+
+**回答任何「项目怎么做的 / 规范是什么 / 谁调用谁」之前，先确认资产存在**，不要盲目重建：
+
+| 要查什么 | 先看状态 | 有产物 → | 没产物 → |
+| :--- | :--- | :--- | :--- |
+| 知识（规范/红线/决策） | \`prism_kb_stats\` | 直接 \`prism_kb_search\` | 告知「知识库为空」，问用户是否导入 |
+| 代码结构（调用/影响面） | \`prism_graph_status\` | 直接 \`prism_graph_query\` | 提示先 \`prism graph build <项目根>\` |
+
+**关键**：\`graphify-out/graph.json\` 已存在且用户只是问问题 → **直接查询，不要重新建图**。
+建图只在这些情况发生：用户明确要求、产物不存在、或 \`status\` 报陈旧且用户同意重建。
+
 ## 1. 快速判定：什么时候用哪个
 
 | 用户意图 | 用什么 | 细节 |
@@ -35,6 +47,23 @@ Prism 是本机的**研发效能控制面**：知识库、知识图谱、代码�
 | 有需要 LLM 的活（向量化/摘要/抽取） | \`prism_work_pending\` → claim → complete | [references/work.md](references/work.md) |
 | 登记任务 / 回报状态 / 看依赖图 | \`prism_task_register/report/status\` | [references/task.md](references/task.md) |
 | 环境自检 / 换宿主 / 打包 | \`prism doctor\` / \`prism harness show\` | [references/cli.md](references/cli.md) |
+
+## 1.5 第一次接入：从零到能用
+
+\`\`\`bash
+prism init --zcode-dir <宿主根>   # ①探测 ②建骨架 ③装本 Skill ④写 MCP 注册 ⑤提示重启
+prism doctor                       # 自检：Node 版本 / 目录 / DB / graphify / 端口
+prism serve --port 7777            # 起 HTTP 服务 + 控制台
+\`\`\`
+
+**验收标准**（\`prism doctor\` 应全绿）：
+- Node ≥ 22.5；\`PRISM_HOME\`（默认 \`~/.prism\`）可写；
+- \`graphify\` 可调用（\`3rd/graphify\` 或 PATH）；
+- MCP 注册已写入宿主配置；Skill 已装到 \`skills_dir\`。
+
+**装完必须重启宿主**——MCP 工具与 Skill 在会话启动时加载，当前会话看不到。
+**首次建图**：\`prism graph build <项目根> --name <项目名>\`（Python graphify，零 LLM）。
+**首次导入知识**：\`prism kb import <file.md> --layer global --book <书>\`。
 
 ## 2. 团队启用链路（最关键，别搞错）
 
@@ -61,15 +90,26 @@ Prism 是本机的**研发效能控制面**：知识库、知识图谱、代码�
 - **不调 LLM**：Prism 零 API key，LLM 工作走工作队列；
 - **不做审核**：宿主说落库就落库，Prism 只记录/可视化/审计。
 
+## 4.5 诚实规则（引用 Prism 数据时必须遵守）
+
+- **查不到就说查不到**：\`prism_kb_search\` 无命中 → 明确告知「知识库没有这条」，**不要用常识补全**；
+- **引用必带来源地址**：格式 \`层[/owner]/书/模块/ID@版次\`，便于人回溯；
+- **陈旧要标注**：\`prism_graph_status\` 报 \`stale: true\` 或知识条目 \`freshness\` 低 → 回答时说明「可能已过期」；
+- **不编边**：图谱没有的关系不要推断；\`confidence\` 字段（EXTRACTED/INFERRED）照实呈现；
+- **不读全图**：用查询拿子图（\`limit\`/\`depth\` 有界），避免把整张图塞进上下文。
+
 ## 5. 工具速查（21 个 MCP 工具）
 
 | 分组 | 工具 |
 | :--- | :--- |
-| 知识库（5） | \`prism_kb_search\` \`prism_kb_get\` \`prism_kb_tree\` \`prism_kb_deposit\` \`prism_kb_graph\` |
+| 知识库（4） | \`prism_kb_search\` \`prism_kb_get\` \`prism_kb_deposit\` \`prism_kb_graph\` |
 | 代码图谱（7） | \`prism_graph_query\` \`prism_graph_path\` \`prism_graph_explain\` \`prism_graph_affected\` \`prism_graph_god_nodes\` \`prism_graph_summary\` \`prism_graph_status\` |
 | 角色团队（4） | \`prism_role_list\` \`prism_role_render\` \`prism_team_get\` \`prism_team_activate\` |
 | 工作队列（3） | \`prism_work_pending\` \`prism_work_claim\` \`prism_work_complete\` |
 | 任务台账（3） | \`prism_task_register\` \`prism_task_report\` \`prism_task_status\` |
+
+> **MCP 与 CLI 的分工**：需要结构化调用（宿主 agent 用）优先 MCP；一次性/交互式操作（人在终端用）
+> 走 CLI。知识树（\`prism kb tree\`）与架构图渲染（\`prism arch render\`）**只有 CLI/HTTP，没有 MCP 工具**。
 
 ## 6. CLI 速查
 
@@ -126,9 +166,10 @@ const PRISM_SKILL_ASSETS: SkillAsset[] = [
 - **沉淀必须带 \`deposited_by\`**（\`{ subject, team? }\`）；
 - 安全红线类知识强制 \`layer: global\`。
 
-## 结构树（prism_kb_tree）
+## 结构树（prism kb tree，仅 CLI）
 
-\`层→书→模块\` 的计数结构，用于回答「知识库里有什么」。
+\`层→书→模块\` 的计数结构，用于回答「知识库里有什么」。**没有对应的 MCP 工具**——
+宿主需要它时执行 \`prism kb tree [--layer <层>]\`，或直接用 \`prism_kb_search\` / \`prism_kb_graph\` 概览。
 
 ## 知识图谱（prism_kb_graph）
 
@@ -158,6 +199,10 @@ const PRISM_SKILL_ASSETS: SkillAsset[] = [
 ## 先看状态（prism_graph_status）
 
 返回 \`stale\` / \`changed_files\` / \`total_files\`。**陈旧就先建图**（或提示用户）。
+
+**没建图时**（\`graph_not_found\` 或 \`graph_exists: false\`）：
+不要反复重试查询——直接告诉用户「该项目还没建图」，并给出命令
+\`prism graph build <项目根> --name <项目名>\`。建图是**显式动作**，由用户决定何时执行。
 
 ## 查询工具
 
@@ -342,7 +387,13 @@ prism task graph d1
 prism arch types                              # 列出五类
 prism arch validate architecture ir.json      # 校验 IR（schema + 布局）
 prism arch render architecture ir.json        # 渲染自包含 HTML
+prism arch render architecture ir.json --book order-platform --module order   # 归到书/模块
 \`\`\`
+
+**产物归属**：\`--book/--module\` 把产物归到知识库的书/模块下，渲染时同时写
+\`<name>.meta.json\`（作用域 + archify 版本 + IR 哈希 + 标题）。界面在
+「知识库 → 点开书 → 架构图」按作用域过滤显示，子标签 [预览 | IR | 元数据]。
+不带 \`--book\` 的产物不属于任何书，只出现在全量列表里。
 
 ## IR 要点
 
@@ -353,7 +404,9 @@ prism arch render architecture ir.json        # 渲染自包含 HTML
 
 ## HTTP 等价
 
-\`POST /api/arch/render { type, ir, name? }\` → 落 \`<PRISM_HOME>/archify/<type>/<name>.html\`；
+\`POST /api/arch/render { type, ir, name?, book?, module? }\` → 落 \`<PRISM_HOME>/archify/<type>/<name>.html\`；
+\`GET /api/arch/diagrams?book=&module=\` 按作用域列出产物；
+\`GET /api/arch/ir/:type/:file\` 取 IR 源 + 元数据；
 \`GET /api/arch/preview/:type/:file\` 可在控制台 iframe 预览。
 `,
   },
@@ -398,7 +451,8 @@ skills_dir: ~/.zcode/skills
 prism serve --port 7777
 \`\`\`
 
-控制台页面：知识库 / 知识图谱 / 代码图谱 / 架构图谱 / 角色 / 团队 / 技能 / 任务中心 / 工作队列。
+控制台页面：知识库 / 代码图谱 / 角色 / 团队 / 技能 / 任务中心 / 工作队列。
+（知识图谱与架构图谱**没有一级页**——它们归入「知识库 → 点开一本书 → 详情面板」。）
 
 ## 打包
 
