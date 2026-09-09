@@ -96,8 +96,9 @@ describe('prism init（F09 五步；全部写临时目录）', () => {
     expect(output).toContain('① ZCode 目录')
     expect(output).toContain('catalog')
     expect(output).toContain('roles')
-    expect(output).toContain('③ Skill 安装: 写 1 个')
+    expect(output).toContain('③ Skill 安装: 写 8 个') // SKILL.md + 7 个 references/（渐进披露）
     expect(existsSync(join(zcodeDir, 'skills', 'prism', 'SKILL.md'))).toBe(true)
+    expect(existsSync(join(zcodeDir, 'skills', 'prism', 'references', 'graph.md'))).toBe(true)
     // ④ config.json 合并写入
     const config = JSON.parse(await readFile(join(zcodeDir, 'cli', 'config.json'), 'utf-8')) as {
       mcp: { servers: { prism: { type: string; env: { PRISM_HOME: string } } } }
@@ -116,10 +117,11 @@ describe('prism init（F09 五步；全部写临时目录）', () => {
 
     lines = []
     expect(await runCommand(ctx, ['init', '--zcode-dir', zcodeDir, '--json'])).toBe(0)
-    const second = JSON.parse(lines[lines.length - 1]) as { value: { mcp: { status: string }; skills: { written: number; skipped: unknown[] } } }
+    const second = JSON.parse(lines[lines.length - 1]) as { value: { mcp: { status: string }; skills: { written: unknown[]; skipped: unknown[] } } }
     expect(second.value.mcp.status).toBe('unchanged')
     expect(second.value.mcp.backup).toBeUndefined()
-    // skill 幂等重装（marker → 覆盖，无 skip）
+    // skill 幂等重装（marker → 覆盖，无 skip；8 个文件：SKILL.md + 7 references）
+    expect(second.value.skills.written).toHaveLength(8)
     expect(second.value.skills.skipped).toHaveLength(0)
   })
 

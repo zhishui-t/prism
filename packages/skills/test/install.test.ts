@@ -70,6 +70,65 @@ describe('installSkills（design-v3 §5 冲突策略；全部写临时目录）'
     expect(await readdir(target)).toContain('prism')
   })
 
+  it('内置 prism skill 带 references/（渐进披露），安装后 7 个引用文件就位', async () => {
+    await installSkills({ targetDir: target, skills: listBuiltinSkills() })
+    const refs = await readdir(join(target, 'prism', 'references'))
+    expect(refs.sort()).toEqual([
+      'arch.md',
+      'cli.md',
+      'graph.md',
+      'knowledge.md',
+      'task.md',
+      'team.md',
+      'work.md',
+    ])
+  })
+
+  it('附带文件路径越界（..）→ bad_request', async () => {
+    const skill: PrismSkill = {
+      ...makeSkill('evil', true),
+      assets: [{ path: '../escape.md', content: 'x' }],
+    }
+    await expect(installSkills({ targetDir: target, skills: [skill] })).rejects.toMatchObject({
+      code: 'bad_request',
+    })
+  })
+
+  it('幂等重装：SKILL.md 是 Prism 产物时，附带文件一并更新（不误判为人写）', async () => {
+    const skill: PrismSkill = {
+      ...makeSkill('idem', true),
+      assets: [{ path: 'references/a.md', content: '第一版' }],
+    }
+    await installSkills({ targetDir: target, skills: [skill] })
+    expect(await readFile(join(target, 'idem', 'references', 'a.md'), 'utf-8')).toBe('第一版')
+
+    // 再次安装（模拟升级）：内容更新，且不产生 .prism-new、不记 skipped
+    const upgraded: PrismSkill = {
+      ...skill,
+      assets: [{ path: 'references/a.md', content: '第二版' }],
+    }
+    const result = await installSkills({ targetDir: target, skills: [upgraded] })
+    expect(await readFile(join(target, 'idem', 'references', 'a.md'), 'utf-8')).toBe('第二版')
+    expect(existsSync(join(target, 'idem', 'references', 'a.md.prism-new'))).toBe(false)
+    expect(result.skipped).toHaveLength(0)
+  })
+
+  it('人写的 SKILL.md 不覆盖时，附带文件也不动（整体跳过）', async () => {
+    await mkdir(join(target, 'guard', 'references'), { recursive: true })
+    await writeFile(join(target, 'guard', 'SKILL.md'), '---\nname: guard\ndescription: "人写"\n---\n\n手写\n', 'utf-8')
+    await writeFile(join(target, 'guard', 'references', 'a.md'), '人写的', 'utf-8')
+    const skill: PrismSkill = {
+      ...makeSkill('guard', true),
+      assets: [{ path: 'references/a.md', content: 'Prism 版' }],
+    }
+    const result = await installSkills({ targetDir: target, skills: [skill] })
+    // 主文件被拒 → 整体跳过，不碰任何附带文件
+    expect(await readFile(join(target, 'guard', 'SKILL.md'), 'utf-8')).toContain('人写')
+    expect(await readFile(join(target, 'guard', 'references', 'a.md'), 'utf-8')).toBe('人写的')
+    expect(result.skipped).toHaveLength(1)
+    expect(result.skipped[0]?.path).toContain('SKILL.md')
+  })
+
   it('目标目录不可写（父路径是文件）→ PrismError 可读错误', async () => {
     const blocker = join(target, 'blocker')
     await writeFile(blocker, 'not a dir', 'utf-8')

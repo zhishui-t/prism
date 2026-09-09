@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 import { PrismError } from '@prism/core'
 
@@ -56,8 +56,24 @@ export async function installSkills(opts: SkillInstallOptions): Promise<SkillIns
       }
     }
 
+    // 主文件就位后，本 Skill 目录即归 Prism 管理
     await writeFile(file, skill.content, 'utf-8')
     written.push(file)
+
+    // 附带文件（references/ 等）：随主文件一起装。
+    // 走到这里说明 SKILL.md 要么是新建、要么是 Prism 产物（人写的已在上面 continue），
+    // 故整个 skill 目录归 Prism 管理，附带文件直接覆盖——否则幂等重装会把自己的
+    // references 误判成「人写文件」而全部跳过（marker 只写在 SKILL.md）。
+    for (const asset of skill.assets ?? []) {
+      const assetPath = join(dir, ...asset.path.split('/'))
+      // 越界防护：解析后必须仍在 skill 目录内
+      if (!assetPath.startsWith(dir)) {
+        throw new PrismError('bad_request', `Skill 附带文件路径越界: ${asset.path}`)
+      }
+      await mkdir(dirname(assetPath), { recursive: true })
+      await writeFile(assetPath, asset.content, 'utf-8')
+      written.push(assetPath)
+    }
   }
 
   return { written, skipped }
