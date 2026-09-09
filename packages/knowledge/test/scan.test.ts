@@ -189,3 +189,23 @@ describe('引用型正文读取（二进制原件）', () => {
     kb.close()
   })
 })
+
+/** 生产级：源文件消失时报告孤儿索引（不静默）。 */
+describe('孤儿索引检测', () => {
+  it('源文件被删除后重扫 → missing 列出该条目，索引保留', async () => {
+    const { scanProject } = await import('../../server/src/kb/scan.js')
+    const { rm } = await import('node:fs/promises')
+    const root = await makeProject({ 'a.md': '# A', 'b.md': '# B' })
+    const home = await makeTempDir('prism-missing-')
+    const kb = makeKb(home)
+
+    await scanProject(kb, { root, owner: 'p', book: 'p' })
+    await rm(join(root, 'b.md'))
+
+    const report = await scanProject(kb, { root, owner: 'p', book: 'p' })
+    expect(report.missing).toContain('IDX-b')
+    // 索引保留（软处理，不自动删——删除是人的决定）
+    expect(await kb.get('IDX-b')).not.toBeNull()
+    kb.close()
+  })
+})

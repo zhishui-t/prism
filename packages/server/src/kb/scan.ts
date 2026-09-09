@@ -90,6 +90,33 @@ export interface ScanReport {
   truncated: boolean
   /** 入队的工作任务 id（--enqueue 时） */
   enqueued: string[]
+  /** 源文件已消失、索引仍在的条目（生产级：不静默留孤儿索引） */
+  missing: string[]
+}
+
+/** 检测「索引里存在但源文件已不在」的引用型条目（按 book/owner 限定范围）。 */
+async function findMissingSources(
+  kb: KnowledgeService,
+  options: { book: string; owner?: string; seenIds: Set<string> },
+): Promise<string[]> {
+  const missing: string[] = []
+  const catalog = await kb.catalog({
+    book: options.book,
+    ...(options.owner !== undefined ? { owner: options.owner } : {}),
+    limit: 5000,
+  })
+  const { access } = await import('node:fs/promises')
+  for (const entry of catalog) {
+    if (entry.origin !== 'indexed') continue
+    if (options.seenIds.has(entry.id)) continue // 本次扫描见过 → 没丢
+    if (entry.path === undefined || entry.path === '') continue
+    try {
+      await access(entry.path)
+    } catch {
+      missing.push(entry.id)
+    }
+  }
+  return missing
 }
 
 /**
@@ -135,6 +162,8 @@ export async function scanProject(kb: KnowledgeService, options: ScanOptions): P
   const maxFiles = options.maxFiles ?? 2000
   const layer = options.layer ?? 'project'
   const book = options.book ?? basename(root)
+  // project/role 层必须有 owner；未指定时回落 book（与 CLI 的 owner 口径一致）
+  const effectiveOwner = options.owner ?? (layer === 'global' ? undefined : book)
 
   const report: ScanReport = {
     root,
@@ -146,6 +175,7 @@ export async function scanProject(kb: KnowledgeService, options: ScanOptions): P
     files: [],
     truncated: false,
     enqueued: [],
+    missing: [],
   }
 
   const candidates: string[] = []
@@ -221,7 +251,7 @@ export async function scanProject(kb: KnowledgeService, options: ScanOptions): P
         title,
         type: 'doc',
         layer: layer as 'global' | 'project' | 'role',
-        ...(options.owner !== undefined ? { owner: options.owner } : {}),
+        ...(effectiveOwner !== undefined ? { owner: effectiveOwner } : {}),
         book,
         module,
         path: abs,
@@ -252,6 +282,14 @@ export async function scanProject(kb: KnowledgeService, options: ScanOptions): P
       })
     }
   }
+
+  // 源文件已消失、索引仍在的条目（生产级：明确报告，不静默留孤儿）
+  const seenIds = new Set(report.files.filter((f) => f.status !== 'skipped').map((f) => idFromRel(f.rel)))
+  report.missing = await findMissingSources(kb, {
+    book,
+    ...(effectiveOwner !== undefined ? { owner: effectiveOwner } : {}),
+    seenIds,
+  })
 
   return report
 }

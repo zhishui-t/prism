@@ -1048,7 +1048,7 @@ export class PrismKnowledgeService implements KnowledgeService {
     const raw = this.persistence.knowledge.raw
     const rows = raw
       .prepare(
-        `SELECT id, version, title, type, layer, owner, book, module, status, risk, tags, path, updated_at
+        `SELECT id, version, title, type, layer, owner, book, module, status, risk, tags, path, origin, updated_at
          FROM knowledge_entries WHERE ${clauses.join(' AND ')}
          ORDER BY updated_at DESC LIMIT ?`,
       )
@@ -1065,6 +1065,7 @@ export class PrismKnowledgeService implements KnowledgeService {
       risk: string
       tags: string
       path: string
+      origin: string
       updated_at: string
     }>
 
@@ -1095,6 +1096,8 @@ export class PrismKnowledgeService implements KnowledgeService {
         status: row.status as KnowledgeEntry['status'],
         risk: row.risk,
         tags: parseStringArray(row.tags),
+        origin: (row.origin as 'owned' | 'indexed' | undefined) ?? 'owned',
+        path: row.path,
         in_degree: d?.indeg ?? 0,
         out_degree: d?.outdeg ?? 0,
         updated_at: row.updated_at,

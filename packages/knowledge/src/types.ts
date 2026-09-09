@@ -279,6 +279,10 @@ export interface CatalogEntry {
   status: KnowledgeEntry['status']
   risk: string
   tags: string[]
+  /** `owned` 或 `indexed`（缺失视为 owned，兼容老数据） */
+  origin?: EntryOrigin
+  /** 引用型：项目原件路径 */
+  path?: string
   /** 入度（被引用数） */
   in_degree: number
   /** 出度（引用他人数） */

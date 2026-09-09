@@ -50,7 +50,7 @@ export async function runKb(ctx: CommandContext, args: string[], values: ArgValu
     case 'export':
       return await kbExport(ctx, rest, values)
     default:
-      ctx.stderr(`用法: prism kb <import|sync|search|get|tree|stats|graph|path|export|reindex> ...`)
+      ctx.stderr(`用法: prism kb <import|sync|remove|search|get|tree|stats|graph|path|export|reindex> ...`)
       return 1
   }
 }
@@ -355,6 +355,11 @@ async function kbSync(ctx: CommandContext, args: string[], values: ArgValues): P
     `  发现 ${report.discovered} 个可处理文件 → 新建 ${report.created} · 更新 ${report.updated} · 未变 ${report.unchanged} · 跳过 ${report.skipped}`,
   )
   if (report.truncated) ctx.stdout('  ⚠ 已达文件数上限，结果被截断（可调 --max-files 或分批扫描）')
+  if (report.missing.length > 0) {
+    ctx.stdout(
+      `  ⚠ ${report.missing.length} 条索引的源文件已不存在（索引保留）：${report.missing.slice(0, 5).join(', ')}${report.missing.length > 5 ? ' …' : ''}`,
+    )
+  }
   if (report.enqueued.length > 0) {
     ctx.stdout(`  已入队 ${report.enqueued.length} 个富化任务（宿主经 prism_work_pending 领取）`)
   }
