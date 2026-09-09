@@ -12,6 +12,7 @@ export function kbRoutes(getKb: () => Promise<KnowledgeService>): {
   tree: (ctx: RouteContext) => Promise<Envelope>
   stats: (ctx: RouteContext) => Promise<Envelope>
   deposit: (ctx: RouteContext) => Promise<Envelope>
+  catalog: (ctx: RouteContext) => Promise<Envelope>
   graph: (ctx: RouteContext) => Promise<Envelope>
   path: (ctx: RouteContext) => Promise<Envelope>
   exportGraph: (ctx: RouteContext) => Promise<Envelope>
@@ -62,6 +63,22 @@ export function kbRoutes(getKb: () => Promise<KnowledgeService>): {
     const owner = ctx.query.get('owner') ?? undefined
     const nodes = await (await getKb()).tree(layer ?? undefined, owner)
     return ok(nodes)
+  }
+
+  /** 全量目录（星图/下钻用）：`?layer=&owner=&book=&limit=`。 */
+  const catalog = async (ctx: RouteContext): Promise<Envelope> => {
+    const layer = parseLayer(ctx.query.get('layer'))
+    const owner = ctx.query.get('owner')?.trim() || undefined
+    const book = ctx.query.get('book')?.trim() || undefined
+    const limitRaw = ctx.query.get('limit')
+    const limit = limitRaw !== null && limitRaw !== '' ? parseLimit(limitRaw) : null
+    const entries = await (await getKb()).catalog({
+      ...(layer !== null ? { layer } : {}),
+      ...(owner !== undefined ? { owner } : {}),
+      ...(book !== undefined ? { book } : {}),
+      ...(limit !== null ? { limit } : {}),
+    })
+    return ok(entries)
   }
 
   const stats = async (_ctx: RouteContext): Promise<Envelope> => {
@@ -129,7 +146,7 @@ export function kbRoutes(getKb: () => Promise<KnowledgeService>): {
     return ok(found)
   }
 
-  return { search, get, tree, stats, deposit, graph, path, exportGraph }
+  return { search, get, tree, stats, catalog, deposit, graph, path, exportGraph }
 }
 
 /** 关系类型查询参数（`relations=references,overrides`；非法 → bad_request）。 */

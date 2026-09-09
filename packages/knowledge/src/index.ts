@@ -6,6 +6,7 @@
  */
 export type {
   BookNode,
+  CatalogEntry,
   DepositInput,
   EdgeConfidence,
   EdgeRelation,

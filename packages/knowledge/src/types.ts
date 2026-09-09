@@ -186,6 +186,29 @@ export interface GraphPath {
   edges: KnowledgeEdge[]
 }
 /**
+ * 目录条目（星图/下钻用）：全量最新版条目的轻量元数据。
+ * 与 SearchResult 的区别：**不需要检索词**，一次拿全量（分页），供可视化渲染。
+ */
+export interface CatalogEntry {
+  id: string
+  version: number
+  title: string
+  type: EntryType
+  layer: Layer
+  owner?: string
+  book: string
+  module: string
+  status: KnowledgeEntry['status']
+  risk: string
+  tags: string[]
+  /** 入度（被引用数） */
+  in_degree: number
+  /** 出度（引用他人数） */
+  out_degree: number
+  updated_at: string
+}
+
+/**
  * 知识库服务（design.md §3.2 KnowledgeService）。
  * 实现类为 PrismKnowledgeService（含 close() 生命周期方法，接口外的扩展）。
  */
@@ -198,6 +221,11 @@ export interface KnowledgeService {
   get(id: string, version?: number): Promise<KnowledgeEntry | null>
   /** 层→书→模块结构树（只统计最新版）。 */
   tree(layer?: Layer, owner?: string): Promise<BookNode[]>
+  /**
+   * 全量目录（最新版），带出入度；供星图/下钻渲染。
+   * `limit` 省略取 2000 上限（防止超大库拖垮前端）。
+   */
+  catalog(options?: { layer?: Layer; owner?: string; book?: string; limit?: number }): Promise<CatalogEntry[]>
   /** 全库统计（只统计最新版）。 */
   stats(): Promise<KbStats>
   /** 图谱邻域/概览查询（边表过滤视图，D8）。 */

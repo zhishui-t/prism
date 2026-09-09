@@ -1,4 +1,4 @@
-import type { BookNode, GraphPath, GraphQuery, GraphView, KnowledgeEntry, KnowledgeService, KbStats, Layer, SearchQuery, SearchResult } from '../src/kb/port.js'
+import type { BookNode, CatalogEntry, GraphPath, GraphQuery, GraphView, KnowledgeEntry, KnowledgeService, KbStats, Layer, SearchQuery, SearchResult } from '../src/kb/port.js'
 import { createHash } from 'node:crypto'
 import { mkdtemp, writeFile, mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -110,6 +110,23 @@ export class MemoryKb implements KnowledgeService {
       }
     }
     return out
+  }
+
+  async catalog(options?: { layer?: Layer; owner?: string; book?: string; limit?: number }): Promise<CatalogEntry[]> {
+    const out: CatalogEntry[] = []
+    for (const e of this.#entries.values()) {
+      if (e.status !== 'active') continue
+      if (options?.layer !== undefined && e.layer !== options.layer) continue
+      if (options?.owner !== undefined && e.owner !== options.owner) continue
+      if (options?.book !== undefined && e.book !== options.book) continue
+      out.push({
+        id: e.id, version: e.version, title: e.title, type: e.type, layer: e.layer,
+        ...(e.owner !== undefined ? { owner: e.owner } : {}),
+        book: e.book, module: e.module, status: e.status, risk: e.risk, tags: e.tags,
+        in_degree: 0, out_degree: 0, updated_at: e.updated_at,
+      })
+    }
+    return options?.limit !== undefined ? out.slice(0, options.limit) : out
   }
 
   async graph(query?: GraphQuery): Promise<GraphView> {

@@ -37,6 +37,24 @@ export interface KnowledgeEntry {
   updated_at: string
 }
 
+/** 目录条目（星图/下钻用）。 */
+export interface CatalogEntry {
+  id: string
+  version: number
+  title: string
+  type: string
+  layer: string
+  owner?: string
+  book: string
+  module: string
+  status: string
+  risk: string
+  tags: string[]
+  in_degree: number
+  out_degree: number
+  updated_at: string
+}
+
 export interface BookNode {
   layer: string
   owner?: string
@@ -235,6 +253,17 @@ export const api = {
     request<BookNode[]>(`/api/kb/tree${layer ? `?layer=${encodeURIComponent(layer)}` : ''}`),
 
   kbStats: () => request<KbStats>('/api/kb/stats'),
+
+  /** 全量目录（星图/下钻）。 */
+  kbCatalog: (params?: { layer?: string; owner?: string; book?: string; limit?: number }) => {
+    const qs = new URLSearchParams()
+    if (params?.layer) qs.set('layer', params.layer)
+    if (params?.owner) qs.set('owner', params.owner)
+    if (params?.book) qs.set('book', params.book)
+    if (params?.limit) qs.set('limit', String(params.limit))
+    const suffix = qs.toString()
+    return request<CatalogEntry[]>(`/api/kb/catalog${suffix ? `?${suffix}` : ''}`)
+  },
 
   kbGraph: (params?: { id?: string; depth?: number; relations?: string; limit?: number }) => {
     const qs = new URLSearchParams()

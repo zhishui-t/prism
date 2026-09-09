@@ -19,6 +19,7 @@ export type {
   SearchQuery,
   SearchResult,
   BookNode,
+  CatalogEntry,
   KbStats,
   KnowledgeService,
   EdgeRelation,

@@ -31,6 +31,7 @@ import {
 import { bigram, toMatchExpression } from './tokenize.js'
 import type {
   BookNode,
+  CatalogEntry,
   DepositInput,
   EdgeConfidence,
   EdgeRelation,
@@ -635,6 +636,86 @@ export class PrismKnowledgeService implements KnowledgeService {
   }
 
   // ===== tree =====
+
+  /**
+   * 全量目录（最新版）：带出入度的轻量条目列表，供星图与下钻渲染。
+   * 与 search 的区别是不需要检索词；上限 2000（超大库时分页/截断）。
+   */
+  async catalog(
+    options: { layer?: Layer; owner?: string; book?: string; limit?: number } = {},
+  ): Promise<CatalogEntry[]> {
+    if (options.layer !== undefined) this.#validateLayers([options.layer])
+    const clauses = ['is_latest = 1']
+    const params: string[] = []
+    if (options.layer !== undefined) {
+      clauses.push('layer = ?')
+      params.push(options.layer)
+    }
+    if (options.book !== undefined) {
+      clauses.push('book = ?')
+      params.push(options.book)
+    }
+    if (options.owner !== undefined) {
+      clauses.push('owner = ?')
+      params.push(options.owner)
+    }
+    const limit = Math.min(Math.max(1, Math.floor(options.limit ?? 2000)), 5000)
+    const raw = this.persistence.knowledge.raw
+    const rows = raw
+      .prepare(
+        `SELECT id, version, title, type, layer, owner, book, module, status, risk, tags, path, updated_at
+         FROM knowledge_entries WHERE ${clauses.join(' AND ')}
+         ORDER BY updated_at DESC LIMIT ?`,
+      )
+      .all(...params, limit) as Array<{
+      id: string
+      version: number
+      title: string
+      type: string
+      layer: string
+      owner: string | null
+      book: string
+      module: string
+      status: string
+      risk: string
+      tags: string
+      path: string
+      updated_at: string
+    }>
+
+    // 出入度一次性聚合（避免逐条查询）
+    const degreeRows = raw
+      .prepare(
+        `SELECT id, SUM(indeg) AS indeg, SUM(outdeg) AS outdeg FROM (
+           SELECT to_id AS id, COUNT(*) AS indeg, 0 AS outdeg FROM knowledge_edges GROUP BY to_id
+           UNION ALL
+           SELECT from_id AS id, 0 AS indeg, COUNT(*) AS outdeg FROM knowledge_edges GROUP BY from_id
+         ) GROUP BY id`,
+      )
+      .all() as Array<{ id: string; indeg: number; outdeg: number }>
+    const degree = new Map(degreeRows.map((r) => [r.id, r]))
+
+    return rows.map((row) => {
+      const owner = row.owner ?? ownerFromPath(this.knowledgeDir, row.path)
+      const d = degree.get(row.id)
+      return {
+        id: row.id,
+        version: row.version,
+        title: row.title,
+        type: row.type as EntryType,
+        layer: row.layer as Layer,
+        ...(owner !== undefined ? { owner } : {}),
+        book: row.book,
+        module: row.module,
+        status: row.status as KnowledgeEntry['status'],
+        risk: row.risk,
+        tags: parseStringArray(row.tags),
+        in_degree: d?.indeg ?? 0,
+        out_degree: d?.outdeg ?? 0,
+        updated_at: row.updated_at,
+      }
+    })
+  }
 
   async tree(layer?: Layer, owner?: string): Promise<BookNode[]> {
     this.#validateLayers(layer ? [layer] : undefined)

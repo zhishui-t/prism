@@ -116,6 +116,7 @@ export async function createApp(options: AppOptions = {}): Promise<{
   router.add('GET', '/api/kb/get/:id', kb.get)
   router.add('GET', '/api/kb/tree', kb.tree)
   router.add('GET', '/api/kb/stats', kb.stats)
+  router.add('GET', '/api/kb/catalog', kb.catalog)
   router.add('POST', '/api/kb/deposit', kb.deposit)
   router.add('GET', '/api/kb/graph', kb.graph)
   router.add('GET', '/api/kb/path', kb.path)

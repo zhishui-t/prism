@@ -136,3 +136,122 @@ tr:last-child td { border-bottom: 0; }
 .iframe-wrap iframe { display: block; width: 100%; height: 640px; border: 0; }
 
 .dag-svg { width: 100%; height: auto; background: var(--panel-2); border-radius: 8px; }
+
+/* ===== 图书馆星图（知识库页） ===== */
+
+.library { position: relative; }
+
+.library-head { margin-bottom: 12px; }
+
+.lib-stat {
+  min-width: 62px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  text-align: center;
+}
+.lib-stat .n { font-size: 18px; font-weight: 600; line-height: 1.2; }
+.lib-stat .l { font-size: 11px; color: var(--muted); }
+
+.crumbs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  font-size: 12.5px;
+  overflow-x: auto;
+}
+.crumb {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 2px 6px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+.crumb:hover { color: var(--text); background: var(--panel-2); }
+.crumb.active { color: var(--accent); font-weight: 500; }
+.crumb-sep { color: var(--border); }
+
+.star-wrap {
+  position: relative;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  /* 深空：中心微光 + 径向渐变 + 底色 */
+  background:
+    radial-gradient(ellipse 70% 55% at 50% 42%, rgba(91, 140, 255, 0.10), transparent 70%),
+    radial-gradient(ellipse 40% 30% at 22% 78%, rgba(160, 107, 255, 0.07), transparent 70%),
+    radial-gradient(ellipse 36% 28% at 80% 20%, rgba(58, 192, 196, 0.06), transparent 70%),
+    #0a0c11;
+}
+
+.star-hint {
+  position: absolute;
+  left: 12px;
+  top: 10px;
+  z-index: 2;
+  padding: 3px 9px;
+  border-radius: 20px;
+  background: rgba(10, 12, 17, 0.72);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.star-canvas {
+  display: block;
+  width: 100%;
+  height: 620px;
+  user-select: none;
+}
+
+.star-body:hover circle:first-child { opacity: 0.34 !important; }
+
+.entry-panel {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 380px;
+  max-width: 92vw;
+  overflow-y: auto;
+  padding: 14px 16px;
+  background: rgba(14, 17, 23, 0.96);
+  border-left: 1px solid var(--border);
+  backdrop-filter: blur(6px);
+}
+
+.entry-body {
+  white-space: pre-wrap;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  margin: 0;
+  max-height: 300px;
+  overflow: auto;
+}
+
+.rel-list { list-style: none; margin: 0; padding: 0; }
+.rel-list li { padding: 3px 0; border-bottom: 1px dashed var(--border); }
+.rel-list li:last-child { border-bottom: 0; }
+
+.rel-link {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.rel-link:hover { text-decoration: underline; }
