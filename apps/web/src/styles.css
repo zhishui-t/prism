@@ -21,47 +21,56 @@ body {
   font: 14px/1.55 system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
 }
 
-.layout { display: flex; min-height: 100vh; }
+.layout { display: flex; flex-direction: column; min-height: 100vh; }
 
-.sidebar {
-  width: 208px;
-  flex: 0 0 208px;
-  background: var(--panel);
-  border-right: 1px solid var(--border);
-  padding: 18px 12px;
+/* 顶部横向导航栏 */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 0 22px;
+  height: 54px;
+  background: rgba(23, 26, 33, 0.92);
+  border-bottom: 1px solid var(--border);
+  backdrop-filter: blur(8px);
 }
 
 .brand {
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 600;
   letter-spacing: 0.3px;
-  padding: 4px 10px 16px;
+  white-space: nowrap;
 }
 .brand span { color: var(--accent); }
 
+.topnav { display: flex; align-items: center; gap: 4px; overflow-x: auto; }
+.topnav-cell { display: flex; align-items: center; gap: 4px; }
+
 .nav-item {
-  display: block;
-  width: 100%;
-  text-align: left;
-  padding: 9px 10px;
-  margin-bottom: 2px;
+  padding: 6px 12px;
   border: 0;
   border-radius: 7px;
   background: transparent;
   color: var(--muted);
-  font-size: 14px;
+  font-size: 13.5px;
+  white-space: nowrap;
   cursor: pointer;
 }
 .nav-item:hover { background: var(--panel-2); color: var(--text); }
 .nav-item.active { background: var(--accent); color: #fff; font-weight: 500; }
 
 .nav-group {
-  margin: 14px 10px 6px;
+  margin-left: 10px;
+  padding-left: 12px;
+  border-left: 1px solid var(--border);
   font-size: 11px;
   letter-spacing: 0.6px;
-  text-transform: uppercase;
   color: var(--muted);
   opacity: 0.75;
+  white-space: nowrap;
 }
 
 .main { flex: 1; min-width: 0; padding: 22px 26px 40px; }

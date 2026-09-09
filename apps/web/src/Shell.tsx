@@ -30,26 +30,28 @@ export function Shell() {
   let lastGroup: string | undefined
   return (
     <div className="layout">
-      <aside className="sidebar">
+      <header className="topbar">
         <div className="brand">
           Prism<span> · 棱镜</span>
         </div>
-        {NAV.map((item) => {
-          const showGroup = item.group !== undefined && item.group !== lastGroup
-          lastGroup = item.group
-          return (
-            <div key={item.key}>
-              {showGroup && <div className="nav-group">{item.group}</div>}
-              <button
-                className={`nav-item${page === item.key ? ' active' : ''}`}
-                onClick={() => setPage(item.key)}
-              >
-                {item.label}
-              </button>
-            </div>
-          )
-        })}
-      </aside>
+        <nav className="topnav">
+          {NAV.map((item) => {
+            const showGroup = item.group !== undefined && item.group !== lastGroup
+            lastGroup = item.group
+            return (
+              <span key={item.key} className="topnav-cell">
+                {showGroup && <span className="nav-group">{item.group}</span>}
+                <button
+                  className={`nav-item${page === item.key ? ' active' : ''}`}
+                  onClick={() => setPage(item.key)}
+                >
+                  {item.label}
+                </button>
+              </span>
+            )
+          })}
+        </nav>
+      </header>
       <main className="main">
         {page === 'knowledge' && <KnowledgePage />}
         {page === 'kbgraph' && <KnowledgeGraphPage />}

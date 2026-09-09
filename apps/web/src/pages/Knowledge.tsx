@@ -68,7 +68,7 @@ export function KnowledgePage() {
         <div className="row" style={{ justifyContent: 'space-between' }}>
           <div>
             <h2 className="page-title" style={{ marginBottom: 2 }}>
-              知识库 <span className="mono small muted">图书馆</span>
+              知识库
             </h2>
             <div className="small muted">
               分类分层给定位，图谱联系给发现。每个星系就是一本「书」，点开进入下一层；滚轮缩放，拖拽平移，双击复位。
@@ -121,7 +121,7 @@ function Breadcrumb({ level, onNavigate }: { level: Level; onNavigate: (l: Level
   return (
     <nav className="crumbs">
       <button className={`crumb${level.kind === 'galaxies' ? ' active' : ''}`} onClick={() => onNavigate({ kind: 'galaxies' })}>
-        ◎ 图书馆
+        ◎ 全部
       </button>
       {level.kind !== 'galaxies' && (
         <>
@@ -199,7 +199,7 @@ function GalaxyView({
             </g>
 
             {/* 一级：图书馆本体 —— 一团巨大的星云，每个星系就是一本「书」 */}
-            {level.kind === 'galaxies' && <LibraryNebula count={bodies.length} />}
+            {level.kind === 'galaxies' && <LibraryNebula />}
 
             {/* 关系边（仅条目图谱有） */}
             {edges.map((e) => {
@@ -261,7 +261,7 @@ interface Body {
  * 中心辉光 + 多层半透明环 + 旋臂点尘，各「书」的星系在其内部环绕。
  * 纯装饰、不拦截事件（pointer-events: none）。
  */
-function LibraryNebula({ count }: { count: number }) {
+function LibraryNebula() {
   const dust = useMemo(() => {
     const rand = seededRandom(77123)
     return Array.from({ length: 160 }, () => {
@@ -304,13 +304,7 @@ function LibraryNebula({ count }: { count: number }) {
       {dust.map((d, i) => (
         <circle key={i} cx={d.x} cy={d.y} r={d.r} fill="#cfe0ff" opacity={d.o} />
       ))}
-      {/* 「图书馆」标识：放星云上部，避免被中心星盖住（单书时星在正中） */}
-      <text x={0} y={-300} textAnchor="middle" fontSize={18} fill="#dbe6ff" opacity={0.9} style={{ letterSpacing: 6 }}>
-        图书馆
-      </text>
-      <text x={0} y={-276} textAnchor="middle" fontSize={11.5} fill="#8b93a7" opacity={0.9}>
-        {count} 本书 · 分类分层给定位
-      </text>
+      {/* 星云中心不写字（用户要求不显示「图书馆」）；书数量见左上角提示条 */}
     </g>
   )
 }
@@ -443,9 +437,9 @@ function ringLayout(
   if (n <= 8) {
     const radius = maxR * 0.72
     if (n === 2) {
-      // 两个星系水平并排（纵向排列会让画面失衡）
-      bodies.push(bodyOf(items[0]!, -radius * 0.62, 0, starR(items[0]!.count)))
-      bodies.push(bodyOf(items[1]!, radius * 0.62, 0, starR(items[1]!.count)))
+      // 两个星系水平并排，间距取可用半径的 0.78（再远会超出星云视觉范围）
+      bodies.push(bodyOf(items[0]!, -radius * 0.78, 0, starR(items[0]!.count)))
+      bodies.push(bodyOf(items[1]!, radius * 0.78, 0, starR(items[1]!.count)))
       return bodies
     }
     // 单环：起始角 -90°（顶部）顺时针；椭圆压扁贴合星云形状
