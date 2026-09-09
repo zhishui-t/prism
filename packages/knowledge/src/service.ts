@@ -845,13 +845,24 @@ export class PrismKnowledgeService implements KnowledgeService {
   }
 
   /** 递归收集 `<knowledgeDir>` 下所有 `v<NN>.md`（跳过最新版副本 `<id>.md`）。 */
+  /**
+   * 扫描版次文件。**根目录不可读时抛错**——否则会「扫描 0 条 → 清空自有型索引」
+   * （QA 遗留 3：静默清库比报错危险）。子目录不可读只跳过（记入 errors 由调用方汇总）。
+   */
   #scanVersionFiles(): string[] {
     const out: string[] = []
-    const walk = (dir: string): void => {
+    const walk = (dir: string, isRoot = false): void => {
       let entries
       try {
         entries = readdirSync(dir, { withFileTypes: true })
-      } catch {
+      } catch (error) {
+        // 目录不存在 = 尚未落过库，返回空（正常）；存在但读不了 = 危险，拒绝。
+        if (isRoot && existsSync(dir)) {
+          throw new PrismError(
+            'knowledge_dir_unreadable',
+            `知识目录存在但不可读，拒绝 reindex（避免清空索引）: ${dir}（${error instanceof Error ? error.message : String(error)}）`,
+          )
+        }
         return
       }
       for (const entry of entries) {
@@ -860,7 +871,7 @@ export class PrismKnowledgeService implements KnowledgeService {
         else if (entry.isFile() && /^v\d+\.md$/.test(entry.name)) out.push(full)
       }
     }
-    walk(this.knowledgeDir)
+    walk(this.knowledgeDir, true)
     return out.sort()
   }
 

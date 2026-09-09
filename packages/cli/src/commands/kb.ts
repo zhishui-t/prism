@@ -355,6 +355,9 @@ async function kbSync(ctx: CommandContext, args: string[], values: ArgValues): P
     `  发现 ${report.discovered} 个可处理文件 → 新建 ${report.created} · 更新 ${report.updated} · 未变 ${report.unchanged} · 跳过 ${report.skipped}`,
   )
   if (report.truncated) ctx.stdout('  ⚠ 已达文件数上限，结果被截断（可调 --max-files 或分批扫描）')
+  if (report.unreadable.length > 0) {
+    ctx.stdout(`  ⚠ ${report.unreadable.length} 个目录不可读（已跳过）：${report.unreadable.slice(0, 3).join('；')}`)
+  }
   if (report.missing.length > 0) {
     ctx.stdout(
       `  ⚠ ${report.missing.length} 条索引的源文件已不存在（索引保留）：${report.missing.slice(0, 5).join(', ')}${report.missing.length > 5 ? ' …' : ''}`,

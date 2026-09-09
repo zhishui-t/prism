@@ -92,6 +92,8 @@ export interface ScanReport {
   enqueued: string[]
   /** 源文件已消失、索引仍在的条目（生产级：不静默留孤儿索引） */
   missing: string[]
+  /** 不可读的目录（权限/占用等），显式报告不静默 */
+  unreadable: string[]
 }
 
 /** 检测「索引里存在但源文件已不在」的引用型条目（按 book/owner 限定范围）。 */
@@ -176,9 +178,11 @@ export async function scanProject(kb: KnowledgeService, options: ScanOptions): P
     truncated: false,
     enqueued: [],
     missing: [],
+    unreadable: [],
   }
 
   const candidates: string[] = []
+  const unreadable: string[] = []
   const walk = async (dir: string): Promise<void> => {
     if (candidates.length >= maxFiles) {
       report.truncated = true
@@ -187,7 +191,9 @@ export async function scanProject(kb: KnowledgeService, options: ScanOptions): P
     let entries
     try {
       entries = await readdir(dir, { withFileTypes: true })
-    } catch {
+    } catch (error) {
+      // 不可读目录显式记录（QA 遗留 4：静默跳过会让用户以为扫全了）
+      unreadable.push(`${dir}（${error instanceof Error ? error.message : String(error)}）`)
       return
     }
     for (const entry of entries) {
@@ -208,6 +214,7 @@ export async function scanProject(kb: KnowledgeService, options: ScanOptions): P
   }
   await walk(root)
   report.discovered = candidates.length
+  report.unreadable = unreadable
 
   for (const abs of candidates) {
     const rel = relative(root, abs).split(sep).join('/')
