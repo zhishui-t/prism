@@ -46,6 +46,8 @@ export function KnowledgeGraphPage() {
   const [to, setTo] = useState('')
   const [pathResult, setPathResult] = useState<string>('')
   const [pathError, setPathError] = useState<string>('')
+  const [exporting, setExporting] = useState(false)
+  const [exportNotice, setExportNotice] = useState<string>('')
 
   const view = useAsync<KbGraphView>(
     () => api.kbGraph({ ...(root ? { id: root } : {}), depth, ...(relationFilter ? { relations: relationFilter } : {}), limit: 200 }),
@@ -60,6 +62,22 @@ export function KnowledgeGraphPage() {
   }, [view.data, root])
 
   const layout = useMemo(() => buildLayout(view.data, root), [view.data, root])
+
+  /** 导出知识图谱（借 Graphify：HTML 渲染 / Obsidian vault）。 */
+  const onExport = async (format: string) => {
+    setExporting(true)
+    setExportNotice('')
+    try {
+      const result = await api.kbExport(format)
+      setExportNotice(
+        `已导出 ${format} → ${result.output}（${result.summary.nodes} 节点 / ${result.summary.edges} 边）`,
+      )
+    } catch (e) {
+      setExportNotice(`导出失败：${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setExporting(false)
+    }
+  }
 
   const onFindPath = async () => {
     setPathError('')
@@ -116,6 +134,21 @@ export function KnowledgeGraphPage() {
               返回概览
             </button>
             <button onClick={view.reload}>刷新</button>
+            <select
+              value=""
+              disabled={exporting}
+              onChange={(e) => {
+                if (e.target.value !== '') void onExport(e.target.value)
+              }}
+              title="借 Graphify 导出（社区发现 + 渲染，零 LLM）"
+            >
+              <option value="">{exporting ? '导出中…' : '导出…'}</option>
+              <option value="html">Graphify HTML 图谱</option>
+              <option value="obsidian">Obsidian 仓库</option>
+              <option value="svg">SVG 矢量图</option>
+              <option value="graphml">GraphML</option>
+              <option value="wiki">Wiki Markdown</option>
+            </select>
           </div>
         </div>
       </div>
@@ -217,6 +250,12 @@ export function KnowledgeGraphPage() {
           )}
         </State>
       </div>
+
+      {exportNotice && (
+        <div className="card" style={{ borderColor: 'var(--accent)' }}>
+          <span className="small">{exportNotice}</span>
+        </div>
+      )}
 
       <div className="card">
         <h3>路径查询</h3>

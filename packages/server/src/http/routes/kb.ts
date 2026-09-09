@@ -3,6 +3,7 @@ import { PrismError } from '@prism/core'
 import { ok, type Envelope } from '../envelope.js'
 import type { RouteContext } from '../router.js'
 import { ENTRY_TYPES, LAYERS, type DepositInput, type EdgeRelation, type KnowledgeService, type Layer } from '../../kb/port.js'
+import { exportKnowledgeGraph } from '../../kb/graph-export.js'
 
 /** kb 路由工厂：注入知识服务端口（真实服务运行时装载；测试注入内存桩）。 */
 export function kbRoutes(getKb: () => Promise<KnowledgeService>): {
@@ -13,6 +14,7 @@ export function kbRoutes(getKb: () => Promise<KnowledgeService>): {
   deposit: (ctx: RouteContext) => Promise<Envelope>
   graph: (ctx: RouteContext) => Promise<Envelope>
   path: (ctx: RouteContext) => Promise<Envelope>
+  exportGraph: (ctx: RouteContext) => Promise<Envelope>
 } {
   const search = async (ctx: RouteContext): Promise<Envelope> => {
     const q = ctx.query.get('q')?.trim() ?? ''
@@ -91,6 +93,28 @@ export function kbRoutes(getKb: () => Promise<KnowledgeService>): {
     return ok(view)
   }
 
+  /**
+   * 导出知识图谱（D9：借 Graphify 渲染/Obsidian，Prism 零 LLM 抽边）：
+   * `POST /api/kb/export { format, limit? }`。
+   */
+  const exportGraph = async (ctx: RouteContext): Promise<Envelope> => {
+    const body = (await ctx.body()) as { format?: unknown; limit?: unknown }
+    const format = typeof body.format === 'string' ? body.format.trim() : 'html'
+    const allowed = ['html', 'obsidian', 'svg', 'graphml', 'wiki']
+    if (!allowed.includes(format)) {
+      throw new PrismError('bad_request', `不支持的导出格式: ${format}`, { allowed })
+    }
+    const limit = typeof body.limit === 'number' ? body.limit : undefined
+    const kb = await getKb()
+    const view = await kb.graph({ limit: limit ?? 500 })
+    const result = await exportKnowledgeGraph(kb, {
+      format: format as 'html',
+      view,
+      ...(limit !== undefined ? {} : {}),
+    })
+    return ok(result)
+  }
+
   /** 两节点最短路径：`?from=<id>&to=<id>`；不可达 → 404 not_found。 */
   const path = async (ctx: RouteContext): Promise<Envelope> => {
     const from = ctx.query.get('from')?.trim() ?? ''
@@ -105,7 +129,7 @@ export function kbRoutes(getKb: () => Promise<KnowledgeService>): {
     return ok(found)
   }
 
-  return { search, get, tree, stats, deposit, graph, path }
+  return { search, get, tree, stats, deposit, graph, path, exportGraph }
 }
 
 /** 关系类型查询参数（`relations=references,overrides`；非法 → bad_request）。 */

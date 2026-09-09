@@ -246,6 +246,13 @@ export const api = {
     return request<KbGraphView>(`/api/kb/graph${suffix ? `?${suffix}` : ''}`)
   },
 
+  /** 知识图谱导出（借 Graphify 渲染/Obsidian） */
+  kbExport: (format: string) =>
+    request<{ format: string; output: string; files: string[]; summary: { nodes: number; edges: number } }>(
+      '/api/kb/export',
+      { method: 'POST', body: JSON.stringify({ format }) },
+    ),
+
   kbPath: (from: string, to: string, relations?: string) => {
     const qs = new URLSearchParams({ from, to })
     if (relations) qs.set('relations', relations)

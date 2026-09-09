@@ -27,6 +27,12 @@ export type {
 } from './kb/port.js'
 export { LAYERS, ENTRY_TYPES } from './kb/port.js'
 export { loadKnowledgeService } from './kb/wiring.js'
+export {
+  exportKnowledgeGraph,
+  kbGraphWorkDir,
+  type KbGraphExportOptions,
+  type KbGraphExportResult,
+} from './kb/graph-export.js'
 
 // 图谱
 export {
@@ -43,6 +49,8 @@ export {
   graphGodNodes,
   graphSummary,
   graphExport,
+  renderExternalGraph,
+  exportExternalGraph,
   GRAPHIFY_EXPORT_FORMATS,
   EXPORT_FORMAT_LABELS,
   type GraphifyExportFormat,

@@ -2,7 +2,7 @@ import { basename, resolve } from 'node:path'
 import { readFile } from 'node:fs/promises'
 
 import { splitFrontmatter, type FrontmatterData } from '@prism/knowledge'
-import { ENTRY_TYPES, loadKnowledgeService, type KnowledgeService } from '@prism/server'
+import { ENTRY_TYPES, loadKnowledgeService, exportKnowledgeGraph, type KnowledgeService } from '@prism/server'
 import { PrismError } from '@prism/core'
 
 import type { ArgValues, CommandContext } from '../argv.js'
@@ -35,8 +35,10 @@ export async function runKb(ctx: CommandContext, args: string[], values: ArgValu
       return await kbPath(ctx, rest, values)
     case 'reindex':
       return await kbReindex(ctx)
+    case 'export':
+      return await kbExport(ctx, rest, values)
     default:
-      ctx.stderr(`用法: prism kb <import|search|get|tree|stats|graph|path|reindex> ...`)
+      ctx.stderr(`用法: prism kb <import|search|get|tree|stats|graph|path|export|reindex> ...`)
       return 1
   }
 }
@@ -214,6 +216,38 @@ async function kbPath(ctx: CommandContext, args: string[], values: ArgValues): P
   for (const edge of path.edges) {
     ctx.stdout(`  ${edge.from_id} --${edge.relation}--> ${edge.to_id}`)
   }
+  return 0
+}
+
+/**
+ * `prism kb export [--format html|obsidian|svg|graphml|wiki]`（D9）：
+ * 知识图谱借 Graphify 渲染/导出——Prism 零 LLM 抽边 → Graphify 格式 → 社区发现 + 渲染。
+ */
+async function kbExport(ctx: CommandContext, args: string[], values: ArgValues): Promise<number> {
+  const format = (values.format ?? args[0] ?? 'html') as 'html' | 'obsidian' | 'svg' | 'graphml' | 'wiki'
+  const allowed = ['html', 'obsidian', 'svg', 'graphml', 'wiki']
+  if (!allowed.includes(format)) {
+    ctx.stderr(`错误 [bad_request] 不支持的导出格式: ${format}（可用: ${allowed.join('/')}）`)
+    return 1
+  }
+  const kb = await getKb(ctx)
+  const result = await exportKnowledgeGraph(kb, {
+    format,
+    home: ctx.home,
+    ...(ctx.graphifyEnv !== undefined ? { graphifyEnv: ctx.graphifyEnv } : {}),
+  })
+  if (ctx.json) {
+    ctx.stdout(JSON.stringify({ ok: true, value: result }))
+    return 0
+  }
+  ctx.stdout(`已导出知识图谱（${format}）：节点 ${result.summary.nodes} / 边 ${result.summary.edges}${result.summary.dropped_edges > 0 ? `（丢弃悬空边 ${result.summary.dropped_edges}）` : ''}`)
+  ctx.stdout(`  Graphify 格式: ${result.graphJson}`)
+  ctx.stdout(`  产物: ${result.output}`)
+  if (result.files.length > 0) {
+    ctx.stdout(`  文件: ${result.files.slice(0, 8).join(', ')}${result.files.length > 8 ? ` …共 ${result.files.length} 个` : ''}`)
+  }
+  if (format === 'obsidian') ctx.stdout('  用法: 把该目录作为 vault 在 Obsidian 中打开')
+  if (format === 'html') ctx.stdout('  提示: 可直接在浏览器打开，或经控制台「知识图谱」页预览')
   return 0
 }
 

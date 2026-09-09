@@ -557,3 +557,81 @@ export async function graphExport(
   }
   return { format, output, files, raw: stdout }
 }
+
+// ===== 外部 graph.json 的渲染/导出（知识图谱借 Graphify，D9） =====
+
+export interface RenderExternalGraphResult {
+  /** 渲染出的自包含 HTML */
+  htmlPath: string
+  /** 聚类后回写的 graph.json（含 community） */
+  graphPath: string
+  raw: string
+}
+
+/**
+ * 对**外部生成的** graph.json 做聚类 + 渲染 + 报告：
+ *   `graphify cluster-only <workdir> --graph <graphJson> --no-label`
+ *
+ * 用途（D9）：Prism 零 LLM 抽出的知识边表转成 Graphify 格式后，借它的社区发现与渲染。
+ * 产物落 `<workdir>/graphify-out/`（graph.html / GRAPH_REPORT.md / graph.json）。
+ */
+export async function renderExternalGraph(
+  workDir: string,
+  graphJsonPath: string,
+  options: GraphQueryOptions = {},
+): Promise<RenderExternalGraphResult> {
+  const { stdout } = await runGraphQuery(
+    ['cluster-only', workDir, '--graph', graphJsonPath, '--no-label'],
+    options,
+  )
+  const outDir = join(workDir, 'graphify-out')
+  return {
+    htmlPath: join(outDir, 'graph.html'),
+    graphPath: join(outDir, 'graph.json'),
+    raw: stdout,
+  }
+}
+
+/**
+ * 导出**外部生成的** graph.json（`graphify export <format> --graph <file>`）。
+ * 与 `graphExport` 的区别：不假设 graph 在 `<root>/graphify-out/`，产物落 `<outDir>/`。
+ */
+export async function exportExternalGraph(
+  graphJsonPath: string,
+  format: GraphifyExportFormat,
+  outDir: string,
+  options: GraphQueryOptions = {},
+): Promise<GraphExportResult> {
+  if (!GRAPHIFY_EXPORT_FORMATS.includes(format)) {
+    throw new PrismError('bad_request', `不支持的导出格式: ${format}`, {
+      allowed: GRAPHIFY_EXPORT_FORMATS,
+    })
+  }
+  const args = ['export', format, '--graph', graphJsonPath]
+  if (format === 'obsidian') args.push('--dir', join(outDir, 'obsidian'))
+
+  const { stdout } = await runGraphQuery(args, options)
+
+  let output: string
+  let files: string[] = []
+  if (format === 'obsidian' || format === 'wiki') {
+    output = join(outDir, format)
+    try {
+      const { readdir } = await import('node:fs/promises')
+      files = (await readdir(output)).sort()
+    } catch {
+      files = []
+    }
+  } else if (format === 'svg') {
+    output = join(outDir, 'graph.svg')
+    files = ['graph.svg']
+  } else if (format === 'graphml') {
+    output = join(outDir, 'graph.graphml')
+    files = ['graph.graphml']
+  } else {
+    output = outDir
+    const match = stdout.match(/(?:written|saved|Cypher|HTML)[^\n]*?([A-Za-z]:[\\/][^\s]+)/)
+    files = match !== null ? [match[1]!] : []
+  }
+  return { format, output, files, raw: stdout }
+}

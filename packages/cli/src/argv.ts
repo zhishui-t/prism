@@ -68,6 +68,7 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
   prism kb stats
   prism kb graph [id] [--depth 1] [--limit 50] [--relations references,overrides]   图谱邻域/概览
   prism kb path <from> <to> [--relations ...]                                      两节点最短路径
+  prism kb export [--format html|obsidian|svg|graphml|wiki]                          知识图谱导出（借 Graphify）
   prism kb reindex                        以文件为真相重建索引（手工改过知识文件后用）
   prism work pending [--kind --limit]     列出待办 LLM 工作（拉取式）
   prism work enqueue --kind <k> --payload <json> [--priority N]
@@ -141,6 +142,7 @@ const CLI_OPTIONS = {
   status: { type: 'string' },
   out: { type: 'string' },
   top: { type: 'string' },
+  format: { type: 'string' },
 } as const
 
 export interface ParsedInvocation {
@@ -194,6 +196,7 @@ export type ArgValues = {
   status?: string
   out?: string
   top?: string
+  format?: string
 }
 
 /** `~`/`~\/` 前缀展开为用户主目录（Windows/Node 不自动展开；CLI 层统一负责，design-v3 §5 P14）。 */

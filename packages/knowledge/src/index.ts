@@ -57,3 +57,14 @@ export {
   PrismKnowledgeService,
   createKnowledgeService,
 } from './service.js'
+
+// 知识图谱 → Graphify 导出（D9：借 Graphify 渲染/Obsidian，Prism 零 LLM 抽边）
+export {
+  toGraphifyGraph,
+  graphifyExportSummary,
+  graphViewFromEntries,
+  type GraphifyGraph,
+  type GraphifyNode,
+  type GraphifyLink,
+  type GraphifyExportSummary,
+} from './graphify-export.js'

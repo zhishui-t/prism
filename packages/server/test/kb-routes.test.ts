@@ -186,3 +186,67 @@ describe('知识图谱路由（GET /api/kb/graph、/api/kb/path）', () => {
     expect(res.status).toBe(400)
   })
 })
+
+describe('知识图谱导出路由（POST /api/kb/export，借 Graphify 渲染）', () => {
+  let app: AppHandle
+  let base: string
+  const kb = new MemoryKb()
+
+  beforeAll(async () => {
+    const home = await makeTempDir('prism-kb-export-')
+    app = await startServer({ home, kb, port: 0 })
+    base = `http://127.0.0.1:${app.port}`
+    await kb.deposit({ id: 'X-A', title: '规则A', type: 'rule', layer: 'global', book: 'b', content: 'A' })
+    await kb.deposit({ id: 'X-B', title: '规则B', type: 'rule', layer: 'global', book: 'b', content: 'B [[X-A]]' })
+  })
+
+  afterAll(async () => {
+    await app.close()
+  })
+
+  it('非法格式 → 400', async () => {
+    const res = await fetch(`${base}/api/kb/export`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ format: 'bogus' }),
+    })
+    expect(res.status).toBe(400)
+  })
+
+  it('空图 → 404（无可导出的关系）', async () => {
+    const emptyHome = await makeTempDir('prism-kb-export-empty-')
+    const emptyApp = await startServer({ home: emptyHome, kb: new MemoryKb(), port: 0 })
+    try {
+      const res = await fetch(`http://127.0.0.1:${emptyApp.port}/api/kb/export`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ format: 'html' }),
+      })
+      expect(res.status).toBe(404)
+    } finally {
+      await emptyApp.close()
+    }
+  })
+
+  it('format=html → Graphify 格式 graph.json 落盘（真实渲染或明确的 graphify_* 错误）', async () => {
+    const res = await fetch(`${base}/api/kb/export`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ format: 'html' }),
+    })
+    const body = (await res.json()) as {
+      ok: boolean
+      value?: { format: string; graphJson: string; output: string; summary: { nodes: number; edges: number } }
+      error?: { code: string }
+    }
+    if (body.ok) {
+      expect(body.value!.format).toBe('html')
+      expect(body.value!.graphJson).toContain('graphify-kb')
+      expect(body.value!.summary.nodes).toBeGreaterThanOrEqual(2)
+      expect(body.value!.summary.edges).toBeGreaterThanOrEqual(1)
+    } else {
+      // 未装 Python 依赖时允许明确的能力缺失错误，但不接受 internal 500
+      expect(['graphify_missing', 'graphify_failed', 'graphify_timeout']).toContain(body.error?.code)
+    }
+  })
+})

@@ -236,6 +236,8 @@ deposited_by:               # 落库来源记录（非审核）
 | 模块级 | 模块内关系 | 边表过滤视图 + 可选 Graphify |
 | 书级 | 书整体图谱 | Graphify（语料 = 一本书，D9） |
 
+> **落地方式（2026-09-10 实测）**：Graphify 处理**文档**需 LLM API key（实测报 `no LLM API key found`），与「不调 LLM」红线冲突。故改为：**Prism 零 LLM 抽边 → 转成 Graphify 的 graph.json → 交 Graphify 做社区发现/HTML 渲染/Obsidian 导出**（这些环节纯计算）。入口 `prism kb export --format html|obsidian|svg|graphml|wiki`、`POST /api/kb/export`、控制台「知识图谱」页导出下拉。产物落 `<PRISM_HOME>/graphify-kb/`。
+
 - 模块图 → 书图用 `graphify merge-graphs` 上卷；跨书关系由 Prism 边补充。
 
 ### 4.4 架构图谱（Archify）——五类图全自动（D11）
