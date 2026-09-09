@@ -22,17 +22,17 @@
 
 | 项 | 事实 |
 | :--- | :--- |
-| 落点 | `<项目根>/.graphify/` |
+| 落点 | `<项目根>/graphify-out/`（Python 版 graphify 实测） |
 | 实测项目 | pixo / RawFlow / weave 均如此 |
 | 核心文件 | `graph.json`（图谱）、`GRAPH_REPORT.md`（报告）、`studio/`（可视化）、`flows.json`（执行流）、`manifest.json`（文件哈希） |
-| 默认 graph 路径 | graphify 自身默认解析到 `<cwd>/.graphify/graph.json` |
+| 默认 graph 路径 | graphify 自身默认解析到 `<cwd>/graphify-out/graph.json` |
 
 ### 2.1 为什么放项目根
 
 - **Graphify 默认**：`graphify extract <src> --out <项目根>`；
 - **就近可见**：开发者在项目里直接能看到；
 - **天然隔离**：每个项目独立图谱，不互相污染；
-- **可 gitignore**：`.graphify/` 通常不入版本库（Weave 的 `.gitignore` 就是这么做的）。
+- **可 gitignore**：`graphify-out/` 通常不入版本库。
 
 ---
 
@@ -45,7 +45,7 @@
 graphify extract <项目根或src> --out <项目根> --no-description --no-label
 
 # 执行流（供 sequence 图与影响面分析用）
-graphify flows build --graph <项目根>/.graphify/graph.json
+graphify cluster-only <项目根> --no-label
 ```
 
 **默认零 token**：`--no-description --no-label` 跳过 LLM 富化，代码走 AST。这是 Weave 验证过的做法。
@@ -82,7 +82,7 @@ Prism 把这些 Graphify 能力包成 MCP 工具：
 
 | 界面 | 内容 |
 | :--- | :--- |
-| **代码图谱页（独立一级页）** | iframe 嵌 `<项目根>/.graphify/studio/index.html`；上方 Prism 工具栏（项目选择、建图按钮、陈旧标记、查询框） |
+| **代码图谱页（独立一级页）** | iframe 嵌 `<项目根>/graphify-out/graph.html`（Python 版自包含可视化）；上方 Prism 工具栏（项目选择、建图按钮、陈旧标记、查询框） |
 | 单文件导出 | `studio/studio.html`（自包含，供分享） |
 | 陈旧标记 | 用 `manifest.json` 的文件哈希 + git HEAD 判断"图谱落后 N 次提交" |
 
@@ -96,7 +96,7 @@ Prism 把这些 Graphify 能力包成 MCP 工具：
 
 | 项 | 做法 |
 | :--- | :--- |
-| 项目选择 | 控制台项目切换器，切换所 serve 的 `.graphify/` |
+| 项目选择 | 控制台项目切换器，切换所 serve 的 `graphify-out/` |
 | 项目清单 | Prism 记录已建图的项目（含路径、建图时间、哈希） |
 | 并发建图 | 同一项目同时只允许一个构建（文件锁），其余等待/拒绝 |
 
@@ -141,7 +141,7 @@ Prism 把这些 Graphify 能力包成 MCP 工具：
 | :--- | :--- | :--- |
 | 1 | 能力来源 | ✅ 用 Graphify 工具 |
 | 2 | 显示方式 | ✅ 用 Graphify Studio 页面（iframe） |
-| 3 | 产物落点 | ✅ `<项目根>/.graphify/` |
+| 3 | 产物落点 | ✅ `<项目根>/graphify-out/` |
 | 4 | 默认建图参数 | ⏳ `--no-description --no-label`（零 token）/ 含富化 |
 | 5 | 建图触发 | ⏳ 仅手动 / 团队启用时自动 |
 | 6 | 多项目图谱合并 | ⏳ 用 `graphify merge-graphs` / 不合并 |

@@ -9,6 +9,9 @@ coverage/
 
 # Prism 本地运行状态（知识库/图谱/审计/团队运行态）
 .prism/
+
+# 建图产物（Python 版 graphify 落各项目根 graphify-out/；旧 .graphify/ 为 npm fork 产物）
+graphify-out/
 .graphify/
 
 # 编辑器 / 系统

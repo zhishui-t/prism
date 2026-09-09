@@ -23,7 +23,8 @@ const LOCK_STALE_MS = 30 * 60_000
 
 /**
  * 异步建图任务（design.md §4：提交即返回 job_id，内存任务表）。
- * 同项目并发：进程内 Set 守卫 + 跨进程文件锁（<root>/.graphify/build.lock）→ build_in_progress。
+ * 同项目并发：进程内 Set 守卫 + 跨进程文件锁（<root>/.prism/build.lock）→ build_in_progress。
+ * 锁放 .prism/（Prism 自身协调态）而非 graphify-out/——产物目录归 graphify 管，不放杂物。
  */
 export class BuildJobManager {
   readonly #jobs = new Map<string, BuildJob>()
@@ -66,7 +67,7 @@ export class BuildJobManager {
     void (async () => {
       let lockHeld = false
       try {
-        await acquireLock(join(lockDir, '.graphify', 'build.lock'))
+        await acquireLock(buildLockPath(lockDir))
         lockHeld = true
         appendLog(`开始建图: ${root}`)
         await runner(project, root, appendLog)
@@ -78,7 +79,7 @@ export class BuildJobManager {
         appendLog(`建图失败: ${job.error}`)
       } finally {
         if (lockHeld) {
-          await releaseLock(join(lockDir, '.graphify', 'build.lock'))
+          await releaseLock(buildLockPath(lockDir))
         }
         this.#running.delete(project)
         job.ended_at = new Date().toISOString()
@@ -116,6 +117,11 @@ export class BuildJobManager {
 }
 
 /** 跨进程文件锁：存在且未过期（30min）→ build_in_progress；过期视为残留并接管。 */
+/** 建图跨进程锁路径：<root>/.prism/build.lock（Prism 协调态，不进 graphify-out 产物目录）。 */
+function buildLockPath(root: string): string {
+  return join(root, '.prism', 'build.lock')
+}
+
 async function acquireLock(lockPath: string): Promise<void> {
   try {
     const raw = await readFile(lockPath, 'utf-8')

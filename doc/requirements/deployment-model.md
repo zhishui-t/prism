@@ -55,7 +55,7 @@ Prism 代码库
         ZCode 会话 A ─┐
         ZCode 会话 B ─┼─→ Prism 实例（harness=zcode）
         ZCode 会话 C ─┘        ├─ 知识库（文件 + SQLite）
-                               ├─ 代码图谱（.git 项目各自 .graphify/）
+                               ├─ 代码图谱（.git 项目各自 graphify-out/）
                                ├─ 任务台账（按 session 隔离）
                                └─ 工作队列
 ```
