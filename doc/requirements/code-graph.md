@@ -84,7 +84,7 @@ Prism 把这些 Graphify 能力包成 MCP 工具：
 | :--- | :--- |
 | **代码图谱页（独立一级页）** | iframe 嵌 `<项目根>/graphify-out/graph.html`；上方 Prism 工具栏（项目选择、建图按钮、陈旧标记、查询框、导出）。**离线化**：graphify HTML 依赖 unpkg CDN 的 vis-network，studio 路由代理到 `3rd/graphify/vendor/` 并改写引用（B12） |
 | 单文件导出 | `studio/studio.html`（自包含，供分享） |
-| 陈旧标记 | 用 `manifest.json` 的文件哈希 + git HEAD 判断"图谱落后 N 次提交" |
+| 陈旧标记 | 用 `manifest.json` 的文件哈希判断"图谱落后 M 个文件变更"（**不读 git**，见 §7） |
 
 **Prism 不重画图谱**——Studio 是 Graphify 预编译的 SPA，直接 serve。
 
@@ -106,9 +106,12 @@ Prism 把这些 Graphify 能力包成 MCP 工具：
 
 | 判据 | 说明 |
 | :--- | :--- |
-| 源文件哈希 | `manifest.json` 记录；对比当前文件 |
-| git HEAD | 图谱构建时的 commit vs 当前 HEAD |
-| 展示 | "建图于 X，落后 N 次提交 / M 个文件变更" |
+| 源文件哈希 | `manifest.json` 记录；对比当前文件内容（SHA-256/SHA-1/MD5，或 mtime） |
+| 展示 | "建图于 X，M 个文件已变更" |
+
+> **不读 git（用户裁决 2026-09-10）**：Prism 不执行 `git` 命令、不读 HEAD、不判断提交。
+> 它只回答「文件内容变没变」。提交/更新是宿主的职责——**宿主做完任务后自行提交，
+> 再触发 `prism graph build` / `prism kb sync` 刷新**。
 
 **注意**：代码图谱可用 AST 增量重建（便宜），文档语义提取贵（走工作队列），两者分开标记。
 

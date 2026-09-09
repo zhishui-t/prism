@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto'
 import { rename, mkdir, readFile, writeFile } from 'node:fs/promises'
-import { spawn } from 'node:child_process'
 import { dirname, join } from 'node:path'
 
 import { PrismError, SingleWriterQueue } from '@prism/core'
@@ -207,14 +206,13 @@ async function isFile(path: string): Promise<boolean> {
   }
 }
 
-// ===== 陈旧检测（code-graph.md §7：manifest 哈希 + git HEAD） =====
+// ===== 陈旧检测（纯文件哈希：Prism 不读 git——提交/更新是宿主的事） =====
 
 export interface GraphStatusDetail {
   project: string
   root: string
   graph_exists: boolean
   built_at: string | null
-  head: { current: string | null; built: string | null }
   changed_files: number
   total_files: number
   stale: boolean
@@ -225,7 +223,9 @@ export interface GraphStatusDetail {
  * 陈旧检测（尽力而为）：读 `graphify-out/manifest.json`（Graphify 产物）。
  * 实测结构为「顶层 文件路径 → { mtime, hash }」映射（兼容 files/hashes 包裹形态）。
  * 比对策略：有 mtime 用 mtime；hash 为 64/40 位十六进制时用 SHA-256/SHA-1；
- * 无法识别的哈希算法跳过该文件并在 note 说明。git HEAD 取当前 HEAD 对比。
+ * 无法识别的哈希算法跳过该文件并在 note 说明。
+ * **不读 git**（用户裁决 2026-09-10）：Prism 只判断文件内容是否变化，
+ * 提交/更新由宿主完成，宿主做完任务后自行触发重新建图/扫描。
  */
 export async function inspectGraphStatus(project: string, root: string, builtAt: string | null): Promise<GraphStatusDetail> {
   const graphPath = join(root, 'graphify-out', 'graph.json')
@@ -237,7 +237,6 @@ export async function inspectGraphStatus(project: string, root: string, builtAt:
     root,
     graph_exists: graphExistsFlag,
     built_at: builtAt,
-    head: { current: null, built: null },
     changed_files: 0,
     total_files: 0,
     stale: !graphExistsFlag,
@@ -261,12 +260,10 @@ export async function inspectGraphStatus(project: string, root: string, builtAt:
     return detail
   }
 
-  const builtHead = extractString(manifest, ['git_head', 'head', 'gitHead', 'commit'])
-  const [currentHead, [changed, skipped]] = await Promise.all([gitHead(root), countChanged(root, entries)])
-  detail.head = { current: currentHead, built: builtHead }
+  const [changed, skipped] = await countChanged(root, entries)
   detail.total_files = entries.length
   detail.changed_files = changed
-  detail.stale = changed > 0 || (builtHead !== null && currentHead !== null && builtHead !== currentHead)
+  detail.stale = changed > 0
   if (skipped > 0) {
     detail.note = `${skipped} 个文件哈希算法不可识别，未参与比对`
   }
@@ -311,20 +308,6 @@ function extractManifestEntries(manifest: unknown): ManifestEntry[] | null {
   return entries.length > 0 ? entries : null
 }
 
-function extractString(manifest: unknown, keys: string[]): string | null {
-  if (manifest === null || typeof manifest !== 'object') {
-    return null
-  }
-  const record = manifest as Record<string, unknown>
-  for (const key of keys) {
-    const value = record[key]
-    if (typeof value === 'string' && value !== '') {
-      return value
-    }
-  }
-  return null
-}
-
 async function countChanged(root: string, entries: ManifestEntry[]): Promise<[changed: number, skipped: number]> {
   const { stat } = await import('node:fs/promises')
   let changed = 0
@@ -360,21 +343,4 @@ async function countChanged(root: string, entries: ManifestEntry[]): Promise<[ch
     }
   }
   return [changed, skipped]
-}
-
-/** 当前 git HEAD（失败返回 null，不致命；git.exe 无需 shell）。 */
-export function gitHead(root: string): Promise<string | null> {
-  return new Promise((resolve) => {
-    const child = spawn('git', ['rev-parse', 'HEAD'], { cwd: root })
-    let out = ''
-    child.stdout?.setEncoding('utf-8')
-    child.stdout?.on('data', (chunk: string) => {
-      out += chunk
-    })
-    child.on('error', () => resolve(null))
-    child.on('close', (code) => {
-      const head = out.trim()
-      resolve(code === 0 && /^[0-9a-f]{7,40}$/i.test(head) ? head : null)
-    })
-  })
 }
