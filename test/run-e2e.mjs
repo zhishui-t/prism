@@ -237,6 +237,86 @@ async function main() {
     const spa = await fetch(`${base}/roles`)
     check('8.8 SPA 回退 200', spa.status === 200)
 
+    // ===== 10. 项目知识导入链路（A1-A4） =====
+    const projRoot = join(workRoot, 'demo-project')
+    await mkdir(join(projRoot, 'docs', 'order'), { recursive: true })
+    await mkdir(join(projRoot, 'node_modules'), { recursive: true })
+    await writeFile(join(projRoot, 'README.md'), '# 订单平台\n\n总体说明。\n', 'utf-8')
+    await writeFile(join(projRoot, 'docs', 'order', 'rules.md'), '# 订单规则\n\n禁止吞掉异常。\n', 'utf-8')
+    await writeFile(join(projRoot, 'docs', 'spec.csv'), 'id,title\nJAVA-01,禁止吞异常\n', 'utf-8')
+    await writeFile(join(projRoot, 'node_modules', 'skip.md'), '# 应被忽略\n', 'utf-8')
+    await writeFile(join(projRoot, 'image.png'), 'not-supported', 'utf-8')
+
+    const projAdd = await cli(['project', 'add', projRoot, '--name', 'demo', '--json'], env)
+    check('10.1 project add 登记成功', projAdd.code === 0 && JSON.parse(projAdd.stdout).value.project === 'demo')
+
+    const projList = await cli(['project', 'list', '--json'], env)
+    const projects = JSON.parse(projList.stdout).value
+    check(
+      '10.2 project list 含登记项与扫描字段',
+      projects.some((p) => p.project === 'demo' && typeof p.registered_at === 'string'),
+      `n=${projects.length}`,
+    )
+
+    const syncDry = await cli(['kb', 'sync', 'demo', '--dry-run', '--json'], env)
+    const dryReport = JSON.parse(syncDry.stdout).value
+    check(
+      '10.3 kb sync --dry-run 只报告不落库（忽略 node_modules/不支持格式）',
+      dryReport.discovered === 3 && dryReport.created === 3,
+      `discovered=${dryReport.discovered} created=${dryReport.created}`,
+    )
+
+    const sync = await cli(['kb', 'sync', 'demo', '--json'], env)
+    const syncReport = JSON.parse(sync.stdout).value
+    check('10.4 kb sync 建引用索引（含 csv 转换）', syncReport.created === 3 && syncReport.skipped === 0)
+
+    const syncAgain = await cli(['kb', 'sync', 'demo', '--json'], env)
+    const againReport = JSON.parse(syncAgain.stdout).value
+    check(
+      '10.5 kb sync 幂等（源未变全部 unchanged）',
+      againReport.created === 0 && againReport.unchanged === 3,
+      `unchanged=${againReport.unchanged}`,
+    )
+
+    const indexedSearch = await cli(['kb', 'search', '订单', '--json'], env)
+    check('10.6 引用型条目可检索（中文）', JSON.parse(indexedSearch.stdout).value.length >= 2)
+
+    // 源文件变更 → 重扫报 updated
+    await writeFile(join(projRoot, 'README.md'), '# 订单平台\n\n总体说明。\n\n新增：日志带上下文。\n', 'utf-8')
+    const syncChanged = await cli(['kb', 'sync', 'demo', '--json'], env)
+    check('10.7 源变更 → 重扫 updated', JSON.parse(syncChanged.stdout).value.updated === 1)
+
+    // BLK-1 回归：reindex 不吞引用型
+    const reindex = await cli(['kb', 'reindex', '--json'], env)
+    const afterReindex = await cli(['kb', 'search', '订单', '--json'], env)
+    check(
+      '10.8 reindex 后引用型索引存活（BLK-1）',
+      reindex.code === 0 && JSON.parse(afterReindex.stdout).value.length >= 2,
+      `hits=${JSON.parse(afterReindex.stdout).value.length}`,
+    )
+
+    // ===== 11. 治理能力（B1-B3） =====
+    const softDel = await cli(['kb', 'remove', 'E2E-B', '--json'], env)
+    check('11.1 软删成功（mode=soft）', softDel.code === 0 && JSON.parse(softDel.stdout).value.mode === 'soft')
+
+    const afterDel = await cli(['kb', 'search', '缓存', '--json'], env)
+    check('11.2 软删后不出现在检索', JSON.parse(afterDel.stdout).value.length === 0)
+
+    const getDeleted = await cli(['kb', 'get', 'E2E-B', '--json'], env)
+    check('11.3 软删后仍可按 id 取到（可恢复）', JSON.parse(getDeleted.stdout).value.status === 'deprecated')
+
+    // BLK-2 回归：reindex 不复活软删
+    await cli(['kb', 'reindex', '--json'], env)
+    const afterReindexDel = await cli(['kb', 'get', 'E2E-B', '--json'], env)
+    check(
+      '11.4 reindex 后软删不复活（BLK-2）',
+      JSON.parse(afterReindexDel.stdout).value.status === 'deprecated',
+    )
+
+    // 硬删被引用条目 → 拒绝
+    const hardDel = await cli(['kb', 'remove', 'E2E-A', '--hard', '--yes', '--json'], env)
+    check('11.5 被引用条目禁止硬删', hardDel.code !== 0 && hardDel.stderr.includes('referenced'))
+
     // ===== 9. 真实宿主零污染 =====
     const realAfter = await listDir(REAL_ZCODE)
     check(
