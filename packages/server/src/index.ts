@@ -33,6 +33,16 @@ export {
   type KbGraphExportOptions,
   type KbGraphExportResult,
 } from './kb/graph-export.js'
+export {
+  DEFAULT_IGNORE_DIRS,
+  extractTitle,
+  idFromRel,
+  moduleFromRel,
+  scanProject,
+  type ScanOptions,
+  type ScanReport,
+  type ScannedFile,
+} from './kb/scan.js'
 
 // 图谱
 export {

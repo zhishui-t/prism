@@ -54,6 +54,18 @@ export {
 
 export { KB_FTS_DDL, ensureKbFts, indexEntry, searchFts } from './index-db.js'
 
+// 文档格式分流与转换（A2）：文本直读、二进制走 anydoc
+export {
+  CONVERTIBLE_EXTENSIONS,
+  SUPPORTED_EXTENSIONS,
+  TEXT_EXTENSIONS,
+  extensionOf,
+  isSupported,
+  toMarkdown,
+  type ConvertResult,
+  type ConvertStatus,
+} from './convert.js'
+
 export {
   PrismKnowledgeService,
   createKnowledgeService,

@@ -40,6 +40,8 @@ import type {
   GraphPath,
   GraphQuery,
   GraphView,
+  IndexInput,
+  IndexResult,
   KnowledgeEdge,
   KnowledgeEntry,
   KnowledgeService,
@@ -110,6 +112,8 @@ interface EntryRow {
   tags: string
   path: string
   content_hash: string
+  origin: string
+  source_hash: string | null
   overrides: string
   supersedes: string | null
   created_at: string
@@ -117,8 +121,8 @@ interface EntryRow {
 }
 
 const ENTRY_COLUMNS = `rowid, id, version, is_latest, title, type, layer, owner, book, module, status,
-  risk, confidence, freshness, visibility, tags, path, content_hash, overrides, supersedes,
-  created_at, updated_at`
+  risk, confidence, freshness, visibility, tags, path, content_hash, origin, source_hash,
+  overrides, supersedes, created_at, updated_at`
 
 /** knowledge_edges 表行。 */
 interface EdgeRow {
@@ -205,6 +209,7 @@ export class PrismKnowledgeService implements KnowledgeService {
   readonly #now: () => Date
   readonly #idFactory: () => string
   readonly #ownsPersistence: boolean
+  readonly #enqueueEnrichment: KnowledgeServiceOptions['enqueueEnrichment']
 
   constructor(options: KnowledgeServiceOptions = {}) {
     this.home = options.home ?? prismPaths().home
@@ -217,6 +222,7 @@ export class PrismKnowledgeService implements KnowledgeService {
     this.#now = options.now ?? (() => new Date())
     this.#idFactory =
       options.idFactory ?? (() => `KB-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`)
+    this.#enqueueEnrichment = options.enqueueEnrichment
     ensureKbFts(this.persistence.knowledge)
   }
 
@@ -379,7 +385,161 @@ export class PrismKnowledgeService implements KnowledgeService {
         reason: 'new_version',
       })
     }
+
+    // A4：落库后投递富化任务（默认未注入 = 不入队；由 server 按 prism.yaml 决定）
+    if (this.#enqueueEnrichment !== undefined) {
+      await this.#enqueueEnrichment({
+        id: deposited.id,
+        version: deposited.version,
+        layer: address.layer,
+        book: address.book,
+        module: address.module,
+        type: input.type,
+      })
+    }
     return deposited
+  }
+
+  // ===== index（引用型：项目文件为真相，Prism 只存索引） =====
+
+  /**
+   * 索引一条引用型知识（design-knowledge-model-v1 §2/§4）。
+   *
+   * 与 `deposit` 的三点不同：
+   * 1. **不写副本**——`path` 指向项目原件，Prism 不在 knowledgeDir 下生成文件；
+   * 2. **不递增版次**——源变了就是 `updated`（同一行更新），不做版本历史（git 管）；
+   * 3. **源哈希比对**——`source_hash` 相同则跳过（`unchanged`），避免无谓重写。
+   *
+   * reindex 只扫 knowledgeDir 下的版次文件，**不会碰到引用型行**（它们 path 在外部，
+   * 且本方法不产生 v<NN>.md），因此两者互不干扰。
+   */
+  async index(input: IndexInput): Promise<IndexResult> {
+    const address = this.#validateAndNormalize({
+      id: input.id,
+      title: input.title,
+      type: input.type ?? 'doc',
+      layer: input.layer,
+      owner: input.owner,
+      book: input.book,
+      module: input.module,
+      content: input.content,
+      tags: input.tags,
+    })
+    const nowIso = this.#now().toISOString()
+    const seg = bigram(`${address.title}\n${input.content}`)
+
+    const action = await this.persistence.knowledge.run((raw) => {
+      raw.exec('BEGIN IMMEDIATE')
+      try {
+        const prev = raw
+          .prepare(
+            `SELECT version, source_hash, origin, layer, book, owner FROM knowledge_entries
+             WHERE id = ? ORDER BY version DESC LIMIT 1`,
+          )
+          .get(address.id) as
+          | { version: number; source_hash: string | null; origin: string; layer: string; book: string; owner: string | null }
+          | undefined
+
+        // 位置冲突：同 id 已在别处 → 拒绝（与 deposit 同口径）
+        if (prev !== undefined) {
+          const prevOwner = prev.owner ?? undefined
+          if (prev.layer !== address.layer || prev.book !== address.book || prevOwner !== address.owner) {
+            throw new PrismError('id_conflict', `条目 id 已存在于其他位置: ${address.id}`, {
+              id: address.id,
+              existing: { layer: prev.layer, book: prev.book, owner: prevOwner ?? null },
+              attempted: { layer: address.layer, book: address.book, owner: address.owner ?? null },
+            })
+          }
+          // 源未变 → 跳过（这就是「后续只是索引没变」）
+          if (prev.origin === 'indexed' && prev.source_hash === input.source_hash) {
+            raw.exec('COMMIT')
+            return 'unchanged' as const
+          }
+        }
+
+        if (prev !== undefined) {
+          // 引用型同一行更新（不做版次）；若原先是自有型，转为引用型需显式覆盖整行
+          raw
+            .prepare(
+              `UPDATE knowledge_entries SET
+                 is_latest = 1, title = ?, type = ?, module = ?, status = 'active',
+                 tags = ?, path = ?, content_hash = ?, source_hash = ?, origin = 'indexed',
+                 updated_at = ?
+               WHERE id = ? AND version = ?`,
+            )
+            .run(
+              address.title,
+              input.type ?? 'doc',
+              address.module,
+              JSON.stringify(address.tags),
+              input.path,
+              createHash('sha256').update(input.content, 'utf-8').digest('hex'),
+              input.source_hash,
+              nowIso,
+              address.id,
+              prev.version,
+            )
+          // FTS 与边表以该行为源重建
+          const row = raw.prepare('SELECT rowid FROM knowledge_entries WHERE id = ? AND version = ?').get(
+            address.id,
+            prev.version,
+          ) as { rowid: number } | undefined
+          if (row !== undefined) {
+            raw.prepare('DELETE FROM kb_fts WHERE rowid = ?').run(row.rowid)
+            indexEntry(raw, row.rowid, input.content, seg)
+          }
+          this.#writeEdges(raw, address.id, { content: input.content, overrides: [], nowIso })
+          raw.exec('COMMIT')
+          return 'updated' as const
+        }
+
+        const insert = raw
+          .prepare(
+            `INSERT INTO knowledge_entries
+             (id, version, is_latest, title, type, layer, owner, book, module, status, risk, confidence,
+              freshness, visibility, tags, path, content_hash, source_hash, origin, overrides, supersedes,
+              created_at, updated_at)
+             VALUES (?, 1, 1, ?, ?, ?, ?, ?, ?, 'active', 'low', 0.5, 1.0, 'project', ?, ?, ?, ?, 'indexed',
+                     '[]', NULL, ?, ?)`,
+          )
+          .run(
+            address.id,
+            address.title,
+            input.type ?? 'doc',
+            address.layer,
+            address.owner ?? null,
+            address.book,
+            address.module,
+            JSON.stringify(address.tags),
+            input.path,
+            createHash('sha256').update(input.content, 'utf-8').digest('hex'),
+            input.source_hash,
+            nowIso,
+            nowIso,
+          )
+        indexEntry(raw, Number(insert.lastInsertRowid), input.content, seg)
+        this.#writeEdges(raw, address.id, { content: input.content, overrides: [], nowIso })
+        raw.exec('COMMIT')
+        return 'created' as const
+      } catch (error) {
+        try {
+          raw.exec('ROLLBACK')
+        } catch {
+          // 事务已终止时忽略
+        }
+        throw error
+      }
+    })
+
+    if (action !== 'unchanged') {
+      await this.audit.record({
+        type: 'knowledge.deposited',
+        knowledge_id: address.id,
+        layer: address.layer,
+        source: 'import',
+      })
+    }
+    return { id: address.id, action }
   }
 
   // ===== reindex（Z2：以文件为真相重建索引） =====
@@ -1250,9 +1410,11 @@ export class PrismKnowledgeService implements KnowledgeService {
       content,
       path: row.path,
       content_hash: row.content_hash,
+      origin: (row.origin as 'owned' | 'indexed' | undefined) ?? 'owned',
       created_at: row.created_at,
       updated_at: row.updated_at,
     }
+    if (row.source_hash !== null && row.source_hash !== undefined) entry.source_hash = row.source_hash
     if (owner !== undefined) entry.owner = owner
     if (row.status === 'superseded') {
       entry.superseded_by = `${row.id}@v${row.version + 1}`

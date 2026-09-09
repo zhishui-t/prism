@@ -15,6 +15,7 @@ import { runTask } from './commands/task.js'
 import { runArch } from './commands/arch.js'
 import { runHarness } from './commands/harness.js'
 import { runGraph } from './commands/graph.js'
+import { runProject } from './commands/project.js'
 import { runRole } from './commands/role.js'
 import { runTeam } from './commands/team.js'
 import { runSkill } from './commands/skill.js'
@@ -62,6 +63,7 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
   teams_dir（默认 ~/.zcode/teams，roles_dir 同级——不在 agents/ 内，避开 ZCode 递归扫描）、skills_dir（默认 ~/.zcode/skills）；
   --zcode-dir 仅作为默认推导基准。
   prism kb import <file.md> [--layer --owner --book --module]
+  prism kb sync <项目名|项目根> [--owner --book --module] [--enqueue] [--dry-run]   扫描项目文档建引用索引
   prism kb search <query> [--layer --book --limit]
   prism kb get <id[@version]>
   prism kb tree [--layer]
@@ -91,6 +93,8 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
   prism graph summary --project <项目名>                     图谱规模统计
   prism graph export <格式> --project <项目名>               导出（obsidian/wiki/svg/graphml/…）
   prism graph status <项目名>
+  prism project add <项目根目录> [--name <项目名>]   登记项目台账（不建图、不扫描）
+  prism project list | show <名> | remove <名> [--yes]
 
 全局：--home <path>  --json  --zcode-dir <path>（role/team/skill/install 类统一收 ZCode 根，~ 自动展开）
       --yes   确认写入默认宿主目录（写守卫；默认链写入无 --yes 会被阻止，B6）`
@@ -143,6 +147,8 @@ const CLI_OPTIONS = {
   out: { type: 'string' },
   top: { type: 'string' },
   format: { type: 'string' },
+  'dry-run': { type: 'boolean' },
+  enqueue: { type: 'boolean' },
 } as const
 
 export interface ParsedInvocation {
@@ -197,6 +203,8 @@ export type ArgValues = {
   out?: string
   top?: string
   format?: string
+  'dry-run'?: boolean
+  enqueue?: boolean
 }
 
 /** `~`/`~\/` 前缀展开为用户主目录（Windows/Node 不自动展开；CLI 层统一负责，design-v3 §5 P14）。 */
@@ -311,6 +319,8 @@ export async function runCommand(ctx: CommandContext, argv: string[]): Promise<n
         return await runHarness(effective, rest, values)
       case 'graph':
         return await runGraph(effective, rest, values)
+      case 'project':
+        return await runProject(effective, rest, values)
       case 'role':
         return await runRole(effective, rest, values)
       case 'team':

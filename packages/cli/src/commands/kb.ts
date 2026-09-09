@@ -1,9 +1,17 @@
 import { basename, resolve } from 'node:path'
-import { readFile } from 'node:fs/promises'
+import { readFile, access } from 'node:fs/promises'
 
 import { splitFrontmatter, type FrontmatterData } from '@prism/knowledge'
-import { ENTRY_TYPES, loadKnowledgeService, exportKnowledgeGraph, type KnowledgeService } from '@prism/server'
-import { PrismError } from '@prism/core'
+import {
+  ENTRY_TYPES,
+  ProjectRegistry,
+  idFromRel,
+  loadKnowledgeService,
+  exportKnowledgeGraph,
+  scanProject,
+  type KnowledgeService,
+} from '@prism/server'
+import { PrismError, WorkQueue, openPersistence, prismPaths } from '@prism/core'
 
 import type { ArgValues, CommandContext } from '../argv.js'
 
@@ -35,10 +43,12 @@ export async function runKb(ctx: CommandContext, args: string[], values: ArgValu
       return await kbPath(ctx, rest, values)
     case 'reindex':
       return await kbReindex(ctx)
+    case 'sync':
+      return await kbSync(ctx, rest, values)
     case 'export':
       return await kbExport(ctx, rest, values)
     default:
-      ctx.stderr(`用法: prism kb <import|search|get|tree|stats|graph|path|export|reindex> ...`)
+      ctx.stderr(`用法: prism kb <import|sync|search|get|tree|stats|graph|path|export|reindex> ...`)
       return 1
   }
 }
@@ -251,8 +261,127 @@ async function kbExport(ctx: CommandContext, args: string[], values: ArgValues):
   return 0
 }
 
-/** `prism kb reindex`：以文件为真相重建索引（Z2；手工编辑/迁移知识文件后收敛漂移）。 */async function kbReindex(ctx: CommandContext): Promise<number> {
-  const kb = await getKb(ctx)
+/**
+ * `prism kb sync <项目名|项目根> [--enqueue] [--book] [--module] [--dry-run]`
+ *
+ * 扫描项目文档建「引用型」索引（design-knowledge-model-v1 §4）：
+ * - 参数是已登记的项目名 → 从台账取根目录并回写扫描时间；是路径 → 直接扫（需 --owner）；
+ * - `--dry-run` 只报告发现与转换结果，不落库（验证用）；
+ * - `--enqueue` 给每条新建/更新的条目投富化任务（宿主执行，Prism 零 LLM）。
+ */
+async function kbSync(ctx: CommandContext, args: string[], values: ArgValues): Promise<number> {
+  const target = args[0]
+  if (target === undefined) {
+    ctx.stderr(
+      '用法: prism kb sync <项目名|项目根> [--owner <名>] [--book <书>] [--module <模块>] [--enqueue] [--dry-run]',
+    )
+    return 1
+  }
+
+  const registry = new ProjectRegistry(ctx.home ?? prismPaths().home)
+  let root: string
+  let projectName: string
+  let owner = values.owner !== undefined ? String(values.owner) : undefined
+
+  // 先按项目名解析；失败则当路径处理
+  try {
+    const info = await registry.get(target)
+    root = info.root
+    projectName = info.project
+    owner = owner ?? info.project
+  } catch {
+    root = resolve(target)
+    projectName = basename(root)
+    owner = owner ?? projectName
+  }
+
+  try {
+    await access(root)
+  } catch {
+    ctx.stderr(`错误 [bad_request] 目录不存在: ${root}`)
+    return 1
+  }
+
+  const dryRun = values['dry-run'] === true
+  const realKb = await getKb(ctx)
+  const report = await scanProject(
+    dryRun ? makeDryRunKb(realKb) : realKb,
+    {
+      root,
+      layer: 'project',
+      owner,
+      ...(values.book !== undefined ? { book: String(values.book) } : {}),
+      ...(values.module !== undefined ? { module: String(values.module) } : {}),
+    },
+  )
+
+  // 入队富化任务（宿主执行；Prism 只投递）
+  if (values.enqueue === true && !dryRun) {
+    const persistence = openPersistence({ home: ctx.home ?? prismPaths().home })
+    try {
+      const queue = new WorkQueue({ persistence })
+      for (const file of report.files) {
+        if (file.status !== 'indexed') continue
+        const created = await queue.enqueue({
+          kind: 'extract_entities',
+          payload: {
+            source: file.rel,
+            path: file.abs,
+            hash: file.source_hash,
+            entry_id: idFromRel(file.rel),
+            owner,
+          },
+          priority: 0,
+        })
+        report.enqueued.push(created.id)
+      }
+    } finally {
+      persistence.close()
+    }
+    await registry.markScanned(projectName, report.discovered)
+  } else if (!dryRun) {
+    await registry.markScanned(projectName, report.discovered)
+  }
+
+  if (ctx.json) {
+    ctx.stdout(JSON.stringify({ ok: true, value: report }))
+    return 0
+  }
+
+  ctx.stdout(`扫描 ${report.root}`)
+  ctx.stdout(
+    `  发现 ${report.discovered} 个可处理文件 → 新建 ${report.created} · 更新 ${report.updated} · 未变 ${report.unchanged} · 跳过 ${report.skipped}`,
+  )
+  if (report.truncated) ctx.stdout('  ⚠ 已达文件数上限，结果被截断（可调 --max-files 或分批扫描）')
+  if (report.enqueued.length > 0) {
+    ctx.stdout(`  已入队 ${report.enqueued.length} 个富化任务（宿主经 prism_work_pending 领取）`)
+  }
+  if (dryRun) ctx.stdout('  [dry-run] 未落库')
+  for (const file of report.files.filter((f) => f.status === 'skipped').slice(0, 10)) {
+    ctx.stdout(`  SKIP ${file.rel}: ${file.reason ?? '未知'}`)
+  }
+  return 0
+}
+
+/**
+ * dry-run 包装：`index()` 只查不写——已存在且源哈希相同 → unchanged；
+ * 否则报告 created/updated 但不落库。转换仍真实执行（验证 anydoc 能否处理）。
+ */
+function makeDryRunKb(real: KnowledgeService): KnowledgeService {
+  return {
+    ...real,
+    index: async (input) => {
+      const existing = await real.get(input.id)
+      if (existing !== null) {
+        const prev = existing.source_hash
+        return { id: input.id, action: prev === input.source_hash ? ('unchanged' as const) : ('updated' as const) }
+      }
+      return { id: input.id, action: 'created' as const }
+    },
+  } as KnowledgeService
+}
+
+/** `prism kb reindex`：以文件为真相重建索引（Z2；手工编辑/迁移知识文件后收敛漂移）。 */async function kbReindex(ctx: CommandContext): Promise<number> {  const kb = await getKb(ctx)
   if (kb.reindex === undefined) {
     ctx.stderr('错误 [unsupported] 当前知识服务未实现 reindex')
     return 1

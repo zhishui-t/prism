@@ -12,7 +12,7 @@ export const TASKS_SCHEMA_VERSION = 3
 export const CORE_SCHEMA_VERSION = 3
 
 /** knowledge.db 版本：v1 起含条目/边/工作请求等表；v2 起补 owner 列与 work 队列护栏列。 */
-export const KNOWLEDGE_SCHEMA_VERSION = 2
+export const KNOWLEDGE_SCHEMA_VERSION = 4
 
 // ===== tasks.db =====
 
@@ -165,6 +165,27 @@ export const KNOWLEDGE_ENTRIES_TABLE_DDL = `CREATE TABLE IF NOT EXISTS knowledge
 export const KNOWLEDGE_V2_ADD_OWNER: DatabaseSchemaStatement = {
   sql: 'ALTER TABLE knowledge_entries ADD COLUMN owner TEXT',
   when: (db: DatabaseSync): boolean => !knowledgeEntryColumns(db).includes('owner'),
+}
+
+/**
+ * v3 补 `origin` 列（design-knowledge-model-v1 §2）：区分两类知识。
+ * - `owned`（默认）：宿主抽取/人工落库，**Prism 落盘是真相**，走版次制；
+ * - `indexed`：项目里的文档（md/docx/pdf…），**项目文件是真相**，Prism 只存索引，
+ *   不写副本、不递增版次，`path` 指向项目原件。
+ * 存量行补默认值 `owned`（老数据全是自有型）。
+ */
+export const KNOWLEDGE_V3_ADD_ORIGIN: DatabaseSchemaStatement = {
+  sql: "ALTER TABLE knowledge_entries ADD COLUMN origin TEXT NOT NULL DEFAULT 'owned'",
+  when: (db: DatabaseSync): boolean => !knowledgeEntryColumns(db).includes('origin'),
+}
+
+/**
+ * v4 补 `source_hash` 列（design-knowledge-model-v1 §5-4）：引用型条目记录**源文件**
+ * 的内容哈希，用于漂移检测（源变了 → 标 stale 并重新入队）。自有型为空。
+ */
+export const KNOWLEDGE_V4_ADD_SOURCE_HASH: DatabaseSchemaStatement = {
+  sql: 'ALTER TABLE knowledge_entries ADD COLUMN source_hash TEXT',
+  when: (db: DatabaseSync): boolean => !knowledgeEntryColumns(db).includes('source_hash'),
 }
 
 function knowledgeEntryColumns(db: DatabaseSync): string[] {
@@ -329,6 +350,8 @@ export const DEFAULT_SCHEMAS: Record<'tasks' | 'core' | 'knowledge', DatabaseSch
       IMPORT_JOBS_TABLE_DDL,
       KNOWLEDGE_CONFLICTS_TABLE_DDL,
       KNOWLEDGE_V2_ADD_OWNER,
+      KNOWLEDGE_V3_ADD_ORIGIN,
+      KNOWLEDGE_V4_ADD_SOURCE_HASH,
       WORK_V2_ADD_DEADLINE,
       WORK_V2_ADD_FAIL_COUNT,
     ],

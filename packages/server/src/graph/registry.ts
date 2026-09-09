@@ -16,11 +16,26 @@ export interface ProjectInfo {
    * studio/query 等消费方在产物缺失时各自返回 404/graph_not_found。
    */
   stale: boolean
+  /** 登记时间（`prism project add` 或首次 build）。 */
+  registered_at?: string
+  /** 上次知识扫描时间（`prism kb sync`）。 */
+  last_scan_at?: string
+  /** 上次扫描发现的知识源数量（用于「有没有新东西」的快速判断）。 */
+  scanned_sources?: number
+}
+
+/** 注册表落盘结构（v1 无扩展字段；读时容忍缺失，写时保留已有值）。 */
+interface RegistryEntry {
+  root: string
+  built_at: string | null
+  registered_at?: string
+  last_scan_at?: string
+  scanned_sources?: number
 }
 
 interface RegistryFile {
   version: 1
-  projects: Record<string, { root: string; built_at: string | null }>
+  projects: Record<string, RegistryEntry>
 }
 
 const EMPTY_REGISTRY: RegistryFile = { version: 1, projects: {} }
@@ -51,6 +66,9 @@ export class ProjectRegistry {
         root: info.root,
         built_at: info.built_at,
         stale: !(await graphExists(info.root)),
+        ...(info.registered_at !== undefined ? { registered_at: info.registered_at } : {}),
+        ...(info.last_scan_at !== undefined ? { last_scan_at: info.last_scan_at } : {}),
+        ...(info.scanned_sources !== undefined ? { scanned_sources: info.scanned_sources } : {}),
       })
     }
     return projects.sort((a, b) => a.project.localeCompare(b.project))
@@ -61,19 +79,75 @@ export class ProjectRegistry {
     const data = await this.#read()
     const info = data.projects[project]
     if (info === undefined) {
-      throw new PrismError('not_found', `未注册的图谱项目: ${project}（可经 POST /api/graph/build 或 prism graph build 注册）`)
+      throw new PrismError('not_found', `未注册的项目: ${project}（可经 prism project add 或 prism graph build 登记）`)
     }
-    return { project, root: info.root, built_at: info.built_at, stale: !(await graphExists(info.root)) }
+    return {
+      project,
+      root: info.root,
+      built_at: info.built_at,
+      stale: !(await graphExists(info.root)),
+      ...(info.registered_at !== undefined ? { registered_at: info.registered_at } : {}),
+      ...(info.last_scan_at !== undefined ? { last_scan_at: info.last_scan_at } : {}),
+      ...(info.scanned_sources !== undefined ? { scanned_sources: info.scanned_sources } : {}),
+    }
   }
 
-  /** 注册或更新项目（原子写；同项目并发注册为后写胜出）。 */
-  async register(project: string, root: string, builtAt: string | null = null): Promise<ProjectInfo> {
+  /**
+   * 登记或更新项目（原子写；同项目并发注册为后写胜出）。
+   * - 首次登记写 `registered_at`；已存在的条目保留其 registered_at。
+   * - `builtAt` 省略（undefined）时**保留已有值**——`project add` 重新登记不该清掉建图记录；
+   *   显式传 `null` 才会清空。
+   */
+  async register(project: string, root: string, builtAt?: string | null): Promise<ProjectInfo> {
+    let registeredAt: string | undefined
+    let effectiveBuiltAt: string | null = null
     await this.#writeQueue.run(async () => {
       const data = await this.#read()
-      data.projects[project] = { root, built_at: builtAt }
+      const prev = data.projects[project]
+      registeredAt = prev?.registered_at ?? new Date().toISOString()
+      effectiveBuiltAt = builtAt === undefined ? (prev?.built_at ?? null) : builtAt
+      data.projects[project] = {
+        ...prev,
+        root,
+        built_at: effectiveBuiltAt,
+        registered_at: registeredAt,
+      }
       await this.#save(data)
     })
-    return { project, root, built_at: builtAt, stale: !(await graphExists(root)) }
+    return {
+      project,
+      root,
+      built_at: effectiveBuiltAt,
+      stale: !(await graphExists(root)),
+      ...(registeredAt !== undefined ? { registered_at: registeredAt } : {}),
+    }
+  }
+
+  /** 从注册表移除项目（不删磁盘文件）。返回是否确实移除了。 */
+  async remove(project: string): Promise<boolean> {
+    let removed = false
+    await this.#writeQueue.run(async () => {
+      const data = await this.#read()
+      if (data.projects[project] !== undefined) {
+        delete data.projects[project]
+        removed = true
+        await this.#save(data)
+      }
+    })
+    return removed
+  }
+
+  /** 记录一次知识扫描（`prism kb sync`）。 */
+  async markScanned(project: string, scannedSources: number): Promise<void> {
+    await this.#writeQueue.run(async () => {
+      const data = await this.#read()
+      const info = data.projects[project]
+      if (info !== undefined) {
+        info.last_scan_at = new Date().toISOString()
+        info.scanned_sources = scannedSources
+        await this.#save(data)
+      }
+    })
   }
 
   async markBuilt(project: string, builtAt: string): Promise<void> {

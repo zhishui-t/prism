@@ -21,6 +21,9 @@ export type EntryType =
   | 'summary'
   | 'other'
 
+/** 知识来源类型（design-knowledge-model-v1 §2）。 */
+export type EntryOrigin = 'owned' | 'indexed'
+
 /** 落库输入（design.md §3.2 DepositInput）。 */
 export interface DepositInput {
   /** 不传则自动生成 */
@@ -46,6 +49,36 @@ export interface DepositInput {
   deposited_by?: { subject: string; team?: string }
 }
 
+/**
+ * 引用型条目的索引输入（design-knowledge-model-v1 §2/§4）。
+ *
+ * 与 `deposit` 的区别：**不写副本、不递增版次**——项目文件才是真相，
+ * Prism 只记 `path` 指向原件 + `source_hash` 用于漂移检测。
+ */
+export interface IndexInput {
+  id: string
+  title: string
+  type?: EntryType
+  layer: Layer
+  owner?: string
+  book: string
+  module?: string
+  /** 项目原件的绝对路径 */
+  path: string
+  /** 原件内容哈希（sha256），用于判断源是否变化 */
+  source_hash: string
+  /** 从文档抽取的正文（用于 FTS 检索；原件为二进制时是转换结果） */
+  content: string
+  tags?: string[]
+}
+
+/** 引用型索引结果。 */
+export interface IndexResult {
+  id: string
+  /** 本次是新建、更新（源变了）、还是跳过（源未变） */
+  action: 'created' | 'updated' | 'unchanged'
+}
+
 /** 知识条目（design.md §3.2 KnowledgeEntry）。 */
 export interface KnowledgeEntry {
   id: string
@@ -65,6 +98,10 @@ export interface KnowledgeEntry {
   /** 指向该版次的版次文件 v<NN>.md（绝对路径） */
   path: string
   content_hash: string
+  /** `owned`（Prism 落盘为真相）或 `indexed`（项目文件为真相） */
+  origin?: EntryOrigin
+  /** 引用型：源文件内容哈希（漂移检测）；自有型为空 */
+  source_hash?: string
   /** 若本版已被取代，指向取代者（如 `ID@v3`） */
   superseded_by?: string
   created_at: string
@@ -223,6 +260,12 @@ export interface CatalogEntry {
 export interface KnowledgeService {
   /** 落库：新条目 v1，同 id 沉淀为 version+1，旧版置 superseded。 */
   deposit(input: DepositInput): Promise<{ id: string; version: number; path: string }>
+  /**
+   * 索引一条「引用型」知识（项目文件为真相）：不写副本、不递增版次。
+   * 源哈希未变 → `unchanged`（跳过）；变了 → `updated`；不存在 → `created`。
+   * 实现层可选（内存桩可不实现）。
+   */
+  index?(input: IndexInput): Promise<IndexResult>
   /** 全文检索（bigram + FTS5 unicode61），默认只返回最新版。 */
   search(query: SearchQuery): Promise<SearchResult[]>
   /** 取单条；version 省略取最新版；历史版可读。查无 → null。 */
@@ -273,4 +316,10 @@ export interface KnowledgeServiceOptions {
   now?: () => Date
   /** 可注入 id 生成器（测试用） */
   idFactory?: () => string
+  /**
+   * 落库后投递富化任务（A4）。**默认不设置 = 不入队**（保持现有行为，
+   * 也避免知识包反向依赖工作队列）。由 server 装配时注入，读取 prism.yaml 的
+   * `enrich_on_deposit` 开关决定是否启用。
+   */
+  enqueueEnrichment?: (entry: { id: string; version: number; layer: Layer; book: string; module: string; type: EntryType }) => Promise<void>
 }
