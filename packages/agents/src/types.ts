@@ -63,7 +63,10 @@ export interface WorkflowStage {
 
 /** 沉淀规则：按内容特征覆盖默认落点（P4）。 */
 export interface DepositRule {
-  /** 如 { type: 'rule' } / { tags: ['security'] }。 */
+  /**
+   * 可匹配键（design-v4 F-E1，全部精确相等，tags 例外为「包含全部」）：
+   * `type` / `layer` / `risk` / `book` / `module` / `tags`；未知键一律不匹配（保守）。
+   */
   match: Record<string, unknown>
   /** 如 { layer: 'global', priority: 'high' }。 */
   set: Record<string, unknown>
@@ -77,7 +80,7 @@ export interface DepositPolicy {
   default_type: string
   priority: 'low' | 'medium' | 'high'
   require_note: boolean
-  /** 按内容特征覆盖默认值（本期只解析校验，不执行合并）。 */
+  /** 按内容特征覆盖默认值（**解析 + 机械执行合并**；执行见 team/deposit-policy.ts）。 */
   rules?: DepositRule[]
 }
 

@@ -203,7 +203,25 @@ deposit:
 | `default_*` | 默认落点 |
 | `priority` | 富化队列优先级（Prism 按此排序，不判断内容） |
 | `require_note` | 落库必须带说明（机械校验） |
-| `rules` | 按 `type`/`tags` 匹配覆盖默认值 |
+| `rules` | 按 `match` 匹配覆盖默认值（**解析 + 机械执行合并**，见下） |
+
+> **v4 修订（2026-09-11，design-v4 F-E1）**：`rules[].match` 的可匹配键为
+> `type` / `layer` / `risk` / `book` / `module` / `tags`（前五者精确相等，`tags` 要求「包含全部」）；
+> **未知键一律不匹配**（保守，避免误覆盖）。执行顺序 = 声明顺序，**后者覆盖前者**；
+> `set` 只认 `layer` / `type` / `risk` / `visibility`，`priority` 单独映射为队列优先级
+> （不出现在落库输入里）。实现单点：`packages/agents/src/team/deposit-policy.ts`；
+> 三入口（CLI `prism kb deposit --team` / MCP `prism_kb_deposit` / HTTP `POST /api/kb/deposit`）
+> 共用 `@prism/server` 的 `depositWithPolicy`，故「同策略同结果」可判定。
+
+> **v4 QA 核实（2026-09-10，`.qa_ok_v4` D-1）**：`require_note` 的判据是
+> **`source.ref` 非空 _或_ `content` 非空**。但 **`content` 在三个入口都是硬要求**
+> （CLI 正文必须非空、MCP `inputSchema.required` 含 `content`、HTTP 前置校验含 `content`），
+> 且知识侧 `#validateAndNormalize` 在写库前**再校验一次**（`400 content 必填`）。
+> 因此「空正文 + 只有 `source.ref`」这条路**在任何入口都到不了写库**——该 OR 分支是
+> **纵深冗余**，不是「HTTP 面被绕过」。**空正文永远先被 `content 必填` 拦下**（HTTP 由入口
+> 校验拦、CLI/MCP 由服务拦），这是三入口一致的**正确**行为；不需要改代码。
+> 相关回归：`packages/server/test/stream-b.test.ts`（`enabled=false` 策略拒绝）、
+> `test/run-e2e.mjs` 的 `19.8.4/19.8.5/19.8.6`（三入口 + 空正文口径记录）。
 
 **注意**：Prism **不审核内容**，只做"声明→机械校验→落库"。规则本身由团队给。
 
@@ -268,9 +286,15 @@ Prism **不做权限裁决**（那属于宿主）。
 
 | 动作 | 涉及团队定义 |
 | :--- | :--- |
+| 新建 `prism team init <id>` | **脚手架**：从内置模板（`minimal` / `core-dev`）或 `--from <既有团队>` 渲染新团队定义 → 自动 `validateTeam`（有 error 不落盘）→ 写守卫 → 落 `<teams_dir>/<id>.md`（只渲染不落盘的实现：`@prism/agents` 的 `renderTeamScaffold`） |
 | 装配 `prism team install` | 读团队定义 → 装配全部成员角色到 `~/.zcode/agents/` |
 | 启用 `prism team activate` | 返回团队运行时配置（成员 + 工作流 + 沉淀规则 + 装配状态） |
 | 注入 | 团队约定写入项目 `AGENTS.md` 标记块 |
+
+> `prism team init` 的写守卫口径 = `--harness-root` / `prism.yaml`（与其它写命令一致）：目标是默认宿主
+> `teams_dir` 且未显式指定时需 `--yes`。**不存在 `--teams-dir`**（`PRISM_TEAMS_DIR` 亦不存在），
+> 写路径一律走已解析的 `teams_dir`。`--members <role[:n],...>` 收窄名册时，工作流里不属于成员的
+> 非编排角色会被自动剔除（出 `workflow_pruned` warning），避免生成即 `workflow_role_unknown`。
 
 ---
 

@@ -39,6 +39,11 @@ export interface CommandContext {
   graphifyEnv?: NodeJS.ProcessEnv
   /** 注入持久化（测试用；缺省按 home 打开，随命令关闭） */
   persistence?: PrismPersistence
+  /**
+   * stdin 读取（`--file -` 用；测试可注入）。
+   * 缺省读 fd 0（同步一次读完，命令结束后进程即退出）。
+   */
+  readStdin?: () => Promise<string>
 }
 
 export const USAGE = `prism — 企业级智能研发效能平台 CLI
@@ -56,9 +61,13 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
   prism role render <name> [--model --thought-level]   渲染为当前 harness 原生格式（预览，不写盘）
   prism role install <name...> [--source <dir>] [--force]   角色（源≠roles_dir 时）初始化/迁移到 roles_dir
   prism team list | show <id> | validate <id>
+  prism team init <id> [--from <team>|--members <role[:n],...>] [--name <名>] [--description <述>] [--template minimal|core-dev] [--harness-root <dir>|--yes]
+                                           从模板/既有团队脚手架建新团队（自动校验，error 不落盘）
   prism team install <id> [--force]        校验团队与成员；确保团队定义在 teams_dir（旧源目录一次性迁移）
   prism team activate <id>
   prism skill list | install | update | uninstall | validate [name...] [--force]
+  prism skill effective --role <r> [--team <t>] [--json]
+                                           角色（可选绑定团队）的生效 Skill 集（global∪team∪role + 缺失告警）
 
 目录解析（装配语义简化——角色/团队/Skill 直接住在宿主目录）：
   <PRISM_HOME>/prism.yaml 可选覆盖：roles_dir / teams_dir / skills_dir；
@@ -79,11 +88,17 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
   prism kb restore <id>                   恢复软删条目（deprecated → active）
   prism kb conflicts [--all]              层间冲突列表（默认未处理）
   prism kb resolve <conflict-id>          标记冲突已处理
+  prism kb versions <id> [--json]         条目全部版次（降序 + is_latest）
+  prism kb structure <show|generate|freeze> --layer <l> --book <b> [--modules a,b] [--confirmed-by x] [--note s]
+                                          书结构：show 读合并清单（父链在前）/ generate 产 _modules.yaml + _summary.md / freeze 固化
+  prism kb deposit --file <md|-> --title <t> --type <ty> [--layer --owner --book --module --team --by --task --note --tags]
+                                          落库（--team 走团队沉淀策略；--file - 读 stdin）
   prism kb reindex                        以文件为真相重建索引（手工改过知识文件后用）
   prism task list [--dag --status]        任务台账（被动记录，不驱动）
   prism task show <task-id> | graph <dag-id> | stats
   prism task register --dag <id> --file <dag.json> --session --team --project
-  prism task report <task-id> --to <STATUS> --by <who> [--from --revision]
+  prism task report <task-id> --to <STATUS> --by <who> [--from --revision] [--deposit <md|->]
+                                          CLOSED 时给沉淀建议清单；COMPLETED 仅提示待收口
   prism arch types | validate <type> <ir.json> | render <type> <ir.json> [--out <html>]
   prism audit query [--type ...] [--task/--request/--knowledge/--session <id>] [--limit N]
   prism harness list | show               运行时宿主适配器（prism.yaml: harness 键）
@@ -171,6 +186,29 @@ const CLI_OPTIONS = {
   tier: { type: 'string' },
   /** kb convert 正文上限 */
   'max-chars': { type: 'string' },
+  // design-v4 §3.5（流 3 命令面）
+  /** team init --members <role[:n],...> */
+  members: { type: 'string' },
+  /** team init --template minimal|core-dev */
+  template: { type: 'string' },
+  /** team init --description <描述> */
+  description: { type: 'string' },
+  /** kb deposit --title <t> */
+  title: { type: 'string' },
+  /** kb deposit --type <rule|pitfall|...> */
+  type: { type: 'string' },
+  /** kb deposit --note <说明>（落 source.ref，满足团队 require_note） */
+  note: { type: 'string' },
+  /** kb deposit --tags a,b */
+  tags: { type: 'string' },
+  /** skill effective --role <r> */
+  role: { type: 'string' },
+  /** task report --deposit <md|->：终态一步落库（复用 kb deposit 路径） */
+  deposit: { type: 'string' },
+  /** kb structure freeze --modules a,b（显式冻结清单） */
+  modules: { type: 'string' },
+  /** kb structure generate|freeze --confirmed-by <who> */
+  'confirmed-by': { type: 'string' },
 } as const
 
 export interface ParsedInvocation {
@@ -240,6 +278,17 @@ export type ArgValues = {
   'no-embedding'?: boolean
   tier?: string
   'max-chars'?: string
+  members?: string
+  template?: string
+  description?: string
+  title?: string
+  type?: string
+  note?: string
+  tags?: string
+  role?: string
+  deposit?: string
+  modules?: string
+  'confirmed-by'?: string
 }
 
 /** `~`/`~\/` 前缀展开为用户主目录（Windows/Node 不自动展开；CLI 层统一负责，design-v3 §5 P14）。 */
@@ -330,8 +379,18 @@ export function defaultContext(overrides: Partial<CommandContext> = {}): Command
     stderr: (line) => process.stderr.write(`${line}\n`),
     home: prismHome(),
     json: false,
+    readStdin: readStdinDefault,
     ...overrides,
   }
+}
+
+/**
+ * 缺省 stdin 读取（`--file -`）：一次性读完 fd 0。
+ * 用 fs.readFileSync(0) 而非 process.stdin 流——后者在无管道时会挂住不返回。
+ */
+export async function readStdinDefault(): Promise<string> {
+  const { readFileSync } = await import('node:fs')
+  return readFileSync(0, 'utf-8')
 }
 
 /**

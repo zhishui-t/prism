@@ -101,3 +101,97 @@ describe('applyDepositPolicy', () => {
     expect(priorityScore('bogus')).toBe(5) // 未知回落 medium
   })
 })
+
+/**
+ * F-E1 规则矩阵（design-v4 §F-E1 / §6）：
+ * `match.layer` / `match.risk` / `match.book` / `match.module` / `set.type` / `set.visibility`
+ * + priority 经 `outcome.priority` 生效 + 组合键 + 无命中回落 + 多规则后者胜。
+ */
+describe('applyDepositPolicy 规则矩阵（F-E1）', () => {
+  it('match.layer 命中/未命中', () => {
+    const p = policy({ rules: [{ match: { layer: 'role' }, set: { type: 'guide' } }] })
+    expect(applyDepositPolicy(p, input({ layer: 'role' })).matched_rules).toEqual([0])
+    expect(applyDepositPolicy(p, input({ layer: 'project' })).matched_rules).toEqual([])
+  })
+
+  it('match.risk 命中/未命中（含未声明的 risk）', () => {
+    const p = policy({ rules: [{ match: { risk: 'high' }, set: { layer: 'global' } }] })
+    expect(applyDepositPolicy(p, input({ risk: 'high' })).matched_rules).toEqual([0])
+    expect(applyDepositPolicy(p, input({ risk: 'low' })).matched_rules).toEqual([])
+    expect(applyDepositPolicy(p, input()).matched_rules).toEqual([]) // risk 缺省 ≠ 'high'
+  })
+
+  it('match.book 命中/未命中（F-E1 新增键）', () => {
+    const p = policy({ rules: [{ match: { book: 'handbook' }, set: { layer: 'global' } }] })
+    const hit = applyDepositPolicy(p, input({ book: 'handbook' }))
+    expect(hit.matched_rules).toEqual([0])
+    expect(hit.input.layer).toBe('global')
+    expect(applyDepositPolicy(p, input({ book: 'other' })).matched_rules).toEqual([])
+  })
+
+  it('match.module 命中/未命中（F-E1 新增键；模块缺省不等于任何值）', () => {
+    const p = policy({ rules: [{ match: { module: 'security' }, set: { visibility: 'role' } }] })
+    const hit = applyDepositPolicy(p, input({ module: 'security' }))
+    expect(hit.matched_rules).toEqual([0])
+    expect(hit.input.visibility).toBe('role')
+    expect(applyDepositPolicy(p, input({ module: 'other' })).matched_rules).toEqual([])
+    expect(applyDepositPolicy(p, input()).matched_rules).toEqual([]) // module undefined
+  })
+
+  it('set.type / set.visibility 生效；未命中回落默认值', () => {
+    const out = applyDepositPolicy(
+      policy({
+        rules: [
+          { match: { book: 'b', module: 'm' }, set: { type: 'guide', visibility: 'global' } },
+          { match: { book: 'nope' }, set: { type: 'doc' } },
+        ],
+      }),
+      input({ book: 'b', module: 'm', type: 'rule', layer: '' }),
+    )
+    expect(out.matched_rules).toEqual([0])
+    expect(out.input.type).toBe('guide')
+    expect(out.input.visibility).toBe('global')
+    expect(out.input.layer).toBe('project') // 无命中 → default_layer
+    expect(out.priority).toBe(5) // 无 priority 覆盖 → 团队默认 medium
+  })
+
+  it('组合键（book+module+type+tags）必须全部满足', () => {
+    const p = policy({
+      rules: [{ match: { book: 'b', module: 'm', type: 'rule', tags: ['security'] }, set: { layer: 'global' } }],
+    })
+    expect(applyDepositPolicy(p, input({ book: 'b', module: 'm', type: 'rule', tags: ['security'] })).matched_rules).toEqual([0])
+    // 少一个标签 → 不命中
+    expect(applyDepositPolicy(p, input({ book: 'b', module: 'm', type: 'rule', tags: [] })).matched_rules).toEqual([])
+    // 少一个模块 → 不命中
+    expect(applyDepositPolicy(p, input({ book: 'b', type: 'rule', tags: ['security'] })).matched_rules).toEqual([])
+  })
+
+  it('priority 经 set.priority 生效于 outcome.priority', () => {
+    const p = policy({ priority: 'low', rules: [{ match: { module: 'm' }, set: { priority: 'high' } }] })
+    const out = applyDepositPolicy(p, input({ module: 'm' }))
+    expect(out.priority).toBe(10)
+    expect(out.input.priority).toBeUndefined() // priority 不进 input（无该字段，避免未定义形状）
+  })
+
+  it('enabled=false 时不评估规则（直接拒绝）', () => {
+    const out = applyDepositPolicy(
+      policy({ enabled: false, rules: [{ match: { type: 'rule' }, set: { layer: 'global' } }] }),
+      input({ type: 'rule' }),
+    )
+    expect(out.allowed).toBe(false)
+    expect(out.matched_rules).toEqual([])
+  })
+
+  it('PolicyDepositInput 扩至与 knowledge 同形（source.kind=task / deposited_by.task_id / origin_task）', () => {
+    const out = applyDepositPolicy(policy(), {
+      ...input(),
+      source: { kind: 'task', ref: 'dag-1' },
+      deposited_by: { subject: 'dev-1', team: 'core-dev', task_id: 'T-1' },
+      origin_task: { task_id: 'T-1', dag_id: 'dag-1', stage: '开发' },
+    })
+    expect(out.allowed).toBe(true)
+    expect(out.input.source?.kind).toBe('task')
+    expect(out.input.deposited_by?.task_id).toBe('T-1')
+    expect(out.input.origin_task?.dag_id).toBe('dag-1')
+  })
+})

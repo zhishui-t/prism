@@ -6,7 +6,7 @@
  *   1. `enabled` 为 false → 拒绝落库（团队自己关的）；
  *   2. `require_note` 为 true 且缺 `source.ref`/说明 → 拒绝（机械校验）；
  *   3. `default_layer`/`default_type` 填默认值（调用方未显式给时）；
- *   4. `rules` 按 `match`（type/tags）匹配后 `set` 覆盖（layer/type/priority）。
+ *   4. `rules` 按 `match`（type/tags/layer/risk/book/module）匹配后 `set` 覆盖（layer/type/risk/visibility）。
  *
  * 规则本身由团队定义提供，Prism 不判断规则对错。
  */
@@ -27,8 +27,12 @@ export interface PolicyDepositInput {
   confidence?: number
   overrides?: string[]
   visibility?: string
-  source?: { kind: 'import' | 'agent' | 'manual'; ref?: string }
-  deposited_by?: { subject: string; team?: string }
+  /** design-v4 §3.3：枚举与 `@prism/knowledge` 的 `DepositInput['source']` 同步（+`task`）。 */
+  source?: { kind: 'import' | 'agent' | 'manual' | 'task'; ref?: string }
+  /** design-v4 §3.3：`+task_id`（任务来源留痕，与 knowledge 侧同形）。 */
+  deposited_by?: { subject: string; team?: string; task_id?: string }
+  /** design-v4 §3.1/F-E2：任务来源（与 knowledge 侧 `DepositInput.origin_task` 同形）。 */
+  origin_task?: { task_id: string; dag_id?: string; stage?: string; role?: string }
 }
 
 export interface DepositPolicyOutcome {
@@ -65,6 +69,12 @@ function ruleMatches(rule: DepositRule, input: PolicyDepositInput): boolean {
       if (!want.every((t) => have.has(t))) return false
     } else if (key === 'risk') {
       if (input.risk !== expected) return false
+    } else if (key === 'book') {
+      // design-v4 F-E1：match 增 book（精确相等；输入已有该字段）
+      if (input.book !== expected) return false
+    } else if (key === 'module') {
+      // design-v4 F-E1：match 增 module（精确相等；缺省/空模块是合法输入，按值比较）
+      if (input.module !== expected) return false
     } else {
       // 未知匹配键：不匹配（保守，避免误覆盖）
       return false

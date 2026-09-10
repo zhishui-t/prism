@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -8,8 +8,12 @@ import { createRoleRegistry } from '../src/registry.js'
 import { RoleParseError, extractPrinciple, parseRoleMarkdown } from '../src/role/parse.js'
 import { renderZcodeRole } from '../src/role/render.js'
 
-/** 本机真实角色目录（只读导入验证；F07 验收命令的数据源）。 */
-const REAL_AGENTS_DIR = 'C:/Users/10042/.zcode/agents'
+/**
+ * 本机真实角色目录（只读导入验证；F07 验收命令的数据源）。
+ * QA v4 修复 D-3：原为硬编码 `C:/Users/10042/.zcode/agents`（换机/换用户即静默跳过，
+ * 覆盖度无声下降，且属 R6「不硬编码宿主路径」的灰区）→ 改由 `os.homedir()` 推导。
+ */
+const REAL_AGENTS_DIR = join(homedir(), '.zcode', 'agents')
 const REAL_ROLE_NAMES = ['dev-1', 'dev-2', 'dev-3', 'qa-checker', 'researcher', 'reviewer', 'super-dev', 'tester', 'writer']
 
 function makeTmp(): string {

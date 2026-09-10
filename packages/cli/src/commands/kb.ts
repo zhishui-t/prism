@@ -9,14 +9,20 @@ import {
   ProjectRegistry,
   ScanHistory,
   loadKnowledgeService,
+  loadTeam,
+  depositWithPolicy,
   exportKnowledgeGraph,
   makeDryRunKb,
   scanProject,
+  type DepositInput,
+  type DepositResult,
   type KnowledgeService,
+  type TeamDefinition,
 } from '@prism/server'
-import { PrismError, prismPaths } from '@prism/core'
+import { PrismError, isPrismError, prismPaths } from '@prism/core'
 
 import type { ArgValues, CommandContext } from '../argv.js'
+import { readStdinDefault, resolveTargetDirs } from '../argv.js'
 
 /** 获取知识服务（注入优先；否则运行时经 @prism/knowledge 装载）。 */
 async function getKb(ctx: CommandContext): Promise<KnowledgeService> {
@@ -64,11 +70,401 @@ export async function runKb(ctx: CommandContext, args: string[], values: ArgValu
       return await kbConvert(ctx, rest, values)
     case 'enrich':
       return await kbEnrich(ctx, rest, values)
+    case 'deposit':
+      return await kbDeposit(ctx, rest, values)
+    case 'versions':
+      return await kbVersions(ctx, rest)
+    case 'structure':
+      return await kbStructure(ctx, rest, values)
     default:
       ctx.stderr(
-        `用法: prism kb <import|sync|remove|search|get|tree|stats|graph|path|export|reindex|convert|enrich> ...`,
+        `用法: prism kb <import|deposit|sync|remove|search|get|tree|stats|graph|path|versions|structure|export|reindex|convert|enrich> ...`,
       )
       return 1
+  }
+}
+
+// ---------------------------------------------------------------------------
+// F-E2：`prism kb deposit`（团队沉淀策略 + 来源落库）
+// ---------------------------------------------------------------------------
+
+/** 落库请求（`kb deposit` 与 `task report --deposit` 共用）。 */
+export interface KbDepositRequest {
+  /** markdown 路径，或 `-` 读 stdin */
+  file: string
+  title?: string
+  type?: string
+  layer?: string
+  owner?: string
+  book?: string
+  module?: string
+  /** 逗号分隔 */
+  tags?: string
+  /** 团队 id：非空则走该团队的 deposit 策略（与 MCP/HTTP 同源） */
+  teamId?: string
+  /** 留痕：谁落的库 */
+  by?: string
+  /** 任务来源（写 `deposited_by.task_id` + `origin_task` + `source.kind='task'`） */
+  taskId?: string
+  /** 说明（落 `source.ref`，用于满足 `deposit.require_note`） */
+  note?: string
+}
+
+/**
+ * `prism kb deposit --file <md|-> --title <t> --type <ty> [--layer --owner --book --module
+ *   --team --by --task --note --tags]`（design-v4 §F-E2）。
+ *
+ * - `--team <id>`：走 `applyDepositPolicy`（与 MCP `prism_kb_deposit` 同一实现）；
+ *   拒绝（`enabled=false` / `require_note` 未满足）→ 打印可执行提示，**不落库**；
+ * - `--file -`：从 stdin 读；带 frontmatter 时 title/type/layer/owner/book/module/tags 可回落 frontmatter；
+ * - 落库后打印**来源地址**（`result.path`）。
+ */
+export async function runKbDeposit(
+  ctx: CommandContext,
+  values: ArgValues,
+  req: KbDepositRequest,
+): Promise<number> {
+  if (req.file === undefined || req.file === '') {
+    ctx.stderr(
+      '用法: prism kb deposit --file <md|-> --title <t> --type <ty> [--layer --owner --book --module --team --by --task --note --tags]',
+    )
+    return 1
+  }
+
+  // ① 正文（`-` = stdin）
+  let raw: string
+  if (req.file === '-') {
+    try {
+      raw = await (ctx.readStdin ?? readStdinDefault)()
+    } catch (error) {
+      ctx.stderr(`错误 [bad_request] 读取 stdin 失败：${error instanceof Error ? error.message : String(error)}`)
+      return 1
+    }
+  } else {
+    const abs = resolve(req.file)
+    try {
+      raw = await readFile(abs, 'utf-8')
+    } catch (error) {
+      ctx.stderr(`错误 [bad_request] 读取 --file 失败：${error instanceof Error ? error.message : String(error)}`)
+      return 1
+    }
+  }
+
+  // ② frontmatter 作默认值（CLI 显式传入优先，口径同 `kb import`）
+  const { data, body } = splitFrontmatter(raw)
+  const fm: FrontmatterData = data ?? {}
+  const fmStr = (key: string): string | undefined => (typeof fm[key] === 'string' ? (fm[key] as string) : undefined)
+
+  // ③ 团队策略（先载入团队，让 `default_layer`/`default_type` 参与默认值解析——否则 CLI 的
+  //    'global' 兜底会**抢先**于团队默认层，rules 覆盖也对不上）
+  const teamId = req.teamId !== undefined && req.teamId !== '' ? req.teamId : undefined
+  let policy: TeamDefinition | undefined
+  if (teamId !== undefined) {
+    const dirs = resolveTargetDirs(ctx, values)
+    const team = await loadTeam(dirs.teamsDir, teamId, { rolesDir: dirs.rolesDir })
+    if (team === null) {
+      ctx.stderr(`错误 [deposit_rejected] 团队不存在: ${teamId}（数据源 ${dirs.teamsDir}）`)
+      return 1
+    }
+    policy = team
+  }
+
+  const title = req.title ?? fmStr('title') ?? extractTitle(body) ?? undefined
+  if (title === undefined || title.trim() === '') {
+    ctx.stderr('错误 [title_required] 缺标题：给 --title，或在文件 frontmatter 写 title / 正文写一级标题')
+    return 1
+  }
+  const type = req.type ?? fmStr('type') ?? policy?.deposit.default_type
+  if (type === undefined || type === '') {
+    ctx.stderr(`错误 [type_required] 缺类型：给 --type（可选: ${ENTRY_TYPES.join('/')}）`)
+    return 1
+  }
+  if (!ENTRY_TYPES.includes(type as never)) {
+    ctx.stderr(`错误 [bad_request] --type 非法: ${type}（可选: ${ENTRY_TYPES.join('/')}）`)
+    return 1
+  }
+  const layer = (req.layer ?? fmStr('layer') ?? policy?.deposit.default_layer ?? 'global') as DepositInput['layer']
+  if (!['global', 'project', 'role'].includes(layer)) {
+    ctx.stderr(`错误 [bad_request] --layer 非法: ${String(layer)}（可选: global/project/role）`)
+    return 1
+  }
+  const owner = req.owner ?? fmStr('owner')
+  const book = req.book ?? fmStr('book') ?? 'inbox'
+  const module = req.module ?? fmStr('module')
+  const tags =
+    req.tags !== undefined
+      ? req.tags
+          .split(',')
+          .map((t) => t.trim())
+          .filter((t) => t !== '')
+      : Array.isArray(fm['tags'])
+        ? fm['tags'].filter((t): t is string => typeof t === 'string')
+        : undefined
+
+  const taskId = req.taskId !== undefined && req.taskId !== '' ? req.taskId : undefined
+  const base: DepositInput = {
+    title,
+    type: type as DepositInput['type'],
+    layer,
+    book,
+    content: body,
+    ...(owner !== undefined && owner !== '' ? { owner } : {}),
+    ...(module !== undefined && module !== '' ? { module } : {}),
+    ...(tags !== undefined && tags.length > 0 ? { tags } : {}),
+    source: {
+      kind: taskId !== undefined ? 'task' : 'manual',
+      ...(req.note !== undefined && req.note !== '' ? { ref: req.note } : {}),
+    },
+    ...(req.by !== undefined || req.teamId !== undefined || taskId !== undefined
+      ? {
+          deposited_by: {
+            subject: req.by ?? 'cli',
+            ...(req.teamId !== undefined ? { team: req.teamId } : {}),
+            ...(taskId !== undefined ? { task_id: taskId } : {}),
+          },
+        }
+      : {}),
+    ...(taskId !== undefined ? { origin_task: { task_id: taskId } } : {}),
+  }
+
+  // ④ 团队沉淀策略（`--team`）：**策略执行单点** = `@prism/server` 的 `depositWithPolicy`
+  //    （MCP `prism_kb_deposit` / HTTP `POST /api/kb/deposit` / CLI 同一实现）；
+  //    拒绝 → PrismError('bad_request')，此处翻译为可执行提示。
+  //    owner 规则在策略之后判定（团队 rules 可能把层改到 global）
+  let result: DepositResult
+  try {
+    result = await depositWithPolicy(
+      {
+        kb: () => getKb(ctx),
+        loadTeam: async (id) => {
+          const dirs = resolveTargetDirs(ctx, values)
+          const found = await loadTeam(dirs.teamsDir, id, { rolesDir: dirs.rolesDir })
+          if (found === null) {
+            throw new PrismError('not_found', `团队不存在: ${id}（数据源 ${dirs.teamsDir}）`)
+          }
+          return found
+        },
+      },
+      {
+        ...base,
+        ...(teamId !== undefined ? { team_id: teamId } : {}),
+      },
+    )
+  } catch (error) {
+    if (isPrismError(error)) {
+      ctx.stderr(`错误 [${error.code}] ${error.message}`)
+      if (teamId !== undefined) {
+        ctx.stderr('提示：团队要求说明时加 --note <说明>，或让正文非空；团队关闭沉淀时换团队/去掉 --team')
+      }
+      return 1
+    }
+    throw error
+  }
+
+  // ⑤ 落库结果
+  if (ctx.json) {
+    ctx.stdout(JSON.stringify({ ok: true, value: result }))
+    return 0
+  }
+  if (result.action === 'unchanged') {
+    ctx.stdout(`${result.id}@v${result.version} 内容未变，跳过（不产生新版次）`)
+  } else {
+    ctx.stdout(`${result.action === 'created' ? '已落库' : '已更新'} ${result.id}@v${result.version}`)
+  }
+  ctx.stdout(`来源地址: ${result.path}`)
+  return 0
+}
+
+/** `kb deposit` 子命令入口（参数来自 argv）。 */
+async function kbDeposit(ctx: CommandContext, rest: string[], values: ArgValues): Promise<number> {
+  const file = values.file ?? rest[0]
+  if (file === undefined) {
+    ctx.stderr(
+      '用法: prism kb deposit --file <md|-> --title <t> --type <ty> [--layer --owner --book --module --team --by --task --note --tags]',
+    )
+    return 1
+  }
+  return await runKbDeposit(ctx, values, {
+    file: String(file),
+    ...(values.title !== undefined ? { title: String(values.title) } : {}),
+    ...(values.type !== undefined ? { type: String(values.type) } : {}),
+    ...(values.layer !== undefined ? { layer: String(values.layer) } : {}),
+    ...(values.owner !== undefined ? { owner: String(values.owner) } : {}),
+    ...(values.book !== undefined ? { book: String(values.book) } : {}),
+    ...(values.module !== undefined ? { module: String(values.module) } : {}),
+    ...(values.tags !== undefined ? { tags: String(values.tags) } : {}),
+    ...(values.team !== undefined ? { teamId: String(values.team) } : {}),
+    ...(values.by !== undefined ? { by: String(values.by) } : {}),
+    ...(values.task !== undefined ? { taskId: String(values.task) } : {}),
+    ...(values.note !== undefined ? { note: String(values.note) } : {}),
+  })
+}
+
+/**
+ * `prism kb versions <id> [--json]`（design-v4 §F-B4 / §3.5）：
+ * 列出版次（降序 + `is_latest`）；id 不存在 → 空数组（不报错）。
+ */
+async function kbVersions(ctx: CommandContext, args: string[]): Promise<number> {
+  const id = args[0]
+  if (id === undefined || id === '') {
+    ctx.stderr('用法: prism kb versions <id> [--json]')
+    return 1
+  }
+  const kb = await getKb(ctx)
+  if (kb.listVersions === undefined) {
+    ctx.stderr('错误 [unsupported] 当前知识服务未实现 listVersions')
+    return 1
+  }
+  const versions = await kb.listVersions(id)
+  if (ctx.json) {
+    ctx.stdout(JSON.stringify({ ok: true, value: versions }))
+    return 0
+  }
+  if (versions.length === 0) {
+    ctx.stdout(`（条目 ${id} 没有版次）`)
+    return 0
+  }
+  for (const v of versions) {
+    ctx.stdout(
+      `v${String(v.version).padEnd(4)} ${v.is_latest ? 'latest' : '      '}  ${v.status.padEnd(11)}  ${v.updated_at}  ${v.source_path ?? ''}`,
+    )
+  }
+  ctx.stdout(`共 ${versions.length} 个版次：${id}`)
+  return 0
+}
+
+/** `prism kb structure` 的用法提示（非法动作/缺参统一打印，含可执行示例）。 */
+const STRUCTURE_USAGE = [
+  '用法: prism kb structure <show|generate|freeze> --layer <l> --book <b>',
+  '       [--modules a,b] [--confirmed-by x] [--note s] [--json]',
+  '  show      打印合并后的模块清单（父在前）+ inherited_from + revision/frozen_at/confirmed_by/suggested',
+  '  generate  产 _modules.yaml + 书级/模块级 _summary.md（幂等，可重复执行），打印生成的文件路径',
+  '  freeze    固化模块清单（revision+1；省略 --modules 则沿用当前清单或接受建议）',
+  '示例: prism kb structure generate --layer global --book demo',
+  '      prism kb structure freeze --layer global --book demo --modules m1,m2 --confirmed-by dev-1',
+].join('\n')
+
+/**
+ * `prism kb structure <show|generate|freeze> --layer <l> --book <b>`（design-v4 §3.5 / §6 F-A1·F-A2）。
+ *
+ * 薄封装 `KnowledgeService.bookStructure` / `generateBookStructure` / `freezeBookStructure`：
+ * - `show`：`modules` 已是**合并后**清单（父链在前，本地覆盖同名项，F-A2）；无结构且书不存在
+ *   → `not_found`；
+ * - `generate`：写 `_modules.yaml` + 书级与各非空模块 `_summary.md`，打印**全部文件路径**；
+ * - `freeze`：`--modules a,b` 显式冻结清单，省略则沿用当前/接受建议；
+ * - 三者均支持 `--json`（`{ok, value}` 信封）。
+ */
+async function kbStructure(ctx: CommandContext, args: string[], values: ArgValues): Promise<number> {
+  const action = args[0]
+  if (action !== 'show' && action !== 'generate' && action !== 'freeze') {
+    ctx.stderr(action === undefined ? STRUCTURE_USAGE : `未知动作: ${action}\n${STRUCTURE_USAGE}`)
+    return 1
+  }
+  const layer = values.layer
+  const book = values.book
+  if (layer === undefined || layer === '' || book === undefined || book === '') {
+    const missing = [
+      ...(layer === undefined || layer === '' ? ['--layer <l>'] : []),
+      ...(book === undefined || book === '' ? ['--book <b>'] : []),
+    ]
+    ctx.stderr(`缺少必填参数: ${missing.join(' ')}\n${STRUCTURE_USAGE}`)
+    return 1
+  }
+  const confirmedBy = values['confirmed-by']
+  const kb = await getKb(ctx)
+  try {
+    if (action === 'show') {
+      if (kb.bookStructure === undefined) {
+        ctx.stderr('错误 [unsupported] 当前知识服务未实现 bookStructure')
+        return 1
+      }
+      const structure = await kb.bookStructure(layer, book)
+      if (structure === null) {
+        ctx.stderr(
+          `错误 [not_found] 书结构不存在: ${layer}/${book}（尚未 generate/freeze，或该书无条目）\n` +
+            `提示: 先跑 prism kb structure generate --layer ${layer} --book ${book}`,
+        )
+        return 1
+      }
+      if (ctx.json) {
+        ctx.stdout(JSON.stringify({ ok: true, value: structure }))
+        return 0
+      }
+      ctx.stdout(`${structure.layer}/${structure.book}  revision=${structure.revision}`)
+      ctx.stdout(`  frozen_at:      ${structure.frozen_at ?? '（未冻结）'}`)
+      ctx.stdout(`  confirmed_by:   ${structure.confirmed_by ?? '（无）'}`)
+      ctx.stdout(
+        `  inherited_from: ${structure.inherited_from.length > 0 ? structure.inherited_from.join(' -> ') : '（无）'}`,
+      )
+      ctx.stdout(
+        `  modules（合并后，父在前）: ${structure.modules.length > 0 ? structure.modules.join(', ') : '（空，尚未 freeze）'}`,
+      )
+      ctx.stdout(
+        `  suggested:      ${structure.suggested.length > 0 ? structure.suggested.map((s) => `${s.slug}(${s.entries})`).join(' · ') : '（无）'}`,
+      )
+      ctx.stdout(`  updated_at:     ${structure.updated_at}`)
+      return 0
+    }
+
+    if (action === 'generate') {
+      if (kb.generateBookStructure === undefined) {
+        ctx.stderr('错误 [unsupported] 当前知识服务未实现 generateBookStructure')
+        return 1
+      }
+      const generated = await kb.generateBookStructure({
+        layer,
+        book,
+        ...(confirmedBy !== undefined ? { confirmed_by: String(confirmedBy) } : {}),
+      })
+      if (ctx.json) {
+        ctx.stdout(JSON.stringify({ ok: true, value: generated }))
+        return 0
+      }
+      const { structure, files } = generated
+      ctx.stdout(
+        `已生成书结构 ${structure.layer}/${structure.book}（revision=${structure.revision}，${files.length} 个文件）`,
+      )
+      for (const file of files) ctx.stdout(`  ${file}`)
+      return 0
+    }
+
+    if (kb.freezeBookStructure === undefined) {
+      ctx.stderr('错误 [unsupported] 当前知识服务未实现 freezeBookStructure')
+      return 1
+    }
+    let modules: string[] | undefined
+    if (values.modules !== undefined) {
+      modules = String(values.modules)
+        .split(',')
+        .map((s) => s.trim())
+        .filter((s) => s !== '')
+      if (modules.length === 0) {
+        ctx.stderr(`--modules 需要至少一个模块 slug（逗号分隔，如 --modules m1,m2）\n${STRUCTURE_USAGE}`)
+        return 1
+      }
+    }
+    const frozen = await kb.freezeBookStructure({
+      layer,
+      book,
+      ...(modules !== undefined ? { modules } : {}),
+      ...(confirmedBy !== undefined ? { confirmed_by: String(confirmedBy) } : {}),
+      ...(values.note !== undefined ? { note: String(values.note) } : {}),
+    })
+    if (ctx.json) {
+      ctx.stdout(JSON.stringify({ ok: true, value: frozen }))
+      return 0
+    }
+    ctx.stdout(`已固化书结构 ${frozen.layer}/${frozen.book}（revision=${frozen.revision}）`)
+    ctx.stdout(`  modules:      ${frozen.modules.join(', ')}`)
+    ctx.stdout(`  frozen_at:    ${frozen.frozen_at ?? '（无）'}`)
+    ctx.stdout(`  confirmed_by: ${frozen.confirmed_by ?? '（无）'}`)
+    return 0
+  } catch (error) {
+    if (error instanceof PrismError) {
+      ctx.stderr(`错误 [${error.code}] ${error.message}`)
+      return 1
+    }
+    throw error
   }
 }
 

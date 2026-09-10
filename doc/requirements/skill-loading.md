@@ -80,6 +80,36 @@ Skill 的受管位置直接就是宿主目录 `skills_dir`（默认 `~/.zcode/sk
 
 ---
 
+## 5.2 生效 Skill 集（v4 新增，design-v4 F-D1/F-D2）
+
+"某角色实际能用哪些 Skill"= **全局已装 ∪ 团队声明 ∪ 角色声明**，去重并按来源标注：
+
+| 来源 | 含义 |
+| :--- | :--- |
+| `global` | 宿主 `skills_dir` 里已安装的（`installedSkillNames`） |
+| `team` | 团队定义 `skills:` 声明 |
+| `role` | 角色定义 `skills:` 声明 |
+
+同名条目合并（`sources` 累积，列出**保序去重** global→team→role），最终条目按 `name` 升序输出；
+`available` = 宿主是否已装（宿主 skills 目录不存在时视为全部 available，不误报未装）。
+
+缺失告警（均为 warning，不阻断）：
+
+| 码 | 触发 |
+| :--- | :--- |
+| `skill_unknown` | 名字既不在内置清单（`listBuiltinSkills()`）也不在已装名单里 |
+| `skill_not_installed` | 名字确实存在，但当前宿主没装（`prism skill install <name>` 可修） |
+
+**装配单点**：`@prism/server` 的 `loadEffectiveSkills({ roleId, teamId?, teamsDir, rolesDir, harnessRoot })`；
+纯计算在 `@prism/agents` 的 `computeEffectiveSkills`（零 IO）。三个暴露面共用该单点，故
+**同角色同团队 → 同输出**：MCP `prism_skill_effective`、HTTP `GET /api/skills/effective?role=&team=`、
+CLI `prism skill effective --role <r> [--team <t>] [--json]`（控制台消费 HTTP 结果）。
+
+> 与既有 `prism skill list`（内置清单）和"使用视图"（skill → 谁引用，`people.ts`）互补：本视图是
+> **正向**的"这个角色/团队实际生效什么"。
+
+---
+
 ## 6. 待确认项
 
 | # | 问题 | 状态 |

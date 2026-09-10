@@ -2,8 +2,10 @@ import { rm, readdir, readFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 
+import { PrismError } from '@prism/core'
 import { installSkills, listBuiltinSkills, validateSkill } from '@prism/skills'
 import { PRISM_MARKER_PREFIX } from '@prism/skills'
+import { loadEffectiveSkills } from '@prism/server'
 
 import type { ArgValues, CommandContext } from '../argv.js'
 import { guardWriteTarget, resolveTargetDirs } from '../argv.js'
@@ -19,6 +21,9 @@ export async function runSkill(ctx: CommandContext, args: string[], values: ArgV
   const skillsDir = dirs.skillsDir
 
   switch (sub) {
+    case 'effective':
+      return await skillEffective(ctx, values, dirs)
+
     case 'list': {
       const skills = listBuiltinSkills()
       if (ctx.json) {
@@ -152,7 +157,54 @@ export async function runSkill(ctx: CommandContext, args: string[], values: ArgV
     }
 
     default:
-      ctx.stderr(`未知子命令: skill ${sub ?? ''}\n用法: prism skill list | install [name...] [--harness-root <dir>] [--force]`)
+      ctx.stderr(
+        `未知子命令: skill ${sub ?? ''}\n用法: prism skill list | install | update | uninstall | validate [name...] | effective --role <r> [--team <t>] [--harness-root <dir>] [--force]`,
+      )
       return 1
+  }
+}
+
+/**
+ * `prism skill effective --role <r> [--team <t>] [--json]`（design-v4 §F-D2 CLI 面）。
+ *
+ * 有效集 = 全局已装 ∪ 团队声明 ∪ 角色声明（去重 + 来源标注 + 缺失告警）。
+ * 装配走 `@prism/server` 的 `loadEffectiveSkills`（§3.4 冻结的唯一装配点）——
+ * **与 MCP `prism_skill_effective` / HTTP `GET /api/skills/effective` 同一实现**，
+ * 故「四处同输入同输出」由单点保证（纯计算在 `@prism/agents` 的 `computeEffectiveSkills`）。
+ */
+async function skillEffective(ctx: CommandContext, values: ArgValues, dirs: ReturnType<typeof resolveTargetDirs>): Promise<number> {
+  const roleId = values.role
+  if (roleId === undefined || roleId === '') {
+    ctx.stderr('用法: prism skill effective --role <r> [--team <t>] [--json]')
+    return 1
+  }
+  try {
+    const effective = await loadEffectiveSkills({
+      roleId: String(roleId),
+      ...(values.team !== undefined ? { teamId: String(values.team) } : {}),
+      teamsDir: dirs.teamsDir,
+      rolesDir: dirs.rolesDir,
+      harnessRoot: dirs.harnessRoot,
+    })
+    if (ctx.json) {
+      ctx.stdout(JSON.stringify({ ok: true, value: effective }))
+      return 0
+    }
+    ctx.stdout(`生效 Skill：role=${effective.role}${effective.team !== undefined ? `  team=${effective.team}` : ''}`)
+    if (effective.skills.length === 0) {
+      ctx.stdout('  （空：角色与团队都没有声明 skill）')
+    }
+    for (const skill of effective.skills) {
+      ctx.stdout(`  ${skill.available ? '已装' : '未装'}  ${skill.name.padEnd(24)} [${skill.sources.join('+')}]`)
+    }
+    for (const issue of effective.warnings) {
+      ctx.stdout(`WARN [${issue.code}] ${issue.message}`)
+    }
+    ctx.stdout(`共 ${effective.skills.length} 个生效 Skill（${effective.warnings.length} 条缺失告警）`)
+    return 0
+  } catch (error) {
+    const code = error instanceof PrismError ? error.code : 'bad_request'
+    ctx.stderr(`错误 [${code}] ${error instanceof Error ? error.message : String(error)}`)
+    return 1
   }
 }

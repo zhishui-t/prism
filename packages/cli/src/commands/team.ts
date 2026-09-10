@@ -1,6 +1,7 @@
-import { existsSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
+import { parseMembersSpec, renderTeamScaffold, type ResolvedDirs } from '@prism/agents'
 import {
   activateTeam,
   installTeamDefinitions,
@@ -8,8 +9,10 @@ import {
   loadTeam,
   loadTeams,
   migrateTeams,
+  parseTeamMarkdown,
   validateTeam,
 } from '@prism/server'
+import type { TeamDefinition, TeamMember } from '@prism/server'
 
 import type { ArgValues, CommandContext } from '../argv.js'
 import { guardWriteTarget, resolveTargetDirs } from '../argv.js'
@@ -31,6 +34,10 @@ export async function runTeam(ctx: CommandContext, args: string[], values: ArgVa
   const legacyTeamsDir = join(home, 'teams')
 
   switch (sub) {
+    case 'init': {
+      return await teamInit(ctx, rest, values, dirs)
+    }
+
     case 'list': {
       const teams = await loadTeams(teamsDir, { rolesDir })
       if (ctx.json) {
@@ -204,7 +211,154 @@ export async function runTeam(ctx: CommandContext, args: string[], values: ArgVa
     }
 
     default:
-      ctx.stderr(`未知子命令: team ${sub ?? ''}\n用法: prism team list|show|validate|install|activate`)
+      ctx.stderr(`未知子命令: team ${sub ?? ''}\n用法: prism team list|show|validate|init|install|activate`)
       return 1
   }
+}
+
+const TEAM_INIT_USAGE =
+  '用法: prism team init <id> [--from <team>|--members <role[:n],...>] [--name <名>] [--description <述>] [--template minimal|core-dev] [--harness-root <dir>|--yes]'
+
+/**
+ * `prism team init <id>`（design-v4 §F-C1）：
+ * 渲染团队脚手架（`renderTeamScaffold`，只渲染）→ 解析回定义 → **自动 validateTeam**
+ * （error 则不落盘）→ 写守卫 → 落 `<teams_dir>/<id>.md`（扁平形态，registry/wiring 双形态均识别）。
+ *
+ * - `--from <team>`：复用 `@prism/server` 的 `loadTeam`（**不自造第二个 loader**），`extends` 保留；
+ * - `--members`：收窄名册时自动裁剪工作流（并出 `workflow_pruned` warning）；
+ * - 已存在 → skipped（不覆盖，对齐 `role init` 语义）；
+ * - 写守卫口径 = `--harness-root` / prism.yaml（**不引入 `--teams-dir`**）。
+ */
+async function teamInit(
+  ctx: CommandContext,
+  rest: string[],
+  values: ArgValues,
+  dirs: ResolvedDirs,
+): Promise<number> {
+  const teamsDir = dirs.teamsDir
+  const rolesDir = dirs.rolesDir
+  const id = rest[0]
+  if (id === undefined) {
+    ctx.stderr(TEAM_INIT_USAGE)
+    return 1
+  }
+  const flatPath = join(teamsDir, `${id}.md`)
+  const dirPath = join(teamsDir, id, 'AGENTS.md')
+
+  // 已存在 → skipped（绝不覆盖人写文件；要重建请先删或换 id）
+  const existing = existsSync(flatPath) ? flatPath : existsSync(dirPath) ? dirPath : null
+  if (existing !== null) {
+    if (ctx.json) {
+      ctx.stdout(
+        JSON.stringify({
+          ok: true,
+          value: { teamId: id, teamsDir, written: [], skipped: [{ path: existing, reason: '团队定义已存在（不覆盖）' }] },
+        }),
+      )
+    } else {
+      ctx.stdout(`  跳过 ${existing}: 团队定义已存在（不覆盖；如需重建请先删除或换 id）`)
+      ctx.stdout(`团队 ${id} 已存在，未做任何改动`)
+    }
+    return 0
+  }
+
+  // --from：读既有团队（复用 server loadTeam）
+  let from: TeamDefinition | undefined
+  if (values.from !== undefined) {
+    const loaded = await loadTeam(teamsDir, String(values.from), { rolesDir })
+    if (loaded === null) {
+      ctx.stderr(`错误 [not_found] --from 团队不存在: ${values.from}（数据源 ${teamsDir}）`)
+      return 1
+    }
+    from = loaded
+  }
+
+  // --members 解析
+  let members: TeamMember[] | undefined
+  if (values.members !== undefined) {
+    const parsed = parseMembersSpec(String(values.members))
+    const parseErrors = parsed.issues.filter((i) => i.level === 'error')
+    if (parseErrors.length > 0) {
+      for (const issue of parseErrors) ctx.stderr(`错误 [${issue.code}] ${issue.message}`)
+      return 1
+    }
+    members = parsed.members
+  }
+
+  const template = values.template !== undefined ? String(values.template) : undefined
+  if (template !== undefined && template !== 'minimal' && template !== 'core-dev') {
+    ctx.stderr(`错误 [bad_request] --template 只支持 minimal|core-dev（收到 ${template}）`)
+    return 1
+  }
+
+  const scaffold = renderTeamScaffold({
+    teamId: id,
+    teamsDir,
+    ...(values.name !== undefined ? { name: String(values.name) } : {}),
+    ...(values.description !== undefined ? { description: String(values.description) } : {}),
+    ...(members !== undefined ? { members } : {}),
+    ...(from !== undefined ? { from } : {}),
+    ...(template !== undefined ? { template: template as 'minimal' | 'core-dev' } : {}),
+  })
+  // 渲染诊断（warning 照打，便于看见「工作流按名册收窄」之类动作）
+  for (const issue of scaffold.issues) {
+    ctx.stdout(`${issue.level === 'error' ? 'ERROR' : 'WARN'} [${issue.code}] ${issue.message}`)
+  }
+  const hardErrors = scaffold.issues.filter((i) => i.level === 'error')
+  if (hardErrors.length > 0) {
+    ctx.stderr(`错误 [${hardErrors[0]!.code}] 脚手架渲染失败，未落盘`)
+    return 1
+  }
+
+  // 生成后自动校验：解析回定义 → 用**真实角色库**跑 validateTeam（error 则不落盘）
+  let definition: TeamDefinition
+  try {
+    definition = parseTeamMarkdown(scaffold.markdown)
+  } catch (error) {
+    ctx.stderr(`错误 [team_parse_failed] 渲染产物无法解析：${error instanceof Error ? error.message : String(error)}`)
+    return 1
+  }
+  const library = await loadRoles(rolesDir)
+  const validation = validateTeam(definition, { roles: library })
+  for (const issue of validation.issues) {
+    ctx.stdout(`${issue.level === 'error' ? 'ERROR' : 'WARN'} [${issue.code}] ${issue.message}`)
+  }
+  if (!validation.ok) {
+    ctx.stderr(
+      `错误 [team_invalid] 团队 ${id} 校验存在 error，未落盘（成员角色需先在 roles_dir：prism role import / prism role init）`,
+    )
+    return 1
+  }
+
+  // 写守卫：目标是默认宿主目录（非 --harness-root / prism.yaml 显式指定）时需 --yes
+  if (!guardWriteTarget(ctx, values, dirs, 'teams', 1)) return 1
+  try {
+    mkdirSync(teamsDir, { recursive: true })
+    writeFileSync(flatPath, scaffold.markdown, 'utf-8')
+  } catch (error) {
+    ctx.stderr(`错误 [install_failed] 团队定义写入失败：${error instanceof Error ? error.message : String(error)}`)
+    return 1
+  }
+
+  if (ctx.json) {
+    ctx.stdout(
+      JSON.stringify({
+        ok: true,
+        value: {
+          teamId: id,
+          teamsDir,
+          rolesDir,
+          written: [flatPath],
+          skipped: [],
+          issues: [...scaffold.issues, ...validation.issues],
+        },
+      }),
+    )
+  } else {
+    ctx.stdout(`  已创建 ${flatPath}`)
+    ctx.stdout(`团队 ${id} 初始化完成（成员 ${definition.members.map((m) => `${m.role}×${m.count}`).join(', ')}）`)
+    ctx.stdout('下一步: prism team validate ' + id + ' / prism team activate ' + id)
+    ctx.stdout('注意: 宿主在会话启动时扫描团队定义——下一会话生效')
+  }
+  return 0
 }

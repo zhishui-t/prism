@@ -74,6 +74,25 @@ export { resolveTeamExtends, MAX_EXTENDS_DEPTH, type TeamResolver, type MergeTea
 export { activateTeam } from './team/activate.js'
 export type { ActivateTeamOptions } from './team/activate.js'
 export { renderZcodeTeam, teamMarker, hasTeamMarker } from './team/render.js'
+// `team init` 脚手架（只渲染不落盘；F-C1）+ 内置团队模板（独立于 server 出厂模板）
+export { renderTeamScaffold, parseMembersSpec, type TeamInitOptions, type TeamScaffold } from './team/init.js'
+export {
+  MINIMAL_TEAM_MD,
+  CORE_DEV_TEAM_MD,
+  TEAM_TEMPLATES,
+  TEAM_TEMPLATE_TEAM_ID_PLACEHOLDER,
+  TEAM_TEMPLATE_NAME_PLACEHOLDER,
+  TEAM_TEMPLATE_DESCRIPTION_PLACEHOLDER,
+  fillTeamTemplate,
+} from './team/templates.js'
+
+// Skill 有效集（F-D1：纯函数；装配函数在 server/src/roles/wiring.ts）
+export {
+  computeEffectiveSkills,
+  type EffectiveSkill,
+  type EffectiveSkillSet,
+  type ComputeEffectiveSkillsInput,
+} from './skill-effective.js'
 
 // 注册表
 export { createRoleRegistry, createTeamRegistry } from './registry.js'

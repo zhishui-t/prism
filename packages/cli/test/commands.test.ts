@@ -100,7 +100,10 @@ describe('CLI 命令（注入真实知识服务 / 假 graphify）', () => {
     expect(lines.join('\n')).toContain('已写配置')
   })
 
-  it('doctor：graphifyEnv 注入假 bin → 全部通过', async () => {
+  // QA v4 修复 D-4：`doctor` 真实探测 vendored graphify(Python) + anydoc，实测在并发负载下
+  // 曾撞 `testTimeout: 20_000`（20037ms，超限 37ms）→ 全量门禁假红。该用例是**负载敏感型**，
+  // 单独放宽到 60s（不改产品代码、不改断言；裸 20s 并不代表被测行为有问题）。
+  it('doctor：graphifyEnv 注入假 bin → 全部通过', { timeout: 60_000 }, async () => {
     await runCommand(ctx, ['init'])
     const fakeBin = await writeFakeGraphify(await tempDir('prism-cli-bin2-'))
     cleanup.push(join(fakeBin, '..'))
