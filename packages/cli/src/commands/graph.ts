@@ -59,6 +59,16 @@ export async function runGraph(ctx: CommandContext, args: string[], values: ArgV
  * 同步执行（CLI 场景），参数与 server 一致：extract --no-description --no-label + flows build（禁 LLM 富化）。
  */
 async function graphBuild(ctx: CommandContext, args: string[], values: ArgValues): Promise<number> {
+  const existsGraph = async (root: string): Promise<boolean> => {
+    const { access } = await import('node:fs/promises')
+    const { join } = await import('node:path')
+    try {
+      await access(join(root, 'graphify-out', 'graph.json'))
+      return true
+    } catch {
+      return false
+    }
+  }
   const rootArg = args[0]
   if (rootArg === undefined) {
     ctx.stderr('用法: prism graph build <项目根目录> [--name <项目名>]')
@@ -80,7 +90,8 @@ async function graphBuild(ctx: CommandContext, args: string[], values: ArgValues
     ctx.buildRunner ??
     (async (_project, projectRoot, appendLog) => {
       const resolvedCommand = await resolveGraphifyCommand(env)
-      for (const stepArgs of buildGraphArgs(projectRoot)) {
+      const mode = values.incremental === true && (await existsGraph(projectRoot)) ? 'incremental' : 'full'
+      for (const stepArgs of buildGraphArgs(projectRoot, mode)) {
         appendLog(`> ${formatCommand(resolvedCommand, stepArgs)}`)
         const result = await runGraphify(stepArgs, { cwd: projectRoot, timeoutMs, env })
         const tail = result.stdout.trim().split('\n').slice(-3).join(' | ')

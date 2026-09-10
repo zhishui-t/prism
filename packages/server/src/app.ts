@@ -4,7 +4,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { prismHome, openPersistence, WorkQueue, BUILTIN_VALIDATORS, WORK_KINDS, type PrismPersistence } from '@prism/core'
+import { AuditLog, prismHome, openPersistence, prismPaths, WorkQueue, BUILTIN_VALIDATORS, WORK_KINDS, type PrismPersistence } from '@prism/core'
 
 import { sendJson, toEnvelope, type Envelope } from './http/envelope.js'
 import { Router } from './http/router.js'
@@ -95,13 +95,16 @@ export async function createApp(options: AppOptions = {}): Promise<{
     options.buildRunner ??
     defaultGraphifyRunner({ env: options.graphifyEnv, timeoutMs: options.graphifyTimeoutMs })
 
+  // 审计（task/work 的状态变更落 <home>/audit/ JSONL；此前从未实例化——死代码）
+  const audit = new AuditLog({ dir: prismPaths(home).auditDir, queue: openPersistence({ home }).queue })
+
   // 工作队列（拉取式，work-queue.md）：惰性打开一次，与 HTTP 进程同库（WAL 并发安全）
   let workQueue: WorkQueue | undefined = options.workQueue
   let workPersistence: PrismPersistence | undefined
   const getQueue = async (): Promise<WorkQueue> => {
     if (workQueue !== undefined) return workQueue
     workPersistence = openPersistence({ home })
-    const queue = new WorkQueue({ persistence: workPersistence })
+    const queue = new WorkQueue({ persistence: workPersistence, audit })
     for (const kind of WORK_KINDS) {
       queue.registerValidator(kind, BUILTIN_VALIDATORS[kind])
     }

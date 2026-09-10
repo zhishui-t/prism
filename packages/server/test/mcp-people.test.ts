@@ -59,7 +59,7 @@ describe('MCP 角色/团队工具（design-v3 §3.4 P6；stdio JSON-RPC 手写�
     await rm(tmp, { recursive: true, force: true }).catch(() => {})
   })
 
-  it('tools/list 含 4 个新工具（累计 30 个）', async () => {
+  it('tools/list 含 4 个新工具（累计 32 个）', async () => {
     const response = await handleRpcRequest(rpc(1, 'tools/list'), tools)
     const names = ((response?.result as { tools: Array<{ name: string }> })?.tools ?? []).map((t) => t.name)
     expect(names).toEqual([
@@ -90,6 +90,8 @@ describe('MCP 角色/团队工具（design-v3 §3.4 P6；stdio JSON-RPC 手写�
       'prism_work_pending',
       'prism_work_claim',
       'prism_work_complete',
+      'prism_work_fail',
+      'prism_work_reclaim',
       'prism_task_register',
       'prism_task_report',
       'prism_task_status',

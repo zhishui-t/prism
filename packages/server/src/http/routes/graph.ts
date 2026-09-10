@@ -33,9 +33,9 @@ export interface GraphDeps {
 
 /** 默认建图执行体：graphify extract（钉死参数，禁 LLM 富化）+ flows build。 */
 export function defaultGraphifyRunner(deps: { env?: NodeJS.ProcessEnv; timeoutMs?: number } = {}): BuildRunner {
-  return async (_project, root, appendLog) => {
+  return async (_project, root, appendLog, opts) => {
     const resolved = await resolveGraphifyCommand(deps.env ?? process.env)
-    for (const args of buildGraphArgs(root)) {
+    for (const args of buildGraphArgs(root, opts?.incremental === true ? 'incremental' : 'full')) {
       appendLog(`> ${formatCommand(resolved, args)}`)
       const result = await runGraphify(args, { cwd: root, timeoutMs: deps.timeoutMs, env: deps.env })
       const tail = result.stdout.trim().split('\n').slice(-3).join(' | ')
@@ -65,7 +65,7 @@ export function graphRoutes(deps: GraphDeps): {
   }
 
   const build = async (ctx: RouteContext): Promise<Envelope> => {
-    const body = (await ctx.body()) as { project?: unknown; root?: unknown }
+    const body = (await ctx.body()) as { project?: unknown; root?: unknown; incremental?: unknown }
     const project = typeof body.project === 'string' ? body.project.trim() : ''
     if (project === '') {
       throw new PrismError('bad_request', '缺少 project')
@@ -86,12 +86,17 @@ export function graphRoutes(deps: GraphDeps): {
       throw new PrismError('bad_request', `项目 ${project} 已注册为 ${known.root}，与传入 root ${root} 不一致`)
     }
     const target = await deps.registry.get(project)
-    const job = deps.jobs.submit(project, target.root, target.root, deps.runner)
+    const incremental = body.incremental === true
+    const job = deps.jobs.submit(project, target.root, target.root, deps.runner, { incremental })
     return ok({ job_id: job.job_id })
   }
 
   const jobStatus = async (ctx: RouteContext): Promise<Envelope> => {
     const job = deps.jobs.get(ctx.params.job_id ?? '')
+    // 建图成功 → 回写 built_at（此前只有 CLI 建图会写，控制台建图 built_at 恒空）
+    if (job.status === 'done' && typeof job.ended_at === 'string') {
+      await deps.registry.markBuilt(job.project, job.ended_at)
+    }
     return ok({
       job_id: job.job_id,
       project: job.project,

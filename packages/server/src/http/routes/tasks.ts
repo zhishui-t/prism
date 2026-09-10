@@ -1,4 +1,4 @@
-import { openPersistence, PrismError, TaskLedger, type PrismPersistence, type TaskStatus } from '@prism/core'
+import { AuditLog, openPersistence, prismPaths, PrismError, TaskLedger, type PrismPersistence, type TaskStatus } from '@prism/core'
 
 import { fail, ok, type Envelope } from '../envelope.js'
 import type { RouteContext } from '../router.js'
@@ -27,7 +27,11 @@ export function taskRoutes(home: string): {
   const open = (): TaskLedger => {
     if (ledger === null) {
       persistence = openPersistence({ home })
-      ledger = new TaskLedger({ persistence })
+      // 审计接线（此前从不传 audit → task.status_changed 从不落盘）
+      ledger = new TaskLedger({
+        persistence,
+        audit: new AuditLog({ dir: prismPaths(home).auditDir, queue: persistence.queue }),
+      })
     }
     return ledger
   }

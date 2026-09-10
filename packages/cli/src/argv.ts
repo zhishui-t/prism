@@ -17,6 +17,7 @@ import { runHarness } from './commands/harness.js'
 import { runGraph } from './commands/graph.js'
 import { runProject } from './commands/project.js'
 import { runInject } from './commands/inject.js'
+import { runAudit } from './commands/audit.js'
 import { runRole } from './commands/role.js'
 import { runTeam } from './commands/team.js'
 import { runSkill } from './commands/skill.js'
@@ -87,8 +88,9 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
   prism task register --dag <id> --file <dag.json> --session --team --project
   prism task report <task-id> --to <STATUS> --by <who> [--from --revision]
   prism arch types | validate <type> <ir.json> | render <type> <ir.json> [--out <html>]
+  prism audit query [--type ...] [--task/--request/--knowledge/--session <id>] [--limit N]
   prism harness list | show               运行时宿主适配器（prism.yaml: harness 键）
-  prism graph build <项目根目录> [--name <项目名>] [--timeout <秒>]
+  prism graph build <项目根目录> [--name <项目名>] [--incremental] [--timeout <秒>]
   prism graph query <q> --project <项目名>                  BFS 遍历查询
   prism graph path <from> <to> --project <项目名>            最短路径
   prism graph explain <node> --project <项目名>              节点解释
@@ -156,7 +158,12 @@ const CLI_OPTIONS = {
   remove: { type: 'boolean' },
   enqueue: { type: 'boolean' },
   hard: { type: 'boolean' },
+  audit_type: { type: 'string' },
   visibility: { type: 'string' },
+  knowledge: { type: 'string' },
+  incremental: { type: 'boolean' },
+  task: { type: 'string' },
+  request: { type: 'string' },
   all: { type: 'boolean' },
 } as const
 
@@ -217,6 +224,11 @@ export type ArgValues = {
   enqueue?: boolean
   hard?: boolean
   visibility?: string
+  knowledge?: string
+  incremental?: boolean
+  task?: string
+  request?: string
+  audit_type?: string
   all?: boolean
 }
 
@@ -336,6 +348,8 @@ export async function runCommand(ctx: CommandContext, argv: string[]): Promise<n
         return await runProject(effective, rest, values)
       case 'inject':
         return await runInject(effective, rest, values)
+      case 'audit':
+        return await runAudit(effective, rest, values)
       case 'role':
         return await runRole(effective, rest, values)
       case 'team':

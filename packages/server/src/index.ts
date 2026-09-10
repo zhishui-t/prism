@@ -37,6 +37,11 @@ export {
 export { probeConverter } from '@prism/knowledge'
 export { ScanHistory, type ScanRecord } from './kb/scan-history.js'
 export {
+  writeEnrichment,
+  type EnrichmentResult,
+  type WritebackReport,
+} from './kb/enrich-writeback.js'
+export {
   buildContextPack,
   estimateTokens,
   type ContextPack,

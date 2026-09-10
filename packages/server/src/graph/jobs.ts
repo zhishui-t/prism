@@ -17,7 +17,12 @@ export interface BuildJob {
 }
 
 /** 构建执行体：把日志行追加进 job（真实实现跑 graphify；测试注入假执行体）。 */
-export type BuildRunner = (project: string, root: string, appendLog: (line: string) => void) => Promise<void>
+export type BuildRunner = (
+  project: string,
+  root: string,
+  appendLog: (line: string) => void,
+  options?: { incremental?: boolean },
+) => Promise<void>
 
 const LOCK_STALE_MS = 30 * 60_000
 
@@ -35,7 +40,13 @@ export class BuildJobManager {
    * 提交建图任务；同项目已有运行中任务 → PrismError('build_in_progress')。
    * 任务体异步执行，不阻塞返回。
    */
-  submit(project: string, root: string, lockDir: string, runner: BuildRunner): BuildJob {
+  submit(
+    project: string,
+    root: string,
+    lockDir: string,
+    runner: BuildRunner,
+    options?: { incremental?: boolean },
+  ): BuildJob {
     if (this.#running.has(project)) {
       throw new PrismError('build_in_progress', `项目 ${project} 正在建图，请稍后用 job 查询进度`)
     }
@@ -70,7 +81,7 @@ export class BuildJobManager {
         await acquireLock(buildLockPath(lockDir))
         lockHeld = true
         appendLog(`开始建图: ${root}`)
-        await runner(project, root, appendLog)
+        await runner(project, root, appendLog, options)
         job.status = 'done'
         appendLog('建图完成')
       } catch (error) {

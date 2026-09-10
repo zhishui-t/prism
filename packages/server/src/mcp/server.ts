@@ -4,7 +4,7 @@ import { access } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { prismHome, openPersistence, PrismError, WorkQueue, WORK_KINDS, BUILTIN_VALIDATORS, TaskLedger, type WorkKind } from '@prism/core'
+import { AuditLog, prismHome, openPersistence, prismPaths, PrismError, WorkQueue, WORK_KINDS, BUILTIN_VALIDATORS, TaskLedger, type WorkKind } from '@prism/core'
 
 import {
   activateTeam,
@@ -29,6 +29,7 @@ import { inspectGraphStatus, ProjectRegistry } from '../graph/registry.js'
 import type { DepositInput, GraphQuery, KnowledgeService, SearchQuery } from '../kb/port.js'
 import { loadKnowledgeService } from '../kb/wiring.js'
 import { buildContextPack } from '../kb/context-pack.js'
+import { writeEnrichment } from '../kb/enrich-writeback.js'
 
 /**
  * MCP stdio 服务（design.md §4 最小集 + design-v3 §3.4 P6 增量，手写 JSON-RPC 2.0）：
@@ -93,7 +94,11 @@ export function createMcpTools(deps: McpDeps): McpTool[] {
   let workQueue: WorkQueue | undefined = deps.workQueue
   const queue = async (): Promise<WorkQueue> => {
     if (workQueue !== undefined) return workQueue
-    const created = new WorkQueue({ persistence: openPersistence({ home: deps.home }) })
+    const persistence = openPersistence({ home: deps.home })
+    const created = new WorkQueue({
+      persistence,
+      audit: new AuditLog({ dir: prismPaths(deps.home).auditDir, queue: persistence.queue }),
+    })
     for (const kind of WORK_KINDS) {
       created.registerValidator(kind, BUILTIN_VALIDATORS[kind])
     }
@@ -105,7 +110,11 @@ export function createMcpTools(deps: McpDeps): McpTool[] {
   let taskLedger: TaskLedger | undefined
   const ledger = async (): Promise<TaskLedger> => {
     if (taskLedger === undefined) {
-      taskLedger = new TaskLedger({ persistence: openPersistence({ home: deps.home }) })
+      const persistence = openPersistence({ home: deps.home })
+      taskLedger = new TaskLedger({
+        persistence,
+        audit: new AuditLog({ dir: prismPaths(deps.home).auditDir, queue: persistence.queue }),
+      })
     }
     return taskLedger
   }
@@ -795,13 +804,69 @@ export function createMcpTools(deps: McpDeps): McpTool[] {
           throw new Error('prism_work_complete 需要 { id, attempt_token, result }')
         }
         const by = asString(args.by)
-        return await (await queue()).complete({
+        const completed = await (await queue()).complete({
           id,
           attempt_token: token,
           result: args.result,
           ...(by !== undefined ? { by } : {}),
         })
+        // 流程⑤：富化结果回写知识库（summarize/classify/extract_entities）。
+        // 回写失败不回滚 work（已 completed），把错误信息带回给宿主。
+        let writeback: unknown = null
+        const isRec = (v: unknown): v is Record<string, unknown> =>
+          typeof v === 'object' && v !== null && !Array.isArray(v)
+        if (completed.kind !== undefined && isRec(completed.result) && isRec(completed.payload)) {
+          try {
+            writeback = await writeEnrichment(
+              await kb(),
+              {
+                kind: completed.kind,
+                payload: completed.payload as Record<string, unknown>,
+                result: completed.result as Record<string, unknown>,
+              },
+              {
+                deposited_by: by !== undefined ? { subject: by } : undefined,
+              },
+            )
+          } catch (error) {
+            writeback = {
+              kind: completed.kind,
+              action: 'failed',
+              detail: error instanceof Error ? error.message : String(error),
+            }
+          }
+        }
+        return { work: completed, writeback }
       },
+    },
+    {
+      name: 'prism_work_fail',
+      description: '显式失败回填（宿主执行报错时调用；计入重试，超上限置 failed 待人工）',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          attempt_token: { type: 'string' },
+          error: { type: 'string', description: '失败原因' },
+        },
+        required: ['id', 'attempt_token', 'error'],
+      },
+      call: async (args) => {
+        const id = asString(args.id)
+        const token = asString(args.attempt_token)
+        const error = asString(args.error)
+        if (id === undefined || token === undefined || error === undefined) {
+          throw new Error('prism_work_fail 需要 { id, attempt_token, error }')
+        }
+        return await (await queue()).fail(id, token, error)
+      },
+    },
+    {
+      name: 'prism_work_reclaim',
+      description:
+        '回收超时认领的工作（claimed 超过时限 → 回到 pending 可重派）。纯 MCP 环境需宿主定期调用',
+      inputSchema: { type: 'object', properties: {} },
+      call: async () => await (await queue()).reclaimExpired(),
     },
     {
       name: 'prism_task_register',

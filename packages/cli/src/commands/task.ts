@@ -3,7 +3,7 @@
  *
  * Prism 不驱动任务——宿主/队长登记 DAG、回报状态，Prism 只记录、可视化、审计。
  */
-import { openPersistence, TaskLedger, isPrismError, type TaskStatus } from '@prism/core'
+import { AuditLog, prismPaths, openPersistence, TaskLedger, isPrismError, type TaskStatus } from '@prism/core'
 import { readFile } from 'node:fs/promises'
 
 import type { ArgValues, CommandContext } from '../argv.js'
@@ -12,7 +12,10 @@ import type { ArgValues, CommandContext } from '../argv.js'
 function makeLedger(ctx: CommandContext): { ledger: TaskLedger; close: () => void } {
   const persistence = ctx.persistence ?? openPersistence({ home: ctx.home })
   return {
-    ledger: new TaskLedger({ persistence }),
+    ledger: new TaskLedger({
+      persistence,
+      audit: new AuditLog({ dir: prismPaths(ctx.home).auditDir, queue: persistence.queue }),
+    }),
     close: () => {
       if (ctx.persistence === undefined) persistence.close()
     },

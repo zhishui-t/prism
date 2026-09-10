@@ -251,7 +251,15 @@ export async function runGraphify(
  * ② `graphify cluster-only <root> --no-label` 聚类 + GRAPH_REPORT.md + graph.html（跳过 LLM 社区命名）。
  * 产物落 `<root>/graphify-out/`。
  */
-export function buildGraphArgs(projectRoot: string): string[][] {
+export function buildGraphArgs(projectRoot: string, mode: 'full' | 'incremental' = 'full'): string[][] {
+  // 增量（code-graph.md §3.2）：已有图谱时只重提取变化文件（graphify update，零 LLM），
+  // 再聚类。首次建图仍走全量。
+  if (mode === 'incremental') {
+    return [
+      ['update', projectRoot],
+      ['cluster-only', projectRoot, '--no-label'],
+    ]
+  }
   return [
     [projectRoot],
     ['cluster-only', projectRoot, '--no-label'],

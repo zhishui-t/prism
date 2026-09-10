@@ -211,6 +211,13 @@ export class WorkQueue {
 
   /** 列出待办（§4，按优先级降序、创建时间升序）。 */
   async pending(query: WorkPendingQuery = {}): Promise<WorkRequest[]> {
+    // 惰性回收（此前只有显式调用 reclaim 才触发；纯 MCP 环境过期任务永远挂着）：
+    // 每次 pending 前先回收超时认领——读取方自动受益，无宿主也可自愈。
+    try {
+      await this.reclaimExpired()
+    } catch {
+      // 回收失败不阻塞 pending（如库被锁的瞬时态）
+    }
     const limit = Math.min(Math.max(1, Math.floor(query.limit ?? 20)), 200)
     const clauses = ["status = 'pending'"]
     const params: Array<string | number> = []

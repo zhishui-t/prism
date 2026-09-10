@@ -233,3 +233,61 @@ describe('TaskLedger 状态回报（状态机校验 + 乐观并发 + 审计）',
     }
   })
 })
+
+/** 派生规则接线（task-center.md §3，此前 report 不触发、生产断链）。 */
+describe('report 派生规则（失败传播 / SKIPPED 重激活）', () => {
+  it('FAILED → 下游 WAITING 级联 SKIPPED（含间接下游）', async () => {
+    const { ledger, close } = makeLedger()
+    await ledger.registerDag({
+      ...BASE_DAG,
+      dag_id: 'prop-1',
+      tasks: [
+        { id: 'A', description: 'a', depends_on: [], write_scopes: [] },
+        { id: 'B', description: 'b', depends_on: ['A'], write_scopes: [] },
+        { id: 'C', description: 'c', depends_on: ['B'], write_scopes: [] },
+      ],
+    })
+    await ledger.report({ task_id: 'A', to_status: 'RUNNING', by: 'x' })
+    await ledger.report({ task_id: 'A', to_status: 'FAILED', by: 'x' })
+    expect((await ledger.get('B')).status).toBe('SKIPPED')
+    expect((await ledger.get('C')).status).toBe('SKIPPED')
+    close()
+  })
+
+  it('上游 FAILED 重开 WAITING → SKIPPED 下游重激活', async () => {
+    const { ledger, close } = makeLedger()
+    await ledger.registerDag({
+      ...BASE_DAG,
+      dag_id: 'prop-2',
+      tasks: [
+        { id: 'A', description: 'a', depends_on: [], write_scopes: [] },
+        { id: 'B', description: 'b', depends_on: ['A'], write_scopes: [] },
+      ],
+    })
+    await ledger.report({ task_id: 'A', to_status: 'RUNNING', by: 'x' })
+    await ledger.report({ task_id: 'A', to_status: 'FAILED', by: 'x' })
+    expect((await ledger.get('B')).status).toBe('SKIPPED')
+    await ledger.report({ task_id: 'A', to_status: 'WAITING', by: 'human' })
+    expect((await ledger.get('B')).status).toBe('WAITING')
+    close()
+  })
+
+  it('COMPLETED 不触发传播；无下游的 FAILED 传播为空', async () => {
+    const { ledger, close } = makeLedger()
+    await ledger.registerDag({
+      ...BASE_DAG,
+      dag_id: 'prop-3',
+      tasks: [
+        { id: 'A', description: 'a', depends_on: [], write_scopes: [] },
+        { id: 'B', description: 'b', depends_on: [], write_scopes: [] },
+      ],
+    })
+    await ledger.report({ task_id: 'A', to_status: 'RUNNING', by: 'x' })
+    await ledger.report({ task_id: 'A', to_status: 'COMPLETED', by: 'x' })
+    expect((await ledger.get('B')).status).toBe('WAITING')
+    await ledger.report({ task_id: 'B', to_status: 'RUNNING', by: 'x' })
+    await ledger.report({ task_id: 'B', to_status: 'FAILED', by: 'x' })
+    expect((await ledger.get('B')).status).toBe('FAILED') // 无下游，不影响别人
+    close()
+  })
+})

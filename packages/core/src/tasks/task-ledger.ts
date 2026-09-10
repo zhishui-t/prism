@@ -274,7 +274,95 @@ export class TaskLedger {
       to: input.to_status,
       by: input.by,
     })
+
+    // 派生规则（task-center.md §3，此前只有测试调用、生产断链）：
+    // FAILED/CANCELLED → 下游 WAITING/BLOCKED 级联 SKIPPED；
+    // SKIPPED 的上游恢复 WAITING（人工重开场景）→ SKIPPED 重激活为 WAITING。
+    if (input.to_status === 'FAILED' || input.to_status === 'CANCELLED') {
+      await this.#propagateFailure(row.dag_id, input.task_id, input.by)
+    } else {
+      // 离开失败终态（如 FAILED → WAITING 人工重开）→ 尝试重激活下游 SKIPPED。
+      // 状态机自行判定「依赖是否已全部就绪」，不满足时无操作。
+      const fromWasTerminalFailure = from === 'FAILED' || from === 'CANCELLED' || from === 'BANNED'
+      if (fromWasTerminalFailure) {
+        await this.#reactivateSkipped(row.dag_id, input.task_id, input.by)
+      }
+    }
     return this.#requireTask(input.task_id)
+  }
+
+  /** 装配当前 DAG 快照（状态机派生函数的输入形状：tasks + edges + skip_override）。 */
+  #loadDagSnapshot(dagId: string): {
+    tasks: Array<{ id: string; dependencies: string[]; status: string; skip_override?: boolean }>
+    edges: Array<{ from: string; to: string }>
+  } {
+    const raw = this.#persistence.tasks.raw
+    const tasks = raw
+      .prepare('SELECT id, status, dependencies, skip_override FROM tasks WHERE dag_id = ?')
+      .all(dagId) as Array<{ id: string; status: string; dependencies: string; skip_override: number }>
+    const edges = raw
+      .prepare('SELECT from_task_id, to_task_id FROM edges WHERE dag_id = ?')
+      .all(dagId) as Array<{ from_task_id: string; to_task_id: string }>
+    return {
+      tasks: tasks.map((t) => ({
+        id: t.id,
+        status: t.status,
+        skip_override: t.skip_override === 1,
+        dependencies: ((): string[] => {
+          try {
+            const parsed = JSON.parse(t.dependencies) as unknown
+            return Array.isArray(parsed) ? parsed.map(String) : []
+          } catch {
+            return []
+          }
+        })(),
+      })),
+      edges: edges.map((e) => ({ from: e.from_task_id, to: e.to_task_id })),
+    }
+  }
+
+  /** 失败传播：下游 WAITING/BLOCKED → SKIPPED（写库 + 逐条审计）。 */
+  async #propagateFailure(dagId: string, failedTaskId: string, by: string): Promise<string[]> {
+    const dag = this.#loadDagSnapshot(dagId) as Parameters<typeof TaskStateMachine.propagateFailure>[0]
+    const result = TaskStateMachine.propagateFailure(dag, failedTaskId)
+    if (result.skipped.length === 0) return []
+    const raw = this.#persistence.tasks.raw
+    const nowIso = this.#now().toISOString()
+    for (const id of result.skipped) {
+      raw
+        .prepare(`UPDATE tasks SET status = 'SKIPPED', revision = revision + 1, updated_at = ? WHERE id = ? AND status IN ('WAITING','BLOCKED')`)
+        .run(nowIso, id)
+      await this.#audit?.record({
+        type: 'task.status_changed',
+        task_id: id,
+        from: 'WAITING',
+        to: 'SKIPPED',
+        by,
+      })
+    }
+    return result.skipped
+  }
+
+  /** SKIPPED 重激活：恢复为 WAITING（上游被人工重开时）。 */
+  async #reactivateSkipped(dagId: string, upstreamTaskId: string, by: string): Promise<string[]> {
+    const dag = this.#loadDagSnapshot(dagId) as Parameters<typeof TaskStateMachine.reactivateSkipped>[0]
+    const result = TaskStateMachine.reactivateSkipped(dag, upstreamTaskId)
+    if (result.reactivated.length === 0) return []
+    const raw = this.#persistence.tasks.raw
+    const nowIso = this.#now().toISOString()
+    for (const id of result.reactivated) {
+      raw
+        .prepare(`UPDATE tasks SET status = 'WAITING', revision = revision + 1, updated_at = ? WHERE id = ? AND status = 'SKIPPED'`)
+        .run(nowIso, id)
+      await this.#audit?.record({
+        type: 'task.status_changed',
+        task_id: id,
+        from: 'SKIPPED',
+        to: 'WAITING',
+        by,
+      })
+    }
+    return result.reactivated
   }
 
   /** 取单任务；不存在 → not_found。 */

@@ -33,7 +33,7 @@ describe('MCP stdio（手写 JSON-RPC，design.md §4 最小 5 工具 + design-v
     })
   })
 
-  it('tools/list → 固定 30 个工具（kb 11 + graph 7 + role/team 6 + work 3 + task 3）', async () => {
+  it('tools/list → 固定 32 个工具（kb 11 + graph 7 + role/team 6 + work 5 + task 3）', async () => {
     const tools = createMcpTools({ home: await makeTempDir('prism-mcp-') })
     const res = await handleRpcRequest(rpc('tools/list'), tools)
     const names = ((res?.result as { tools: Array<{ name: string }> }).tools).map((t) => t.name)
@@ -65,6 +65,8 @@ describe('MCP stdio（手写 JSON-RPC，design.md §4 最小 5 工具 + design-v
       'prism_work_pending',
       'prism_work_claim',
       'prism_work_complete',
+      'prism_work_fail',
+      'prism_work_reclaim',
       'prism_task_register',
       'prism_task_report',
       'prism_task_status',
@@ -171,8 +173,10 @@ describe('MCP 工作队列工具（拉取式：pending → claim → complete）
             tools,
           ),
         ),
-      ) as { status: string }
-      expect(done.status).toBe('completed')
+      ) as { work: { status: string }; writeback: { action: string } | null }
+      expect(done.work.status).toBe('completed')
+      // summarize 结果回写（writeback 非 null）
+      expect(done.writeback?.action).toBeDefined()
     } finally {
       persistence.close()
     }
