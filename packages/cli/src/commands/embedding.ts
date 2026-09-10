@@ -20,6 +20,7 @@ import {
   embedText,
   embeddingInstalled,
   ensureEmbeddingServer,
+  preferredBackend,
   stopEmbeddingServer,
 } from '@prism/server'
 
@@ -50,6 +51,7 @@ export async function runEmbedding(ctx: CommandContext, args: string[], _values:
 
 async function status(ctx: CommandContext): Promise<number> {
   const installed = embeddingInstalled()
+  const backend = preferredBackend()
   let alive = false
   let probe: string | undefined
   if (installed) {
@@ -64,6 +66,7 @@ async function status(ctx: CommandContext): Promise<number> {
   const payload = {
     installed,
     alive,
+    backend,
     port: EMBEDDING_PORT,
     dim: EMBEDDING_DIM,
     ...(probe !== undefined ? { probe } : {}),
@@ -71,6 +74,7 @@ async function status(ctx: CommandContext): Promise<number> {
   if (ctx.json) ctx.stdout(JSON.stringify({ ok: true, value: payload }))
   else {
     ctx.stdout(`安装: ${installed ? '就绪' : '缺失（跑 prism embedding install）'}`)
+    ctx.stdout(`后端: ${backend === 'gpu' ? 'GPU（Vulkan）' : 'CPU'}${backend === 'cpu' ? '——慢约 170 倍，建议 prism embedding install --gpu' : ''}`)
     ctx.stdout(`服务: ${alive ? `运行中（127.0.0.1:${EMBEDDING_PORT}，${probe ?? ''}）` : '未运行'}`)
     ctx.stdout(`维度: ${EMBEDDING_DIM}（BGE-M3）`)
   }

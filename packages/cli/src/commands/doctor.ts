@@ -9,6 +9,7 @@ import {
   EMBEDDING_PORT,
   embedText,
   embeddingInstalled,
+  preferredBackend,
   probeConverter,
   resolveGraphifyCommand,
   runGraphify,
@@ -107,11 +108,13 @@ export async function runDoctor(ctx: CommandContext, _args: string[], values: Ar
     })
   } else {
     const probe = await embedText('健康检查')
+    const backend = preferredBackend()
+    const backendLabel = backend === 'gpu' ? 'GPU/Vulkan' : 'CPU（慢，建议 prism embedding install --gpu）'
     checks.push({
       name: 'embedding',
       ok: probe.ok,
       detail: probe.ok
-        ? `就绪（BGE-M3 ${EMBEDDING_DIM} 维，127.0.0.1:${EMBEDDING_PORT}）`
+        ? `就绪（BGE-M3 ${EMBEDDING_DIM} 维，${backendLabel}，127.0.0.1:${EMBEDDING_PORT}）`
         : `已安装但服务不可用：${probe.error ?? '未知'}（prism embedding start）`,
     })
   }

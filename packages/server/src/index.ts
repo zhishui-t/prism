@@ -43,8 +43,10 @@ export {
   embeddingInstalled,
   ensureEmbeddingServer,
   embedText,
+  preferredBackend,
   stopEmbeddingServer,
   type EmbedText,
+  type EmbeddingBackend,
 } from './kb/embedding.js'
 export { ScanHistory, type ScanRecord } from './kb/scan-history.js'
 export {

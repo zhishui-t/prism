@@ -214,11 +214,15 @@ embedding 由 Prism **内置 BGE-M3 模型**生成，**不需要你回填**—�
 宿主无需感知；仅当环境缺模型时用以下命令装配（一次性，约 600MB + 本地编译 llama.cpp）：
 
 \`\`\`bash
-prism embedding install    # 首次：本地 MinGW+CMake 编译 llama.cpp + 下载 BGE-M3（缺工具链时回落预编译包）
-prism embedding status     # 查看安装/服务状态
+prism embedding install    # 首次：编译 llama.cpp + 下载 BGE-M3；**有显卡会自动装 GPU(Vulkan) 包**
+prism embedding status     # 查看安装/服务/后端（GPU 或 CPU）
 prism embedding start|stop # 常驻服务（按需自动启动，一般无需手动）
 prism embedding reindex    # 为已有条目补齐向量（幂等）
 \`\`\`
+
+**GPU 很关键**：CPU 推理 BGE-M3 极慢（1500 字约 7.5s），装了 GPU 包后约 0.2s
+（快约 170 倍）。若 \`status\` 显示 CPU，跑 \`prism embedding install --gpu\`
+（Vulkan 包仅约 28MB，无需 CUDA SDK，装完自动切换后端）。
 
 未安装时自动降级纯 BM25，**不报错、不阻断落库**。
 `,
@@ -520,11 +524,13 @@ prism serve --port 7777             # HTTP API + 控制台（只读控制面）
 向量化由 Prism 自理（内置 BGE-M3，不调宿主 LLM）；未安装自动降级纯 BM25。
 
 \`\`\`bash
-prism embedding install    # 首次装配：本地编译 llama.cpp + 下载模型（缺工具链回落预编译包）
-prism embedding status     # 二进制/模型/服务状态
+prism embedding install    # 首次装配：编译 llama.cpp + 下载模型（有显卡自动加 GPU/Vulkan 包）
+prism embedding status     # 二进制/模型/服务状态 + 后端（GPU 或 CPU）
 prism embedding start|stop # 常驻服务（一般按需自动启停）
 prism embedding reindex    # 为已有条目补齐向量（幂等）
 \`\`\`
+
+**务必用 GPU**：CPU 约慢 170 倍。\`status\` 显示 CPU 时跑 \`prism embedding install --gpu\`。
 
 ## 运行时宿主适配器（prism harness）
 

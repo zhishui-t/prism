@@ -19,9 +19,23 @@ import { join } from 'node:path'
 
 /** vendored 布局（scripts/setup-embedding.mjs 安装目标）。 */
 const LLAMA_DIR = fileURLToPath(new URL('../../../../3rd/llama.cpp', import.meta.url))
-const SERVER_EXE = join(LLAMA_DIR, 'bin', 'llama-server.exe')
+const CPU_SERVER_EXE = join(LLAMA_DIR, 'bin', 'llama-server.exe')
+/** GPU（Vulkan 预编译）二进制；有则优先（CPU 推理慢约 170 倍）。 */
+const GPU_SERVER_EXE = join(LLAMA_DIR, 'bin-vulkan', 'llama-server.exe')
 const MODEL_PATH = join(LLAMA_DIR, 'models', 'bge-m3-Q8_0.gguf')
 const PID_FILE = join(LLAMA_DIR, 'llama-server.pid')
+
+/** 推理后端。 */
+export type EmbeddingBackend = 'gpu' | 'cpu'
+
+/** 优先后端：装了 GPU 包就用 GPU，否则 CPU。 */
+export function preferredBackend(): EmbeddingBackend {
+  return existsSync(GPU_SERVER_EXE) ? 'gpu' : 'cpu'
+}
+
+function serverExeFor(backend: EmbeddingBackend): string {
+  return backend === 'gpu' ? GPU_SERVER_EXE : CPU_SERVER_EXE
+}
 
 /** 默认端口（可被 PRISM_EMBEDDING_PORT 覆盖）。 */
 export const EMBEDDING_PORT = Number(process.env['PRISM_EMBEDDING_PORT'] ?? 8191)
@@ -41,10 +55,10 @@ export const EMBEDDING_DIM = 1024
  */
 export const EMBEDDING_CTX = 2048
 
-/** 安装是否就绪（二进制 + 模型都在）。`PRISM_EMBEDDING=off` 时一律视为未就绪（降级纯 BM25）。 */
+/** 安装是否就绪（可用二进制 + 模型都在）。`PRISM_EMBEDDING=off` 时一律视为未就绪（降级纯 BM25）。 */
 export function embeddingInstalled(): boolean {
   if (embeddingDisabled()) return false
-  return existsSync(SERVER_EXE) && existsSync(MODEL_PATH)
+  return (existsSync(GPU_SERVER_EXE) || existsSync(CPU_SERVER_EXE)) && existsSync(MODEL_PATH)
 }
 
 /**
@@ -56,17 +70,42 @@ function embeddingDisabled(): boolean {
   return v === 'off' || v === '0' || v === 'false'
 }
 
+/** PID 文件内容（记录后端，供「装了 GPU 后自动切过去」判断）。 */
+interface ServerHandle {
+  pid: number
+  backend: EmbeddingBackend
+}
+
+function readHandle(): ServerHandle | null {
+  try {
+    const text = readFileSync(PID_FILE, 'utf-8').trim()
+    if (text === '') return null
+    if (text.startsWith('{')) {
+      const obj = JSON.parse(text) as { pid?: unknown; backend?: unknown }
+      if (typeof obj.pid === 'number') {
+        return { pid: obj.pid, backend: obj.backend === 'gpu' ? 'gpu' : 'cpu' }
+      }
+      return null
+    }
+    // 兼容旧格式（纯 pid）
+    const pid = Number(text)
+    return Number.isFinite(pid) ? { pid, backend: 'cpu' } : null
+  } catch {
+    return null
+  }
+}
+
 /** 停止常驻 server（PID 文件记录的进程）。返回是否有进程被停。 */
 export function stopEmbeddingServer(): boolean {
   let stopped = false
-  try {
-    const pid = Number(readFileSync(PID_FILE, 'utf-8').trim())
-    if (Number.isFinite(pid)) {
-      process.kill(pid)
+  const handle = readHandle()
+  if (handle !== null) {
+    try {
+      process.kill(handle.pid)
       stopped = true
+    } catch {
+      // 进程可能已退出
     }
-  } catch {
-    // PID 缺失/进程已退；下方仍清理锁
   }
   try {
     rmSync(PID_FILE, { force: true })
@@ -109,7 +148,18 @@ let starting: Promise<boolean> | undefined
 export function ensureEmbeddingServer(): Promise<boolean> {
   if (starting === undefined) {
     starting = (async () => {
-      if (await isAlive()) return true
+      const backend = preferredBackend()
+      const exe = serverExeFor(backend)
+      if (await isAlive()) {
+        // 后端升级（如装了 GPU 包后旧 CPU 实例还在）→ 平滑切换：停旧起新
+        const handle = readHandle()
+        if (handle !== null && handle.backend !== backend) {
+          stopEmbeddingServer()
+          await new Promise((r) => setTimeout(r, 1000))
+        } else {
+          return true
+        }
+      }
       if (!embeddingInstalled()) return false
       const acquired = tryAcquireStartLock()
       if (!acquired) {
@@ -123,22 +173,21 @@ export function ensureEmbeddingServer(): Promise<boolean> {
         if (await isAlive()) return true
         // -c/-b/--ubatch-size 三者统一为 EMBEDDING_CTX：默认 -b 2048 会让约 1000 字
         // 的输入直接 500（见 EMBEDDING_CTX 注释），必须放大到装得下单条最长输入。
-        const child = spawn(
-          SERVER_EXE,
-          [
-            '-m', MODEL_PATH,
-            '--embedding',
-            '--host', '127.0.0.1',
-            '--port', String(EMBEDDING_PORT),
-            '-c', String(EMBEDDING_CTX),
-            '-b', String(EMBEDDING_CTX),
-            '--ubatch-size', String(EMBEDDING_CTX),
-          ],
-          { detached: true, stdio: 'ignore', windowsHide: true },
-        )
+        // GPU（Vulkan）后端额外 -ngl 99：全部层卸载到显卡。
+        const argv = [
+          '-m', MODEL_PATH,
+          '--embedding',
+          '--host', '127.0.0.1',
+          '--port', String(EMBEDDING_PORT),
+          '-c', String(EMBEDDING_CTX),
+          '-b', String(EMBEDDING_CTX),
+          '--ubatch-size', String(EMBEDDING_CTX),
+          ...(backend === 'gpu' ? ['-ngl', '99'] : []),
+        ]
+        const child = spawn(exe, argv, { detached: true, stdio: 'ignore', windowsHide: true })
         child.unref()
         try {
-          writeFileSync(PID_FILE, String(child.pid), 'utf-8')
+          writeFileSync(PID_FILE, JSON.stringify({ pid: child.pid, backend }), 'utf-8')
         } catch {
           // PID 记录失败不影响运行
         }

@@ -8,15 +8,22 @@
  *         找不到工具链时回落到官方预编译包。
  *   模型：始终需要下载 BGE-M3 GGUF（gpustack/bge-m3-GGUF Q8_0，约 634MB，1024 维）。
  *
+ * GPU 加速（重要）：CPU 推理 BGE-M3 极慢（实测 1500 字 ≈ 7.5s）。检测到显卡即下载
+ * 官方 **Vulkan** 预编译包（仅约 28MB，NVIDIA/AMD/Intel 通用，无需 CUDA SDK）到
+ * `bin-vulkan/`，运行时全部层卸载到 GPU（实测 1500 字 ≈ 44ms，快约 170 倍）。
+ *
  * 选项：
  *   --check        只检查是否就绪（退出码 0/1）
  *   --bin-only     只装二进制，跳过模型
  *   --model-only   只装模型，跳过二进制
  *   --prebuilt     强制用官方预编译包（不编译）
+ *   --gpu          强制下载 GPU（Vulkan）包（即使未探到显卡）
+ *   --no-gpu       跳过 GPU 包（只用 CPU）
  *   --force        重编译/重下载
  *
  * 产物（均已 gitignore，不进仓库）：
- *   3rd/llama.cpp/bin/llama-server.exe   本地编译产物 + 运行库
+ *   3rd/llama.cpp/bin/llama-server.exe          CPU（本地编译）
+ *   3rd/llama.cpp/bin-vulkan/llama-server.exe   GPU（Vulkan 预编译，有显卡时）
  *   3rd/llama.cpp/models/bge-m3-Q8_0.gguf
  *
  * 验证：prism doctor 会检查 embedding 可用性；检索自动走 BM25+向量混合。
@@ -36,12 +43,14 @@ const LLAMA_DIR = join(ROOT, '3rd', 'llama.cpp')
 const SRC_DIR = join(LLAMA_DIR, 'src')
 const BUILD_DIR = join(LLAMA_DIR, 'build')
 const BIN_DIR = join(LLAMA_DIR, 'bin')
+const GPU_BIN_DIR = join(LLAMA_DIR, 'bin-vulkan')
 const MODEL_DIR = join(LLAMA_DIR, 'models')
 
 /** 版本钉死（升级时改这里）。 */
 const LLAMA_TAG = 'b6900'
 const SRC_URL = `https://codeload.github.com/ggml-org/llama.cpp/zip/refs/tags/${LLAMA_TAG}`
 const PREBUILT_URL = `https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_TAG}/llama-${LLAMA_TAG}-bin-win-cpu-x64.zip`
+const VULKAN_URL = `https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_TAG}/llama-${LLAMA_TAG}-bin-win-vulkan-x64.zip`
 const MODEL_FILE = 'bge-m3-Q8_0.gguf'
 /** 下载源按序尝试：国内镜像优先（huggingface.co 直连常被阻断）。 */
 const MODEL_URLS = [
@@ -49,6 +58,17 @@ const MODEL_URLS = [
   `https://huggingface.co/gpustack/bge-m3-GGUF/resolve/main/${MODEL_FILE}`,
 ]
 const MODEL_BYTES = 634_553_760
+
+/**
+ * GitHub 直连在国内常被阻断/抖动 → release 下载统一走镜像前缀。
+ * 空串 = 官方直链（最后兜底）。codeload（源码 zip）一般可直连，不套镜像。
+ */
+const GH_MIRRORS = ['https://ghfast.top/', 'https://gh-proxy.com/', 'https://ghproxy.net/', '']
+
+/** 给一个 GitHub URL 生成「镜像优先 + 官方兜底」的可尝试列表。 */
+function withMirrors(url) {
+  return GH_MIRRORS.map((m) => (m === '' ? url : `${m}${url}`))
+}
 
 /** 工具链候选目录（PATH 找不到时逐个探测，目录内找 <name>.exe）。 */
 const CMAKE_CANDIDATES = [
@@ -78,6 +98,8 @@ const BIN_ONLY = args.includes('--bin-only')
 const MODEL_ONLY = args.includes('--model-only')
 const FORCE_PREBUILT = args.includes('--prebuilt')
 const FORCE = args.includes('--force')
+const FORCE_GPU = args.includes('--gpu')
+const NO_GPU = args.includes('--no-gpu')
 
 function log(msg) {
   process.stdout.write(`[embedding-setup] ${msg}\n`)
@@ -283,14 +305,46 @@ async function buildFromSource() {
   log(`源码编译完成 → ${BIN_DIR}/llama-server.exe`)
 }
 
-/** 官方预编译包（回落路径）。 */
+/** 官方 CPU 预编译包（回落路径）。 */
 async function installPrebuilt() {
   const zipPath = join(LLAMA_DIR, `llama-${LLAMA_TAG}-bin-win-cpu-x64.zip`)
-  await download(PREBUILT_URL, zipPath)
+  await downloadAny(withMirrors(PREBUILT_URL), zipPath)
   await rm(BIN_DIR, { recursive: true, force: true })
   await unzip(zipPath, BIN_DIR)
   await rm(zipPath, { force: true })
   log(`预编译包安装完成（${(await exists(join(BIN_DIR, 'llama-server.exe'))) ? 'llama-server.exe OK' : '警告: 未找到 llama-server.exe'}）`)
+}
+
+/**
+ * GPU（Vulkan）预编译包 → bin-vulkan/。
+ * 为什么选 Vulkan 而非 CUDA：Vulkan 包仅约 28MB 且无需 CUDA SDK，在 NVIDIA/AMD/Intel
+ * 上都能卸载到 GPU；CUDA 包 179MB + 391MB 运行时，收益并无量级差异（瓶颈在显存带宽）。
+ */
+async function installGpu() {
+  const zipPath = join(LLAMA_DIR, `llama-${LLAMA_TAG}-bin-win-vulkan-x64.zip`)
+  await downloadAny(withMirrors(VULKAN_URL), zipPath)
+  await rm(GPU_BIN_DIR, { recursive: true, force: true })
+  await unzip(zipPath, GPU_BIN_DIR)
+  await rm(zipPath, { force: true })
+  const ok = await exists(join(GPU_BIN_DIR, 'llama-server.exe'))
+  log(ok ? `GPU(Vulkan) 包安装完成 → ${GPU_BIN_DIR}/llama-server.exe` : '警告: GPU 包未找到 llama-server.exe')
+  return ok
+}
+
+/** 探测本机是否有可用显卡（nvidia-smi / wmic），用于决定是否装 GPU 包。 */
+function detectGpu() {
+  const nv = spawnSync('nvidia-smi', ['--query-gpu=name', '--format=csv,noheader'], { encoding: 'utf-8' })
+  if (nv.status === 0 && (nv.stdout ?? '').trim() !== '') return (nv.stdout ?? '').trim().split('\n')[0]
+  // Windows 通用探测：wmic 列显卡名（非 NVIDIA 也可能支持 Vulkan）
+  const wmic = spawnSync('wmic', ['path', 'win32_VideoController', 'get', 'name'], { encoding: 'utf-8' })
+  if (wmic.status === 0) {
+    const names = (wmic.stdout ?? '')
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l !== '' && l.toLowerCase() !== 'name')
+    if (names.length > 0) return names[0]
+  }
+  return null
 }
 
 async function installBinary() {
@@ -308,23 +362,31 @@ async function installBinary() {
   }
 }
 
+/** 是否装 GPU 包：显式 --gpu > 探测到显卡且未 --no-gpu。 */
+function shouldInstallGpu() {
+  if (NO_GPU) return { want: false, reason: '--no-gpu' }
+  if (FORCE_GPU) return { want: true, reason: '--gpu' }
+  const gpu = detectGpu()
+  return gpu !== null
+    ? { want: true, reason: `探测到显卡: ${gpu}` }
+    : { want: false, reason: '未探测到显卡（可 --gpu 强制，或装 GPU 驱动后重试）' }
+}
+
 async function main() {
   await mkdir(LLAMA_DIR, { recursive: true })
   await mkdir(MODEL_DIR, { recursive: true })
 
   const serverExe = join(BIN_DIR, 'llama-server.exe')
+  const gpuServerExe = join(GPU_BIN_DIR, 'llama-server.exe')
   const modelPath = join(MODEL_DIR, MODEL_FILE)
   const binReady = await exists(serverExe)
+  const gpuReady = await exists(gpuServerExe)
   const modelReady = await exists(modelPath)
 
   if (CHECK_ONLY) {
-    log(`二进制: ${binReady ? '就绪' : '缺失'} → ${serverExe}`)
-    log(`模型:   ${modelReady ? '就绪' : '缺失'} → ${modelPath}`)
-    if (binReady) {
-      const cmake = findTool('cmake', CMAKE_CANDIDATES)
-      const mingwBin = findMingwBin()
-      log(`工具链: cmake=${cmake ?? '缺失'} mingw=${mingwBin ?? (spawnSync('gcc', ['--version'], { stdio: 'ignore' }).status === 0 ? 'PATH' : '缺失')}`)
-    }
+    log(`二进制(CPU):  ${binReady ? '就绪' : '缺失'} → ${serverExe}`)
+    log(`二进制(GPU):  ${gpuReady ? '就绪' : '缺失'} → ${gpuServerExe}`)
+    log(`模型:        ${modelReady ? '就绪' : '缺失'} → ${modelPath}`)
     process.exitCode = binReady && modelReady ? 0 : 1
     return
   }
@@ -333,8 +395,22 @@ async function main() {
     if (!MODEL_ONLY && (!binReady || FORCE)) {
       await installBinary()
     } else if (!MODEL_ONLY) {
-      log(`二进制已存在，跳过: ${serverExe}（--force 可重编）`)
+      log(`CPU 二进制已存在，跳过: ${serverExe}（--force 可重编）`)
     }
+
+    // GPU 包：可选增强，失败不阻断（CPU 仍可用）
+    const gpuPlan = shouldInstallGpu()
+    if (!MODEL_ONLY && gpuPlan.want && (!gpuReady || FORCE)) {
+      log(`安装 GPU 加速包（${gpuPlan.reason}）…`)
+      try {
+        await installGpu()
+      } catch (error) {
+        log(`GPU 包安装失败（不影响 CPU 运行）：${error instanceof Error ? error.message : String(error)}`)
+      }
+    } else if (!MODEL_ONLY) {
+      log(gpuPlan.want ? `GPU 包已存在，跳过: ${gpuServerExe}` : `跳过 GPU 包：${gpuPlan.reason}`)
+    }
+
     if (!BIN_ONLY && (!modelReady || FORCE)) {
       await downloadAny(MODEL_URLS, modelPath, MODEL_BYTES)
       log('模型安装完成')
@@ -342,6 +418,7 @@ async function main() {
       log(`模型已存在，跳过: ${modelPath}`)
     }
     log('\n全部就绪。可用 prism doctor 检查；检索将自动使用向量混合排序。')
+    if (gpuReady || gpuPlan.want) log('检测到 GPU 包 → 运行时将自动优先用 GPU 推理。')
   } catch (error) {
     process.stderr.write(`[embedding-setup] 失败: ${error instanceof Error ? error.message : String(error)}\n`)
     process.exitCode = 1
