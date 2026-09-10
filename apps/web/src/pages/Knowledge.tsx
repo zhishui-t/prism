@@ -167,6 +167,9 @@ export function KnowledgePage() {
       {scope.length > 0 && (
         <ScopePanel scope={scope} entries={catalog.data ?? []} />
       )}
+
+      {/* 层间冲突（B2）：有才显示，避免空面板占位 */}
+      <ConflictPanel onSelect={setSelectedId} />
     </div>
   )
 }
@@ -199,6 +202,78 @@ function Breadcrumb({ scope, onNavigate }: { scope: Scope; onNavigate: (s: Scope
         </span>
       ))}
     </nav>
+  )
+}
+
+/**
+ * 层间冲突面板（B2）：同名跨层且未声明 overrides 的条目对。
+ * 只提示不阻断；可逐条标记已处理。
+ */
+function ConflictPanel({ onSelect }: { onSelect: (id: string) => void }) {
+  const conflicts = useAsync(() => api.kbConflicts(), [])
+  const [busy, setBusy] = useState('')
+  const [hidden, setHidden] = useState(false)
+
+  const list = conflicts.data ?? []
+  if (hidden || list.length === 0) return null
+
+  const resolve = async (id: string) => {
+    setBusy(id)
+    try {
+      await api.kbResolveConflict(id)
+      conflicts.reload()
+    } finally {
+      setBusy('')
+    }
+  }
+
+  return (
+    <div className="card" style={{ marginTop: 12 }}>
+      <div className="row" style={{ justifyContent: 'space-between' }}>
+        <h3 style={{ margin: 0 }}>
+          层间冲突 <span className="small muted">（{list.length}）</span>
+        </h3>
+        <button onClick={() => setHidden(true)}>收起</button>
+      </div>
+      <div className="small muted" style={{ margin: '6px 0 10px' }}>
+        同名条目跨层共存且高层未声明 <span className="mono">overrides</span>。
+        Prism 只记录不阻断——如需以高层为准，请在高层条目里显式声明覆盖，然后标记已处理。
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th style={{ width: 130 }}>高层条目</th>
+            <th style={{ width: 130 }}>低层条目</th>
+            <th style={{ width: 90 }}>类型</th>
+            <th style={{ width: 150 }}>发现时间</th>
+            <th style={{ width: 90 }} />
+          </tr>
+        </thead>
+        <tbody>
+          {list.map((c) => (
+            <tr key={c.id}>
+              <td>
+                <button className="rel-link mono small" onClick={() => onSelect(c.high_id)}>
+                  {c.high_id}
+                </button>
+              </td>
+              <td>
+                <button className="rel-link mono small" onClick={() => onSelect(c.low_id)}>
+                  {c.low_id}
+                </button>
+              </td>
+              <td className="small muted">{c.kind}</td>
+              <td className="small muted">{c.detected_at.replace('T', ' ').slice(0, 19)}</td>
+              <td>
+                <button onClick={() => void resolve(c.id)} disabled={busy === c.id}>
+                  {busy === c.id ? '处理中…' : '标记已处理'}
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   )
 }
 
@@ -1094,13 +1169,45 @@ function MiniGraph({ view }: { view: KbGraphView }) {
 function EntryPanel({ id, onClose, onSelect }: { id: string; onClose: () => void; onSelect: (id: string) => void }) {
   const entry = useAsync(() => api.kbGet(id), [id])
   const neighbors = useAsync(() => api.kbGraph({ id, depth: 1 }), [id])
+  const [removing, setRemoving] = useState(false)
+  const [note, setNote] = useState('')
+
+  /** 软删（可恢复）：二次确认，避免误点。 */
+  const doRemove = async () => {
+    if (!window.confirm(`软删条目「${entry.data?.title ?? id}」？
+
+条目将标记为 deprecated（保留可恢复），不再出现在检索与图谱中。`)) {
+      return
+    }
+    setRemoving(true)
+    try {
+      const result = await api.kbRemove(id)
+      setNote(`已软删（被 ${result.references} 条边引用）；关闭面板后从视图消失`)
+    } catch (error) {
+      setNote(`删除失败：${error instanceof Error ? error.message : String(error)}`)
+    } finally {
+      setRemoving(false)
+    }
+  }
 
   return (
     <aside className="entry-panel">
       <div className="row" style={{ justifyContent: 'space-between', marginBottom: 10 }}>
         <strong>条目详情</strong>
-        <button onClick={onClose}>关闭</button>
+        <div className="row" style={{ gap: 6 }}>
+          {entry.data !== undefined && entry.data.status === 'active' && (
+            <button onClick={() => void doRemove()} disabled={removing} title="软删（可恢复）">
+              {removing ? '删除中…' : '软删'}
+            </button>
+          )}
+          <button onClick={onClose}>关闭</button>
+        </div>
       </div>
+      {note !== '' && (
+        <div className="small" style={{ marginBottom: 8, color: 'var(--warn, #e0c23a)' }}>
+          {note}
+        </div>
+      )}
       <State loading={entry.loading} error={entry.error}>
         {entry.data && (
           <>

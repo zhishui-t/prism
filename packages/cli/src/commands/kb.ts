@@ -47,6 +47,10 @@ export async function runKb(ctx: CommandContext, args: string[], values: ArgValu
       return await kbSync(ctx, rest, values)
     case 'remove':
       return await kbRemove(ctx, rest, values)
+    case 'conflicts':
+      return await kbConflicts(ctx, values)
+    case 'resolve':
+      return await kbResolve(ctx, rest)
     case 'export':
       return await kbExport(ctx, rest, values)
     default:
@@ -109,15 +113,25 @@ async function kbImport(ctx: CommandContext, args: string[], values: ArgValues):
 async function kbSearch(ctx: CommandContext, args: string[], values: ArgValues): Promise<number> {
   const q = args[0]
   if (q === undefined || q.trim() === '') {
-    ctx.stderr('用法: prism kb search <query> [--layer --book --limit]')
+    ctx.stderr('用法: prism kb search <query> [--layer --owner --book --module --visibility --limit]')
     return 1
   }
   const kb = await getKb(ctx)
+  const visibilities =
+    values.visibility !== undefined
+      ? (String(values.visibility)
+          .split(',')
+          .map((v) => v.trim())
+          .filter((v): v is 'global' | 'project' | 'role' => ['global', 'project', 'role'].includes(v)))
+      : undefined
   const results = await kb.search({
     q: q.trim(),
     layers: values.layer !== undefined ? [values.layer as 'global' | 'project' | 'role'] : undefined,
+    owner: values.owner,
     book: values.book,
+    module: values.module,
     limit: values.limit !== undefined ? Number(values.limit) : undefined,
+    ...(visibilities !== undefined && visibilities.length > 0 ? { visibilities } : {}),
   })
   if (ctx.json) {
     ctx.stdout(JSON.stringify({ ok: true, value: results }))
@@ -431,6 +445,58 @@ async function kbRemove(ctx: CommandContext, args: string[], values: ArgValues):
     }
     throw error
   }
+}
+
+/**
+ * `prism kb conflicts [--all]`
+ * 列出层间冲突（默认只列未处理的；--all 含已处理）。
+ */
+async function kbConflicts(ctx: CommandContext, values: ArgValues): Promise<number> {
+  const kb = await getKb(ctx)
+  if (kb.conflicts === undefined) {
+    ctx.stderr('错误 [unsupported] 当前知识服务未实现 conflicts')
+    return 1
+  }
+  const list = await kb.conflicts({ includeResolved: values.all === true })
+  if (ctx.json) {
+    ctx.stdout(JSON.stringify({ ok: true, value: list }))
+    return 0
+  }
+  if (list.length === 0) {
+    ctx.stdout('（没有层间冲突）')
+    return 0
+  }
+  for (const c of list) {
+    const mark = c.resolved ? '已处理' : '未处理'
+    ctx.stdout(`[${mark}] ${c.kind}  ${c.high_id}  ⟷  ${c.low_id}   (${c.detected_at})`)
+    ctx.stdout(`        ${c.id}`)
+  }
+  ctx.stdout(`共 ${list.length} 条`)
+  return 0
+}
+
+/** `prism kb resolve <conflict-id>`：标记冲突已处理。 */
+async function kbResolve(ctx: CommandContext, args: string[]): Promise<number> {
+  const id = args[0]
+  if (id === undefined) {
+    ctx.stderr('用法: prism kb resolve <conflict-id>')
+    return 1
+  }
+  const kb = await getKb(ctx)
+  if (kb.resolveConflict === undefined) {
+    ctx.stderr('错误 [unsupported] 当前知识服务未实现 resolveConflict')
+    return 1
+  }
+  const resolved = await kb.resolveConflict(id)
+  if (ctx.json) {
+    ctx.stdout(JSON.stringify({ ok: true, value: { id, resolved } }))
+  } else if (resolved) {
+    ctx.stdout(`已标记冲突 ${id} 为已处理`)
+  } else {
+    ctx.stderr(`错误 [not_found] 冲突不存在: ${id}`)
+    return 1
+  }
+  return resolved ? 0 : 1
 }
 
 /** `prism kb reindex`：以文件为真相重建索引（Z2；手工编辑/迁移知识文件后收敛漂移）。 */async function kbReindex(ctx: CommandContext): Promise<number> {  const kb = await getKb(ctx)

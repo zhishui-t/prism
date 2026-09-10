@@ -33,7 +33,7 @@ describe('MCP stdio（手写 JSON-RPC，design.md §4 最小 5 工具 + design-v
     })
   })
 
-  it('tools/list → 固定 22 个工具（kb 5 + graph 7 + role/team 4 + work 3 + task 3）', async () => {
+  it('tools/list → 固定 28 个工具（kb 5 + graph 7 + role/team 4 + work 3 + task 3）', async () => {
     const tools = createMcpTools({ home: await makeTempDir('prism-mcp-') })
     const res = await handleRpcRequest(rpc('tools/list'), tools)
     const names = ((res?.result as { tools: Array<{ name: string }> }).tools).map((t) => t.name)
@@ -43,6 +43,12 @@ describe('MCP stdio（手写 JSON-RPC，design.md §4 最小 5 工具 + design-v
       'prism_kb_deposit',
       'prism_kb_graph',
       'prism_kb_tree',
+      'prism_kb_stats',
+      'prism_kb_catalog',
+      'prism_kb_path',
+      'prism_kb_remove',
+      'prism_kb_conflicts',
+      'prism_kb_resolve_conflict',
       'prism_graph_query',
       'prism_graph_status',
       'prism_graph_path',
@@ -240,5 +246,45 @@ describe('MCP 任务台账工具（被动台账：register → report → status
     )
     expect(bad?.result).toMatchObject({ isError: true })
     expect(textOf(bad)).toContain('invalid_status_transition')
+  })
+})
+
+describe('MCP 新增工具（kb stats/catalog/path/remove/conflicts/resolve）', () => {
+  it('prism_kb_stats → 统计；prism_kb_remove → 软删', async () => {
+    const kb = new MemoryKb()
+    await kb.deposit({ id: 'M-1', title: 'T', type: 'rule', layer: 'global', book: 'b', content: 'x' })
+    const tools = createMcpTools({ home: await makeTempDir('prism-mcp-new-'), kb })
+
+    const stats = await handleRpcRequest(rpc('tools/call', { name: 'prism_kb_stats', arguments: {} }), tools)
+    const statsPayload = JSON.parse((stats?.result as { content: Array<{ text: string }> }).content[0]!.text) as {
+      total?: number
+      entries?: number
+    }
+    expect(typeof statsPayload).toBe('object')
+
+    const removed = await handleRpcRequest(
+      rpc('tools/call', { name: 'prism_kb_remove', arguments: { id: 'M-1' } }),
+      tools,
+    )
+    const removedPayload = JSON.parse(
+      (removed?.result as { content: Array<{ text: string }> }).content[0]!.text,
+    ) as { mode: string }
+    expect(removedPayload.mode).toBe('soft')
+  })
+
+  it('prism_kb_conflicts → 数组；prism_kb_path 缺参 → isError', async () => {
+    const tools = createMcpTools({ home: await makeTempDir('prism-mcp-new2-'), kb: new MemoryKb() })
+    const conflicts = await handleRpcRequest(
+      rpc('tools/call', { name: 'prism_kb_conflicts', arguments: {} }),
+      tools,
+    )
+    const payload = JSON.parse((conflicts?.result as { content: Array<{ text: string }> }).content[0]!.text)
+    expect(Array.isArray(payload)).toBe(true)
+
+    const bad = await handleRpcRequest(
+      rpc('tools/call', { name: 'prism_kb_path', arguments: { from: 'a' } }),
+      tools,
+    )
+    expect((bad?.result as { isError?: boolean }).isError).toBe(true)
   })
 })

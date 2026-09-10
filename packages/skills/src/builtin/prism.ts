@@ -101,11 +101,11 @@ prism serve --port 7777            # 起 HTTP 服务 + 控制台
 - **不编边**：图谱没有的关系不要推断；\`confidence\` 字段（EXTRACTED/INFERRED）照实呈现；
 - **不读全图**：用查询拿子图（\`limit\`/\`depth\` 有界），避免把整张图塞进上下文。
 
-## 5. 工具速查（22 个 MCP 工具）
+## 5. 工具速查（28 个 MCP 工具）
 
 | 分组 | 工具 |
 | :--- | :--- |
-| 知识库（5） | \`prism_kb_search\` \`prism_kb_get\` \`prism_kb_deposit\` \`prism_kb_graph\` \`prism_kb_tree\` |
+| 知识库（11） | \`prism_kb_search\` \`prism_kb_get\` \`prism_kb_deposit\` \`prism_kb_graph\` \`prism_kb_tree\` \`prism_kb_stats\` \`prism_kb_catalog\` \`prism_kb_path\` \`prism_kb_remove\` \`prism_kb_conflicts\` \`prism_kb_resolve_conflict\` |
 | 代码图谱（7） | \`prism_graph_query\` \`prism_graph_path\` \`prism_graph_explain\` \`prism_graph_affected\` \`prism_graph_god_nodes\` \`prism_graph_summary\` \`prism_graph_status\` |
 | 角色团队（4） | \`prism_role_list\` \`prism_role_render\` \`prism_team_get\` \`prism_team_activate\` |
 | 工作队列（3） | \`prism_work_pending\` \`prism_work_claim\` \`prism_work_complete\` |
@@ -121,13 +121,13 @@ prism init [--zcode-dir <宿主根>] [--yes]     # 接入：注册 MCP + 装 Ski
 prism serve [--port 7777]                     # HTTP API + 控制台
 prism doctor                                   # 环境自检
 prism harness list | show                      # 运行时宿主适配器
-prism kb     import/sync/search/get/tree/stats/graph/path/remove/reindex
-prism graph  build/query/path/explain/affected/god-nodes/summary/status
+prism kb     import/sync/search/get/tree/stats/graph/path/remove/conflicts/resolve/export/reindex
+prism graph  build/query/path/explain/affected/god-nodes/summary/export/status
 prism project add/list/show/remove          项目台账（登记后 kb sync 可扫）
 prism arch   types/validate/render             # 架构图谱（五类图）
 prism role   list/show/init/import/validate/render/install
 prism team   list/show/validate/install/activate
-prism skill  list/install/validate
+prism skill  list/install
 prism work   pending/enqueue/claim/complete/fail/reclaim/stats
 prism task   list/show/graph/register/report/stats
 \`\`\`

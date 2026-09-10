@@ -232,6 +232,61 @@ export class MemoryKb implements KnowledgeService {
   > {
     return []
   }
+
+  /** B2 桩：无冲突可解决，恒 false。 */
+  async resolveConflict(_conflictId: string): Promise<boolean> {
+    return false
+  }
+
+  /** A3 桩：按 id@version 写入内存（模拟引用型索引）。 */
+  async index(input: {
+    id: string
+    title: string
+    type?: string
+    layer: Layer
+    owner?: string
+    book: string
+    module?: string
+    path: string
+    source_hash: string
+    content: string
+  }): Promise<{ id: string; action: 'created' | 'updated' | 'unchanged' }> {
+    const existing = await this.get(input.id)
+    if (existing !== null && existing.source_hash === input.source_hash) {
+      return { id: input.id, action: 'unchanged' }
+    }
+    const action = existing === null ? ('created' as const) : ('updated' as const)
+    const now = new Date().toISOString()
+    const version = existing === null ? 1 : existing.version + 1
+    this.#entries.set(`${input.id}@${version}`, {
+      id: input.id,
+      version,
+      title: input.title,
+      type: (input.type ?? 'doc') as KnowledgeEntry['type'],
+      layer: input.layer,
+      ...(input.owner !== undefined ? { owner: input.owner } : {}),
+      book: input.book,
+      module: input.module ?? '_inbox',
+      status: 'active',
+      risk: 'low',
+      confidence: 0.5,
+      tags: [],
+      content: input.content,
+      path: input.path,
+      content_hash: input.source_hash,
+      origin: 'indexed',
+      source_hash: input.source_hash,
+      created_at: existing?.created_at ?? now,
+      updated_at: now,
+    })
+    return { id: input.id, action }
+  }
+
+  /** Z2 桩：内存桩无需重建（文件即内存）。 */
+  async reindex(): Promise<{ scanned: number; indexed: number; skipped: number; errors: Array<{ path: string; reason: string }> }> {
+    const n = this.#entries.size
+    return { scanned: n, indexed: n, skipped: 0, errors: [] }
+  }
 }
 
 /** 临时目录（自动前缀），用于隔离 PRISM_HOME / 项目根。 */

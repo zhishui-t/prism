@@ -269,6 +269,11 @@ export function createMcpTools(deps: McpDeps): McpTool[] {
           module: { type: 'string' },
           limit: { type: 'integer', minimum: 1, maximum: 1000 },
           all_versions: { type: 'boolean' },
+          visibilities: {
+            type: 'array',
+            items: { enum: ['global', 'project', 'role'] },
+            description: '按可见性收窄读取面（B3，opt-in）',
+          },
         },
         required: ['q'],
       },
@@ -285,6 +290,9 @@ export function createMcpTools(deps: McpDeps): McpTool[] {
           module: asString(args.module),
           limit: typeof args.limit === 'number' ? args.limit : undefined,
           all_versions: typeof args.all_versions === 'boolean' ? args.all_versions : undefined,
+          ...(Array.isArray(args.visibilities)
+            ? { visibilities: args.visibilities as SearchQuery['visibilities'] }
+            : {}),
         }
         return await (await kb()).search(query)
       },
@@ -393,6 +401,107 @@ export function createMcpTools(deps: McpDeps): McpTool[] {
         ),
     },
     {
+      name: 'prism_kb_stats',
+      description: '知识库统计（条目/书/各层分布），回答「知识库有多大」',
+      inputSchema: { type: 'object', properties: {} },
+      call: async () => await (await kb()).stats(),
+    },
+    {
+      name: 'prism_kb_catalog',
+      description: '全量目录（最新版，带出入度）；供星图/下钻渲染，支持 layer/owner/book 过滤',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          layer: { enum: ['global', 'project', 'role'] },
+          owner: { type: 'string' },
+          book: { type: 'string' },
+          limit: { type: 'integer', minimum: 1, maximum: 5000 },
+        },
+      },
+      call: async (args) =>
+        await (await kb()).catalog({
+          layer: asString(args.layer) as 'global' | 'project' | 'role' | undefined,
+          owner: asString(args.owner),
+          book: asString(args.book),
+          limit: typeof args.limit === 'number' ? args.limit : undefined,
+        }),
+    },
+    {
+      name: 'prism_kb_path',
+      description: '知识条目之间的最短路径（无向 BFS）；不可达返回 null',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          from: { type: 'string' },
+          to: { type: 'string' },
+          relations: {
+            type: 'array',
+            items: { enum: ['references', 'overrides', 'supersedes', 'related'] },
+          },
+        },
+        required: ['from', 'to'],
+      },
+      call: async (args) => {
+        const from = asString(args.from)
+        const to = asString(args.to)
+        if (from === undefined || to === undefined) {
+          throw new Error('prism_kb_path 需要 { from, to }')
+        }
+        const relations = Array.isArray(args.relations)
+          ? (args.relations as GraphQuery['relations'])
+          : undefined
+        return await (await kb()).path(from, to, relations)
+      },
+    },
+    {
+      name: 'prism_kb_remove',
+      description: '删除知识条目：默认软删（置 deprecated，可恢复）；hard=true 硬删（被引用时拒绝）',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          hard: { type: 'boolean', description: '默认 false（软删）；true 需无引用' },
+        },
+        required: ['id'],
+      },
+      call: async (args) => {
+        const id = asString(args.id)
+        if (id === undefined) throw new Error('prism_kb_remove 需要 { id }')
+        const service = await kb()
+        if (service.remove === undefined) throw new Error('当前知识服务未实现 remove')
+        return await service.remove(id, { hard: args.hard === true })
+      },
+    },
+    {
+      name: 'prism_kb_conflicts',
+      description: '层间冲突列表（同名跨层且未声明 overrides）；默认只返回未处理的',
+      inputSchema: {
+        type: 'object',
+        properties: { include_resolved: { type: 'boolean' } },
+      },
+      call: async (args) => {
+        const service = await kb()
+        if (service.conflicts === undefined) throw new Error('当前知识服务未实现 conflicts')
+        return await service.conflicts({ includeResolved: args.include_resolved === true })
+      },
+    },
+    {
+      name: 'prism_kb_resolve_conflict',
+      description: '标记一条层间冲突已处理（只改标记，不删记录）',
+      inputSchema: {
+        type: 'object',
+        properties: { conflict_id: { type: 'string' } },
+        required: ['conflict_id'],
+      },
+      call: async (args) => {
+        const id = asString(args.conflict_id)
+        if (id === undefined) throw new Error('prism_kb_resolve_conflict 需要 { conflict_id }')
+        const service = await kb()
+        if (service.resolveConflict === undefined) throw new Error('当前知识服务未实现 resolveConflict')
+        return { resolved: await service.resolveConflict(id) }
+      },
+    },
+    {
       name: 'prism_graph_query',
       description: '查询已建图的代码图谱（graphify query；返回子图/摘要，不返回全图）',
       inputSchema: {
@@ -404,7 +513,7 @@ export function createMcpTools(deps: McpDeps): McpTool[] {
     },
     {
       name: 'prism_graph_status',
-      description: '图谱陈旧状态（manifest 哈希 + git HEAD）',
+      description: '图谱陈旧状态（纯文件哈希比对，不读 git）',
       inputSchema: {
         type: 'object',
         properties: { project: { type: 'string' } },

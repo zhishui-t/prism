@@ -75,6 +75,19 @@ export interface GraphProject {
   root: string
   built_at?: string
   stale?: boolean
+  registered_at?: string
+  last_scan_at?: string
+  scanned_sources?: number
+}
+
+/** 层间冲突（/api/kb/conflicts）。 */
+export interface KbConflict {
+  id: string
+  high_id: string
+  low_id: string
+  kind: string
+  resolved: boolean
+  detected_at: string
 }
 
 /** 知识图谱节点（/api/kb/graph）。 */
@@ -321,6 +334,21 @@ export const api = {
   },
 
   /** 知识图谱导出（借 Graphify 渲染/Obsidian） */
+  kbConflicts: (includeResolved = false) =>
+    request<KbConflict[]>(`/api/kb/conflicts${includeResolved ? '?include_resolved=true' : ''}`),
+
+  kbResolveConflict: (id: string) =>
+    request<{ id: string; resolved: boolean }>(
+      `/api/kb/conflicts/${encodeURIComponent(id)}/resolve`,
+      { method: 'POST' },
+    ),
+
+  kbRemove: (id: string, hard = false) =>
+    request<{ id: string; mode: string; references: number }>(
+      `/api/kb/entry/${encodeURIComponent(id)}/remove${hard ? '?hard=true' : ''}`,
+      { method: 'POST' },
+    ),
+
   kbExport: (format: string) =>
     request<{ format: string; output: string; files: string[]; summary: { nodes: number; edges: number } }>(
       '/api/kb/export',

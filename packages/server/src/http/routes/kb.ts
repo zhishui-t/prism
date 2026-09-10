@@ -18,6 +18,7 @@ export function kbRoutes(getKb: () => Promise<KnowledgeService>): {
   exportGraph: (ctx: RouteContext) => Promise<Envelope>
   remove: (ctx: RouteContext) => Promise<Envelope>
   conflicts: (ctx: RouteContext) => Promise<Envelope>
+  resolveConflict: (ctx: RouteContext) => Promise<Envelope>
 } {
   const search = async (ctx: RouteContext): Promise<Envelope> => {
     const q = ctx.query.get('q')?.trim() ?? ''
@@ -25,6 +26,8 @@ export function kbRoutes(getKb: () => Promise<KnowledgeService>): {
       throw new PrismError('bad_request', '缺少检索词 q')
     }
     const layers = parseLayers(ctx.query.get('layers'))
+    // B3：visibility 过滤（opt-in，不传即不过滤）
+    const visibilities = parseLayers(ctx.query.get('visibilities'))
     const limit = parseLimit(ctx.query.get('limit'))
     const results = await (
       await getKb()
@@ -36,6 +39,7 @@ export function kbRoutes(getKb: () => Promise<KnowledgeService>): {
       module: ctx.query.get('module') ?? undefined,
       limit: limit ?? undefined,
       all_versions: parseBool(ctx.query.get('all_versions')),
+      ...(visibilities !== null ? { visibilities } : {}),
     })
     return ok(results)
   }
@@ -74,11 +78,13 @@ export function kbRoutes(getKb: () => Promise<KnowledgeService>): {
     const book = ctx.query.get('book')?.trim() || undefined
     const limitRaw = ctx.query.get('limit')
     const limit = limitRaw !== null && limitRaw !== '' ? parseLimit(limitRaw) : null
+    const visibilities = parseLayers(ctx.query.get('visibilities'))
     const entries = await (await getKb()).catalog({
       ...(layer !== null ? { layer } : {}),
       ...(owner !== undefined ? { owner } : {}),
       ...(book !== undefined ? { book } : {}),
       ...(limit !== null ? { limit } : {}),
+      ...(visibilities !== null ? { visibilities } : {}),
     })
     return ok(entries)
   }
@@ -109,6 +115,15 @@ export function kbRoutes(getKb: () => Promise<KnowledgeService>): {
     const kb = await getKb()
     if (kb.conflicts === undefined) throw new PrismError('unsupported', '当前知识服务未实现 conflicts')
     return ok(await kb.conflicts({ includeResolved: ctx.query.get('include_resolved') === 'true' }))
+  }
+
+  /** 标记冲突已处理（B2）：`POST /api/kb/conflicts/:id/resolve`。 */
+  const resolveConflict = async (ctx: RouteContext): Promise<Envelope> => {
+    const id = ctx.params.id?.trim() ?? ''
+    if (id === '') throw new PrismError('bad_request', '缺少冲突 id')
+    const kb = await getKb()
+    if (kb.resolveConflict === undefined) throw new PrismError('unsupported', '当前知识服务未实现 resolveConflict')
+    return ok({ id, resolved: await kb.resolveConflict(id) })
   }
 
   /** 图谱邻域/概览：`?id=<节点>&depth=1&relations=references&limit=50`。 */
@@ -174,7 +189,7 @@ export function kbRoutes(getKb: () => Promise<KnowledgeService>): {
     return ok(found)
   }
 
-  return { search, get, tree, stats, catalog, deposit, graph, path, exportGraph, remove, conflicts }
+  return { search, get, tree, stats, catalog, deposit, graph, path, exportGraph, remove, conflicts, resolveConflict }
 }
 
 /** 关系类型查询参数（`relations=references,overrides`；非法 → bad_request）。 */

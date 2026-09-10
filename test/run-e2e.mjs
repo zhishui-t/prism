@@ -326,6 +326,38 @@ async function main() {
     const hardDel = await cli(['kb', 'remove', 'E2E-A', '--hard', '--yes', '--json'], env)
     check('11.5 被引用条目禁止硬删', hardDel.code !== 0 && hardDel.stderr.includes('referenced'))
 
+    // ===== 12. 冲突检测闭环（B2） =====
+    // 造同名跨层条目：global 与 project 同名同模块且未声明 overrides
+    const gDoc = join(workRoot, 'conf-global.md')
+    const pDoc = join(workRoot, 'conf-project.md')
+    await writeFile(
+      gDoc,
+      '---\nid: CONF-G\ntitle: 命名规范\ntype: rule\nlayer: global\nbook: e2e\nmodule: conf\n---\n\n全局。\n',
+      'utf-8',
+    )
+    await writeFile(
+      pDoc,
+      '---\nid: CONF-P\ntitle: 命名规范\ntype: rule\nlayer: project\nowner: e2e\nbook: e2e\nmodule: conf\n---\n\n项目。\n',
+      'utf-8',
+    )
+    await cli(['kb', 'import', gDoc], env)
+    await cli(['kb', 'import', pDoc], env)
+
+    const confList = await cli(['kb', 'conflicts', '--json'], env)
+    const conflicts = JSON.parse(confList.stdout).value
+    check(
+      '12.1 同名跨层 → 检出冲突',
+      conflicts.length >= 1 && conflicts.some((c) => c.high_id === 'CONF-P' && c.low_id === 'CONF-G'),
+      `n=${conflicts.length}`,
+    )
+
+    const conflictId = conflicts[0]?.id
+    const resolved = await cli(['kb', 'resolve', conflictId, '--json'], env)
+    check('12.2 标记冲突已处理', resolved.code === 0 && JSON.parse(resolved.stdout).value.resolved === true)
+
+    const afterResolve = await cli(['kb', 'conflicts', '--json'], env)
+    check('12.3 已处理冲突不再出现在默认列表', JSON.parse(afterResolve.stdout).value.length === conflicts.length - 1)
+
     // ===== 9. 真实宿主零污染 =====
     const realAfter = await listDir(REAL_ZCODE)
     check(
