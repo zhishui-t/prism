@@ -5,9 +5,11 @@ import type { RouteContext } from '../router.js'
 import { ENTRY_TYPES, LAYERS, type DepositInput, type EdgeRelation, type KnowledgeService, type Layer } from '../../kb/port.js'
 import { exportKnowledgeGraph } from '../../kb/graph-export.js'
 import { ScanHistory } from '../../kb/scan-history.js'
+import { buildContextPack } from '../../kb/context-pack.js'
+import { loadRole } from '../../roles/index.js'
 
 /** kb 路由工厂：注入知识服务端口（真实服务运行时装载；测试注入内存桩）。 */
-export function kbRoutes(getKb: () => Promise<KnowledgeService>, home: string): {
+export function kbRoutes(getKb: () => Promise<KnowledgeService>, home: string, rolesDir: string): {
   search: (ctx: RouteContext) => Promise<Envelope>
   get: (ctx: RouteContext) => Promise<Envelope>
   tree: (ctx: RouteContext) => Promise<Envelope>
@@ -21,6 +23,7 @@ export function kbRoutes(getKb: () => Promise<KnowledgeService>, home: string): 
   conflicts: (ctx: RouteContext) => Promise<Envelope>
   resolveConflict: (ctx: RouteContext) => Promise<Envelope>
   scanHistory: (ctx: RouteContext) => Promise<Envelope>
+  contextPack: (ctx: RouteContext) => Promise<Envelope>
 } {
   const search = async (ctx: RouteContext): Promise<Envelope> => {
     const q = ctx.query.get('q')?.trim() ?? ''
@@ -137,6 +140,29 @@ export function kbRoutes(getKb: () => Promise<KnowledgeService>, home: string): 
     return ok(await history.list(project, Number.isFinite(limit) ? limit : 20))
   }
 
+  /** 上下文包：`GET /api/kb/context-pack?role=<名>&task=<词>&budget_tokens=4000`。 */
+  const contextPack = async (ctx: RouteContext): Promise<Envelope> => {
+    const roleName = ctx.query.get('role')?.trim() ?? ''
+    const task = ctx.query.get('task')?.trim() ?? ''
+    if (roleName === '' || task === '') {
+      throw new PrismError('bad_request', '缺少 role 或 task 参数')
+    }
+    const role = await loadRole(rolesDir, roleName)
+    if (role === null) {
+      throw new PrismError('not_found', `角色不存在: ${roleName}`)
+    }
+    const budgetRaw = ctx.query.get('budget_tokens')
+    const budget = budgetRaw !== null && budgetRaw !== '' ? Number(budgetRaw) : undefined
+    return ok(
+      await buildContextPack(await getKb(), {
+        role: roleName,
+        binding: role.knowledge,
+        task,
+        ...(budget !== undefined && Number.isFinite(budget) ? { budgetTokens: budget } : {}),
+      }),
+    )
+  }
+
   /** 图谱邻域/概览：`?id=<节点>&depth=1&relations=references&limit=50`。 */
   const graph = async (ctx: RouteContext): Promise<Envelope> => {
     const id = ctx.query.get('id')?.trim() || undefined
@@ -200,7 +226,7 @@ export function kbRoutes(getKb: () => Promise<KnowledgeService>, home: string): 
     return ok(found)
   }
 
-  return { search, get, tree, stats, catalog, deposit, graph, path, exportGraph, remove, conflicts, resolveConflict, scanHistory }
+  return { search, get, tree, stats, catalog, deposit, graph, path, exportGraph, remove, conflicts, resolveConflict, scanHistory, contextPack }
 }
 
 /** 关系类型查询参数（`relations=references,overrides`；非法 → bad_request）。 */

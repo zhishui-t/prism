@@ -64,9 +64,18 @@ export function bigram(input: string): string {
 }
 
 /** 把 bigram 输出转成 FTS5 MATCH 表达式：逐词双引号包裹（AND 语义）。 */
-export function toMatchExpression(query: string): string {
+export type MatchMode = 'all' | 'any'
+
+/**
+ * 生成 FTS5 MATCH 表达式。
+ * - `all`（默认）：空格分隔 = 隐式 AND，要求命中全部词元——精确检索用；
+ * - `any`：显式 OR，命中任一词元即可——**长任务描述**（上下文包）用，
+ *   否则「审计 src/auth.ts 的变更」这类句子会因要求全部词元而零命中。
+ */
+export function toMatchExpression(query: string, mode: MatchMode = 'all'): string {
   const terms = bigram(query)
     .split(' ')
     .filter((t) => t.length > 0)
-  return terms.map((t) => `"${t.replace(/"/g, '""')}"`).join(' ')
+    .map((t) => `"${t.replace(/"/g, '""')}"`)
+  return mode === 'any' ? terms.join(' OR ') : terms.join(' ')
 }

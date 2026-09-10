@@ -37,6 +37,13 @@ export {
 export { probeConverter } from '@prism/knowledge'
 export { ScanHistory, type ScanRecord } from './kb/scan-history.js'
 export {
+  buildContextPack,
+  estimateTokens,
+  type ContextPack,
+  type ContextPackItem,
+  type ContextPackOptions,
+} from './kb/context-pack.js'
+export {
   DEFAULT_IGNORE_DIRS,
   extractTitle,
   idFromRel,

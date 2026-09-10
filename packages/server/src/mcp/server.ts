@@ -28,6 +28,7 @@ import {
 import { inspectGraphStatus, ProjectRegistry } from '../graph/registry.js'
 import type { DepositInput, GraphQuery, KnowledgeService, SearchQuery } from '../kb/port.js'
 import { loadKnowledgeService } from '../kb/wiring.js'
+import { buildContextPack } from '../kb/context-pack.js'
 
 /**
  * MCP stdio 服务（design.md §4 最小集 + design-v3 §3.4 P6 增量，手写 JSON-RPC 2.0）：
@@ -232,6 +233,28 @@ export function createMcpTools(deps: McpDeps): McpTool[] {
   const roleList = async (): Promise<unknown> => {
     const roles = await loadRoles(rolesDir)
     return { count: roles.length, roles, agents_dir: zcode.agentsDir }
+  }
+
+  /**
+   * 上下文包（knowledge-injection.md §4 模式 B）：
+   * 按角色知识绑定 + 任务关键词检索，组装带预算的包。Prism 只产包、不写 prompt。
+   */
+  const contextPack = async (args: Record<string, unknown>): Promise<unknown> => {
+    const roleName = asString(args.role)
+    const task = asString(args.task)
+    if (roleName === undefined || task === undefined) {
+      throw new Error('prism_context_pack 需要 { role, task }')
+    }
+    const role = await loadRole(rolesDir, roleName)
+    if (role === null) {
+      throw new Error(`角色不存在: ${roleName}（数据源 ${rolesDir}/<name>/AGENTS.md）`)
+    }
+    return await buildContextPack(await kb(), {
+      role: roleName,
+      binding: role.knowledge,
+      task,
+      ...(typeof args.budget_tokens === 'number' ? { budgetTokens: args.budget_tokens } : {}),
+    })
   }
 
   /** 取单个角色定义（装配器按名拉取，免拉全量）。 */
@@ -663,6 +686,21 @@ export function createMcpTools(deps: McpDeps): McpTool[] {
         required: ['name'],
       },
       call: roleGet,
+    },
+    {
+      name: 'prism_context_pack',
+      description:
+        '组装上下文包：按角色知识绑定 + 任务关键词检索，返回带预算截断的知识条目与来源（Prism 只产包，prompt 由宿主决定）',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          role: { type: 'string', description: '角色名（用其 knowledge 绑定限定层/书）' },
+          task: { type: 'string', description: '任务描述（作为检索词）' },
+          budget_tokens: { type: 'integer', minimum: 100, maximum: 100000, description: 'token 预算，默认 4000' },
+        },
+        required: ['role', 'task'],
+      },
+      call: contextPack,
     },
     {
       name: 'prism_role_render',

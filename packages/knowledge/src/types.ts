@@ -168,6 +168,12 @@ export interface SearchQuery {
    * 传入可见性集合时只返回 `visibility IN (...)` 的条目。用于按角色/项目收窄读取面。
    */
   visibilities?: Array<'global' | 'project' | 'role'>
+  /**
+   * 词元匹配模式（默认 `all` = AND，保持既有精确检索行为）。
+   * `any` = OR，命中任一词元即可——**长任务描述**（如上下文包）必须用，
+   * 否则要求全部词元会零命中。
+   */
+  match_mode?: 'all' | 'any'
 }
 
 /** 检索结果（design.md §3.2 SearchResult）。score 越大越相关（-bm25）。 */

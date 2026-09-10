@@ -967,7 +967,7 @@ export class PrismKnowledgeService implements KnowledgeService {
     if (typeof query?.q !== 'string' || query.q.trim() === '') {
       throw new PrismError('bad_request', '检索词 q 必填')
     }
-    const match = toMatchExpression(query.q)
+    const match = toMatchExpression(query.q, query.match_mode ?? 'all')
     if (match === '') {
       throw new PrismError('bad_request', '检索词无有效词元')
     }

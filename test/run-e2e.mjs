@@ -394,6 +394,24 @@ async function main() {
       `n=${usageRes.body.value?.length ?? 0}`,
     )
 
+    // ===== 15. 上下文包（knowledge-injection §4 模式 B） =====
+    const packRes = await fetchJson(
+      `${base}/api/kb/context-pack?role=dev-1&task=${encodeURIComponent('性能 缓存')}&budget_tokens=2000`,
+    )
+    check(
+      '15.1 context-pack 组装成功（含来源）',
+      packRes.status === 200 &&
+        Array.isArray(packRes.body.value.items) &&
+        packRes.body.value.items.length >= 1 &&
+        packRes.body.value.sources.length === packRes.body.value.items.length,
+      `items=${packRes.body.value.items?.length ?? 0}`,
+    )
+    check(
+      '15.2 context-pack 带预算与截断标记',
+      typeof packRes.body.value.total_tokens === 'number' &&
+        typeof packRes.body.value.truncated === 'boolean',
+    )
+
     // ===== 9. 真实宿主零污染 =====
     const realAfter = await listDir(REAL_ZCODE)
     check(

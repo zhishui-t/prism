@@ -15,6 +15,7 @@ import { studioRoute } from './http/routes/studio.js'
 import { consoleRoute, resolveWebDistDir } from './http/routes/console.js'
 import { taskRoutes } from './http/routes/tasks.js'
 import { peopleRoutes } from './http/routes/people.js'
+import { resolveDirsFromHome } from './roles/index.js'
 import { workRoutes } from './http/routes/work.js'
 import { archRoutes } from './http/routes/arch.js'
 import { BuildJobManager } from './graph/jobs.js'
@@ -111,7 +112,7 @@ export async function createApp(options: AppOptions = {}): Promise<{
   const router = new Router()
   router.add('GET', '/api/health', healthRoute(meta))
 
-  const kb = kbRoutes(loadKb, home)
+  const kb = kbRoutes(loadKb, home, resolveDirsFromHome(home, { zcodeDir: options.zcodeDir, zcodeDirExplicit: true }).rolesDir)
   router.add('GET', '/api/kb/search', kb.search)
   router.add('GET', '/api/kb/get/:id', kb.get)
   router.add('GET', '/api/kb/tree', kb.tree)
@@ -125,6 +126,7 @@ export async function createApp(options: AppOptions = {}): Promise<{
   router.add('GET', '/api/kb/conflicts', kb.conflicts)
   router.add('POST', '/api/kb/conflicts/:id/resolve', kb.resolveConflict)
   router.add('GET', '/api/kb/scan-history', kb.scanHistory)
+  router.add('GET', '/api/kb/context-pack', kb.contextPack)
 
   const graph = graphRoutes({
     registry,

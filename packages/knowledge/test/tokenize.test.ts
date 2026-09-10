@@ -67,3 +67,20 @@ describe('toMatchExpression（FTS5 MATCH 表达式）', () => {
     expect(toMatchExpression('!!!')).toBe('')
   })
 })
+
+/** 回归：长任务描述需 OR 语义（AND 会零命中）。 */
+describe('toMatchExpression 匹配模式', () => {
+  it('默认 all：空格分隔（隐式 AND）', () => {
+    const expr = toMatchExpression('凭证 令牌')
+    expect(expr).not.toContain(' OR ')
+  })
+
+  it('any：显式 OR（长任务描述用）', () => {
+    const expr = toMatchExpression('凭证 令牌', 'any')
+    expect(expr).toContain(' OR ')
+  })
+
+  it('两种模式都做引号转义', () => {
+    expect(toMatchExpression('a"b', 'any')).toContain('""')
+  })
+})
