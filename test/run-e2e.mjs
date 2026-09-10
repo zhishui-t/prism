@@ -13,7 +13,7 @@
 import { spawn } from 'node:child_process'
 import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)))
@@ -220,10 +220,13 @@ async function main() {
     check('7.1 arch render 产出 HTML', arch.code === 0, arch.stderr.trim().slice(0, 120))
 
     // ===== 8. 服务 + HTTP API + 控制台 =====
-    const { startServer } = await import(pathToFileURL(join(ROOT, 'packages', 'server', 'dist', 'index.js')).href)
+    const serverModule = await import(pathToFileURL(join(ROOT, 'packages', 'server', 'dist', 'index.js')).href)
+    const { startServer } = serverModule
     // 进程内 server 也关向量：省去 600MB 模型加载，且 search 计数确定
     process.env['PRISM_EMBEDDING'] = 'off'
-    server = await startServer({ home, port: PORT })
+    // 显式 harnessRoot（隔离修正）：不传时 server 会回落到默认宿主 ~/.zcode，
+    // 使 /api/teams、/api/skills/effective 读到真实宿主（R5 邻域：只读但语义错位）。
+    server = await startServer({ home, harnessRoot, port: PORT })
     const base = `http://127.0.0.1:${server.port}`
 
     const health = await fetchJson(`${base}/api/health`)
@@ -562,6 +565,873 @@ async function main() {
         '18.2 可激活插件，布局随其自述（squads/skills）',
         sv.id === 'e2e-harness' && String(sv.agent.teamDir).includes('squads'),
         `${sv.id} teamDir=${sv.agent.teamDir}`,
+      )
+    }
+
+    // ===== 19. design-v4 §6 验收补充（F-A1/A2/A4/B4/C1/C3/D2/E2/E3） =====
+    {
+      const jparse = (res) => {
+        try {
+          return JSON.parse(res.stdout)
+        } catch {
+          return {}
+        }
+      }
+      const fileExists = async (p) => {
+        try {
+          await readFile(p)
+          return true
+        } catch {
+          return false
+        }
+      }
+      const httpJson = async (method, apiPath, body) => {
+        const res = await fetch(`${base}${apiPath}`, {
+          method,
+          ...(body !== undefined
+            ? { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }
+            : {}),
+        })
+        let parsed = null
+        try {
+          parsed = await res.json()
+        } catch {
+          parsed = null
+        }
+        return { status: res.status, body: parsed }
+      }
+      const errText = (r) => `${r.body?.error?.code ?? ''} ${r.body?.error?.message ?? ''}`.trim()
+
+      // ---------- F-A1 书结构生成 / 幂等 / show / freeze ----------
+      const gen1 = await cli(['kb', 'structure', 'generate', '--layer', 'global', '--book', 'e2e', '--json'], env)
+      const gen1v = jparse(gen1).value ?? {}
+      const genFiles = Array.isArray(gen1v.files) ? gen1v.files : []
+      const modulesYaml = genFiles.find((f) => f.endsWith('_modules.yaml'))
+      const bookDir = modulesYaml !== undefined ? dirname(modulesYaml) : ''
+      const allFilesExist = (await Promise.all(genFiles.map((f) => fileExists(f)))).every(Boolean)
+      check(
+        '19.1.1 F-A1 generate 产 _modules.yaml + 书级/模块级 _summary.md（文件真实存在）',
+        gen1.code === 0 &&
+          modulesYaml !== undefined &&
+          genFiles.length >= 3 &&
+          genFiles.some((f) => dirname(f) === bookDir && f.endsWith('_summary.md')) &&
+          genFiles.some((f) => dirname(f) !== bookDir && f.endsWith('_summary.md')) &&
+          allFilesExist,
+        `files=${genFiles.length} exist=${allFilesExist}`,
+      )
+
+      const snapshot = async (paths) =>
+        JSON.stringify(await Promise.all([...paths].sort().map(async (f) => [f, await readFile(f, 'utf-8')])))
+      const beforeRegen = await snapshot(genFiles)
+      const gen2 = await cli(['kb', 'structure', 'generate', '--layer', 'global', '--book', 'e2e', '--json'], env)
+      const afterRegen = await snapshot(genFiles)
+      const revBefore = gen1v.structure?.revision
+      const revAfter = jparse(gen2).value?.structure?.revision
+      check(
+        '19.1.2 F-A1 幂等：二次 generate 全部文件逐字节一致 + revision 不递增',
+        gen1.code === 0 && gen2.code === 0 && beforeRegen === afterRegen && revBefore === revAfter,
+        `bytesEqual=${beforeRegen === afterRegen} revision=${String(revBefore)}→${String(revAfter)}`,
+      )
+
+      const modulesText = modulesYaml !== undefined ? await readFile(modulesYaml, 'utf-8') : ''
+      const bookSummaryText = bookDir !== '' ? await readFile(join(bookDir, '_summary.md'), 'utf-8') : ''
+      check(
+        '19.1.3 F-A1 幂等强口径：_modules.yaml/_summary.md 不含时钟字段',
+        modulesText !== '' &&
+          bookSummaryText !== '' &&
+          !modulesText.includes('updated_at') &&
+          !bookSummaryText.includes('updated_at'),
+      )
+
+      const showGen = await cli(['kb', 'structure', 'show', '--layer', 'global', '--book', 'e2e', '--json'], env)
+      const showGenV = jparse(showGen).value ?? {}
+      const suggested = Array.isArray(showGenV.suggested) ? showGenV.suggested : []
+      check(
+        '19.1.4 F-A1 show：suggested 按条目数降序 + 未冻结 modules 为空 + inherited_from 空',
+        showGen.code === 0 &&
+          suggested.length >= 1 &&
+          Array.isArray(showGenV.modules) &&
+          showGenV.modules.length === 0 &&
+          Array.isArray(showGenV.inherited_from) &&
+          showGenV.inherited_from.length === 0 &&
+          suggested.every((s, i, a) => i === 0 || a[i - 1].entries >= s.entries),
+        `suggested=${JSON.stringify(suggested)}`,
+      )
+
+      const frozenModule = suggested.find((s) => s.slug !== '_inbox')?.slug ?? 'perf'
+      const frz = await cli(
+        ['kb', 'structure', 'freeze', '--layer', 'global', '--book', 'e2e', '--modules', frozenModule, '--confirmed-by', 'tester-1', '--json'],
+        env,
+      )
+      const frzV = jparse(frz).value ?? {}
+      check(
+        '19.1.5 F-A1 freeze：revision=1 + 清单固化 + frozen_at/confirmed_by 落文件与表',
+        frz.code === 0 &&
+          frzV.revision === 1 &&
+          Array.isArray(frzV.modules) &&
+          frzV.modules.join(',') === frozenModule &&
+          typeof frzV.frozen_at === 'string' &&
+          frzV.confirmed_by === 'tester-1',
+        `revision=${String(frzV.revision)} modules=${JSON.stringify(frzV.modules)}`,
+      )
+
+      const gen3 = await cli(['kb', 'structure', 'generate', '--layer', 'global', '--book', 'e2e', '--json'], env)
+      const gen3V = jparse(gen3).value ?? {}
+      check(
+        '19.1.6 F-A1 freeze 后 generate 不覆盖冻结清单（revision 不变）',
+        gen3.code === 0 &&
+          gen3V.structure?.revision === 1 &&
+          (gen3V.structure?.modules ?? []).join(',') === frozenModule,
+        `modules=${JSON.stringify(gen3V.structure?.modules)}`,
+      )
+      const showFrozen = await cli(['kb', 'structure', 'show', '--layer', 'global', '--book', 'e2e', '--json'], env)
+      const showFrozenV = jparse(showFrozen).value ?? {}
+      check(
+        '19.1.7 F-A1 show 读回冻结清单（文件为真相，R7）',
+        showFrozen.code === 0 && showFrozenV.revision === 1 && (showFrozenV.modules ?? []).join(',') === frozenModule,
+      )
+
+      const genGhost = await cli(['kb', 'structure', 'generate', '--layer', 'global', '--book', 'ghost-book', '--json'], env)
+      check(
+        '19.1.8 F-A1 异常：generate 不存在的书 → bad_request',
+        genGhost.code !== 0 && genGhost.stderr.includes('bad_request'),
+        genGhost.stderr.trim().slice(0, 120),
+      )
+      const showGhost = await cli(['kb', 'structure', 'show', '--layer', 'global', '--book', 'ghost-book', '--json'], env)
+      check(
+        '19.1.9 F-A1 异常：show 无结构 → not_found + 可执行提示',
+        showGhost.code !== 0 && showGhost.stderr.includes('not_found') && showGhost.stderr.includes('structure generate'),
+      )
+      const badAction = await cli(['kb', 'structure', 'bogus', '--layer', 'global', '--book', 'e2e'], env)
+      check('19.1.10 F-A1 异常：非法动作 → 用法提示', badAction.code !== 0 && badAction.stderr.includes('未知动作'))
+      const missBook = await cli(['kb', 'structure', 'generate', '--layer', 'global', '--json'], env)
+      check(
+        '19.1.11 F-A1 异常：缺 --book → 缺少必填参数',
+        missBook.code !== 0 && missBook.stderr.includes('--book <b>'),
+        missBook.stderr.trim().slice(0, 90),
+      )
+
+      // ---------- F-A2 书结构继承 ----------
+      const childDoc = join(workRoot, 'child.md')
+      await writeFile(
+        childDoc,
+        '---\nid: CHILD-1\ntitle: 子书条目\ntype: doc\nlayer: global\nbook: e2echild\nmodule: cb\n---\n\n子书正文。\n',
+        'utf-8',
+      )
+      await cli(['kb', 'import', childDoc, '--json'], env)
+      const genChild = await cli(['kb', 'structure', 'generate', '--layer', 'global', '--book', 'e2echild', '--json'], env)
+      const childYaml =
+        (jparse(genChild).value?.files ?? []).find((f) => f.endsWith('_modules.yaml')) ??
+        join(dirname(bookDir), 'e2echild', '_modules.yaml')
+      // 人工声明继承（文件为真相）；格式逐字对齐 packages/knowledge/test/book-structure.test.ts 的 writeModules
+      const writeChildModules = (inherits, modules) =>
+        writeFile(
+          childYaml,
+          [
+            '# generated: true',
+            'layer: global',
+            'book: e2echild',
+            'generated: true',
+            'revision: 1',
+            'frozen_at: null',
+            'confirmed_by: null',
+            `inherits: [${inherits.join(', ')}]`,
+            `modules: [${modules.join(', ')}]`,
+            '',
+          ].join('\n'),
+          'utf-8',
+        )
+
+      await writeChildModules(['global/e2e'], ['cb'])
+      const showChild = await cli(['kb', 'structure', 'show', '--layer', 'global', '--book', 'e2echild', '--json'], env)
+      const childV = jparse(showChild).value ?? {}
+      const childModules = Array.isArray(childV.modules) ? childV.modules : []
+      check(
+        '19.2.1 F-A2 继承正例：父统一在前 + 本地覆盖不重复 + inherited_from 非空',
+        showChild.code === 0 &&
+          (childV.inherited_from ?? []).includes('global/e2e') &&
+          childModules.includes('cb') &&
+          childModules.includes(frozenModule) &&
+          childModules.indexOf(frozenModule) < childModules.indexOf('cb') &&
+          new Set(childModules).size === childModules.length,
+        `modules=${JSON.stringify(childModules)} inherited_from=${JSON.stringify(childV.inherited_from)}`,
+      )
+      await writeChildModules(['global/ghost-book'], ['cb'])
+      const badInh = await cli(['kb', 'structure', 'show', '--layer', 'global', '--book', 'e2echild', '--json'], env)
+      check(
+        '19.2.2 F-A2 异常：缺父 → book_inherit_invalid（消息含缺失链路）',
+        badInh.code !== 0 && badInh.stderr.includes('book_inherit_invalid') && badInh.stderr.includes('global/ghost-book'),
+        badInh.stderr.trim().slice(0, 140),
+      )
+      await writeChildModules(['global/e2echild'], ['cb'])
+      const selfInh = await cli(['kb', 'structure', 'show', '--layer', 'global', '--book', 'e2echild', '--json'], env)
+      check(
+        '19.2.3 F-A2 异常：自继承 → book_inherit_invalid',
+        selfInh.code !== 0 && selfInh.stderr.includes('book_inherit_invalid'),
+        selfInh.stderr.trim().slice(0, 120),
+      )
+      await writeChildModules(['global'], ['cb'])
+      const segInh = await cli(['kb', 'structure', 'show', '--layer', 'global', '--book', 'e2echild', '--json'], env)
+      check(
+        '19.2.4 F-A2 异常：继承引用段数非法 → book_inherit_invalid',
+        segInh.code !== 0 && segInh.stderr.includes('book_inherit_invalid'),
+        segInh.stderr.trim().slice(0, 120),
+      )
+
+      // ---------- F-A4 status 往返（自有型） ----------
+      // 注意：`kb deposit` 的 id **由服务端生成**（不采用 frontmatter 的 id）；
+      // 要造同一 id 的多版次须走 `kb import`（frontmatter id 生效，已实测确认）。
+      const stFm = (body) =>
+        `---\nid: STI-1\ntitle: 版次状态往返\ntype: doc\nlayer: global\nbook: e2estatus\nmodule: st\n---\n\n${body}\n`
+      const stFile1 = join(workRoot, 'status-v1.md')
+      const stFile2 = join(workRoot, 'status-v2.md')
+      await writeFile(stFile1, stFm('状态往返正文 v1。'), 'utf-8')
+      await writeFile(stFile2, stFm('状态往返正文 v2（内容已变更）。'), 'utf-8')
+      const stImp1 = await cli(['kb', 'import', stFile1, '--json'], env)
+      const stImp1V = jparse(stImp1).value ?? {}
+      const stPath = stImp1V.path ?? ''
+      check(
+        '19.3.1 F-A4 自有型落库可定位版次文件（frontmatter id + path 非空）',
+        stImp1.code === 0 && stImp1V.id === 'STI-1' && typeof stPath === 'string' && stPath !== '',
+        `id=${String(stImp1V.id)} path=${stPath}`,
+      )
+      const withStatus = (text, status) =>
+        /(^|\n)status:[^\n]*/.test(text)
+          ? text.replace(/(^|\n)status:[^\n]*/, `$1status: ${status}`)
+          : text.replace(/\n---/, `\nstatus: ${status}\n---`)
+      const applyStatus = async (status) => {
+        await writeFile(stPath, withStatus(await readFile(stPath, 'utf-8'), status), 'utf-8')
+        await cli(['kb', 'reindex', '--json'], env)
+        return jparse(await cli(['kb', 'get', 'STI-1', '--json'], env)).value?.status
+      }
+      const statusSuperseded = stPath !== '' ? await applyStatus('superseded') : 'no-path'
+      check(
+        '19.3.2 F-A4 latest 版写 status: superseded → reindex 后仍 superseded（不压平成 active）',
+        statusSuperseded === 'superseded',
+        `status=${String(statusSuperseded)}`,
+      )
+      const statusCandidate = stPath !== '' ? await applyStatus('candidate') : 'no-path'
+      check(
+        '19.3.3 F-A4 status: candidate 往返（EntryStatus 全量）',
+        statusCandidate === 'candidate',
+        `status=${String(statusCandidate)}`,
+      )
+      let bogusStatus
+      let bogusStderr = ''
+      if (stPath !== '') {
+        await writeFile(stPath, withStatus(await readFile(stPath, 'utf-8'), 'bogus_status'), 'utf-8')
+        const bogusReindex = await cli(['kb', 'reindex', '--json'], env)
+        bogusStderr = bogusReindex.stderr
+        bogusStatus = jparse(await cli(['kb', 'get', 'STI-1', '--json'], env)).value?.status
+      }
+      check(
+        '19.3.4 F-A4 越界 status → warning + 回落 active + 该行不丢',
+        bogusStatus === 'active' && bogusStderr.includes('未知 status'),
+        `status=${String(bogusStatus)} stderr=${bogusStderr.trim().slice(0, 90)}`,
+      )
+
+      // ---------- F-A4 引用型软删不被重扫复活 ----------
+      const idxRoot = join(workRoot, 'idx-proj')
+      await mkdir(join(idxRoot, 'docs'), { recursive: true })
+      const idxFile = join(idxRoot, 'docs', 'a.md')
+      const idxTextV1 = '---\nid: IDX-1\ntitle: 引用型条目\ntype: doc\n---\n\n引用型正文 v1。\n'
+      const idxTextV2 = '---\nid: IDX-1\ntitle: 引用型条目\ntype: doc\n---\n\n引用型正文 v2（源已变更）。\n'
+      await writeFile(idxFile, idxTextV1, 'utf-8')
+      await cli(['project', 'add', idxRoot, '--name', 'idxproj', '--json'], env)
+      const idxSync1 = await cli(['kb', 'sync', 'idxproj', '--json'], env)
+      const idxId = 'IDX-docs-a' // idFromRel('docs/a.md')（scan.ts:144）
+      const idxDel = await cli(['kb', 'remove', idxId, '--json'], env)
+      const idxAfterDel = jparse(await cli(['kb', 'get', idxId, '--json'], env)).value?.status
+      await writeFile(idxFile, idxTextV2, 'utf-8')
+      const idxSync2 = await cli(['kb', 'sync', 'idxproj', '--json'], env)
+      const idxSync2V = jparse(idxSync2).value ?? {}
+      const idxAfterRescan = jparse(await cli(['kb', 'get', idxId, '--json'], env)).value?.status
+      check(
+        '19.3.5 F-A4 引用型软删 → 改源 → 重扫仍 deprecated（不静默复活）',
+        idxSync1.code === 0 &&
+          jparse(idxSync1).value?.created === 1 &&
+          idxDel.code === 0 &&
+          idxAfterDel === 'deprecated' &&
+          idxSync2V.updated === 1 &&
+          idxAfterRescan === 'deprecated',
+        `del=${String(idxAfterDel)} rescan=${String(idxAfterRescan)} created=${String(jparse(idxSync1).value?.created)} updated=${String(idxSync2V.updated)}`,
+      )
+      check(
+        '19.3.6 F-A4 索引/重扫不写用户原件（逐字节一致）',
+        (await readFile(idxFile, 'utf-8')) === idxTextV2,
+      )
+
+      // ---------- F-B4 版本历史（CLI + HTTP） ----------
+      // 造第二个版次：同一 frontmatter id 经 `kb import` → v2（deposit 每次都是新 id）
+      const stImp2 = await cli(['kb', 'import', stFile2, '--json'], env)
+      const vers = await cli(['kb', 'versions', 'STI-1', '--json'], env)
+      const versV = jparse(vers).value
+      check(
+        '19.4.1 F-B4 kb versions：降序 + 恰一条 is_latest + 字段齐全',
+        stImp2.code === 0 &&
+          jparse(stImp2).value?.version === 2 &&
+          vers.code === 0 &&
+          Array.isArray(versV) &&
+          versV.length >= 2 &&
+          versV[0].is_latest === true &&
+          versV.slice(1).every((v) => v.is_latest === false) &&
+          versV.every((v, i) => i === 0 || versV[i - 1].version > v.version) &&
+          versV.every((v) => v.source_path === null || typeof v.source_path === 'string'),
+        `n=${Array.isArray(versV) ? versV.length : 0} ${JSON.stringify((versV ?? []).map((v) => [v.version, v.is_latest, v.status]))}`,
+      )
+      const versGhost = await cli(['kb', 'versions', 'NO-SUCH-ID', '--json'], env)
+      check(
+        '19.4.2 F-B4 边界：不存在 id → 空数组且 rc 0',
+        versGhost.code === 0 && Array.isArray(jparse(versGhost).value) && jparse(versGhost).value.length === 0,
+      )
+      const versNoArg = await cli(['kb', 'versions'], env)
+      check('19.4.3 F-B4 异常：缺 id → rc≠0 + 用法', versNoArg.code !== 0 && versNoArg.stderr.includes('用法'))
+      const versHttp = await httpJson('GET', '/api/kb/versions/STI-1')
+      const versHttpV = versHttp.body?.value?.versions ?? []
+      check(
+        '19.4.4 F-B4 HTTP /api/kb/versions/:id 与 CLI 同序同内容',
+        versHttp.status === 200 && JSON.stringify(versHttpV) === JSON.stringify(versV),
+        `http=${versHttpV.length} cli=${Array.isArray(versV) ? versV.length : 0}`,
+      )
+      const versHttpGhost = await httpJson('GET', '/api/kb/versions/NO-SUCH-ID')
+      check(
+        '19.4.5 F-B4 边界：HTTP 不存在 id → 200 空数组（不报错）',
+        versHttpGhost.status === 200 && (versHttpGhost.body?.value?.versions ?? []).length === 0,
+      )
+
+      // ---------- F-C1 CLI 建队（含写守卫三态） ----------
+      const teamDir = join(harnessRoot, 'teams')
+      const e2eTeamPath = join(teamDir, 'e2e-team.md')
+      const initOk = await cli(
+        ['team', 'init', 'e2e-team', '--harness-root', harnessRoot, '--members', 'dev-1', '--json'],
+        env,
+      )
+      const validateOk = await cli(['team', 'validate', 'e2e-team', '--harness-root', harnessRoot, '--json'], env)
+      check(
+        '19.5.1 F-C1 team init（--harness-root）→ 落盘 + validate 通过 + workflow_pruned 警告',
+        initOk.code === 0 &&
+          (await fileExists(e2eTeamPath)) &&
+          initOk.stdout.includes('workflow_pruned') &&
+          validateOk.code === 0 &&
+          jparse(validateOk).ok === true,
+        `validate=${validateOk.code} warn=${initOk.stdout.includes('workflow_pruned')}`,
+      )
+      const guardedPath = join(teamDir, 'e2e-guarded.md')
+      const guarded = await cli(['team', 'init', 'e2e-guarded', '--members', 'dev-1', '--json'], env)
+      check(
+        '19.5.2 F-C1 写守卫：默认宿主目录未加 --yes → guard_required 且不落盘',
+        guarded.code !== 0 && guarded.stderr.includes('guard_required') && !(await fileExists(guardedPath)),
+        guarded.stderr.trim().slice(0, 130),
+      )
+      const forced = await cli(['team', 'init', 'e2e-guarded', '--members', 'dev-1', '--yes', '--json'], env)
+      check(
+        '19.5.3 F-C1 写守卫：--yes 放行并落盘',
+        forced.code === 0 &&
+          (await fileExists(guardedPath)) &&
+          forced.stdout.includes('--yes：确认写入默认宿主目录'),
+        `path=${guardedPath}`,
+      )
+      const badMember = await cli(
+        ['team', 'init', 'e2e-bad', '--harness-root', harnessRoot, '--members', 'ghost-role', '--json'],
+        env,
+      )
+      check(
+        '19.5.4 F-C1 异常：成员不在角色库 → team_invalid 且不落盘',
+        badMember.code !== 0 &&
+          badMember.stderr.includes('team_invalid') &&
+          !(await fileExists(join(teamDir, 'e2e-bad.md'))),
+        badMember.stderr.trim().slice(0, 130),
+      )
+      const badId = await cli(
+        ['team', 'init', 'Demo_Bad', '--harness-root', harnessRoot, '--members', 'dev-1', '--json'],
+        env,
+      )
+      check(
+        '19.5.5 F-C1 异常：非法 id → team_id_invalid 且不落盘',
+        badId.code !== 0 && badId.stderr.includes('team_id_invalid') && !(await fileExists(join(teamDir, 'Demo_Bad.md'))),
+        badId.stderr.trim().slice(0, 120),
+      )
+      const initAgain = await cli(
+        ['team', 'init', 'e2e-team', '--harness-root', harnessRoot, '--members', 'dev-1', '--json'],
+        env,
+      )
+      check(
+        '19.5.6 F-C1 边界：重复 init 已存在 id → skipped（不覆盖人写文件）',
+        initAgain.code === 0 && (initAgain.stdout.includes('skipped') || initAgain.stdout.includes('已存在')),
+        initAgain.stdout.trim().slice(0, 120),
+      )
+      const prunedTeam = await cli(
+        ['team', 'init', 'e2e-pruned', '--harness-root', harnessRoot, '--template', 'core-dev', '--members', 'dev-1', '--json'],
+        env,
+      )
+      const prunedValidate = await cli(['team', 'validate', 'e2e-pruned', '--harness-root', harnessRoot, '--json'], env)
+      check(
+        '19.5.7 F-C1 边界：core-dev 模板按名册收窄 → workflow_pruned + 校验通过（阶段重编号）',
+        prunedTeam.code === 0 &&
+          prunedTeam.stdout.includes('workflow_pruned') &&
+          prunedValidate.code === 0 &&
+          (await fileExists(join(teamDir, 'e2e-pruned.md'))),
+      )
+
+      // ---------- F-C3 POST /api/teams 三态 + GET teamsDir ----------
+      const managedTeams = join(workRoot, 'managed-teams')
+      const apiTeamPath = join(managedTeams, 'api-team.md')
+      const apiTeamBody = {
+        team_id: 'api-team',
+        name: 'API 队',
+        description: 'HTTP 建队验证',
+        members: [{ role: 'dev-1', count: 1 }],
+        teams_dir: managedTeams,
+      }
+      const apiCreate = await httpJson('POST', '/api/teams', apiTeamBody)
+      check(
+        '19.6.1 F-C3 POST /api/teams 正例：落显式 teams_dir + 无 error issue',
+        apiCreate.status === 200 &&
+          apiCreate.body?.ok === true &&
+          apiCreate.body?.value?.path === apiTeamPath &&
+          (await fileExists(apiTeamPath)) &&
+          (apiCreate.body?.value?.issues ?? []).every((i) => i.level !== 'error'),
+        `status=${apiCreate.status} path=${apiCreate.body?.value?.path ?? ''}`,
+      )
+      const apiTeamDef = serverModule.parseTeamMarkdown(await readFile(apiTeamPath, 'utf-8'))
+      const apiTeamValidate = serverModule.validateTeam(apiTeamDef, {
+        roles: await serverModule.loadRoles(join(harnessRoot, 'agents')),
+      })
+      check(
+        '19.6.2 F-C3 正例产物经同一 validateTeam 通过',
+        apiTeamValidate.ok === true,
+        JSON.stringify(apiTeamValidate.issues).slice(0, 140),
+      )
+      const noDirCreate = await httpJson('POST', '/api/teams', {
+        team_id: 'api-nodefault',
+        name: '无目录',
+        members: [{ role: 'dev-1', count: 1 }],
+      })
+      check(
+        '19.6.3 F-C3 异常：缺 teams_dir → 400 teams_dir_required 且不回落默认宿主',
+        noDirCreate.status === 400 &&
+          errText(noDirCreate).includes('teams_dir_required') &&
+          !(await fileExists(join(teamDir, 'api-nodefault.md'))),
+        `status=${noDirCreate.status} err=${errText(noDirCreate).slice(0, 80)}`,
+      )
+      const badMemberApi = await httpJson('POST', '/api/teams', {
+        team_id: 'api-bad',
+        name: '坏成员',
+        members: [{ role: 'ghost-role', count: 1 }],
+        teams_dir: managedTeams,
+      })
+      check(
+        '19.6.4 F-C3 异常：非法成员 → 400 member_role_unknown 且不落盘',
+        badMemberApi.status === 400 &&
+          errText(badMemberApi).includes('member_role_unknown') &&
+          !(await fileExists(join(managedTeams, 'api-bad.md'))),
+        `status=${badMemberApi.status} err=${errText(badMemberApi).slice(0, 80)}`,
+      )
+      const dupApi = await httpJson('POST', '/api/teams', apiTeamBody)
+      check(
+        '19.6.5 F-C3 异常：同 id 重复 → 409 id_conflict（不覆盖）',
+        dupApi.status === 409 && errText(dupApi).includes('id_conflict'),
+        `status=${dupApi.status}`,
+      )
+      const teamsList = await httpJson('GET', '/api/teams')
+      check(
+        '19.6.6 F-C3/UI 依赖：GET /api/teams 返回只读 teamsDir（预填用）且指向临时 harnessRoot',
+        teamsList.status === 200 && teamsList.body?.value?.teamsDir === teamDir,
+        `teamsDir=${teamsList.body?.value?.teamsDir ?? ''}`,
+      )
+
+      // ---------- F-D2 四处一致（CLI ≡ HTTP ≡ MCP） ----------
+      const mcpTools = serverModule.createMcpTools({ home, harnessRoot })
+      const effCli = await cli(['skill', 'effective', '--role', 'dev-1', '--team', 'core-dev', '--json'], env)
+      const effCliV = jparse(effCli).value ?? {}
+      const effHttp = await httpJson('GET', '/api/skills/effective?role=dev-1&team=core-dev')
+      const effHttpV = effHttp.body?.value ?? {}
+      const mcpSkillTool = mcpTools.find((t) => t.name === 'prism_skill_effective')
+      const effMcp = mcpSkillTool !== undefined ? await mcpSkillTool.call({ role: 'dev-1', team: 'core-dev' }) : null
+      check(
+        '19.7.1 F-D2 四处一致：CLI ≡ HTTP ≡ MCP（同 loadEffectiveSkills）',
+        effCli.code === 0 &&
+          effHttp.status === 200 &&
+          effMcp !== null &&
+          JSON.stringify(effCliV) === JSON.stringify(effHttpV) &&
+          JSON.stringify(effHttpV) === JSON.stringify(effMcp),
+        `cli=${effCliV.skills?.length ?? -1} http=${effHttpV.skills?.length ?? -1} mcp=${effMcp?.skills?.length ?? -1}`,
+      )
+      check(
+        '19.7.2 F-D2 有效集元素含 name/sources/available 三要素',
+        Array.isArray(effHttpV.skills) &&
+          effHttpV.skills.every(
+            (s) => typeof s.name === 'string' && Array.isArray(s.sources) && typeof s.available === 'boolean',
+          ),
+        `skills=${effHttpV.skills?.length ?? 0}`,
+      )
+      const effNoTeamHttp = await httpJson('GET', '/api/skills/effective?role=dev-1')
+      const effNoTeamCli = jparse(await cli(['skill', 'effective', '--role', 'dev-1', '--json'], env)).value ?? {}
+      check(
+        '19.7.3 F-D2 边界：无团队时 CLI ≡ HTTP',
+        JSON.stringify(effNoTeamCli) === JSON.stringify(effNoTeamHttp.body?.value ?? {}),
+      )
+      const effMissingHttp = await httpJson('GET', '/api/skills/effective?role=no-such-role')
+      const effMissingCli = await cli(['skill', 'effective', '--role', 'no-such-role', '--json'], env)
+      check(
+        '19.7.4 F-D2 异常：角色不存在 → HTTP 404 + CLI rc≠0（不静默降级为无团队）',
+        effMissingHttp.status === 404 && effMissingCli.code !== 0,
+        `http=${effMissingHttp.status} cli=${effMissingCli.code}`,
+      )
+
+      // ---------- F-E2 三入口同策略（含规则覆盖 + require_note 差异） ----------
+      // 自建带 book→type 规则的团队（可观测覆盖：type doc → guide），写受管 teams_dir
+      const depTeamPath = join(teamDir, 'e2e-dep.md')
+      await writeFile(
+        depTeamPath,
+        [
+          '---',
+          'team_id: e2e-dep',
+          'name: "E2E 沉淀策略队"',
+          'description: "E2E 三入口同策略验证"',
+          'default: false',
+          'members:',
+          '  - role: dev-1',
+          '    count: 1',
+          'skills: []',
+          'knowledge:',
+          '  layers: [global, project]',
+          'deposit:',
+          '  enabled: true',
+          '  default_layer: global',
+          '  default_type: pitfall',
+          '  priority: medium',
+          '  require_note: true',
+          '  rules:',
+          '    - match: { book: e2edep }',
+          '      set: { type: guide, priority: high }',
+          'arbitration: [requirement, quality, progress]',
+          'rework_limit: 2',
+          '---',
+          '',
+          '# E2E 沉淀策略队',
+          '',
+          '## 工作流',
+          '',
+          '| # | 阶段 | 负责角色 | 串/并行 | 输入 | 输出 | 完成判定 | 回流路径 |',
+          '| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |',
+          '| 1 | 开发 | dev-1 | 串行 | 任务书 | patch | 自验通过 | 卡死 2 次 → 队长 |',
+          '',
+          '## 沉淀规则',
+          '',
+          '- `match.book=e2edep` → `set.type=guide / priority=high`；`require_note=true`。',
+          '',
+        ].join('\n'),
+        'utf-8',
+      )
+      const depTeamShow = await cli(['team', 'show', 'e2e-dep', '--harness-root', harnessRoot, '--json'], env)
+      check(
+        '19.8.0 F-E2 前置：自建策略团队可被 loadTeam 载入',
+        depTeamShow.code === 0 && jparse(depTeamShow).value?.deposit?.rules?.length === 1,
+        `rules=${jparse(depTeamShow).value?.deposit?.rules?.length ?? -1}`,
+      )
+      const depCliFile = join(workRoot, 'dep-cli.md')
+      await writeFile(depCliFile, '---\ntitle: E2E 三入口策略\n---\n\n三入口同策略正文。\n', 'utf-8')
+      const depCli = await cli(
+        ['kb', 'deposit', '--file', depCliFile, '--title', 'E2E 三入口策略 CLI', '--type', 'doc', '--layer', 'global', '--book', 'e2edep', '--team', 'e2e-dep', '--by', 'tester-1', '--note', '三入口一致验证', '--json'],
+        env,
+      )
+      const depCliV = jparse(depCli).value ?? {}
+      const depCliEntry = jparse(await cli(['kb', 'get', depCliV.id, '--json'], env)).value ?? {}
+      const depHttp = await httpJson('POST', '/api/kb/deposit', {
+        title: 'E2E 三入口策略 HTTP',
+        type: 'doc',
+        layer: 'global',
+        book: 'e2edep',
+        content: '三入口同策略正文。',
+        team_id: 'e2e-dep',
+        source: { kind: 'manual', ref: '三入口一致验证' },
+        deposited_by: { subject: 'tester-1' },
+      })
+      const depHttpV = depHttp.body?.value ?? {}
+      const depHttpEntry = jparse(await cli(['kb', 'get', depHttpV.id, '--json'], env)).value ?? {}
+      const mcpDepositTool = mcpTools.find((t) => t.name === 'prism_kb_deposit')
+      const depMcpV =
+        mcpDepositTool !== undefined
+          ? await mcpDepositTool.call({
+              title: 'E2E 三入口策略 MCP',
+              type: 'doc',
+              layer: 'global',
+              book: 'e2edep',
+              content: '三入口同策略正文。',
+              team_id: 'e2e-dep',
+              source: { kind: 'manual', ref: '三入口一致验证' },
+              deposited_by: { subject: 'tester-1' },
+            })
+          : {}
+      const depMcpEntry = jparse(await cli(['kb', 'get', depMcpV.id, '--json'], env)).value ?? {}
+      check(
+        '19.8.1 F-E2 三入口同策略：规则覆盖一致生效（type doc→guide）+ 层一致',
+        depCli.code === 0 &&
+          depHttp.status === 200 &&
+          typeof depMcpV.id === 'string' &&
+          depCliEntry.type === 'guide' &&
+          depHttpEntry.type === 'guide' &&
+          depMcpEntry.type === 'guide' &&
+          depCliEntry.layer === 'global' &&
+          depHttpEntry.layer === 'global' &&
+          depMcpEntry.layer === 'global',
+        `type=${depCliEntry.type}/${depHttpEntry.type}/${depMcpEntry.type} layer=${depCliEntry.layer}/${depHttpEntry.layer}/${depMcpEntry.layer}`,
+      )
+      const depFileText = depCliEntry.path !== undefined ? await readFile(depCliEntry.path, 'utf-8') : ''
+      check(
+        '19.8.2 F-E2 落库后 frontmatter 与 DB 均可读来源（deposited_by：subject/team/at）',
+        depCliEntry.deposited_by?.subject === 'tester-1' &&
+          depCliEntry.deposited_by?.team === 'e2e-dep' &&
+          typeof depCliEntry.deposited_by?.at === 'string' &&
+          depFileText.includes('deposited_by') &&
+          depFileText.includes('e2e-dep'),
+        `by=${JSON.stringify(depCliEntry.deposited_by)}`,
+      )
+      await cli(['kb', 'reindex', '--json'], env)
+      const depAfterReindex = jparse(await cli(['kb', 'get', depCliV.id, '--json'], env)).value ?? {}
+      check(
+        '19.8.3 F-E2 边界：reindex 后 deposited_by 仍在（v7 两列往返）',
+        depAfterReindex.deposited_by?.team === 'e2e-dep' && depAfterReindex.deposited_by?.task_id === undefined,
+        `by=${JSON.stringify(depAfterReindex.deposited_by)}`,
+      )
+      // require_note 拒绝：CLI / MCP 走策略；HTTP 的入口校验先拦（口径张力，QA v4 判定
+      // 为「非功能缺陷」——空正文在所有入口都被 content 必填拦下，见 .agent-team/qa-report-v4.md）
+      const depEmptyFile = join(workRoot, 'dep-empty.md')
+      await writeFile(depEmptyFile, '---\ntitle: 空正文\n---\n\n', 'utf-8')
+      const statsBeforeReject = jparse(await cli(['kb', 'stats', '--json'], env)).value?.entries
+      const depRejectCli = await cli(
+        ['kb', 'deposit', '--file', depEmptyFile, '--title', 'E2E 空正文', '--type', 'doc', '--layer', 'global', '--book', 'e2edep', '--team', 'e2e-dep', '--json'],
+        env,
+      )
+      // 「不落库」用条目总数前后一致证明（落库 id 是自动生成的，不能按标题 get）
+      const statsAfterReject = jparse(await cli(['kb', 'stats', '--json'], env)).value?.entries
+      check(
+        '19.8.4 F-E2 异常：CLI + require_note 未满足 → 策略拒绝且不落库（条目数不变）',
+        depRejectCli.code !== 0 &&
+          depRejectCli.stderr.includes('沉淀策略拒绝') &&
+          statsAfterReject === statsBeforeReject,
+        `entries=${String(statsBeforeReject)}→${String(statsAfterReject)} err=${depRejectCli.stderr.trim().slice(0, 80)}`,
+      )
+      const depRejectMcp =
+        mcpDepositTool !== undefined
+          ? await mcpDepositTool
+              .call({
+                title: 'E2E 空正文 MCP',
+                type: 'doc',
+                layer: 'global',
+                book: 'e2edep',
+                content: '',
+                team_id: 'e2e-dep',
+              })
+              .then(() => 'allowed')
+              .catch((error) => String(error?.message ?? error))
+          : 'no-tool'
+      check(
+        '19.8.5 F-E2 异常：MCP + require_note 未满足 → 策略拒绝',
+        String(depRejectMcp).includes('沉淀策略拒绝'),
+        String(depRejectMcp).slice(0, 130),
+      )
+      const depRejectHttp = await httpJson('POST', '/api/kb/deposit', {
+        title: 'E2E 空正文 HTTP',
+        type: 'doc',
+        layer: 'global',
+        book: 'e2edep',
+        content: '',
+        team_id: 'e2e-dep',
+      })
+      check(
+        '19.8.6 F-E2 口径记录：HTTP 空正文被入口校验先拦（400 缺 content）——与 CLI/MCP 的 content 必填同口径',
+        depRejectHttp.status === 400 && errText(depRejectHttp).includes('content'),
+        `status=${depRejectHttp.status} err=${errText(depRejectHttp).slice(0, 90)}`,
+      )
+      // 反向：非空正文 + source.ref → 策略放行（CLI `--note` 的 HTTP 等价物，三入口一致）
+      const depNoteHttp = await httpJson('POST', '/api/kb/deposit', {
+        title: 'E2E 有正文有说明 HTTP',
+        type: 'doc',
+        layer: 'global',
+        book: 'e2edep',
+        content: 'E2E 说明正文。',
+        source: { kind: 'manual', ref: 'E2E 说明' },
+        team_id: 'e2e-dep',
+      })
+      check(
+        '19.8.7 F-E2 三入口一致：HTTP 非空正文 + source.ref → 策略放行并落库',
+        depNoteHttp.status === 200 && typeof depNoteHttp.body?.value?.id === 'string',
+        `status=${depNoteHttp.status} value=${JSON.stringify(depNoteHttp.body?.value ?? depNoteHttp.body?.error).slice(0, 120)}`,
+      )
+
+      // ---------- F-E3 任务终态沉淀建议 ----------
+      // 状态链必须是 RUNNING→COMPLETED→AWAITING_FEEDBACK→CLOSED（TASK_TRANSITIONS 无 COMPLETED→CLOSED）
+      const dagE3 = join(workRoot, 'dag-e3.json')
+      await writeFile(
+        dagE3,
+        JSON.stringify({
+          tasks: [
+            { id: 'E3-1', description: '安全：修复越权访问的漏洞' },
+            { id: 'E3-2', description: '性能：优化检索延迟' },
+          ],
+        }),
+        'utf-8',
+      )
+      const regE3 = await cli(
+        ['task', 'register', '--dag', 'd-e3', '--session', 's19', '--team', 'core-dev', '--project', 'prism', '--file', dagE3, '--json'],
+        env,
+      )
+      check('19.9.0 F-E3 前置：登记 E3 DAG', regE3.code === 0 && jparse(regE3).value?.tasks === 2)
+      const e3Running = await cli(['task', 'report', 'E3-1', '--to', 'RUNNING', '--by', 'tester-1', '--json'], env)
+      const e3RunningV = jparse(e3Running).value ?? {}
+      check(
+        '19.9.1 F-E3 边界：非终态（RUNNING）→ 不给 deposit_hint/deposit_suggestions',
+        e3Running.code === 0 &&
+          e3RunningV.deposit_hint === undefined &&
+          e3RunningV.deposit_suggestions === undefined,
+      )
+      const e3Completed = await cli(['task', 'report', 'E3-1', '--to', 'COMPLETED', '--by', 'tester-1', '--json'], env)
+      const e3CompletedV = jparse(e3Completed).value ?? {}
+      check(
+        '19.9.2 F-E3 COMPLETED → 仅 deposit_hint=await_close（无清单，裁决 A4）',
+        e3Completed.code === 0 &&
+          e3CompletedV.deposit_hint === 'await_close' &&
+          e3CompletedV.deposit_suggestions === undefined,
+        `hint=${String(e3CompletedV.deposit_hint)}`,
+      )
+      const e3Awaiting = await cli(['task', 'report', 'E3-1', '--to', 'AWAITING_FEEDBACK', '--by', 'tester-1', '--json'], env)
+      const e3AwaitingV = jparse(e3Awaiting).value ?? {}
+      check(
+        '19.9.3 F-E3 边界：AWAITING_FEEDBACK（保温期）→ 仍不给清单',
+        e3Awaiting.code === 0 &&
+          e3AwaitingV.deposit_hint === undefined &&
+          e3AwaitingV.deposit_suggestions === undefined,
+      )
+      const e3Closed = await cli(['task', 'report', 'E3-1', '--to', 'CLOSED', '--by', 'tester-1', '--json'], env)
+      const e3ClosedV = jparse(e3Closed).value ?? {}
+      const e3Suggestions = Array.isArray(e3ClosedV.deposit_suggestions) ? e3ClosedV.deposit_suggestions : []
+      check(
+        '19.9.4 F-E3 CLOSED → deposit_suggestions（团队规则 + 安全关键词，均带 reason）',
+        e3Closed.code === 0 &&
+          e3Suggestions.length >= 2 &&
+          e3Suggestions.some((s) => String(s.reason).includes('团队规则 match{type:rule}')) &&
+          e3Suggestions.some((s) => String(s.reason).includes('安全关键词') && s.layer === 'global' && s.kind === 'rule'),
+        `n=${e3Suggestions.length} ${JSON.stringify(e3Suggestions.map((s) => [s.kind, s.layer, s.reason]))}`.slice(0, 200),
+      )
+      // --deposit 一步落库（文本模式：先打回报结果再打落库结果，故用正则取 id）
+      for (const to of ['RUNNING', 'COMPLETED', 'AWAITING_FEEDBACK']) {
+        await cli(['task', 'report', 'E3-2', '--to', to, '--by', 'tester-1'], env)
+      }
+      const depE3File = join(workRoot, 'dep-e3.md')
+      await writeFile(depE3File, '---\ntitle: E3 一步落库\n---\n\nE3 一步落库正文。\n', 'utf-8')
+      const e3Deposit = await cli(
+        ['task', 'report', 'E3-2', '--to', 'CLOSED', '--by', 'tester-1', '--deposit', depE3File, '--title', 'E3 一步落库', '--type', 'pitfall', '--layer', 'global', '--note', 'E3 一步落库验证'],
+        env,
+      )
+      const e3DepMatch = /已落库\s+(\S+?)@v1/.exec(e3Deposit.stdout)
+      const e3DepId = e3DepMatch !== null ? e3DepMatch[1] : ''
+      check(
+        '19.9.5 F-E3 --deposit 一步落库（复用 kb deposit，rc 0 + 来源地址）',
+        e3Deposit.code === 0 && e3Deposit.stdout.includes('来源地址') && e3DepId !== '',
+        `id=${e3DepId} tail=${e3Deposit.stdout.trim().split('\n').slice(-1)[0]?.slice(0, 80) ?? ''}`,
+      )
+      const e3DepEntry = e3DepId !== '' ? jparse(await cli(['kb', 'get', e3DepId, '--json'], env)).value : undefined
+      check(
+        '19.9.6 F-E3 一步落库带任务来源（deposited_by.task_id=E3-2）',
+        e3DepEntry?.deposited_by?.task_id === 'E3-2',
+        `by=${JSON.stringify(e3DepEntry?.deposited_by)}`,
+      )
+      const dagE3NoTeam = join(workRoot, 'dag-e3b.json')
+      await writeFile(dagE3NoTeam, JSON.stringify({ tasks: [{ id: 'E3-NT', description: '无团队任务' }] }), 'utf-8')
+      // 注：`registerDag` 必填 team_id（CLI 造不出「空团队」任务）→ 这里覆盖「团队不存在 → 不打扰」；
+      //     空 team_id / deposit.enabled=false 两态由 packages/server/test/stream-b.test.ts（F-E3 四态）单测覆盖。
+      await cli(
+        ['task', 'register', '--dag', 'd-e3b', '--session', 's19', '--team', 'ghost-team', '--project', 'prism', '--file', dagE3NoTeam, '--json'],
+        env,
+      )
+      for (const to of ['RUNNING', 'COMPLETED', 'AWAITING_FEEDBACK']) {
+        await cli(['task', 'report', 'E3-NT', '--to', to, '--by', 'tester-1'], env)
+      }
+      const e3NoTeam = await cli(['task', 'report', 'E3-NT', '--to', 'CLOSED', '--by', 'tester-1', '--json'], env)
+      const e3NoTeamV = jparse(e3NoTeam).value ?? {}
+      check(
+        '19.9.7 F-E3 边界：团队不存在 → 不打扰（两字段都不给）',
+        e3NoTeam.code === 0 &&
+          e3NoTeamV.deposit_hint === undefined &&
+          e3NoTeamV.deposit_suggestions === undefined,
+        `rc=${e3NoTeam.code} status=${String(e3NoTeamV.status)}`,
+      )
+
+      // ---------- F-B1/F-B2 上下文包暴露面（normalized_by / symbols 加权 / max_excerpt_chars） ----------
+      const packQuery = (extra) =>
+        `/api/kb/context-pack?role=dev-1&task=${encodeURIComponent('性能')}&budget_tokens=2000${extra}`
+      const packBase = await httpJson('GET', packQuery(''))
+      const packBaseV = packBase.body?.value ?? {}
+      check(
+        '19.10.1 F-B1 上下文包标明归一语义 normalized_by=candidate_max + 预算/截断字段齐备',
+        packBase.status === 200 &&
+          packBaseV.normalized_by === 'candidate_max' &&
+          typeof packBaseV.total_tokens === 'number' &&
+          typeof packBaseV.truncated === 'boolean',
+        `normalized_by=${String(packBaseV.normalized_by)}`,
+      )
+      // 同一查询只差 symbols，保证 relevance/排名可比（symbols 命中判定基 = title+excerpt，大小写敏感）
+      const packNoSym = await httpJson('GET', packQuery('&max_excerpt_chars=20'))
+      const packSym = await httpJson(
+        'GET',
+        packQuery(`&max_excerpt_chars=20&symbols=${encodeURIComponent('性能守则')}`),
+      )
+      const noSymItems = packNoSym.body?.value?.items ?? []
+      const symItems = packSym.body?.value?.items ?? []
+      const noSymRelevance = new Map(noSymItems.map((i) => [i.id, i.relevance]))
+      const noSymIndex = new Map(noSymItems.map((i, idx) => [i.id, idx]))
+      const boosted = symItems.find((i) => (i.graph_hits ?? []).length > 0 && noSymRelevance.has(i.id))
+      const boostedIndex = boosted !== undefined ? symItems.findIndex((i) => i.id === boosted.id) : -1
+      check(
+        '19.10.2 F-B2 symbols 命中加权：relevance 提升 + graph_hits 非空 + 排名不前移后',
+        packSym.status === 200 &&
+          boosted !== undefined &&
+          boosted.graph_hits.includes('性能守则') &&
+          boosted.relevance > noSymRelevance.get(boosted.id) &&
+          boostedIndex <= noSymIndex.get(boosted.id),
+        `id=${boosted?.id ?? ''} rel=${String(noSymRelevance.get(boosted?.id))}→${String(boosted?.relevance)} idx=${String(noSymIndex.get(boosted?.id))}→${String(boostedIndex)}`,
+      )
+      check(
+        '19.10.3 F-B2 max_excerpt_chars 精确截断（每项 excerpt 长度 <= 上限）',
+        symItems.length >= 1 && symItems.every((i) => i.excerpt.length <= 20),
+        `lens=${JSON.stringify(symItems.map((i) => i.excerpt.length))}`,
+      )
+      check(
+        '19.10.4 F-B2 边界：不传 symbols → graph_hits 全为空数组（缺省行为不变）',
+        noSymItems.length >= 1 &&
+          noSymItems.every((i) => Array.isArray(i.graph_hits) && i.graph_hits.length === 0),
+      )
+      const mcpPackTool = mcpTools.find((t) => t.name === 'prism_context_pack')
+      const packProps = Object.keys(mcpPackTool?.inputSchema?.properties ?? {})
+      check(
+        '19.10.5 F-B2 MCP prism_context_pack schema 含 symbols/layers/books/max_excerpt_chars',
+        ['symbols', 'layers', 'books', 'max_excerpt_chars'].every((k) => packProps.includes(k)),
+        packProps.join(','),
+      )
+
+      // ---------- F-A3 冲突审计留痕（detected_from 只进审计 JSONL，不进返回体/表结构） ----------
+      const confAll = jparse(await cli(['kb', 'conflicts', '--all', '--json'], env)).value
+      check(
+        '19.11.1 F-A3 冲突返回体不含 detected_from（零迁移：不加列）',
+        Array.isArray(confAll) && confAll.length >= 1 && confAll.every((c) => c.detected_from === undefined),
+        `n=${Array.isArray(confAll) ? confAll.length : 0}`,
+      )
+      const auditDir = join(home, 'audit')
+      const auditFiles = (await readdir(auditDir).catch(() => [])).filter((f) => /^audit-.*\.jsonl$/.test(f))
+      let auditText = ''
+      for (const f of auditFiles) auditText += await readFile(join(auditDir, f), 'utf-8').catch(() => '')
+      check(
+        '19.11.2 F-A3 审计 JSONL 含 detected_from 留痕（R7 文件为真相）',
+        auditFiles.length >= 1 &&
+          auditText.includes('detected_from') &&
+          auditText.includes('"deposit"'),
+        `auditFiles=${auditFiles.length}`,
+      )
+      check(
+        '19.11.3 F-A3 冲突只记录不阻断（R3）：冲突存在时 import 仍成功',
+        (await cli(['kb', 'conflicts', '--all', '--json'], env)).code === 0,
       )
     }
 
