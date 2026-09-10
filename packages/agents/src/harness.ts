@@ -1,11 +1,13 @@
 /**
  * 宿主适配器注册表（deployment-model.md §1）：
- * **编译期登记清单里的全部适配器，运行期只激活一个**。
+ * **内置清单 + 运行期插件目录，运行期只激活一个**。
  *
  * 选择优先级：`PRISM_HARNESS` 环境变量 > `prism.yaml: harness` 键 > 默认项。
  * 不做运行时多 harness 路由——换 harness = 改配置重启。
  *
- * 新增 harness **只改 `harness-manifest.ts`**（加一行）；本文件无需改动。
+ * 新增 harness **不必改 Prism 代码**：把适配器包放进 `<PRISM_HOME>/harnesses/`，
+ * 启动时由 `harness-plugins.ts` 自动加载（见 `loadHarnessPlugins`）。内置仅保留
+ * 默认的 zcode，保证无插件时也能开箱可用。
  */
 
 import { createHarnessRegistry, PrismError, type HarnessAdapter } from '@prism/core'
@@ -18,6 +20,7 @@ import {
   type HarnessFactoryOptions,
   type PrismHarnessAdapter,
 } from './harness-manifest.js'
+import { externalHarnessIds, harnessPluginEntries, harnessPluginsDir } from './harness-plugins.js'
 
 export type { PrismHarnessAdapter } from './harness-manifest.js'
 
@@ -33,9 +36,9 @@ export interface BuildHarnessRegistryOptions {
 }
 
 /**
- * 构建注册表：把清单里登记的全部适配器注册进来（**不激活**）。
- * 调用方用 `resolveHarness()` 决定激活哪个。**新增 harness 不必改本函数**——
- * 只在 `harness-manifest.ts` 的 `HARNESS_MANIFEST` 加一行。
+ * 构建注册表：登记**内置清单 + 已加载的插件适配器**（**不激活**）。
+ * 插件由 `loadHarnessPlugins()` 事先异步加载进缓存（启动时一次）；本函数保持同步。
+ * 显式传 `manifest` 时**只用该清单**（测试/隔离用，不含插件）。
  */
 export function buildHarnessRegistry(
   options: BuildHarnessRegistryOptions = {},
@@ -45,10 +48,30 @@ export function buildHarnessRegistry(
   const createOptions: HarnessFactoryOptions = {}
   if (root !== undefined) createOptions.root = root
   if (options.repoDir !== undefined) createOptions.repoDir = options.repoDir
-  for (const entry of options.manifest ?? HARNESS_MANIFEST) {
+  const entries = options.manifest ?? [...HARNESS_MANIFEST, ...harnessPluginEntries()]
+  for (const entry of entries) {
     registry.register(entry.create(createOptions) as unknown as HarnessAdapter)
   }
   return registry
+}
+
+/** 适配器清单项（供 `harness list` 展示来源）。 */
+export interface HarnessListing {
+  id: string
+  origin: 'builtin' | 'external'
+}
+
+/** 列出全部可用适配器（内置 + 插件）及其来源。 */
+export function listHarnesses(): HarnessListing[] {
+  const externals = externalHarnessIds()
+  return [...HARNESS_MANIFEST.map((e) => e.id), ...externals]
+    .filter((id, i, arr) => arr.indexOf(id) === i)
+    .map((id) => ({ id, origin: externals.has(id) ? 'external' : 'builtin' }))
+}
+
+/** 插件目录（`harness list` / doctor 展示；`PRISM_HARNESS_DIR` 可覆盖）。 */
+export function harnessDir(home?: string): string {
+  return harnessPluginsDir(home)
 }
 
 export interface ResolveHarnessOptions extends BuildHarnessRegistryOptions {

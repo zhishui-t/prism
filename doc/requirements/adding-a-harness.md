@@ -1,117 +1,131 @@
 # 新增一个 harness（宿主适配器）
 
-> **结论：新增 harness = 只改一个文件 `packages/agents/src/harness-manifest.ts`**
-> （在 `HARNESS_MANIFEST` 加一行 `{ id, create }`）。
-> 适配器实现可放 `adapters/<id>.ts`，简单 harness 甚至能内联在清单里。
-> 目录布局、CLI 根目录、MCP 数据源全部由适配器自述推导，其余文件无需改动。
-> 若你发现要改 `harness.ts` / `dirs.ts` / `index.ts` / CLI / server，那是耦合 bug。
+> **结论：不必改 Prism 代码、不必重新编译。** 把适配器包放进
+> `<PRISM_HOME>/harnesses/<你的名字>/`，Prism 启动时**自动发现并注册**。
+> 目录只要一个 `harness.json`（或 package.json 的 `prismHarness` 字段）+ 一个入口 `.mjs`。
+>
+> 想让某个 harness 成为内置默认，才需要改 Prism 源码（见文末「内置适配器」）。
 
-## 唯一登记点：`harness-manifest.ts`
+## 插件方式（推荐）
 
-```ts
-// packages/agents/src/harness-manifest.ts
-import { createMyAdapter, MY_ADAPTER_ID } from './adapters/my-harness.js'
-
-export const HARNESS_MANIFEST: readonly HarnessEntry[] = [
-  { id: ZCODE_ADAPTER_ID, create: createZcodeAdapter },
-  { id: MY_ADAPTER_ID, create: createMyAdapter },   // ← 只加这一行
-]
+```
+<PRISM_HOME>/harnesses/
+  my-harness/
+    harness.json       # { "id": "my-harness", "entry": "./index.mjs" }
+    index.mjs          # 导出适配器
 ```
 
-- `DEFAULT_HARNESS_ID` 自动取 `isDefault: true` 的条目（缺省取首项），**不需要**再维护
-  一个 id 常量文件（旧的 `harness-id.ts` 已删除）。
-- `index.ts` 无需为新 harness 追加命名导出——消费方用 `HARNESS_MANIFEST` /
-  `resolveHarness()` / `harnessLayout()` 这些**通用符号**即可。
+`index.mjs` 导出适配器，任选一种：
 
-## 为什么能做到「只改一处」
+```js
+// ① 推荐：工厂（能拿到 root/repoDir）
+export default function createAdapter(opts) {
+  const root = opts.root ?? '/Users/me/.my-harness'
+  return {
+    id: 'my-harness',
+    displayName: 'My Harness',
+    defaultRoot: root,                       // 未显式指定根时用它
+    detect: async () => ({ installed: true, configDir: root }),
+    agent: {
+      globalDir: root + '/agents',
+      projectDir: opts.repoDir ? opts.repoDir + '/.my-harness/agents' : null,
+      filePattern: '<role>.md',
+      teamDir: root + '/teams',              // 可 null（回落到 agents 同级 teams/）
+      frontmatterFields: ['name', 'description'],
+      bodyConvention: '## 核心契约',
+      activation: 'session-start',
+      nameMustMatchFile: true,
+    },
+    dispatch: null,                          // 无子 agent 机制 → null
+    model: null,                             // 不可声明模型 → null
+    skill: { nativeDir: root + '/skills', ecosystemDir: null, format: 'SKILL.md', supported: true },
+    instructions: { file: 'AGENTS.md', projectFile: '<repo>/AGENTS.md' },
+    renderRole: (role) => ({ path: '', content: '', format: 'markdown', writePolicy: 'overwrite', marker: '' }),
+    parseRole: (content, filename) => ({}),
+    renderTeamInstructions: () => null,
+  }
+}
+```
+
+```js
+// ② 也可：export function createAdapter(opts) {...}
+// ③ 也可：export const adapter = { ...实例... }（忽略 opts）
+// ④ 也可：export default { ...实例... }
+```
+
+激活：
+
+```bash
+PRISM_HARNESS=my-harness prism harness show    # 或写入 prism.yaml：harness: my-harness
+```
+
+查询：
+
+```bash
+prism harness list          # 内置 + 插件（标注来源），并显示插件目录
+prism doctor                # harness_plugins 检查：加载了几个、有无失败
+```
+
+### 骨架约定（`harness.json`）
+
+| 字段 | 必填 | 说明 |
+| :--- | :--- | :--- |
+| `id` | ✅ | 适配器 id，须与入口导出的 `id` 一致，且**不得与内置冲突** |
+| `entry` | | 入口文件，相对插件目录；缺省 `index.mjs` |
+| `displayName` | | 仅展示用（入口里的 `displayName` 优先） |
+
+也可用 `package.json`：`"prismHarness": { "id": "my-harness", "entry": "./index.mjs" }`
+（省略 `id` 时取 package `name`）。
+
+### 健壮性与安全
+
+- **插件加载即执行其代码**（插件机制的本质）。Prism 只扫描 `harnesses/` 目录，不追踪任意路径。
+- 任一插件失败（清单缺字段 / 入口不存在 / id 与内置冲突 / 结构不合法）**只记录、不抛出**，
+  不影响 Prism 启动与其它插件；`prism harness list` / `prism doctor` 会显示失败原因。
+- 结构校验：`id`/`displayName`/`defaultRoot`/`agent.globalDir`/`skill.format` 必填，
+  `detect`/`renderRole`/`parseRole` 必须是函数。
+
+### 环境变量
+
+| 变量 | 作用 |
+| :--- | :--- |
+| `PRISM_HARNESS` | 激活哪个适配器（优先级最高） |
+| `PRISM_HARNESS_DIR` | 覆盖插件目录（缺省 `<PRISM_HOME>/harnesses`） |
+| `PRISM_NO_HARNESS_PLUGINS=1` | 禁用插件加载（仅用内置） |
+| `PRISM_HARNESS_ROOT` | 覆盖 harness 根目录 |
+
+## 内置适配器（改源码，仅当要进 Prism 发行版）
+
+若某 harness 要成为**内置**（随 Prism 发布、无插件目录也默认可用）：
+
+1. 在 `packages/agents/src/adapters/<id>.ts` 写适配器实现；
+2. 在 `packages/agents/src/harness-manifest.ts` 的 `HARNESS_MANIFEST` 加一行
+   `{ id, create }`（`isDefault: true` 可设默认项）。
+
+内置与插件走**同一套接口**，插件方式的一切约定（目录自述等）都适用。
+
+## 为什么能做到「零侵入」
 
 历史坑（两轮才修完，2026-09-10）：
 1. 目录名曾写死在 4 处（`dirs.ts` 的 `join(root,'agents'|'teams'|'skills')`、CLI 的
    `--zcode-dir`、server 的 `zcodePaths`/`defaultZcodeDir`、MCP 的 `~/.zcode` 兜底）；
 2. 登记样板曾分散在 `harness.ts`（注册）+ `harness-id.ts`（id 常量/默认值）+
-   `index.ts`（逐适配器导出）。
+   `index.ts`（逐适配器导出）；
+3. 适配器曾是**编译期**清单，第三方必须改源码重编译。
 
-现在统一为**数据驱动 + 单一清单**：
+现在统一为**数据驱动 + 运行期插件**：
 
 | 关注点 | 唯一来源 | 消费方 |
 | :--- | :--- | :--- |
-| 登记项 / 默认项 | `HARNESS_MANIFEST` | `buildHarnessRegistry()` |
-| 根目录默认 | `adapter.defaultRoot` | `harnessLayout()` → `defaultZcodeDir()` |
+| 登记项（内置/插件） | `HARNESS_MANIFEST` + `harnesses/` | `buildHarnessRegistry()` |
+| 默认项 | 清单 `isDefault`（缺省首项） | `resolveHarness()` |
+| 根目录默认 | `adapter.defaultRoot` | `harnessLayout()` |
 | 角色目录 | `adapter.agent.globalDir` | `resolveDirs()` |
 | 团队目录 | `adapter.agent.teamDir` | `resolveDirs()` |
 | Skill 目录 | `adapter.skill.nativeDir` | `resolveDirs()` / installSkills |
 | 角色文件形态 | `adapter.agent.filePattern` / `frontmatterFields` | install / render |
 | 派发/模型/指令文件 | `adapter.dispatch` / `.model` / `.instructions` | MCP 只读展示 |
 
-## 步骤
-
-### 1. 写适配器
-
-新建 `packages/agents/src/adapters/<id>.ts`，实现 `HarnessAdapter<RoleDefinition, TeamDefinition>`
-（接口见 `packages/core/src/harness/adapter.ts`，逐字段有注释）：
-
-```ts
-import { homedir } from 'node:os'
-import { join } from 'node:path'
-import type { HarnessAdapter } from '@prism/core'
-import type { RoleDefinition, TeamDefinition } from '../types.js'
-
-export const MY_ADAPTER_ID = 'myharness'
-
-export function createMyAdapter(opts: { root?: string; repoDir?: string } = {}): HarnessAdapter<RoleDefinition, TeamDefinition> {
-  const root = opts.root ?? join(homedir(), '.myharness')
-  return {
-    id: MY_ADAPTER_ID,
-    displayName: 'My Harness',
-    defaultRoot: root,                       // ← 上层所有默认目录由它推导
-    detect: async () => ({ installed: true, configDir: root }),
-    agent: {
-      globalDir: join(root, 'agents'),
-      projectDir: opts.repoDir ? join(opts.repoDir, '.myharness', 'agents') : null,
-      filePattern: '<role>.md',
-      teamDir: join(root, 'teams'),          // 无独立团队目录可给 null（上层回落到 agents 同级 teams/）
-      frontmatterFields: ['name', 'description'],
-      bodyConvention: '## 核心契约',
-      activation: 'session-start',           // 或 'immediate' | 'restart' | 'unknown'
-      nameMustMatchFile: true,
-    },
-    dispatch: null,                          // 无子 agent 机制 → null
-    model: null,                             // 不可声明模型 → null
-    skill: { nativeDir: join(root, 'skills'), ecosystemDir: null, format: 'SKILL.md', supported: true },
-    instructions: { file: 'AGENTS.md', projectFile: '<repo>/AGENTS.md' },
-    renderRole: (role) => ({ path: join(root, 'agents', `${role.name}.md`), content: '...', format: 'markdown', writePolicy: 'overwrite', marker: '...' }),
-    parseRole: (content, filename) => ({ /* 解析回 RoleDefinition */ } as RoleDefinition),
-    renderTeamInstructions: (team) => null,
-  }
-}
-```
-
-### 2. 登记（唯一一处改动）
-
-在 `packages/agents/src/harness-manifest.ts` 的 `HARNESS_MANIFEST` 加一行：
-
-```ts
-{ id: MY_ADAPTER_ID, create: createMyAdapter },
-```
-
-**不需要**改 `harness.ts`（自动遍历清单注册）、**不需要**加 id 常量文件、**不需要**
-改 `index.ts` 导出。
-
-### 3. 激活
-
-```bash
-PRISM_HARNESS=myharness prism harness show     # 环境变量（优先级最高）
-# 或写入 <PRISM_HOME>/prism.yaml：harness: myharness
-```
-
-## 验证清单
-
-- [ ] `pnpm -r typecheck && pnpm lint`
-- [ ] `pnpm test`（`harness-layout.test.ts` + `harness-manifest.test.ts` 锁死
-      「布局随适配器变」「清单加一行即可激活」）
-- [ ] `PRISM_HARNESS=<id> prism harness show` 输出的目录与适配器自述一致
-- [ ] `PRISM_HARNESS=<id> prism role install ...` 落到适配器声明的 `globalDir`
-- [ ] 用适配器的 `parseRole` 跑通一次导入（往返一致）
 
 ## 已知的「不在适配器内」约定
 

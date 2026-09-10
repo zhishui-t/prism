@@ -4,7 +4,6 @@ import { dirname, join, resolve } from 'node:path'
 
 import {
   checkPrincipleConsistency,
-  defaultZcodeDir,
   initRole,
   installedSkillNames,
   installRoles,
@@ -14,11 +13,9 @@ import {
   parseRoleFile,
   renderPrismRole,
   renderZcodeRole,
-  resolveDirsFromHome,
   zcodePaths,
 } from '@prism/server'
 import type { RoleDefinition } from '@prism/server'
-import { prismHome } from '@prism/core'
 
 import type { ArgValues, CommandContext } from '../argv.js'
 import { expandHome, guardWriteTarget, resolveTargetDirs } from '../argv.js'
@@ -33,7 +30,8 @@ export async function runRole(ctx: CommandContext, args: string[], values: ArgVa
   const [sub, ...rest] = args
   const dirs = resolveTargetDirs(ctx, values)
   const rolesDir = values.source !== undefined ? expandHome(values.source) : dirs.rolesDir
-  const zcodeDir = expandHome((values['harness-root'] ?? values['zcode-dir']) ?? defaultZcodeDir())
+  // 根目录取自解析结果（未显式指定时 = 激活适配器的默认根，不再是硬编码 ~/.zcode）
+  const zcodeDir = dirs.zcodeDir
   const zcode = zcodePaths(zcodeDir)
 
   switch (sub) {
@@ -133,7 +131,7 @@ export async function runRole(ctx: CommandContext, args: string[], values: ArgVa
     case 'validate': {
       const roles = await loadRoles(rolesDir, { knownSkills: await installedSkillNames(zcodeDir) })
       // 原则一致性（role-definition.md §2.1）：跨角色 + 团队仲裁链的组合校验
-      const teams = await loadTeams(resolveDirsFromHome(ctx.home ?? prismHome(), { zcodeDir, zcodeDirExplicit: true }).teamsDir)
+      const teams = await loadTeams(dirs.teamsDir)
       const consistency = checkPrincipleConsistency({ roles, teams })
       const consistencyIssues: Array<{ role: string; level: string; code: string; message: string }> = []
       for (const [name, issues] of consistency.entries()) {

@@ -1,27 +1,35 @@
 /**
  * `prism harness`（deployment-model.md §1）：运行时宿主适配器。
  *
- * Prism 编译期支持多个 harness 适配器，**运行期只激活一个**。
- * 选择优先级：`PRISM_HARNESS` 环境变量 > `prism.yaml: harness` 键 > 默认 `zcode`。
+ * 适配器分**内置**（zcode）与**插件**（`<PRISM_HOME>/harnesses/`，启动时自动注册）。
+ * **运行期只激活一个**：`PRISM_HARNESS` 环境变量 > `prism.yaml: harness` 键 > 默认项。
  */
-import { loadPrismConfig, resolveHarness, harnessSummary, HARNESS_ENV_VAR } from '@prism/agents'
+import {
+  loadPrismConfig,
+  resolveHarness,
+  harnessSummary,
+  listHarnesses,
+  harnessDir,
+  HARNESS_ENV_VAR,
+} from '@prism/agents'
 import { isPrismError } from '@prism/core'
 
-import { defaultZcodeDir } from '@prism/server'
+import { harnessPluginReport } from '@prism/server'
 
 import type { ArgValues, CommandContext } from '../argv.js'
-import { expandHome } from '../argv.js'
+import { harnessRootOverride } from '../argv.js'
 
-/** `prism harness <list|show> [--zcode-dir <dir>]`。 */
+/** `prism harness <list|show> [--harness-root <dir>]`。 */
 export async function runHarness(ctx: CommandContext, args: string[], values: ArgValues): Promise<number> {
   const [sub] = args
-  const zcodeDir = expandHome((values['harness-root'] ?? values['zcode-dir']) ?? defaultZcodeDir())
+  // 只在**显式指定**时给根覆盖；否则交给激活适配器的 defaultRoot（插件自述）
+  const { root } = harnessRootOverride(values)
   try {
     switch (sub) {
       case 'list':
-        return harnessList(ctx, zcodeDir)
+        return harnessList(ctx, root)
       case 'show':
-        return harnessShow(ctx, zcodeDir)
+        return harnessShow(ctx, root)
       default:
         ctx.stderr(
           `用法: prism harness <list|show>\n` +
@@ -39,37 +47,53 @@ export async function runHarness(ctx: CommandContext, args: string[], values: Ar
   }
 }
 
-/** 解析配置来源（env / prism.yaml），供展示。 */
-function resolveWithConfig(ctx: CommandContext, zcodeDir: string): ReturnType<typeof resolveHarness> {
+/** 解析配置来源（env / prism.yaml），供展示。root 仅在显式指定时传入。 */
+function resolveWithConfig(ctx: CommandContext, root?: string): ReturnType<typeof resolveHarness> {
   const config = loadPrismConfig(ctx.home)
   return resolveHarness({
-    zcodeDir,
+    ...(root !== undefined ? { root } : {}),
     ...(config?.harness !== undefined ? { configuredId: config.harness } : {}),
   })
 }
 
-function harnessList(ctx: CommandContext, zcodeDir: string): number {
-  const resolved = resolveWithConfig(ctx, zcodeDir)
+function harnessList(ctx: CommandContext, root?: string): number {
+  const resolved = resolveWithConfig(ctx, root)
+  const listings = listHarnesses()
+  const report = harnessPluginReport()
   if (ctx.json) {
     ctx.stdout(
       JSON.stringify({
         ok: true,
-        value: { active: resolved.id, source: resolved.source, available: resolved.available },
+        value: {
+          active: resolved.id,
+          source: resolved.source,
+          available: resolved.available,
+          adapters: listings,
+          plugins_dir: harnessDir(ctx.home),
+          plugins: report !== null ? { loaded: report.loaded, errors: report.errors } : null,
+        },
       }),
     )
     return 0
   }
-  for (const id of resolved.available) {
+  for (const { id, origin } of listings) {
     const mark = id === resolved.id ? '●' : '○'
     const tag = id === resolved.id ? `  ← 当前激活（${sourceLabel(resolved.source)}）` : ''
-    ctx.stdout(`${mark} ${id}${tag}`)
+    ctx.stdout(`${mark} ${id}  [${origin === 'external' ? '插件' : '内置'}]${tag}`)
   }
-  ctx.stdout(`已编译 ${resolved.available.length} 个适配器（运行期只激活一个）`)
+  ctx.stdout(`共 ${listings.length} 个适配器（运行期只激活一个）`)
+  ctx.stdout(`插件目录: ${harnessDir(ctx.home)}`)
+  if (report !== null && report.errors.length > 0) {
+    for (const e of report.errors) ctx.stdout(`  ⚠ 插件加载失败: ${e.dir} — ${e.reason}`)
+  }
+  if (listings.length === 1) {
+    ctx.stdout('（提示：第三方适配器包放入插件目录即可自动注册，无需改 Prism 代码）')
+  }
   return 0
 }
 
-function harnessShow(ctx: CommandContext, zcodeDir: string): number {
-  const resolved = resolveWithConfig(ctx, zcodeDir)
+function harnessShow(ctx: CommandContext, root?: string): number {
+  const resolved = resolveWithConfig(ctx, root)
   const summary = harnessSummary(resolved.adapter)
   if (ctx.json) {
     ctx.stdout(JSON.stringify({ ok: true, value: { source: resolved.source, ...summary } }))

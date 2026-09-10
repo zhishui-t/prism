@@ -41,7 +41,9 @@ export const DEFAULT_ZCODE_DIR = join(homedir(), '.zcode')
 
 /** 创建 ZCode 适配器。 */
 export function createZcodeAdapter(opts: ZcodeAdapterOptions = {}): HarnessAdapter<RoleDefinition, TeamDefinition> {
-  const zcodeDir = opts.root ?? opts.zcodeDir ?? DEFAULT_ZCODE_DIR
+  // ZCODE_DIR 是 **ZCode 专属**的旧环境变量；在此（而非通用路径里）生效，
+  // 避免它泄漏到其它 harness（插件实测：会把插件的 defaultRoot 覆盖成 ~/.zcode）。
+  const zcodeDir = opts.root ?? opts.zcodeDir ?? process.env['ZCODE_DIR'] ?? DEFAULT_ZCODE_DIR
   const agentsDir = join(zcodeDir, 'agents')
   // 团队定义落在宿主根的 teams/（agents 的同级）——ZCode 递归扫描 agents/ 下全部 .md，
   // 团队文件含 name+description 会被误注册成 agent（R3 实测 / B7），故必须移出 agents/。
@@ -49,7 +51,7 @@ export function createZcodeAdapter(opts: ZcodeAdapterOptions = {}): HarnessAdapt
   const adapter: HarnessAdapter<RoleDefinition, TeamDefinition> = {
     id: ZCODE_ADAPTER_ID,
     displayName: 'ZCode',
-    defaultRoot: DEFAULT_ZCODE_DIR,
+    defaultRoot: zcodeDir,
 
     async detect(): Promise<HarnessPresence> {
       if (!existsSync(zcodeDir)) {

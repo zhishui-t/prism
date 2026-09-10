@@ -1,11 +1,11 @@
-import { defaultZcodeDir, startServer } from '@prism/server'
+import { startServer } from '@prism/server'
 
 import type { ArgValues, CommandContext } from '../argv.js'
-import { expandHome } from '../argv.js'
+import { harnessRootOverride } from '../argv.js'
 
 /**
- * `prism serve [--port 7777] [--host <h>] [--zcode-dir <dir>]`：启动 HTTP 服务，Ctrl+C 退出。
- * `--zcode-dir` 透传给 server（角色/团队数据源基准），使控制台与 CLI 同源（B10）。
+ * `prism serve [--port 7777] [--host <h>] [--harness-root <dir>]`：启动 HTTP 服务，Ctrl+C 退出。
+ * 根目录仅在**显式指定**时透传，否则由 server 用激活适配器的默认根（支持插件 harness）。
  */
 export async function runServe(ctx: CommandContext, _args: string[], values: ArgValues): Promise<number> {
   const port = values.port !== undefined ? Number(values.port) : undefined
@@ -14,9 +14,9 @@ export async function runServe(ctx: CommandContext, _args: string[], values: Arg
     return 1
   }
   const host = values.host
-  const zcodeDir = expandHome((values['harness-root'] ?? values['zcode-dir']) ?? defaultZcodeDir())
+  const { root } = harnessRootOverride(values)
   try {
-    const app = await startServer({ home: ctx.home, port, host, zcodeDir })
+    const app = await startServer({ home: ctx.home, port, host, ...(root !== undefined ? { zcodeDir: root } : {}) })
     ctx.stdout(`Prism serve 监听 http://${app.host}:${app.port}（home=${app.home}）`)
     ctx.stdout('按 Ctrl+C 停止')
     const untilSignal = new Promise<void>((resolve) => {

@@ -3,8 +3,8 @@ import { join as joinPath } from 'node:path'
 import { parseArgs } from 'node:util'
 
 import { prismHome, type PrismPersistence } from '@prism/core'
-import { resolveDirsFromHome, type ResolvedDirs } from '@prism/agents'
-import { applyEmbeddingConfig, defaultZcodeDir } from '@prism/server'
+import { ensureHarnessPluginsLoaded, resolveDirsFromHome, type ResolvedDirs } from '@prism/agents'
+import { applyEmbeddingConfig } from '@prism/server'
 import type { BuildRunner, KnowledgeService } from '@prism/server'
 import { runInit } from './commands/init.js'
 import { runServe } from './commands/serve.js'
@@ -255,18 +255,35 @@ export function expandHome(path: string): string {
 }
 
 /**
+ * 解析「显式指定的 harness 根」——**只认 flag 与 env 覆盖，无则 undefined**。
+ *
+ * 与 `defaultZcodeDir()` 的区别很关键：后者总会回落到 **zcode 的**默认根，若拿它去
+ * 解析插件适配器，会把 `~/.zcode` 硬塞给插件，覆盖插件自述的 `defaultRoot`（实测 bug）。
+ * 未显式指定时应返回 undefined，让 `harnessLayout()` 用**被激活适配器**的默认根。
+ *
+ * 返回值同时给出 explicit（仅 flag 算显式；env 只重定向不解除写守卫）。
+ */
+export function harnessRootOverride(values: ArgValues): { root?: string; explicit: boolean } {
+  const flag = values['harness-root'] ?? values['zcode-dir']
+  if (flag !== undefined && flag !== '') return { root: expandHome(flag), explicit: true }
+  // 只认**通用** env；`ZCODE_DIR` 是 zcode 专属，由 zcode 适配器自己消费——
+  // 在此读取会把它泄漏给其它 harness（插件实测：覆盖插件 defaultRoot）
+  const envRoot = process.env['PRISM_HARNESS_ROOT']
+  if (envRoot !== undefined && envRoot !== '') return { root: expandHome(envRoot), explicit: false }
+  return { explicit: false }
+}
+
+/**
  * role/team/skill 子命令的统一目录解析（装配语义简化：直接住在宿主目录）：
  * `<PRISM_HOME>/prism.yaml`（可选）覆盖适配器默认；`--harness-root` 只作为默认推导基准。
- * 优先级：prism.yaml 显式键 > --harness-root 推导 > 激活适配器的默认根。
+ * 优先级：prism.yaml 显式键 > 显式根覆盖 > **激活适配器的默认根**。
  *
  * 显式性口径（B6 守卫）：只有 **--harness-root（或旧名 --zcode-dir）** / prism.yaml 键
  * 算「用户显式指定」；env `PRISM_HARNESS_ROOT`/`ZCODE_DIR` 不算（保持守卫生效）。
  */
 export function resolveTargetDirs(ctx: CommandContext, values: ArgValues): ResolvedDirs {
-  const rootFlag = values['harness-root'] ?? values['zcode-dir']
-  const explicit = rootFlag !== undefined
-  const zcodeDir = explicit ? expandHome(rootFlag as string) : defaultZcodeDir()
-  return resolveDirsFromHome(ctx.home, { zcodeDir, zcodeDirExplicit: explicit })
+  const { root, explicit } = harnessRootOverride(values)
+  return resolveDirsFromHome(ctx.home, { ...(root !== undefined ? { zcodeDir: root } : {}), zcodeDirExplicit: explicit })
 }
 
 export type GuardedTarget = 'roles' | 'teams' | 'skills'
@@ -340,6 +357,9 @@ export async function runCommand(ctx: CommandContext, argv: string[]): Promise<n
     // 应用 prism.yaml 配置（embedding 档位等）——须在派发前，保证所有命令
     // （status/reindex/search…）看到一致的生效档位；env PRISM_EMBEDDING_MODEL 优先级更高。
     applyEmbeddingConfig(effective.home)
+    // 加载 harness 插件（<PRISM_HOME>/harnesses/）——让 harness list / role/team/skill
+    // 等命令看到第三方适配器。加载失败不阻断（内部逐项容错）。
+    await ensureHarnessPluginsLoaded(effective.home).catch(() => undefined)
     switch (command) {
       case 'init':
         return await runInit(effective, rest, values)

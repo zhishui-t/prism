@@ -506,6 +506,52 @@ async function main() {
       await cli(['embedding', 'stop', '--json'], hEnv)
     }
 
+    // ===== 18. harness 插件：放目录即注册（零代码侵入；变更 3c） =====
+    {
+      const pluginRoot = join(home, 'harnesses', 'e2e-harness')
+      await mkdir(pluginRoot, { recursive: true })
+      await writeFile(
+        join(pluginRoot, 'harness.json'),
+        JSON.stringify({ id: 'e2e-harness', entry: './index.mjs' }),
+        'utf-8',
+      )
+      await writeFile(
+        join(pluginRoot, 'index.mjs'),
+        `export default function createAdapter(opts) {
+  const root = opts.root ?? '/tmp/e2e-harness-home'
+  return {
+    id: 'e2e-harness', displayName: 'E2E Harness', defaultRoot: root,
+    detect: async () => ({ installed: true, configDir: root }),
+    agent: { globalDir: root + '/roles', projectDir: null, filePattern: '<role>.md', teamDir: root + '/squads',
+      frontmatterFields: ['name'], bodyConvention: '## 核心契约', activation: 'session-start', nameMustMatchFile: true },
+    dispatch: null, model: null,
+    skill: { nativeDir: root + '/skills', ecosystemDir: null, format: 'SKILL.md', supported: true },
+    instructions: { file: 'AGENTS.md', projectFile: '<repo>/AGENTS.md' },
+    renderRole: () => ({ path: '', content: '', format: 'markdown', writePolicy: 'overwrite', marker: '' }),
+    parseRole: () => ({}), renderTeamInstructions: () => null,
+  }
+}
+`,
+        'utf-8',
+      )
+
+      const listed = await cli(['harness', 'list', '--json'], env)
+      const lv = JSON.parse(listed.stdout).value
+      check(
+        '18.1 插件被自动发现（origin=external）',
+        lv.adapters.some((a) => a.id === 'e2e-harness' && a.origin === 'external'),
+        JSON.stringify(lv.adapters.map((a) => a.id)),
+      )
+
+      const shown = await cli(['harness', 'show', '--json'], { ...env, PRISM_HARNESS: 'e2e-harness' })
+      const sv = JSON.parse(shown.stdout).value
+      check(
+        '18.2 可激活插件，布局随其自述（squads/skills）',
+        sv.id === 'e2e-harness' && String(sv.agent.teamDir).includes('squads'),
+        `${sv.id} teamDir=${sv.agent.teamDir}`,
+      )
+    }
+
     // ===== 9. 真实宿主零污染 =====
     const realAfter = await listDir(REAL_ZCODE)
     check(

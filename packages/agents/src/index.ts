@@ -91,6 +91,9 @@ export {
   resolveHarness,
   harnessLayout,
   harnessSummary,
+  listHarnesses,
+  harnessDir,
+  type HarnessListing,
 } from './harness.js'
 export {
   HARNESS_MANIFEST,
@@ -99,6 +102,17 @@ export {
   type HarnessEntry,
   type HarnessFactoryOptions,
 } from './harness-manifest.js'
+// **Harness 适配器插件**（运行期自动注册：第三方把包放 <PRISM_HOME>/harnesses/ 即可）
+export {
+  loadHarnessPlugins,
+  ensureHarnessPluginsLoaded,
+  harnessPluginReport,
+  harnessPluginsDir,
+  harnessPluginsLoaded,
+  resetHarnessPlugins,
+  externalHarnessIds,
+  type HarnessPluginLoad,
+} from './harness-plugins.js'
 export type {
   PrismHarnessAdapter,
   BuildHarnessRegistryOptions,

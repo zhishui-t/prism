@@ -220,5 +220,15 @@ export {
   findPrismBlock,
 } from '@prism/agents'
 
+// Harness 适配器插件（<PRISM_HOME>/harnesses/ 运行期自动注册）
+export {
+  ensureHarnessPluginsLoaded,
+  harnessDir,
+  harnessPluginReport,
+  harnessPluginsDir,
+  listHarnesses,
+  type HarnessPluginLoad,
+} from '@prism/agents'
+
 // MCP stdio
 export { createMcpTools, handleRpcRequest, runMcpStdio, type McpTool, type McpDeps } from './mcp/server.js'

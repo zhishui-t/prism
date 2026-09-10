@@ -9,6 +9,9 @@ import {
   activeModel,
   embedText,
   embeddingInstalled,
+  ensureHarnessPluginsLoaded,
+  harnessDir,
+  listHarnesses,
   preferredBackend,
   probeConverter,
   resolveGraphifyCommand,
@@ -120,7 +123,25 @@ export async function runDoctor(ctx: CommandContext, _args: string[], values: Ar
     })
   }
 
-  // 7) 端口占用
+  // 7) harness 适配器插件（<PRISM_HOME>/harnesses/ 自动注册；有失败项才告警）
+  {
+    const report = await ensureHarnessPluginsLoaded(home).catch(() => null)
+    const listings = listHarnesses()
+    const loaded = listings.filter((a) => a.origin === 'external').map((a) => a.id)
+    const failed = report?.errors ?? []
+    checks.push({
+      name: 'harness_plugins',
+      ok: failed.length === 0,
+      detail:
+        failed.length > 0
+          ? `${failed.length} 个插件加载失败：${failed.map((f) => f.dir).join(', ')}`
+          : loaded.length > 0
+            ? `已加载 ${loaded.length} 个插件适配器：${loaded.join(', ')}`
+            : `无插件（可选；把适配器包放入 ${harnessDir(home)} 即自动注册），内置 ${listings.filter((a) => a.origin === 'builtin').map((a) => a.id).join(', ')}`,
+    })
+  }
+
+  // 8) 端口占用
   const port = values.port !== undefined ? Number(values.port) : 7777
   const portFree = await probePort(port, values.host)
   checks.push({

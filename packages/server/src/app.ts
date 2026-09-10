@@ -1,10 +1,9 @@
 import { readFile } from 'node:fs/promises'
 import { createServer, type Server } from 'node:http'
-import { homedir } from 'node:os'
-import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { prismHome } from '@prism/core'
+import { ensureHarnessPluginsLoaded } from '@prism/agents'
 
 import { sendJson, toEnvelope, type Envelope } from './http/envelope.js'
 import { Router } from './http/router.js'
@@ -93,7 +92,11 @@ export async function createApp(options: AppOptions = {}): Promise<{
   const router = new Router()
   router.add('GET', '/api/health', healthRoute(meta))
 
-  const kb = kbRoutes(loadKb, home, resolveDirsFromHome(home, { zcodeDir: options.zcodeDir, zcodeDirExplicit: true }).rolesDir)
+  // 目录解析一次：未显式指定根 → 用激活适配器的默认根（支持插件 harness）。
+  const dirs = resolveDirsFromHome(home, {
+    ...(options.zcodeDir !== undefined ? { zcodeDir: options.zcodeDir, zcodeDirExplicit: true } : {}),
+  })
+  const kb = kbRoutes(loadKb, home, dirs.rolesDir)
   router.add('GET', '/api/kb/search', kb.search)
   router.add('GET', '/api/kb/get/:id', kb.get)
   router.add('GET', '/api/kb/tree', kb.tree)
@@ -148,9 +151,8 @@ export async function createApp(options: AppOptions = {}): Promise<{
   router.add('GET', '/api/tasks/:id', tasks.get)
   router.add('GET', '/api/dags/:id', tasks.dag)
 
-  // 角色 / 团队 / 技能（design-v3 §3.4 F11；只读 GET，数据源 <home>/roles|teams）
-  const zcodeDir = options.zcodeDir ?? process.env['PRISM_ZCODE_DIR'] ?? join(homedir(), '.zcode')
-  const people = peopleRoutes({ home, zcodeDir })
+  // 角色 / 团队 / 技能（design-v3 §3.4 F11；只读 GET，数据源由激活适配器推导）
+  const people = peopleRoutes({ home, zcodeDir: dirs.zcodeDir })
   router.add('GET', '/api/roles', people.roles)
   router.add('GET', '/api/roles/:name', people.role)
   router.add('GET', '/api/teams', people.teams)
@@ -185,6 +187,8 @@ export async function createApp(options: AppOptions = {}): Promise<{
 
 /** 启动 HTTP 服务（CLI `prism serve` 用）。 */
 export async function startServer(options: AppOptions = {}): Promise<AppHandle> {
+  // 先加载 harness 插件：people 路由按激活适配器解析目录，须在 createApp 前就绪。
+  await ensureHarnessPluginsLoaded(options.home).catch(() => undefined)
   const { server, loadKb, home } = await createApp(options)
   const port = options.port ?? DEFAULT_PORT
   const host = options.host ?? '127.0.0.1'

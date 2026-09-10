@@ -4,11 +4,11 @@ import { access } from 'node:fs/promises'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { AuditLog, prismHome, openPersistence, prismPaths, PrismError, TaskLedger } from '@prism/core'
+import { ensureHarnessPluginsLoaded } from '@prism/agents'
 
 import {
   activateTeam,
   applyDepositPolicy,
-  defaultZcodeDir,
   installedSkillNames,
   loadRole,
   loadRoles,
@@ -204,13 +204,17 @@ export function createMcpTools(deps: McpDeps): McpTool[] {
   }
 
   // ---- 角色 / 团队（design-v3 §3.4 P6：宿主拉配置主链路；数据源与 CLI 同源 resolveDirs，B8）----
-  // 根目录：显式 deps > env（新名 > 旧名） > 激活适配器默认根（不再硬编码 ~/.zcode）
-  const zcodeDir =
-    deps.zcodeDir ??
-    process.env['PRISM_HARNESS_ROOT'] ??
-    process.env['PRISM_ZCODE_DIR'] ??
-    defaultZcodeDir()
-  const dirs = resolveDirsFromHome(deps.home, { zcodeDir, zcodeDirExplicit: true })
+  // 根目录：显式 deps > 通用 env `PRISM_HARNESS_ROOT` > **激活适配器默认根**。
+  // 不用 `PRISM_ZCODE_DIR`/`~/.zcode` 兜底——那是 zcode 专属，会泄漏到插件 harness
+  // （zcode 适配器自己会消费 ZCODE_DIR/PRISM_ZCODE_DIR）。未显式指定时不传 root，
+  // 让 `resolveDirs` 走适配器 defaultRoot。
+  const rootOverride = deps.zcodeDir ?? process.env['PRISM_HARNESS_ROOT']
+  const dirs = resolveDirsFromHome(deps.home, {
+    ...(rootOverride !== undefined && rootOverride !== ''
+      ? { zcodeDir: rootOverride, zcodeDirExplicit: true }
+      : {}),
+  })
+  const zcodeDir = dirs.zcodeDir
   const rolesDir = dirs.rolesDir
   const teamsDir = dirs.teamsDir
   const zcode = zcodePaths(zcodeDir)
@@ -997,9 +1001,23 @@ function asString(value: unknown): string | undefined {
   return typeof value === 'string' && value !== '' ? value : undefined
 }
 
-/** stdio 传输：逐行读 JSON-RPC，逐行写响应（启动 MCP：`node dist/mcp/server.js`）。 */
+/**
+ * stdio 传输：逐行读 JSON-RPC，逐行写响应（启动 MCP：`node dist/mcp/server.js`）。
+ *
+ * **先加载 harness 插件再建工具**：适配器（含插件提供的）要在 `createMcpTools` 里被
+ * `resolveDirs`/`resolveHarness` 解析，故加载完成前不开始读 stdin（加载很快）。
+ */
 export function runMcpStdio(options: { home?: string; zcodeDir?: string } = {}): void {
   const home = options.home ?? prismHome()
+  void ensureHarnessPluginsLoaded(home)
+    .catch(() => {
+      // 插件加载异常不得阻断 MCP 启动（内部已逐项容错，这里兜底）
+    })
+    .then(() => serveMcpStdio(home, options))
+}
+
+/** 建立工具并开始服务（插件已加载后调用）。 */
+function serveMcpStdio(home: string, options: { zcodeDir?: string }): void {
   const tools = createMcpTools({ home, zcodeDir: options.zcodeDir })
   const input = createInterface({ input: process.stdin })
   const write = (response: JsonRpcResponse | null): void => {

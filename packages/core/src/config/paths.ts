@@ -20,6 +20,11 @@ export interface PrismPaths {
   teamsDir: string
   skillsDir: string
   graphDir: string
+  /**
+   * **harness 适配器插件目录**：第三方把打包好的适配器放这里，运行期自动注册
+   * （无需改 Prism 代码/重新编译）。每个插件一个子目录，见 harness-plugins.ts。
+   */
+  harnessesDir: string
 }
 
 /** 解析全部子目录路径（均位于 home 之下，可整体迁移）。 */
@@ -32,5 +37,6 @@ export function prismPaths(home: string = prismHome()): PrismPaths {
     teamsDir: join(home, 'teams'),
     skillsDir: join(home, 'skills'),
     graphDir: join(home, 'graph'),
+    harnessesDir: join(home, 'harnesses'),
   }
 }
