@@ -1,14 +1,14 @@
 import { createInterface } from 'node:readline'
 
 import { access } from 'node:fs/promises'
-import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { AuditLog, prismHome, openPersistence, prismPaths, PrismError, WorkQueue, WORK_KINDS, BUILTIN_VALIDATORS, TaskLedger, type WorkKind } from '@prism/core'
+import { AuditLog, prismHome, openPersistence, prismPaths, PrismError, TaskLedger } from '@prism/core'
 
 import {
   activateTeam,
   applyDepositPolicy,
+  defaultZcodeDir,
   installedSkillNames,
   loadRole,
   loadRoles,
@@ -26,6 +26,8 @@ import {
   graphSummary as queryGraphSummary,
 } from '../graph/graphify.js'
 import { inspectGraphStatus, ProjectRegistry } from '../graph/registry.js'
+import { convertFileToMarkdown } from '../kb/convert-file.js'
+import { makeDryRunKb, scanProject } from '../kb/scan.js'
 import type { DepositInput, GraphQuery, KnowledgeService, SearchQuery } from '../kb/port.js'
 import { loadKnowledgeService } from '../kb/wiring.js'
 import { buildContextPack } from '../kb/context-pack.js'
@@ -63,8 +65,6 @@ export interface McpDeps {
   kbFactory?: () => Promise<KnowledgeService>
   graphifyEnv?: NodeJS.ProcessEnv
   graphifyTimeoutMs?: number
-  /** 注入工作队列（测试注入内存实例）；不传则按 home 惰性自建 */
-  workQueue?: WorkQueue
 }
 
 export interface McpTool {
@@ -88,23 +88,6 @@ export function createMcpTools(deps: McpDeps): McpTool[] {
   }
 
   const registry = new ProjectRegistry(deps.home)
-
-  // 工作队列（拉取式，work-queue.md §4）：宿主经 MCP 认领执行 LLM 工作；Prism 不调 LLM
-  // 持久化随 stdio 进程退出释放，无需显式关闭（进程生命周期 = 会话生命周期）
-  let workQueue: WorkQueue | undefined = deps.workQueue
-  const queue = async (): Promise<WorkQueue> => {
-    if (workQueue !== undefined) return workQueue
-    const persistence = openPersistence({ home: deps.home })
-    const created = new WorkQueue({
-      persistence,
-      audit: new AuditLog({ dir: prismPaths(deps.home).auditDir, queue: persistence.queue }),
-    })
-    for (const kind of WORK_KINDS) {
-      created.registerValidator(kind, BUILTIN_VALIDATORS[kind])
-    }
-    workQueue = created
-    return created
-  }
 
   // 任务台账（被动台账，task-center.md）：宿主登记 DAG / 回报状态；Prism 只记录
   let taskLedger: TaskLedger | undefined
@@ -221,7 +204,12 @@ export function createMcpTools(deps: McpDeps): McpTool[] {
   }
 
   // ---- 角色 / 团队（design-v3 §3.4 P6：宿主拉配置主链路；数据源与 CLI 同源 resolveDirs，B8）----
-  const zcodeDir = deps.zcodeDir ?? process.env['PRISM_ZCODE_DIR'] ?? join(homedir(), '.zcode')
+  // 根目录：显式 deps > env（新名 > 旧名） > 激活适配器默认根（不再硬编码 ~/.zcode）
+  const zcodeDir =
+    deps.zcodeDir ??
+    process.env['PRISM_HARNESS_ROOT'] ??
+    process.env['PRISM_ZCODE_DIR'] ??
+    defaultZcodeDir()
   const dirs = resolveDirsFromHome(deps.home, { zcodeDir, zcodeDirExplicit: true })
   const rolesDir = dirs.rolesDir
   const teamsDir = dirs.teamsDir
@@ -445,6 +433,117 @@ export function createMcpTools(deps: McpDeps): McpTool[] {
           })
         }
         return await (await kb()).deposit(raw)
+      },
+    },
+    {
+      name: 'prism_kb_convert',
+      description:
+        '把任意文档转成 Markdown（本地转换，零 LLM、零网络）。支持 docx/pdf/xlsx/pptx/csv/epub 等二进制格式；md/txt/html 直接读原文。图片型扫描 PDF 返回 needs_ocr。**不落库**——转换结果由你（宿主）提炼后经 prism_kb_deposit 落库',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: '待转换文件的绝对路径' },
+          max_chars: {
+            type: 'integer',
+            minimum: 1,
+            description: '返回正文上限（默认 200000；超出截断并标记 truncated）',
+          },
+        },
+        required: ['path'],
+      },
+      call: async (args) => {
+        const path = asString(args.path)
+        if (path === undefined) throw new Error('prism_kb_convert 需要 { path }')
+        return await convertFileToMarkdown(path, {
+          ...(typeof args.max_chars === 'number' ? { maxChars: args.max_chars } : {}),
+        })
+      },
+    },
+    {
+      name: 'prism_kb_import',
+      description:
+        '把项目文档目录扫描成「引用型」索引（项目文件为真相，Prism 只存索引 + 转换后的检索副本，只读不改原文件）。适合宿主批量导入项目知识：先 import 建索引，再对重点条目用 prism_kb_enrich 补实体/摘要',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: '项目根目录绝对路径' },
+          owner: { type: 'string', description: '项目名（project 层 owner）' },
+          book: { type: 'string', description: '书（默认取项目名）' },
+          module: { type: 'string', description: '模块（默认按目录推断）' },
+          dry_run: { type: 'boolean', description: '只报告不落库（默认 false）' },
+        },
+        required: ['path', 'owner'],
+      },
+      call: async (args) => {
+        const root = asString(args.path)
+        const owner = asString(args.owner)
+        if (root === undefined || owner === undefined) {
+          throw new Error('prism_kb_import 需要 { path, owner }')
+        }
+        const dryRun = args.dry_run === true
+        const service = await kb()
+        const target = dryRun ? makeDryRunKb(service) : service
+        const report = await scanProject(target, {
+          root,
+          layer: 'project',
+          owner,
+          ...(asString(args.book) !== undefined ? { book: asString(args.book)! } : {}),
+          ...(asString(args.module) !== undefined ? { module: asString(args.module)! } : {}),
+        })
+        return {
+          root: report.root,
+          discovered: report.discovered,
+          created: report.created,
+          updated: report.updated,
+          unchanged: report.unchanged,
+          skipped: report.skipped,
+          truncated: report.truncated,
+          missing: report.missing,
+          dry_run: dryRun,
+        }
+      },
+    },
+    {
+      name: 'prism_kb_enrich',
+      description:
+        '回写一次富化结果（工作队列已移除：宿主用自己的 LLM 产出后直接调本工具落库，Prism 只做确定性写入）。kind=summarize/classify/extract_entities/diagram_ir；各 kind 的 result 结构见 description 尾注。Prism 不审核、不调 LLM',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          kind: {
+            type: 'string',
+            enum: ['summarize', 'classify', 'extract_entities', 'diagram_ir'],
+            description:
+              'summarize:{entry_id,summary} / classify:{entry_id,labels[]} / extract_entities:{entities[],relations[]} / diagram_ir:{diagram_type,meta}',
+          },
+          payload: { description: '原条目上下文：{ entry_id, layer?, owner?, book?, module?, type? }' },
+          result: { description: '你的 LLM 产出结果（结构随 kind 而定）' },
+          by: { type: 'string', description: '执行者标识（会话/agent 名，写入 deposited_by）' },
+        },
+        required: ['kind', 'payload', 'result'],
+      },
+      call: async (args) => {
+        const kind = asString(args.kind)
+        if (kind === undefined) throw new Error('prism_kb_enrich 需要 { kind, payload, result }')
+        const rec = (v: unknown): v is Record<string, unknown> =>
+          typeof v === 'object' && v !== null && !Array.isArray(v)
+        if (!rec(args.payload) || !rec(args.result)) {
+          throw new Error('prism_kb_enrich 的 payload 与 result 必须是对象')
+        }
+        // diagram_ir 不回写知识库（由 arch render 消费），显式提示避免静默无操作
+        if (kind === 'diagram_ir') {
+          return {
+            kind,
+            action: 'skipped',
+            detail: 'diagram_ir 不回写知识库；用 prism arch render 消费该 IR',
+          }
+        }
+        const by = asString(args.by)
+        return await writeEnrichment(
+          await kb(),
+          { kind, payload: args.payload, result: args.result },
+          { deposited_by: by !== undefined ? { subject: by } : undefined },
+        )
       },
     },
     {
@@ -745,128 +844,6 @@ export function createMcpTools(deps: McpDeps): McpTool[] {
         required: ['team_id'],
       },
       call: teamActivate,
-    },
-    {
-      name: 'prism_work_pending',
-      description:
-        '列出待办的 LLM 工作（Prism 不调 LLM：宿主拉取后用自己的 agent 执行）。按优先级降序、创建时间升序',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          kind: { enum: [...WORK_KINDS] },
-          limit: { type: 'integer', minimum: 1, maximum: 200 },
-          priority_min: { type: 'integer' },
-        },
-      },
-      call: async (args) =>
-        await (await queue()).pending({
-          ...(typeof args.kind === 'string' ? { kind: args.kind as WorkKind } : {}),
-          ...(typeof args.limit === 'number' ? { limit: args.limit } : {}),
-          ...(typeof args.priority_min === 'number' ? { priority_min: args.priority_min } : {}),
-        }),
-    },
-    {
-      name: 'prism_work_claim',
-      description: '认领一条待办（签发 attempt token 防重复；同一任务不会被两个宿主认领）',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          id: { type: 'string' },
-          claimed_by: { type: 'string', description: '认领者标识（会话/agent 名）' },
-        },
-        required: ['id', 'claimed_by'],
-      },
-      call: async (args) => {
-        const id = asString(args.id)
-        const by = asString(args.claimed_by)
-        if (id === undefined || by === undefined) throw new Error('prism_work_claim 需要 { id, claimed_by }')
-        return await (await queue()).claim(id, by)
-      },
-    },
-    {
-      name: 'prism_work_complete',
-      description:
-        '回填工作结果（带 token 校验 + 按 kind 的 schema 校验；校验失败置 failed 并附原因）',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          id: { type: 'string' },
-          attempt_token: { type: 'string' },
-          result: { description: '结果对象（结构随 kind 而定，见 work-queue.md §5）' },
-          by: { type: 'string' },
-        },
-        required: ['id', 'attempt_token', 'result'],
-      },
-      call: async (args) => {
-        const id = asString(args.id)
-        const token = asString(args.attempt_token)
-        if (id === undefined || token === undefined) {
-          throw new Error('prism_work_complete 需要 { id, attempt_token, result }')
-        }
-        const by = asString(args.by)
-        const completed = await (await queue()).complete({
-          id,
-          attempt_token: token,
-          result: args.result,
-          ...(by !== undefined ? { by } : {}),
-        })
-        // 流程⑤：富化结果回写知识库（summarize/classify/extract_entities）。
-        // 回写失败不回滚 work（已 completed），把错误信息带回给宿主。
-        let writeback: unknown = null
-        const isRec = (v: unknown): v is Record<string, unknown> =>
-          typeof v === 'object' && v !== null && !Array.isArray(v)
-        if (completed.kind !== undefined && isRec(completed.result) && isRec(completed.payload)) {
-          try {
-            writeback = await writeEnrichment(
-              await kb(),
-              {
-                kind: completed.kind,
-                payload: completed.payload as Record<string, unknown>,
-                result: completed.result as Record<string, unknown>,
-              },
-              {
-                deposited_by: by !== undefined ? { subject: by } : undefined,
-              },
-            )
-          } catch (error) {
-            writeback = {
-              kind: completed.kind,
-              action: 'failed',
-              detail: error instanceof Error ? error.message : String(error),
-            }
-          }
-        }
-        return { work: completed, writeback }
-      },
-    },
-    {
-      name: 'prism_work_fail',
-      description: '显式失败回填（宿主执行报错时调用；计入重试，超上限置 failed 待人工）',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          id: { type: 'string' },
-          attempt_token: { type: 'string' },
-          error: { type: 'string', description: '失败原因' },
-        },
-        required: ['id', 'attempt_token', 'error'],
-      },
-      call: async (args) => {
-        const id = asString(args.id)
-        const token = asString(args.attempt_token)
-        const error = asString(args.error)
-        if (id === undefined || token === undefined || error === undefined) {
-          throw new Error('prism_work_fail 需要 { id, attempt_token, error }')
-        }
-        return await (await queue()).fail(id, token, error)
-      },
-    },
-    {
-      name: 'prism_work_reclaim',
-      description:
-        '回收超时认领的工作（claimed 超过时限 → 回到 pending 可重派）。纯 MCP 环境需宿主定期调用',
-      inputSchema: { type: 'object', properties: {} },
-      call: async () => await (await queue()).reclaimExpired(),
     },
     {
       name: 'prism_task_register',

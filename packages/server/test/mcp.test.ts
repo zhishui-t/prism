@@ -1,7 +1,5 @@
 import { describe, expect, it } from 'vitest'
 
-import { BUILTIN_VALIDATORS, openPersistence, WorkQueue, WORK_KINDS } from '@prism/core'
-
 import { createMcpTools, handleRpcRequest } from '../src/mcp/server.js'
 import { MemoryKb, makeTempDir } from './helpers.js'
 import type { JsonRpcRequest } from '../src/mcp/server.js'
@@ -33,7 +31,7 @@ describe('MCP stdio（手写 JSON-RPC，design.md §4 最小 5 工具 + design-v
     })
   })
 
-  it('tools/list → 固定 32 个工具（kb 11 + graph 7 + role/team 6 + work 5 + task 3）', async () => {
+  it('tools/list → 固定 30 个工具（kb 14 + graph 7 + role/team 6 + task 3）', async () => {
     const tools = createMcpTools({ home: await makeTempDir('prism-mcp-') })
     const res = await handleRpcRequest(rpc('tools/list'), tools)
     const names = ((res?.result as { tools: Array<{ name: string }> }).tools).map((t) => t.name)
@@ -41,6 +39,9 @@ describe('MCP stdio（手写 JSON-RPC，design.md §4 最小 5 工具 + design-v
       'prism_kb_search',
       'prism_kb_get',
       'prism_kb_deposit',
+      'prism_kb_convert',
+      'prism_kb_import',
+      'prism_kb_enrich',
       'prism_kb_graph',
       'prism_kb_tree',
       'prism_kb_stats',
@@ -62,11 +63,6 @@ describe('MCP stdio（手写 JSON-RPC，design.md §4 最小 5 工具 + design-v
       'prism_role_render',
       'prism_team_get',
       'prism_team_activate',
-      'prism_work_pending',
-      'prism_work_claim',
-      'prism_work_complete',
-      'prism_work_fail',
-      'prism_work_reclaim',
       'prism_task_register',
       'prism_task_report',
       'prism_task_status',
@@ -130,65 +126,50 @@ describe('MCP stdio（手写 JSON-RPC，design.md §4 最小 5 工具 + design-v
   })
 })
 
-describe('MCP 工作队列工具（拉取式：pending → claim → complete）', () => {
-  it('三个工具齐全，端到端跑通一轮', async () => {
-    const persistence = openPersistence({ inMemory: true })
-    const workQueue = new WorkQueue({ persistence })
-    for (const kind of WORK_KINDS) workQueue.registerValidator(kind, BUILTIN_VALIDATORS[kind])
-    const tools = createMcpTools({ home: await makeTempDir('prism-mcp-work-'), workQueue })
-    try {
-      const names = ((await handleRpcRequest(rpc('tools/list'), tools))?.result as { tools: Array<{ name: string }> }).tools.map((t) => t.name)
-      expect(names).toContain('prism_work_pending')
-      expect(names).toContain('prism_work_claim')
-      expect(names).toContain('prism_work_complete')
-
-      // 入队（直接经 queue，MCP 只暴露拉取面）
-      const w = await workQueue.enqueue({ kind: 'summarize', payload: { knowledge_id: 'K-1' }, id: 'w-1' })
-
-      // pending
-      const pending = JSON.parse(
-        textOf(await handleRpcRequest(rpc('tools/call', { name: 'prism_work_pending', arguments: {} }), tools)),
-      ) as Array<{ id: string; kind: string }>
-      expect(pending.map((p) => p.id)).toEqual(['w-1'])
-
-      // claim
-      const claim = JSON.parse(
-        textOf(
-          await handleRpcRequest(
-            rpc('tools/call', { name: 'prism_work_claim', arguments: { id: w.id, claimed_by: 'host-A' } }),
-            tools,
-          ),
-        ),
-      ) as { attempt_token: string }
-      expect(claim.attempt_token).toMatch(/^[0-9a-f-]{36}$/)
-
-      // complete
-      const done = JSON.parse(
-        textOf(
-          await handleRpcRequest(
-            rpc('tools/call', {
-              name: 'prism_work_complete',
-              arguments: { id: w.id, attempt_token: claim.attempt_token, result: { summary: '摘要' } },
-            }),
-            tools,
-          ),
-        ),
-      ) as { work: { status: string }; writeback: { action: string } | null }
-      expect(done.work.status).toBe('completed')
-      // summarize 结果回写（writeback 非 null）
-      expect(done.writeback?.action).toBeDefined()
-    } finally {
-      persistence.close()
-    }
+describe('MCP 富化直付工具（prism_kb_enrich，工作队列已移除）', () => {
+  it('summarize 直付 → 落 SUMMARY 条目', async () => {
+    // 用真实知识服务：MemoryKb 的 deposit 不返回 action，无法验证落库动作
+    const { PrismKnowledgeService } = await import('@prism/knowledge')
+    const kb = new PrismKnowledgeService({ home: await makeTempDir('prism-mcp-enrich-kb-') })
+    await kb.deposit({ id: 'K-1', title: '订单规则', type: 'rule', layer: 'global', book: 'b', content: '订单必须幂等。' })
+    const tools = createMcpTools({ home: await makeTempDir('prism-mcp-enrich-'), kb })
+    const res = await handleRpcRequest(
+      rpc('tools/call', {
+        name: 'prism_kb_enrich',
+        arguments: {
+          kind: 'summarize',
+          payload: { entry_id: 'K-1', book: 'b' },
+          result: { summary: '订单处理需幂等' },
+          by: 'host-A',
+        },
+      }),
+      tools,
+    )
+    const out = JSON.parse(textOf(res)) as { kind: string; action: string; detail: string }
+    expect(out.kind).toBe('summarize')
+    expect(out.action).toBe('created')
+    expect(out.detail).toContain('SUMMARY-K-1')
   })
 
-  it('claim 缺参数 → isError', async () => {
-    const tools = createMcpTools({ home: await makeTempDir('prism-mcp-work2-') })
-    const res = await handleRpcRequest(rpc('tools/call', { name: 'prism_work_claim', arguments: {} }), tools)
+  it('diagram_ir → skipped（不回写知识库）', async () => {
+    const kb = new MemoryKb()
+    const tools = createMcpTools({ home: await makeTempDir('prism-mcp-enrich2-'), kb })
+    const res = await handleRpcRequest(
+      rpc('tools/call', {
+        name: 'prism_kb_enrich',
+        arguments: { kind: 'diagram_ir', payload: { entry_id: 'x' }, result: { diagram_type: 'architecture', meta: { title: 't' } } },
+      }),
+      tools,
+    )
+    expect((JSON.parse(textOf(res)) as { action: string }).action).toBe('skipped')
+  })
+
+  it('缺 payload/result → isError', async () => {
+    const tools = createMcpTools({ home: await makeTempDir('prism-mcp-enrich3-') })
+    const res = await handleRpcRequest(rpc('tools/call', { name: 'prism_kb_enrich', arguments: { kind: 'summarize' } }), tools)
     expect(res?.result).toMatchObject({ isError: true })
   })
 })
-
 describe('MCP 任务台账工具（被动台账：register → report → status）', () => {
   it('register → report → status 端到端', async () => {
     const home = await makeTempDir('prism-mcp-task-')

@@ -14,7 +14,7 @@ export async function runServe(ctx: CommandContext, _args: string[], values: Arg
     return 1
   }
   const host = values.host
-  const zcodeDir = expandHome(values['zcode-dir'] ?? defaultZcodeDir())
+  const zcodeDir = expandHome((values['harness-root'] ?? values['zcode-dir']) ?? defaultZcodeDir())
   try {
     const app = await startServer({ home: ctx.home, port, host, zcodeDir })
     ctx.stdout(`Prism serve 监听 http://${app.host}:${app.port}（home=${app.home}）`)

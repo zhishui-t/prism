@@ -3,13 +3,15 @@ dist/
 coverage/
 *.tsbuildinfo
 
-# 3rd 子工程：源码 + lockfile 入库，依赖本地安装（见 3rd/README.md）
+# 3rd 子工程：git submodule（锁定上游发布 tag），源码不入本仓。
+# 依赖本地构建（见 3rd/README.md 与 scripts/setup-3rd.mjs）。
 3rd/graphify/**/__pycache__/
 3rd/graphify/**/*.pyc
 
-# 本地向量化运行时产物（编译出的 llama.cpp 二进制 + BGE-M3 模型，约 600MB）
-# 由 `prism embedding install` / scripts/setup-embedding.mjs 生成，不入库
-3rd/llama.cpp/
+# llama.cpp 的本地构建产物与模型（约 600MB+）：源码是 submodule（3rd/llama.cpp，只存 gitlink），
+# 构建输出与模型放独立的 3rd/llama-runtime/（不入库）
+# 由 `prism embedding install` / scripts/setup-embedding.mjs 生成
+3rd/llama-runtime/
 
 # Prism 本地运行状态（知识库/图谱/审计/团队运行态）
 .prism/

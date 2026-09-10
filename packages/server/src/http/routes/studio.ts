@@ -1,12 +1,12 @@
 import { createReadStream } from 'node:fs'
 import { readFile, stat } from 'node:fs/promises'
 import { extname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { PrismError } from '@prism/core'
 
 import { fail, sendJson } from '../envelope.js'
 import { ProjectRegistry } from '../../graph/registry.js'
-import { vendoredGraphifyDir } from '../../graph/graphify.js'
 import type { RouteContext } from '../router.js'
 
 const MIME: Record<string, string> = {
@@ -35,11 +35,16 @@ export const MIME_TYPES: Record<string, string> = MIME
 
 /**
  * 离线化（B12）：graphify 生成的 graph.html 从 unpkg CDN 加载 vis-network，
- * 断网/离线即空白。此处把该请求代理到 vendored 副本（3rd/graphify/vendor/），
+ * 断网/离线即空白。此处把该请求代理到 Prism 自有的本地副本（仓库根 `assets/`），
  * 并把 HTML 里的 CDN URL 改写为本地路径——**不重写 graphify 渲染器**（D9）。
+ *
+ * 注：该资源是 **Prism 自有**（上游 graphify 不含），故放 `assets/` 而非 `3rd/`
+ * （3rd 现为 git submodule，只装上游原样代码）。
  */
 const VENDOR_PREFIX = 'vendor/'
 const VIS_NETWORK_FILE = 'vis-network.min.js'
+/** 仓库根 assets/（src 与 dist 同深度：…/http/routes → 上 5 级 = 仓库根）。 */
+const PRISM_ASSETS_DIR = fileURLToPath(new URL('../../../../../assets', import.meta.url))
 /** HTML 中需改写的外部脚本标签（与 graphify exporters/html.py 的引用一致）。 */
 const CDN_SCRIPT_RE = /<script\s+src="https:\/\/unpkg\.com\/vis-network@[^"]+"[^>]*><\/script>/g
 
@@ -51,14 +56,14 @@ export function studioRoute(registry: ProjectRegistry) {
   return async (ctx: RouteContext): Promise<void> => {
     const rel = ctx.wildcard ?? ''
 
-    // 离线化资源：/studio/:project/vendor/<file> → 3rd/graphify/vendor/<file>
+    // 离线化资源：/studio/:project/vendor/<file> → 仓库根 assets/<file>
     if (rel.startsWith(VENDOR_PREFIX)) {
       const name = rel.slice(VENDOR_PREFIX.length)
       if (name !== VIS_NETWORK_FILE) {
         sendJson(ctx.res, 404, fail('not_found', `未知 vendored 资源: ${name}`))
         return
       }
-      const file = join(vendoredGraphifyDir(), 'vendor', VIS_NETWORK_FILE)
+      const file = join(PRISM_ASSETS_DIR, VIS_NETWORK_FILE)
       try {
         const buf = await readFile(file)
         ctx.res.writeHead(200, {

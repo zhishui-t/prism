@@ -224,7 +224,6 @@ export class PrismKnowledgeService implements KnowledgeService {
   readonly #now: () => Date
   readonly #idFactory: () => string
   readonly #ownsPersistence: boolean
-  readonly #enqueueEnrichment: KnowledgeServiceOptions['enqueueEnrichment']
   readonly #embed: KnowledgeServiceOptions['embed']
   /** 当前 embedding 模型 id（分档）；检索只比同模型向量。未装配时为 undefined。 */
   readonly #embeddingModel: KnowledgeServiceOptions['embeddingModel']
@@ -240,7 +239,6 @@ export class PrismKnowledgeService implements KnowledgeService {
     this.#now = options.now ?? (() => new Date())
     this.#idFactory =
       options.idFactory ?? (() => `KB-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`)
-    this.#enqueueEnrichment = options.enqueueEnrichment
     this.#embed = options.embed
     this.#embeddingModel = options.embeddingModel
     ensureKbFts(this.persistence.knowledge)
@@ -445,17 +443,8 @@ export class PrismKnowledgeService implements KnowledgeService {
       overrides: address.overrides,
     })
 
-    // A4：落库后投递富化任务（默认未注入 = 不入队；由 server 按 prism.yaml 决定）
-    if (this.#enqueueEnrichment !== undefined) {
-      await this.#enqueueEnrichment({
-        id: deposited.id,
-        version: deposited.version,
-        layer: address.layer,
-        book: address.book,
-        module: address.module,
-        type: input.type,
-      })
-    }
+    // 富化（summarize/classify/extract_entities/diagram_ir）改由宿主经 MCP
+    // `prism_kb_enrich` 直接回写（工作队列已移除；见 enrich-writeback.ts）。
     return deposited
   }
 

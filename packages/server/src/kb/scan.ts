@@ -88,8 +88,6 @@ export interface ScanReport {
   files: ScannedFile[]
   /** 截断标记（超过 maxFiles） */
   truncated: boolean
-  /** 入队的工作任务 id（--enqueue 时） */
-  enqueued: string[]
   /** 源文件已消失、索引仍在的条目（生产级：不静默留孤儿索引） */
   missing: string[]
   /** 不可读的目录（权限/占用等），显式报告不静默 */
@@ -149,6 +147,27 @@ export function idFromRel(rel: string): string {
 }
 
 /**
+ * dry-run 包装：`index()` 只查不写——已存在且源哈希相同 → unchanged；
+ * 否则报告 created/updated 但不落库。转换仍真实执行（验证 anydoc 能否处理）。
+ */
+export function makeDryRunKb(real: KnowledgeService): KnowledgeService {
+  // 用 Object.create 保留原型方法（class 实例的方法不在自有属性上，展开会丢）
+  const wrapper = Object.create(real) as KnowledgeService
+  wrapper.index = async (input) => {
+    const existing = await real.get(input.id)
+    if (existing !== null) {
+      const prev = existing.source_hash
+      return {
+        id: input.id,
+        action: prev === input.source_hash ? ('unchanged' as const) : ('updated' as const),
+      }
+    }
+    return { id: input.id, action: 'created' as const }
+  }
+  return wrapper
+}
+
+/**
  * 扫描项目目录并建「引用型」索引。
  *
  * @param kb 知识服务（需实现 index）
@@ -176,7 +195,6 @@ export async function scanProject(kb: KnowledgeService, options: ScanOptions): P
     skipped: 0,
     files: [],
     truncated: false,
-    enqueued: [],
     missing: [],
     unreadable: [],
   }

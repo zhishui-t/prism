@@ -29,12 +29,13 @@ import {
 } from './embedding-models.js'
 
 /** vendored 布局（scripts/setup-embedding.mjs 安装目标）。 */
-const LLAMA_DIR = fileURLToPath(new URL('../../../../3rd/llama.cpp', import.meta.url))
-const CPU_SERVER_EXE = join(LLAMA_DIR, 'bin', 'llama-server.exe')
+/** 源码是 submodule（3rd/llama.cpp）；构建产物与模型在 Prism 自有的 3rd/llama-runtime/。 */
+const RUNTIME_DIR = fileURLToPath(new URL('../../../../3rd/llama-runtime', import.meta.url))
+const CPU_SERVER_EXE = join(RUNTIME_DIR, 'bin', 'llama-server.exe')
 /** GPU（Vulkan 预编译）二进制；有则优先（CPU 推理慢约 170 倍）。 */
-const GPU_SERVER_EXE = join(LLAMA_DIR, 'bin-vulkan', 'llama-server.exe')
-const MODELS_DIR = join(LLAMA_DIR, 'models')
-const PID_FILE = join(LLAMA_DIR, 'llama-server.pid')
+const GPU_SERVER_EXE = join(RUNTIME_DIR, 'bin-vulkan', 'llama-server.exe')
+const MODELS_DIR = join(RUNTIME_DIR, 'models')
+const PID_FILE = join(RUNTIME_DIR, 'llama-server.pid')
 
 /** 推理后端。 */
 export type EmbeddingBackend = 'gpu' | 'cpu'
@@ -262,7 +263,7 @@ export function ensureEmbeddingServer(): Promise<boolean> {
 }
 
 /** 启动锁：`<dir>/llama-server.lock`（独占创建；陈旧锁自动接管）。 */
-const LOCK_FILE = join(LLAMA_DIR, 'llama-server.lock')
+const LOCK_FILE = join(RUNTIME_DIR, 'llama-server.lock')
 const LOCK_STALE_MS = 120_000
 
 function tryAcquireStartLock(): boolean {

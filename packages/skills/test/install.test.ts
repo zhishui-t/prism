@@ -76,12 +76,12 @@ describe('installSkills（design-v3 §5 冲突策略；全部写临时目录）'
     expect(refs.sort()).toEqual([
       'arch.md',
       'cli.md',
+      'enrich.md',
       'graph.md',
       'import.md',
       'knowledge.md',
       'task.md',
       'team.md',
-      'work.md',
     ])
   })
 

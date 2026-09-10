@@ -240,49 +240,6 @@ export const KNOWLEDGE_EDGES_TABLE_DDL = `CREATE TABLE IF NOT EXISTS knowledge_e
 
 /** 授权记录已废弃——Prism 不做审核（需求 v0.4 D3/D6）。保留占位说明，不再建表。 */
 
-/**
- * 工作请求队列（通知宿主去做 LLM 工作：embed/summarize/classify/extract_entities/diagram_ir）。
- * 拉取式：宿主经 MCP 认领；claim 签发 attempt token，超时回收。
- * v2 起补 fail_count/claimed_deadline（重试上限与认领超时回收，work-queue §6）。
- */
-export const WORK_REQUESTS_TABLE_DDL = `CREATE TABLE IF NOT EXISTS work_requests (
-    id TEXT PRIMARY KEY,
-    kind TEXT NOT NULL,
-    payload TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending',
-    priority INTEGER NOT NULL DEFAULT 0,
-    attempt_token TEXT,
-    claimed_by TEXT,
-    claimed_at TEXT,
-    claimed_deadline TEXT,
-    fail_count INTEGER NOT NULL DEFAULT 0,
-    result TEXT,
-    error TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-)`
-
-/** v2 存量库补列（幂等：列已存在则跳过）。 */
-export const WORK_V2_ADD_DEADLINE: DatabaseSchemaStatement = {
-  sql: 'ALTER TABLE work_requests ADD COLUMN claimed_deadline TEXT',
-  when: (db: DatabaseSync): boolean => !workRequestColumns(db).includes('claimed_deadline'),
-}
-
-export const WORK_V2_ADD_FAIL_COUNT: DatabaseSchemaStatement = {
-  sql: 'ALTER TABLE work_requests ADD COLUMN fail_count INTEGER NOT NULL DEFAULT 0',
-  when: (db: DatabaseSync): boolean => !workRequestColumns(db).includes('fail_count'),
-}
-
-function workRequestColumns(db: DatabaseSync): string[] {
-  return (db.prepare('PRAGMA table_info(work_requests)').all() as Array<{ name: string }>).map(
-    (column) => column.name,
-  )
-}
-
-/** 待办查询/优先级索引（拉取式队列的常见访问路径）。 */
-export const WORK_REQUESTS_INDEX_DDL =
-  'CREATE INDEX IF NOT EXISTS idx_work_pending ON work_requests(status, priority DESC, created_at)'
-
 /** 书/模块结构固化（D2：自动建议 + 人工固化）。 */
 export const BOOK_STRUCTURES_TABLE_DDL = `CREATE TABLE IF NOT EXISTS book_structures (
     layer TEXT NOT NULL,
@@ -339,7 +296,6 @@ export const CORE_TABLE_DDL: Record<string, string> = {
   executor_children: EXECUTOR_CHILDREN_TABLE_DDL,
   knowledge_entries: KNOWLEDGE_ENTRIES_TABLE_DDL,
   knowledge_edges: KNOWLEDGE_EDGES_TABLE_DDL,
-  work_requests: WORK_REQUESTS_TABLE_DDL,
   book_structures: BOOK_STRUCTURES_TABLE_DDL,
   import_jobs: IMPORT_JOBS_TABLE_DDL,
   knowledge_conflicts: KNOWLEDGE_CONFLICTS_TABLE_DDL,
@@ -376,8 +332,6 @@ export const DEFAULT_SCHEMAS: Record<'tasks' | 'core' | 'knowledge', DatabaseSch
     statements: [
       KNOWLEDGE_ENTRIES_TABLE_DDL,
       KNOWLEDGE_EDGES_TABLE_DDL,
-      WORK_REQUESTS_TABLE_DDL,
-      WORK_REQUESTS_INDEX_DDL,
       BOOK_STRUCTURES_TABLE_DDL,
       IMPORT_JOBS_TABLE_DDL,
       KNOWLEDGE_CONFLICTS_TABLE_DDL,
@@ -386,8 +340,6 @@ export const DEFAULT_SCHEMAS: Record<'tasks' | 'core' | 'knowledge', DatabaseSch
       KNOWLEDGE_V4_ADD_SOURCE_HASH,
       KB_VECTORS_TABLE_DDL,
       KB_VECTORS_V6_ADD_MODEL,
-      WORK_V2_ADD_DEADLINE,
-      WORK_V2_ADD_FAIL_COUNT,
     ],
   },
 }

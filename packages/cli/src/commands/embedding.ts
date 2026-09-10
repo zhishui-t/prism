@@ -31,9 +31,9 @@ import {
 
 import type { ArgValues, CommandContext } from '../argv.js'
 
-/** vendored 模型目录（与 server 的布局一致）。 */
+/** vendored 模型目录（与 server 的运行时布局一致）。 */
 function modelDir(): string {
-  return fileURLToPath(new URL('../../../../3rd/llama.cpp/models', import.meta.url))
+  return fileURLToPath(new URL('../../../../3rd/llama-runtime/models', import.meta.url))
 }
 
 const ACTIONS = ['status', 'install', 'start', 'stop', 'reindex', 'models', 'use'] as const

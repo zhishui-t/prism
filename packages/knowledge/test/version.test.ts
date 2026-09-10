@@ -260,21 +260,14 @@ describe('版本去重', () => {
     kb.close()
   })
 
-  it('unchanged 不写审计、不重复投富化任务', async () => {
+  it('unchanged 不写审计（重复落库静默跳过）', async () => {
     const { PrismKnowledgeService } = await import('../src/service.js')
     const { makeTempDir } = await import('../../server/test/helpers.js')
-    const enrichCalls: number[] = []
-    const kb = new PrismKnowledgeService({
-      home: await makeTempDir('prism-dedup2-'),
-      enqueueEnrichment: async (e) => {
-        enrichCalls.push(e.version)
-      },
-    })
+    const kb = new PrismKnowledgeService({ home: await makeTempDir('prism-dedup2-') })
     const base = { id: 'D-2', title: 'T', type: 'rule' as const, layer: 'global' as const, book: 'b', content: 'x' }
-    await kb.deposit(base)
-    await kb.deposit(base)
-    await kb.deposit(base)
-    expect(enrichCalls).toEqual([1]) // 只有第一次
+    expect((await kb.deposit(base)).action).toBe('created')
+    expect((await kb.deposit(base)).action).toBe('unchanged')
+    expect((await kb.deposit(base)).action).toBe('unchanged')
     kb.close()
   })
 })

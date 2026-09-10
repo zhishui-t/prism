@@ -75,12 +75,19 @@ export {
   DEFAULT_IGNORE_DIRS,
   extractTitle,
   idFromRel,
+  makeDryRunKb,
   moduleFromRel,
   scanProject,
   type ScanOptions,
   type ScanReport,
   type ScannedFile,
 } from './kb/scan.js'
+// 文档转换（anydoc 封装；MCP prism_kb_convert / CLI 用）
+export {
+  convertFileToMarkdown,
+  type ConvertFileOptions,
+  type ConvertFileResult,
+} from './kb/convert-file.js'
 
 // 图谱
 export {

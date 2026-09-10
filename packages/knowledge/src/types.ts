@@ -391,12 +391,6 @@ export interface KnowledgeServiceOptions {
   /** 可注入 id 生成器（测试用） */
   idFactory?: () => string
   /**
-   * 落库后投递富化任务（A4）。**默认不设置 = 不入队**（保持现有行为，
-   * 也避免知识包反向依赖工作队列）。由 server 装配时注入，读取 prism.yaml 的
-   * `enrich_on_deposit` 开关决定是否启用。
-   */
-  enqueueEnrichment?: (entry: { id: string; version: number; layer: Layer; book: string; module: string; type: EntryType }) => Promise<void>
-  /**
    * 本地向量化（变更 2）：`(text) => Float32Array | null`——由 server 装配注入
    * （未安装时返回 null 降级）。knowledge 包只存向量、算余弦，不依赖 embedding 实现。
    * 注入后：deposit 自动写向量；search 走 BM25+向量混合。

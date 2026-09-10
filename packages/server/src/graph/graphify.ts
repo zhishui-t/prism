@@ -59,7 +59,7 @@ function normalizeExecPath(path: string): string {
 }
 
 /**
- * 仓库内 vendored graphify 子工程目录（`3rd/graphify`，Python 包，PYTHONPATH 直跑免安装）。
+ * 仓库内 graphify 子模块目录（`3rd/graphify`，Python 包，PYTHONPATH 直跑免安装）。
  * 源码 `packages/server/src/graph/graphify.ts` 与产物 `packages/server/dist/graph/graphify.js`
  * 到仓库根都是 4 层，故统一 `../../../../3rd/...`。
  */
@@ -81,7 +81,7 @@ export async function vendoredGraphifyVersion(): Promise<string | null> {
 /**
  * 解析 graphify 可执行入口（design.md §4 Windows 约束）：
  * 1. `GRAPHIFY_BIN` 环境变量优先（.py 经 python；.js/.mjs/.cjs 经 node；.cmd/.bat shell 执行）；
- * 2. 仓库内 `3rd/graphify`（Python 子工程，经 `python -m graphify` + PYTHONPATH 免安装调用；
+ * 2. 仓库内 `3rd/graphify`（submodule，经 `python -m graphify` + PYTHONPATH 免安装调用；
  *    依赖需先 `pnpm run 3rd:build` 安装；设 `PRISM_SKIP_VENDORED=1` 跳过本分支供测试隔离）；
  * 3. 否则在 PATH 上找 `graphify.cmd`/`graphify.exe`/`graphify`（Windows）；
  * 4. 找不到 → PrismError('graphify_missing')。
@@ -127,7 +127,7 @@ export async function resolveGraphifyCommand(env: NodeJS.ProcessEnv = process.en
   }
   throw new PrismError(
     'graphify_missing',
-    `找不到 graphify：仓库内子工程缺失（${vendored}），PATH 上也没有 graphify；可先 pnpm run 3rd:build（安装 Python 依赖），或设置 GRAPHIFY_BIN 覆盖`,
+    `找不到 graphify：仓库内子模块缺失（${vendored}），PATH 上也没有 graphify；可先 pnpm run 3rd:build（安装 Python 依赖），或设置 GRAPHIFY_BIN 覆盖`,
   )
 }
 

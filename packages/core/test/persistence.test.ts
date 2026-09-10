@@ -110,7 +110,6 @@ describe('PrismPersistence', () => {
     const knowledgeTables = p.knowledge.tables()
     expect(knowledgeTables).toContain('knowledge_entries')
     expect(knowledgeTables).toContain('knowledge_edges')
-    expect(knowledgeTables).toContain('work_requests')
     expect(knowledgeTables).toContain('book_structures')
     expect(knowledgeTables).toContain('import_jobs')
     expect(p.tasks.tables()).toContain('tasks')

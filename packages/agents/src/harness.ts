@@ -17,7 +17,9 @@ import type { RoleDefinition, TeamDefinition } from './types.js'
 export type PrismHarnessAdapter = HarnessAdapter<RoleDefinition, TeamDefinition>
 
 export interface BuildHarnessRegistryOptions {
-  /** 适配器根目录（当前 = ZCode 根，如 ~/.zcode）；缺省用适配器默认。 */
+  /** harness 根目录（如 ZCode 的 ~/.zcode）；缺省用适配器 `defaultRoot`。 */
+  root?: string
+  /** @deprecated 用 `root`（保留兼容旧调用）。 */
   zcodeDir?: string
   /** 项目根（renderTeamInstructions 注入 <repo>/AGENTS.md 用）。 */
   repoDir?: string
@@ -26,13 +28,17 @@ export interface BuildHarnessRegistryOptions {
 /**
  * 构建注册表并登记全部已编译适配器（**不激活**）。
  * 调用方用 `resolveHarness()` 决定激活哪个。
+ *
+ * **新增 harness 的唯二改动点之一**：在此 `registry.register(<新适配器>)`；
+ * 另一个是实现适配器文件。目录布局由适配器自述，上层无需改动。
  */
 export function buildHarnessRegistry(
   options: BuildHarnessRegistryOptions = {},
 ): ReturnType<typeof createHarnessRegistry> {
   const registry = createHarnessRegistry()
-  const adapterOptions: { zcodeDir?: string; repoDir?: string } = {}
-  if (options.zcodeDir !== undefined) adapterOptions.zcodeDir = options.zcodeDir
+  const root = options.root ?? options.zcodeDir
+  const adapterOptions: { root?: string; repoDir?: string } = {}
+  if (root !== undefined) adapterOptions.root = root
   if (options.repoDir !== undefined) adapterOptions.repoDir = options.repoDir
   registry.register(createZcodeAdapter(adapterOptions) as unknown as HarnessAdapter)
   return registry
@@ -53,6 +59,40 @@ export interface ResolvedHarness {
   source: 'env' | 'config' | 'default'
   /** 全部已编译适配器 id（供 harness list 展示） */
   available: string[]
+}
+
+/** 目录布局（由适配器推导；上层不得硬编码宿主目录名）。 */
+export interface HarnessLayout {
+  /** harness id */
+  id: string
+  /** 解析后的 harness 根目录 */
+  root: string
+  /** 角色受管目录（如 ZCode 的 <root>/agents） */
+  rolesDir: string
+  /** 团队定义目录；适配器未约定则 null（调用方回落到 rolesDir 同级 teams/） */
+  teamsDir: string | null
+  /** Skill 安装目录；适配器不支持 Skill 则 null */
+  skillsDir: string | null
+}
+
+/**
+ * 解析某个 harness 的目录布局——**新增 harness 的唯二改动点之一**
+ * （另一个是 `buildHarnessRegistry` 注册适配器）。
+ *
+ * @param id   harness id；缺省用默认适配器
+ * @param root 根目录覆盖；缺省用适配器 `defaultRoot`
+ */
+export function harnessLayout(id?: string, root?: string): HarnessLayout {
+  const registry = buildHarnessRegistry(root !== undefined ? { root } : {})
+  const target = id !== undefined && id !== '' ? id : DEFAULT_HARNESS_ID
+  const adapter = registry.activate(target) as unknown as PrismHarnessAdapter
+  return {
+    id: adapter.id,
+    root: root ?? adapter.defaultRoot,
+    rolesDir: adapter.agent.globalDir,
+    teamsDir: adapter.agent.teamDir,
+    skillsDir: adapter.skill.nativeDir,
+  }
 }
 
 /**

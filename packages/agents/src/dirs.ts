@@ -25,8 +25,8 @@ import { isAbsolute, dirname, join } from 'node:path'
 
 import { prismHome } from '@prism/core'
 
-import { DEFAULT_ZCODE_DIR } from './adapters/zcode.js'
 import { DEFAULT_HARNESS_ID } from './harness-id.js'
+import { harnessLayout } from './harness.js'
 
 /** prism.yaml 的标量键（仅这些键，多余键忽略）。 */
 export interface PrismDirConfig {
@@ -42,21 +42,21 @@ export type PrismDirKey = 'roles_dir' | 'teams_dir' | 'skills_dir'
 
 /** 解析后的目录集。 */
 export interface ResolvedDirs {
-  /** 角色受管目录（默认宿主 `~/.zcode/agents`，扁平 <role>.md）。 */
+  /** 角色受管目录（由适配器 `agent.globalDir` 推导；如 ZCode 的 <root>/agents）。 */
   rolesDir: string
-  /** 团队定义受管目录（默认 `~/.zcode/teams`——roles_dir 的同级，不在 agents/ 扫描路径内）。 */
+  /** 团队定义受管目录（适配器 `agent.teamDir`；未约定则 roles_dir 同级 teams/）。 */
   teamsDir: string
-  /** Skill 受管目录（默认宿主 `~/.zcode/skills`）。 */
+  /** Skill 受管目录（适配器 `skill.nativeDir`；不支持则 <root>/skills 兜底）。 */
   skillsDir: string
   /** 来源：'config' = prism.yaml 存在（键缺省仍回落默认）；'default' = 无配置文件。 */
   source: 'config' | 'default'
   /** 运行时激活的宿主适配器 id（prism.yaml `harness` 键；缺省 zcode）。 */
   harness: string
-  /** 作为默认推导基准的 ZCode 根。 */
+  /** 作为默认推导基准的 harness 根目录（如 ZCode 的 ~/.zcode）。 */
   zcodeDir: string
   /**
    * **写守卫（B6）**：逐键标记该目录是否取自「默认链」——
-   * 即既非 prism.yaml 显式配置、也非调用方显式指定 zcodeDir，而是回落到真实宿主默认（~/.zcode）。
+   * 即既非 prism.yaml 显式配置、也非调用方显式指定根目录，而是回落到真实宿主默认。
    * guard=true 的目录**写前必须确认**（CLI：--yes / --zcode-dir / prism.yaml）。
    */
   guard: {
@@ -127,16 +127,20 @@ export function resolveDirs(
   config?: PrismDirConfig | null,
   opts: { zcodeDir?: string; zcodeDirExplicit?: boolean } = {},
 ): ResolvedDirs {
-  const zcodeDir = opts.zcodeDir ?? DEFAULT_ZCODE_DIR
+  const harnessId = config?.harness !== undefined && config.harness !== '' ? config.harness : DEFAULT_HARNESS_ID
   const explicit = opts.zcodeDirExplicit === true
-  const rolesDir = join(zcodeDir, 'agents')
+  // 目录布局全部由**激活的适配器**推导（不再硬编码 agents/teams/skills）——
+  // 新增 harness 只需实现适配器 + 注册，本函数无需改动。
+  const layout = harnessLayout(harnessId, opts.zcodeDir)
+  const zcodeDir = layout.root
+  const rolesDir = layout.rolesDir
   const resolved: ResolvedDirs = {
     rolesDir,
-    // teams 落在 roles_dir 的**同级**（默认 ~/.zcode/teams），避开 ZCode 对 agents/ 的递归扫描（B7）
-    teamsDir: join(dirname(rolesDir), 'teams'),
-    skillsDir: join(zcodeDir, 'skills'),
+    // 适配器未约定 teamDir 时回落到 roles_dir 同级 teams/（避开 agent 扫描路径，B7）
+    teamsDir: layout.teamsDir ?? join(dirname(rolesDir), 'teams'),
+    skillsDir: layout.skillsDir ?? join(zcodeDir, 'skills'),
     source: config !== null && config !== undefined ? 'config' : 'default',
-    harness: config?.harness !== undefined && config.harness !== '' ? config.harness : DEFAULT_HARNESS_ID,
+    harness: harnessId,
     zcodeDir,
     guard: { roles: true, teams: true, skills: true },
   }

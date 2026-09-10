@@ -156,20 +156,19 @@ async function main() {
     const roles = await cli(['role', 'list', '--json'], env)
     check('3.2 role list 含 dev-1', JSON.parse(roles.stdout).value.some((r) => r.name === 'dev-1'))
 
-    // ===== 4. 工作队列：enqueue → claim → complete =====
-    const enq = await cli(
-      ['work', 'enqueue', '--kind', 'summarize', '--payload', '{"knowledge_id":"E2E-A"}', '--id', 'w-e2e', '--json'],
+    // ===== 4. 富化直付（工作队列已移除：kb enrich 直接回写） =====
+    const enr = await cli(
+      ['kb', 'enrich', 'summarize', '--payload', '{"entry_id":"E2E-A","book":"e2e"}', '--result', '{"summary":"性能问题先量化再优化"}', '--by', 'e2e', '--json'],
       env,
     )
-    check('4.1 work enqueue', enq.code === 0 && JSON.parse(enq.stdout).value.status === 'pending')
-    const claim = await cli(['work', 'claim', 'w-e2e', '--by', 'e2e', '--json'], env)
-    const token = JSON.parse(claim.stdout).value.attempt_token
-    check('4.2 work claim 签发 token', /^[0-9a-f-]{36}$/.test(token))
-    const complete = await cli(
-      ['work', 'complete', 'w-e2e', '--token', token, '--result', '{"summary":"摘要"}', '--json'],
-      env,
-    )
-    check('4.3 work complete 校验通过', complete.code === 0 && JSON.parse(complete.stdout).value.status === 'completed')
+    const enrVal = enr.code === 0 ? JSON.parse(enr.stdout).value : {}
+    check('4.1 kb enrich summarize 落库', enr.code === 0 && enrVal.action === 'created', enr.stderr.trim().slice(0, 120))
+    const sumHit = await cli(['kb', 'get', 'SUMMARY-E2E-A', '--json'], env)
+    check('4.2 摘要条目可检索（SUMMARY-E2E-A）', sumHit.code === 0 && JSON.parse(sumHit.stdout).value.title.includes('摘要'))
+
+    // 4.3 文档转换（纯文本直读）
+    const conv = await cli(['kb', 'convert', docA, '--json'], env)
+    check('4.3 kb convert 纯文本直读', conv.code === 0 && JSON.parse(conv.stdout).value.status === 'text')
 
     // ===== 5. 任务台账：register → report → 依赖图 =====
     const dagFile = join(workRoot, 'dag.json')
@@ -235,8 +234,8 @@ async function main() {
     check('8.3 /api/kb/graph 返回节点/边', kbGraph.body.value.nodes.length >= 2)
     const taskStats = await fetchJson(`${base}/api/tasks/stats`)
     check('8.4 /api/tasks/stats', taskStats.body.value.total === 2)
-    const workStats = await fetchJson(`${base}/api/work/stats`)
-    check('8.5 /api/work/stats', workStats.body.value.completed === 1)
+    const kbStats = await fetchJson(`${base}/api/kb/stats`)
+    check('8.5 /api/kb/stats 含摘要条目', kbStats.body.value.entries >= 3)
     const archTypes = await fetchJson(`${base}/api/arch/types`)
     check('8.6 /api/arch/types 五类图', archTypes.body.value.length === 5)
 

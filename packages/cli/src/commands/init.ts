@@ -42,8 +42,8 @@ export interface InitReport {
 export async function runInit(ctx: CommandContext, _args: string[], values: ArgValues): Promise<number> {
   const home = ctx.home ?? prismHome()
   const paths = prismPaths(home)
-  const zcodeDirExplicit = values['zcode-dir'] !== undefined
-  const zcodeDir = expandHome(values['zcode-dir'] ?? defaultZcodeDir())
+  const zcodeDirExplicit = (values['harness-root'] ?? values['zcode-dir']) !== undefined
+  const zcodeDir = expandHome((values['harness-root'] ?? values['zcode-dir']) ?? defaultZcodeDir())
   // B6 写守卫：init 会写 <zcodeDir>/skills 与 <zcodeDir>/cli/config.json——
   // 默认链（未显式 --zcode-dir）落真实 ~/.zcode，需 --yes 确认
   if (!zcodeDirExplicit && values.yes !== true) {

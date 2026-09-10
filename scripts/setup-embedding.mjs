@@ -4,7 +4,8 @@
  *
  *   node scripts/setup-embedding.mjs [选项]
  *
- *   默认：本地 MinGW + CMake 源码编译 llama.cpp（含 llama-server.exe），
+ *   源码：llama.cpp 是 **git submodule**（`3rd/llama.cpp`，锁定上游 tag），不下载源码 zip；
+ *         本地 MinGW + CMake **out-of-source** 编译（产物落 `3rd/llama-runtime/`，不污染子模块）。
  *         找不到工具链时回落到官方预编译包。
  *   模型：**按算力分档下载**——有显卡装 large(Qwen3-Emb-0.6B)+small；无显卡只装
  *         small(bge-small-zh, 25MB, 512 维)。default(BGE-M3) 需 --tier default 显式装。
@@ -12,6 +13,8 @@
  * GPU 加速（重要）：CPU 推理大模型极慢（实测 1500 字 ≈ 7.5s）。检测到显卡即下载
  * 官方 **Vulkan** 预编译包（仅约 28MB，NVIDIA/AMD/Intel 通用，无需 CUDA SDK）到
  * `bin-vulkan/`，运行时全部层卸载到 GPU（实测 1500 字 ≈ 44ms，快约 170 倍）。
+ *
+ * 前置：`git submodule update --init --recursive`（llama.cpp 源码）。
  *
  * 选项：
  *   --check        只检查是否就绪（退出码 0/1）
@@ -23,10 +26,10 @@
  *   --no-gpu       跳过 GPU 包（只用 CPU）
  *   --force        重编译/重下载
  *
- * 产物（均已 gitignore，不进仓库）：
- *   3rd/llama.cpp/bin/llama-server.exe          CPU（本地编译）
- *   3rd/llama.cpp/bin-vulkan/llama-server.exe   GPU（Vulkan 预编译，有显卡时）
- *   3rd/llama.cpp/models/<档位模型>.gguf
+ * 产物（均 gitignored，不进仓库）：
+ *   3rd/llama-runtime/bin/llama-server.exe          CPU（本地编译）
+ *   3rd/llama-runtime/bin-vulkan/llama-server.exe   GPU（Vulkan 预编译，有显卡时）
+ *   3rd/llama-runtime/models/<档位模型>.gguf
  *
  * 验证：prism doctor 会检查 embedding 可用性；检索自动走 BM25+向量混合。
  */
@@ -41,16 +44,20 @@ import { existsSync } from 'node:fs'
 import os from 'node:os'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
-const LLAMA_DIR = join(ROOT, '3rd', 'llama.cpp')
-const SRC_DIR = join(LLAMA_DIR, 'src')
-const BUILD_DIR = join(LLAMA_DIR, 'build')
-const BIN_DIR = join(LLAMA_DIR, 'bin')
-const GPU_BIN_DIR = join(LLAMA_DIR, 'bin-vulkan')
-const MODEL_DIR = join(LLAMA_DIR, 'models')
+/** 源码：git submodule（只读，绝不写构建产物进去）。 */
+const SRC_DIR = join(ROOT, '3rd', 'llama.cpp')
+/** 运行时：Prism 自有的构建输出 + 下载的模型（gitignored）。 */
+const RUNTIME_DIR = join(ROOT, '3rd', 'llama-runtime')
+const BUILD_DIR = join(RUNTIME_DIR, 'build')
+const BIN_DIR = join(RUNTIME_DIR, 'bin')
+const GPU_BIN_DIR = join(RUNTIME_DIR, 'bin-vulkan')
+const MODEL_DIR = join(RUNTIME_DIR, 'models')
 
-/** 版本钉死（升级时改这里）。 */
-const LLAMA_TAG = 'b6900'
-const SRC_URL = `https://codeload.github.com/ggml-org/llama.cpp/zip/refs/tags/${LLAMA_TAG}`
+/**
+ * llama.cpp 版本 = submodule 锁定的 tag（升级：改 submodule 引用即可，
+ * 本脚本不再下载源码 zip）。常量仅用于 GPU 预编译包 URL 与提示。
+ */
+const LLAMA_TAG = 'b10883'
 const PREBUILT_URL = `https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_TAG}/llama-${LLAMA_TAG}-bin-win-cpu-x64.zip`
 const VULKAN_URL = `https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_TAG}/llama-${LLAMA_TAG}-bin-win-vulkan-x64.zip`
 
@@ -271,7 +278,7 @@ async function run(cmd, cmdArgs, options = {}) {
   if (code !== 0) throw new Error(`命令失败（退出码 ${code}）: ${cmd} ${cmdArgs.join(' ')}`)
 }
 
-/** 源码编译 llama.cpp → bin/。 */
+/** 源码编译 llama.cpp（源码来自 submodule）→ bin/。 */
 async function buildFromSource() {
   const cmake = findTool('cmake', CMAKE_CANDIDATES)
   if (cmake === null) throw new Error('未找到 cmake（装 CMake 或加进 PATH）')
@@ -280,6 +287,14 @@ async function buildFromSource() {
   const make = mingwBin === null ? 'mingw32-make' : join(mingwBin, 'mingw32-make.exe')
   if (gcc === null) throw new Error('未找到 MinGW gcc（装 MinGW-w64 或加进 PATH）')
 
+  // 源码来自 submodule：先确保已初始化（否则提示 git submodule update）
+  if (!(await exists(join(SRC_DIR, 'CMakeLists.txt')))) {
+    throw new Error(
+      `未找到 llama.cpp 源码（${SRC_DIR}）——请先初始化子模块：git submodule update --init --recursive`,
+    )
+  }
+  log(`源码: ${SRC_DIR}（submodule）`)
+
   const env = { ...process.env }
   if (mingwBin !== null) {
     env.PATH = `${mingwBin};${env.PATH ?? ''}`
@@ -287,27 +302,8 @@ async function buildFromSource() {
     env.CXX = join(mingwBin, 'g++.exe')
   }
 
-  // 1. 源码
-  if (!(await exists(join(SRC_DIR, 'CMakeLists.txt')))) {
-    await rm(SRC_DIR, { recursive: true, force: true })
-    const tmp = join(LLAMA_DIR, '_src_tmp')
-    await rm(tmp, { recursive: true, force: true })
-    await mkdir(tmp, { recursive: true })
-    const zipPath = join(LLAMA_DIR, `llama.cpp-${LLAMA_TAG}-src.zip`)
-    await download(SRC_URL, zipPath)
-    await unzip(zipPath, tmp)
-    await rm(zipPath, { force: true })
-    const entries = await readdir(tmp)
-    const top = entries.find((e) => e.startsWith('llama.cpp-'))
-    if (top === undefined) throw new Error('源码解压结果异常：未找到顶层目录')
-    await rename(join(tmp, top), SRC_DIR)
-    await rm(tmp, { recursive: true, force: true })
-    log(`源码就绪: ${SRC_DIR}（tag ${LLAMA_TAG}）`)
-  } else {
-    log(`源码已存在: ${SRC_DIR}`)
-  }
-
-  // 2. 配置（MinGW Makefiles；关 OpenMP 免 libgomp 依赖，关 curl/tests 提速）
+  // 配置（MinGW Makefiles；关 OpenMP 免 libgomp 依赖，关 curl/tests 提速）
+  // **out-of-source**：构建目录在 3rd/llama-runtime/build，绝不写进 submodule。
   await rm(BUILD_DIR, { recursive: true, force: true })
   await mkdir(BUILD_DIR, { recursive: true })
   const native = process.env.PRISM_EMBED_NATIVE !== '0' ? 'ON' : 'OFF'
@@ -330,11 +326,11 @@ async function buildFromSource() {
     { env },
   )
 
-  // 3. 编译（只编 llama-server，省时间）
+  // 编译（只编 llama-server，省时间）
   const jobs = String(Math.max(1, os.cpus().length))
   await run(cmake, ['--build', BUILD_DIR, '--config', 'Release', '--target', 'llama-server', '-j', jobs], { env })
 
-  // 4. 收集产物：build/bin 下所有 exe/dll + MinGW 运行库
+  // 收集产物：build/bin 下所有 exe/dll + MinGW 运行库
   const outBin = join(BUILD_DIR, 'bin')
   if (!(await exists(join(outBin, 'llama-server.exe')))) {
     throw new Error(`编译完成但未找到 ${join(outBin, 'llama-server.exe')}`)
@@ -355,7 +351,7 @@ async function buildFromSource() {
 
 /** 官方 CPU 预编译包（回落路径）。 */
 async function installPrebuilt() {
-  const zipPath = join(LLAMA_DIR, `llama-${LLAMA_TAG}-bin-win-cpu-x64.zip`)
+  const zipPath = join(RUNTIME_DIR, `llama-${LLAMA_TAG}-bin-win-cpu-x64.zip`)
   await downloadAny(withMirrors(PREBUILT_URL), zipPath)
   await rm(BIN_DIR, { recursive: true, force: true })
   await unzip(zipPath, BIN_DIR)
@@ -369,7 +365,7 @@ async function installPrebuilt() {
  * 上都能卸载到 GPU；CUDA 包 179MB + 391MB 运行时，收益并无量级差异（瓶颈在显存带宽）。
  */
 async function installGpu() {
-  const zipPath = join(LLAMA_DIR, `llama-${LLAMA_TAG}-bin-win-vulkan-x64.zip`)
+  const zipPath = join(RUNTIME_DIR, `llama-${LLAMA_TAG}-bin-win-vulkan-x64.zip`)
   await downloadAny(withMirrors(VULKAN_URL), zipPath)
   await rm(GPU_BIN_DIR, { recursive: true, force: true })
   await unzip(zipPath, GPU_BIN_DIR)
@@ -421,7 +417,7 @@ function shouldInstallGpu() {
 }
 
 async function main() {
-  await mkdir(LLAMA_DIR, { recursive: true })
+  await mkdir(RUNTIME_DIR, { recursive: true })
   await mkdir(MODEL_DIR, { recursive: true })
 
   const serverExe = join(BIN_DIR, 'llama-server.exe')

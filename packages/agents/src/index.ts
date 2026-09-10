@@ -96,6 +96,7 @@ export type { InstallTeamsOptions, InitRoleOptions, MigrateTeamsOptions } from '
 export {
   buildHarnessRegistry,
   resolveHarness,
+  harnessLayout,
   harnessSummary,
 } from './harness.js'
 export { DEFAULT_HARNESS_ID, HARNESS_ENV_VAR, ZCODE_HARNESS_ID } from './harness-id.js'
@@ -104,6 +105,7 @@ export type {
   BuildHarnessRegistryOptions,
   ResolveHarnessOptions,
   ResolvedHarness,
+  HarnessLayout,
 } from './harness.js'
 
 // 目录解析（装配语义简化：直接住在宿主目录；prism.yaml 可选覆盖）

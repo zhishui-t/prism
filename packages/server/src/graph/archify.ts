@@ -1,7 +1,7 @@
 /**
  * Archify 封装（knowledge-base.md §4.4 / D10）——**子进程调用**，与 Graphify 同一模式。
  *
- * Archify 是 vendored 自包含 CLI（`3rd/archify/bin/archify.mjs`，MIT v2.16.0），
+ * Archify 是自包含 CLI（submodule `3rd/archify/archify/bin/archify.mjs`，MIT v2.16.0），
  * 负责 JSON-IR → 自包含 HTML 的渲染与校验。Prism **不重写渲染器**，只做：
  *   - 解析 CLI 入口（仓库内子工程优先 → 环境变量覆盖）
  *   - 参数钉死与错误映射（与 runGraphify 同口径）
@@ -42,7 +42,7 @@ export const ARCHIFY_TYPE_LABELS: Record<ArchifyDiagramType, string> = {
 /** 默认超时（渲染是纯计算，比建图快得多）。 */
 export const DEFAULT_ARCHIFY_TIMEOUT_MS = 120_000
 
-/** vendored archify 版本（与 3rd/archify/package.json 对齐，写进产物元数据供溯源）。 */
+/** vendored archify 版本（与 3rd/archify/archify/package.json 对齐，写进产物元数据供溯源）。 */
 export const ARCHIFY_VERSION = '2.16.0'
 
 export interface ArchifyCommand {
@@ -92,19 +92,22 @@ function normalizeExecPath(path: string): string {
 }
 
 /**
- * 仓库内 vendored archify 入口。
+ * 仓库内 archify 子模块入口。
+ *
+ * 布局（上游 tt-a1i/archify 仓库结构）：`3rd/archify/archify/bin/archify.mjs`
+ * （submodule 根 = 上游 repo 根，CLI 在其 `archify/` 子目录内）。
  * 源码位置 `packages/server/src/graph/archify.ts` 与产物 `packages/server/dist/graph/archify.js`
- * 到仓库根都是 4 层（…/graph → src|dist → server → packages → 根），故统一用 `../../../../3rd/...`。
+ * 到仓库根都是 4 层（…/graph → src|dist → server → packages → 根），故前缀 `../../../../`。
  */
 export function vendoredArchifyEntry(): string {
-  return fileURLToPath(new URL('../../../../3rd/archify/bin/archify.mjs', import.meta.url))
+  return fileURLToPath(new URL('../../../../3rd/archify/archify/bin/archify.mjs', import.meta.url))
 }
 
 /**
  * 解析 archify 入口：
  * 1. `ARCHIFY_BIN` 环境变量（显式覆盖；测试注入假实现）；
- * 2. 仓库内 `3rd/archify/bin/archify.mjs`（vendored 子工程，默认路径）；
- * 3. 都不可用 → PrismError('archify_missing')，附 `pnpm run 3rd:build` 提示。
+ * 2. 仓库内 `3rd/archify/archify/bin/archify.mjs`（submodule，默认路径）；
+ * 3. 都不可用 → PrismError('archify_missing')，提示初始化子模块。
  */
 export async function resolveArchifyCommand(env: NodeJS.ProcessEnv = process.env): Promise<ArchifyCommand> {
   const override = normalizeExecPath(env.ARCHIFY_BIN?.trim() ?? '')

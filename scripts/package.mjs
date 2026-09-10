@@ -197,16 +197,17 @@ async function main() {
   // 6) 控制台静态资源
   await cp(join(ROOT, 'apps', 'web', 'dist'), join(stageDir, 'apps', 'web', 'dist'), { recursive: true })
 
-  // 7) vendored 子工程（archify 自包含；graphify Python 源码）
-  //    排除 3rd/llama.cpp：那是本地编译的向量运行时 + 600MB 模型，目标机用
-  //    `prism embedding install` 自行生成（tarball 不能背这么大的二进制）。
+  // 7) 第三方子模块（archify 自包含 CLI；graphify Python 源码）——解压即用需要它们的**源码**。
+  //    排除运行时目录：
+  //    - 3rd/llama.cpp：C++ 源码，目标机用 `prism embedding install` 自行 clone/编译（源码 submodule 很大）
+  //    - 3rd/llama-runtime：本地编译的二进制 + 模型（1.5GB），由 install 脚本生成
   await cp(join(ROOT, '3rd'), join(stageDir, '3rd'), {
     recursive: true,
-    filter: (src) =>
-      !src.includes('node_modules') &&
-      !src.includes('__pycache__') &&
-      !src.includes('.git') &&
-      !src.split(/[/\\]3rd[/\\]/)[1]?.startsWith('llama.cpp'),
+    filter: (src) => {
+      if (src.includes('node_modules') || src.includes('__pycache__') || src.includes('.git')) return false
+      const top = src.split(/[/\\]3rd[/\\]/)[1]?.split(/[/\\]/)[0]
+      return top !== 'llama.cpp' && top !== 'llama-runtime'
+    },
   })
 
   // 7b) 向量化安装脚本（`prism embedding install` 依赖；小文件，随包发）

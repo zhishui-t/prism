@@ -232,65 +232,38 @@ describe('CLI 命令（注入真实知识服务 / 假 graphify）', () => {
     expect(lines.join('\n')).toContain('任务 3 个')
   })
 
-  it('work 队列：enqueue → pending → claim → complete 全链路（拉取式）', async () => {
-    const wHome = await tempDir('prism-cli-work-')
-    cleanup.push(wHome)
-    const wCtx: CommandContext = { ...ctx, home: wHome }
+  it('kb enrich：直付摘要 → 落 SUMMARY 条目（工作队列已移除）', async () => {
+    const eHome = await tempDir('prism-cli-enrich-')
+    cleanup.push(eHome)
+    const eCtx: CommandContext = { ...ctx, home: eHome, kbFactory: makeKb(eHome) }
 
-    // 入队
     lines = []
-    expect(
-      await runCommand(wCtx, ['work', 'enqueue', '--kind', 'summarize', '--payload', '{"knowledge_id":"K-1"}', '--id', 'w1']),
-    ).toBe(0)
-    expect(lines.join('\n')).toContain('已入队 w1')
-
-    // 待办
-    lines = []
-    expect(await runCommand(wCtx, ['work', 'pending'])).toBe(0)
-    expect(lines.join('\n')).toContain('w1')
-
-    // 认领（拿 token）
-    lines = []
-    expect(await runCommand(wCtx, ['work', 'claim', 'w1', '--by', 'cli-test', '--json'])).toBe(0)
-    const claim = JSON.parse(lines[lines.length - 1]) as { value: { attempt_token: string } }
-    expect(claim.value.attempt_token).toMatch(/^[0-9a-f-]{36}$/)
-
-    // 回填（校验通过）
-    lines = []
-    expect(
-      await runCommand(wCtx, [
-        'work', 'complete', 'w1',
-        '--token', claim.value.attempt_token,
-        '--result', '{"summary":"摘要"}',
-      ]),
-    ).toBe(0)
-    expect(lines.join('\n')).toContain('status=completed')
-
-    // 水位
-    lines = []
-    expect(await runCommand(wCtx, ['work', 'stats'])).toBe(0)
-    expect(lines.join('\n')).toContain('已完成 1')
+    const code = await runCommand(eCtx, [
+      'kb', 'enrich', 'summarize',
+      '--payload', '{"entry_id":"K-1","book":"b"}',
+      '--result', '{"summary":"摘要内容"}',
+      '--by', 'cli-test',
+      '--json',
+    ])
+    expect(code).toBe(0)
+    const out = JSON.parse(lines[lines.length - 1]) as { value: { kind: string; action: string; detail: string } }
+    expect(out.value.kind).toBe('summarize')
+    expect(out.value.action).toBe('created')
+    expect(out.value.detail).toContain('SUMMARY-K-1')
   })
 
-  it('work：结果校验失败 → 非零退出且状态 failed；token 不匹配 → 非零', async () => {
-    const wHome = await tempDir('prism-cli-work2-')
-    cleanup.push(wHome)
-    const wCtx: CommandContext = { ...ctx, home: wHome }
+  it('kb convert：纯文本直读，--json 返回 status=text', async () => {
+    const cHome = await tempDir('prism-cli-convert-')
+    cleanup.push(cHome)
+    const cCtx: CommandContext = { ...ctx, home: cHome }
+    const file = join(cHome, 'note.md')
+    await writeFile(file, '# 标题\n\n正文内容。', 'utf-8')
 
-    await runCommand(wCtx, ['work', 'enqueue', '--kind', 'summarize', '--id', 'w2'])
     lines = []
-    await runCommand(wCtx, ['work', 'claim', 'w2', '--json'])
-    const claim = JSON.parse(lines[lines.length - 1]) as { value: { attempt_token: string } }
-
-    // 结果结构非法 → 抛 PrismError，runCommand 顶层返回非零
-    lines = []
-    const code = await runCommand(wCtx, ['work', 'complete', 'w2', '--token', claim.value.attempt_token, '--result', '{"nope":1}'])
-    expect(code).not.toBe(0)
-    expect(lines.join('\n')).toContain('work_result_invalid')
-
-    // 坏 token → 非零
-    lines = []
-    expect(await runCommand(wCtx, ['work', 'complete', 'w2', '--token', 'bogus', '--result', '{"summary":"x"}'])).not.toBe(0)
+    expect(await runCommand(cCtx, ['kb', 'convert', file, '--json'])).toBe(0)
+    const out = JSON.parse(lines[lines.length - 1]) as { value: { status: string; markdown: string } }
+    expect(out.value.status).toBe('text')
+    expect(out.value.markdown).toContain('正文内容')
   })
 
   it('kb reindex：手工改文件后重建索引 → 新标题可检索（Z2）', async () => {

@@ -33,7 +33,7 @@ export async function runRole(ctx: CommandContext, args: string[], values: ArgVa
   const [sub, ...rest] = args
   const dirs = resolveTargetDirs(ctx, values)
   const rolesDir = values.source !== undefined ? expandHome(values.source) : dirs.rolesDir
-  const zcodeDir = expandHome(values['zcode-dir'] ?? defaultZcodeDir())
+  const zcodeDir = expandHome((values['harness-root'] ?? values['zcode-dir']) ?? defaultZcodeDir())
   const zcode = zcodePaths(zcodeDir)
 
   switch (sub) {

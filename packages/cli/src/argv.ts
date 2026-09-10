@@ -11,7 +11,6 @@ import { runServe } from './commands/serve.js'
 import { runDoctor } from './commands/doctor.js'
 import { runEmbedding } from './commands/embedding.js'
 import { runKb } from './commands/kb.js'
-import { runWork } from './commands/work.js'
 import { runTask } from './commands/task.js'
 import { runArch } from './commands/arch.js'
 import { runHarness } from './commands/harness.js'
@@ -46,7 +45,7 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
 
 用法：
   prism --version
-  prism init [--home <PRISM_HOME>] [--zcode-dir <~/.zcode>] [--force]   接入初始化（五步）
+  prism init [--home <PRISM_HOME>] [--harness-root <路径>] [--force]   接入初始化（五步）
   prism serve [--port 7777] [--host <h>]   启动 HTTP 服务（控制台 + API）
   prism doctor [--port 7777]               环境自检
   prism role list [--source <dir>]         列出角色（默认 roles_dir，见下）
@@ -64,7 +63,7 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
 目录解析（装配语义简化——角色/团队/Skill 直接住在宿主目录）：
   <PRISM_HOME>/prism.yaml 可选覆盖：roles_dir（默认 ~/.zcode/agents）、
   teams_dir（默认 ~/.zcode/teams，roles_dir 同级——不在 agents/ 内，避开 ZCode 递归扫描）、skills_dir（默认 ~/.zcode/skills）；
-  --zcode-dir 仅作为默认推导基准。
+  --harness-root 仅作为默认推导基准（--zcode-dir 兼容旧名）。
   prism kb import <file.md> [--layer --owner --book --module]
   prism kb sync <项目名|项目根> [--owner --book --module] [--enqueue] [--dry-run]   扫描项目文档建引用索引
   prism kb search <query> [--layer --book --limit]
@@ -74,16 +73,12 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
   prism kb graph [id] [--depth 1] [--limit 50] [--relations references,overrides]   图谱邻域/概览
   prism kb path <from> <to> [--relations ...]                                      两节点最短路径
   prism kb export [--format html|obsidian|svg|graphml|wiki]                          知识图谱导出（借 Graphify）
+  prism kb convert <file> [--out <path>] [--max-chars N]                             文档转 Markdown（anydoc，零 LLM）
+  prism kb enrich <kind> --payload <json> --result <json> [--by <who>]               回写富化结果（摘要/标签/实体）
   prism kb remove <id> [--hard --yes]     软删（默认置 deprecated）；硬删需 --hard 且无引用
   prism kb conflicts [--all]              层间冲突列表（默认未处理）
   prism kb resolve <conflict-id>          标记冲突已处理
   prism kb reindex                        以文件为真相重建索引（手工改过知识文件后用）
-  prism work pending [--kind --limit]     列出待办 LLM 工作（拉取式）
-  prism work enqueue --kind <k> --payload <json> [--priority N]
-  prism work claim <id> [--by <who>]      认领（签发 attempt token）
-  prism work complete <id> --token <t> --result <json>
-  prism work fail <id> --token <t> [--error <msg>]
-  prism work reclaim | stats              超时回收 / 队列水位
   prism task list [--dag --status]        任务台账（被动记录，不驱动）
   prism task show <task-id> | graph <dag-id> | stats
   prism task register --dag <id> --file <dag.json> --session --team --project
@@ -105,7 +100,7 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
   prism project list | show <名> | remove <名> [--yes]
   prism embedding status | install | start | stop | reindex   本地向量化（BGE-M3，Prism 自理）
 
-全局：--home <path>  --json  --zcode-dir <path>（role/team/skill/install 类统一收 ZCode 根，~ 自动展开）
+全局：--home <path>  --json  --harness-root <path>（role/team/skill/install 类统一收宿主根，~ 自动展开；--zcode-dir 为兼容旧名）
       --yes   确认写入默认宿主目录（写守卫；默认链写入无 --yes 会被阻止，B6）`
 
 /** 全部子命令接受的选项（并集；strict:false 容忍未知项）。 */
@@ -126,6 +121,8 @@ const CLI_OPTIONS = {
   project: { type: 'string' },
   timeout: { type: 'string' },
   // design-v3 §3.5 F10 / §5 P14：role/team/skill 命令面
+  /** 变更 3：harness 根目录（通用名；`--zcode-dir` 为兼容旧名） */
+  'harness-root': { type: 'string' },
   'zcode-dir': { type: 'string' },
   yes: { type: 'boolean' },
   from: { type: 'string' },
@@ -172,6 +169,8 @@ const CLI_OPTIONS = {
   'no-embedding': { type: 'boolean' },
   /** embedding 模型档位（small|default|large） */
   tier: { type: 'string' },
+  /** kb convert 正文上限 */
+  'max-chars': { type: 'string' },
 } as const
 
 export interface ParsedInvocation {
@@ -196,6 +195,7 @@ export type ArgValues = {
   name?: string
   project?: string
   timeout?: string
+  'harness-root'?: string
   'zcode-dir'?: string
   yes?: boolean
   from?: string
@@ -240,6 +240,7 @@ export type ArgValues = {
   action?: string
   'no-embedding'?: boolean
   tier?: string
+  'max-chars'?: string
 }
 
 /** `~`/`~\/` 前缀展开为用户主目录（Windows/Node 不自动展开；CLI 层统一负责，design-v3 §5 P14）。 */
@@ -255,15 +256,16 @@ export function expandHome(path: string): string {
 
 /**
  * role/team/skill 子命令的统一目录解析（装配语义简化：直接住在宿主目录）：
- * `<PRISM_HOME>/prism.yaml`（可选）覆盖适配器默认；`--zcode-dir` 只作为默认推导基准。
- * 优先级：prism.yaml 显式键 > --zcode-dir 推导 > 内置默认（~/.zcode）。
+ * `<PRISM_HOME>/prism.yaml`（可选）覆盖适配器默认；`--harness-root` 只作为默认推导基准。
+ * 优先级：prism.yaml 显式键 > --harness-root 推导 > 激活适配器的默认根。
  *
- * 显式性口径（B6 守卫）：只有 **--zcode-dir** / prism.yaml 键算「用户显式指定」；
- * env `ZCODE_DIR` 不算（保持守卫生效），缺省回落真实 ~/.zcode 一律 guard=true。
+ * 显式性口径（B6 守卫）：只有 **--harness-root（或旧名 --zcode-dir）** / prism.yaml 键
+ * 算「用户显式指定」；env `PRISM_HARNESS_ROOT`/`ZCODE_DIR` 不算（保持守卫生效）。
  */
 export function resolveTargetDirs(ctx: CommandContext, values: ArgValues): ResolvedDirs {
-  const explicit = values['zcode-dir'] !== undefined
-  const zcodeDir = explicit ? expandHome(values['zcode-dir'] as string) : defaultZcodeDir()
+  const rootFlag = values['harness-root'] ?? values['zcode-dir']
+  const explicit = rootFlag !== undefined
+  const zcodeDir = explicit ? expandHome(rootFlag as string) : defaultZcodeDir()
   return resolveDirsFromHome(ctx.home, { zcodeDir, zcodeDirExplicit: explicit })
 }
 
@@ -349,8 +351,6 @@ export async function runCommand(ctx: CommandContext, argv: string[]): Promise<n
         return await runEmbedding(effective, rest, values)
       case 'kb':
         return await runKb(effective, rest, values)
-      case 'work':
-        return await runWork(effective, rest, values)
       case 'task':
         return await runTask(effective, rest, values)
       case 'arch':

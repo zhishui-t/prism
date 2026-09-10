@@ -205,33 +205,6 @@ export interface ArchValidation {
   problems: Array<{ code: string; severity: string; message: string; fix?: string }>
 }
 
-/** 工作请求（拉取式队列）。 */
-export interface WorkRequest {
-  id: string
-  kind: string
-  payload: unknown
-  status: string
-  priority: number
-  attempt_token: string | null
-  claimed_by: string | null
-  claimed_at: string | null
-  claimed_deadline: string | null
-  fail_count: number
-  result: unknown
-  error: string | null
-  created_at: string
-  updated_at: string
-}
-
-/** 队列水位。 */
-export interface WorkStats {
-  pending: number
-  claimed: number
-  completed: number
-  failed: number
-  oldest_pending_age_ms: number | null
-}
-
 export interface TaskRow {
   id: string
   dag_id: string
@@ -414,16 +387,6 @@ export const api = {
   taskStats: () => request<TaskStats>('/api/tasks/stats'),
 
   taskDag: (dagId: string) => request<TaskDag>(`/api/dags/${encodeURIComponent(dagId)}`),
-
-  workPending: (params?: { kind?: string; limit?: number }) => {
-    const qs = new URLSearchParams()
-    if (params?.kind) qs.set('kind', params.kind)
-    if (params?.limit) qs.set('limit', String(params.limit))
-    const suffix = qs.toString()
-    return request<WorkRequest[]>(`/api/work/pending${suffix ? `?${suffix}` : ''}`)
-  },
-
-  workStats: () => request<WorkStats>('/api/work/stats'),
 
   archTypes: () => request<ArchType[]>('/api/arch/types'),
 

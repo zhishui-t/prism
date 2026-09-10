@@ -1,18 +1,20 @@
 import { basename, resolve } from 'node:path'
-import { readFile, access } from 'node:fs/promises'
+import { readFile, access, writeFile } from 'node:fs/promises'
 
 import { splitFrontmatter, type FrontmatterData } from '@prism/knowledge'
 import {
+  convertFileToMarkdown,
+  writeEnrichment,
   ENTRY_TYPES,
   ProjectRegistry,
   ScanHistory,
-  idFromRel,
   loadKnowledgeService,
   exportKnowledgeGraph,
+  makeDryRunKb,
   scanProject,
   type KnowledgeService,
 } from '@prism/server'
-import { PrismError, WorkQueue, openPersistence, prismPaths } from '@prism/core'
+import { PrismError, prismPaths } from '@prism/core'
 
 import type { ArgValues, CommandContext } from '../argv.js'
 
@@ -56,10 +58,96 @@ export async function runKb(ctx: CommandContext, args: string[], values: ArgValu
       return await kbHistory(ctx, rest, values)
     case 'export':
       return await kbExport(ctx, rest, values)
+    case 'convert':
+      return await kbConvert(ctx, rest, values)
+    case 'enrich':
+      return await kbEnrich(ctx, rest, values)
     default:
-      ctx.stderr(`用法: prism kb <import|sync|remove|search|get|tree|stats|graph|path|export|reindex> ...`)
+      ctx.stderr(
+        `用法: prism kb <import|sync|remove|search|get|tree|stats|graph|path|export|reindex|convert|enrich> ...`,
+      )
       return 1
   }
+}
+
+/**
+ * `prism kb convert <file> [--out <path>] [--max-chars N]`
+ * 把任意文档转成 Markdown（本地 anydoc 转换，零 LLM）。默认打印到 stdout；--out 写文件。
+ */
+async function kbConvert(ctx: CommandContext, args: string[], values: ArgValues): Promise<number> {
+  const file = args[0]
+  if (file === undefined) {
+    ctx.stderr('用法: prism kb convert <file> [--out <path>] [--max-chars N]')
+    return 1
+  }
+  const result = await convertFileToMarkdown(resolve(file), {
+    ...(values['max-chars'] !== undefined ? { maxChars: Number(values['max-chars']) } : {}),
+  })
+  if (values.out !== undefined) {
+    await writeFile(resolve(String(values.out)), result.markdown, 'utf-8')
+    if (ctx.json) {
+      ctx.stdout(
+        JSON.stringify({
+          ok: true,
+          value: {
+            status: result.status,
+            path: result.path,
+            out: resolve(String(values.out)),
+            chars: result.markdown.length,
+            truncated: result.truncated ?? false,
+          },
+        }),
+      )
+    } else {
+      ctx.stdout(`已转换 ${result.path} → ${resolve(String(values.out))}（${result.status}，${result.markdown.length} 字）`)
+    }
+    return 0
+  }
+  // 无 --out：Markdown 打到 stdout（便于管道）；--json 时走信封
+  if (ctx.json) {
+    ctx.stdout(JSON.stringify({ ok: true, value: { status: result.status, chars: result.markdown.length, markdown: result.markdown } }))
+  } else {
+    ctx.stdout(result.markdown)
+  }
+  return result.status === 'failed' || result.status === 'unsupported' ? 1 : 0
+}
+
+/**
+ * `prism kb enrich <kind> --payload <json> --result <json> [--by <who>]`
+ * 回写一次富化结果（工作队列已移除，改为直付）。
+ */
+async function kbEnrich(ctx: CommandContext, args: string[], values: ArgValues): Promise<number> {
+  const kind = args[0]
+  if (kind === undefined || !['summarize', 'classify', 'extract_entities', 'diagram_ir'].includes(kind)) {
+    ctx.stderr('用法: prism kb enrich <summarize|classify|extract_entities|diagram_ir> --payload <json> --result <json> [--by <who>]')
+    return 1
+  }
+  const parse = (raw: string | undefined, name: string): Record<string, unknown> | undefined => {
+    if (raw === undefined) return undefined
+    try {
+      const v: unknown = JSON.parse(raw)
+      if (typeof v !== 'object' || v === null || Array.isArray(v)) throw new Error('必须是对象')
+      return v as Record<string, unknown>
+    } catch (error) {
+      ctx.stderr(`--${name} 不是合法 JSON 对象: ${error instanceof Error ? error.message : String(error)}`)
+      return undefined
+    }
+  }
+  const payload = parse(values.payload, 'payload')
+  const result = parse(values.result, 'result')
+  if (payload === undefined || result === undefined) return 1
+  if (kind === 'diagram_ir') {
+    ctx.stdout('diagram_ir 不回写知识库；用 prism arch render 消费该 IR')
+    return 0
+  }
+  const report = await writeEnrichment(
+    await getKb(ctx),
+    { kind, payload, result },
+    values.by !== undefined ? { deposited_by: { subject: String(values.by) } } : {},
+  )
+  if (ctx.json) ctx.stdout(JSON.stringify({ ok: true, value: report }))
+  else ctx.stdout(report === null ? '（无回写动作）' : `回写 ${report.kind}: ${report.action} — ${report.detail}`)
+  return 0
 }
 
 async function kbImport(ctx: CommandContext, args: string[], values: ArgValues): Promise<number> {
@@ -286,18 +374,18 @@ async function kbExport(ctx: CommandContext, args: string[], values: ArgValues):
 }
 
 /**
- * `prism kb sync <项目名|项目根> [--enqueue] [--book] [--module] [--dry-run]`
+ * `prism kb sync <项目名|项目根> [--book] [--module] [--dry-run]`
  *
  * 扫描项目文档建「引用型」索引（design-knowledge-model-v1 §4）：
  * - 参数是已登记的项目名 → 从台账取根目录并回写扫描时间；是路径 → 直接扫（需 --owner）；
- * - `--dry-run` 只报告发现与转换结果，不落库（验证用）；
- * - `--enqueue` 给每条新建/更新的条目投富化任务（宿主执行，Prism 零 LLM）。
+ * - `--dry-run` 只报告发现与转换结果，不落库（验证用）。
+ *   富化（实体抽取等）由宿主另经 MCP `prism_kb_enrich` 直接回写（工作队列已移除）。
  */
 async function kbSync(ctx: CommandContext, args: string[], values: ArgValues): Promise<number> {
   const target = args[0]
   if (target === undefined) {
     ctx.stderr(
-      '用法: prism kb sync <项目名|项目根> [--owner <名>] [--book <书>] [--module <模块>] [--enqueue] [--dry-run]',
+      '用法: prism kb sync <项目名|项目根> [--owner <名>] [--book <书>] [--module <模块>] [--dry-run]',
     )
     return 1
   }
@@ -339,31 +427,7 @@ async function kbSync(ctx: CommandContext, args: string[], values: ArgValues): P
     },
   )
 
-  // 入队富化任务（宿主执行；Prism 只投递）
-  if (values.enqueue === true && !dryRun) {
-    const persistence = openPersistence({ home: ctx.home ?? prismPaths().home })
-    try {
-      const queue = new WorkQueue({ persistence })
-      for (const file of report.files) {
-        if (file.status !== 'indexed') continue
-        const created = await queue.enqueue({
-          kind: 'extract_entities',
-          payload: {
-            source: file.rel,
-            path: file.abs,
-            hash: file.source_hash,
-            entry_id: idFromRel(file.rel),
-            owner,
-          },
-          priority: 0,
-        })
-        report.enqueued.push(created.id)
-      }
-    } finally {
-      persistence.close()
-    }
-    await registry.markScanned(projectName, report.discovered)
-  } else if (!dryRun) {
+  if (!dryRun) {
     await registry.markScanned(projectName, report.discovered)
   }
 
@@ -402,35 +466,11 @@ async function kbSync(ctx: CommandContext, args: string[], values: ArgValues): P
       `  ⚠ ${report.missing.length} 条索引的源文件已不存在（索引保留）：${report.missing.slice(0, 5).join(', ')}${report.missing.length > 5 ? ' …' : ''}`,
     )
   }
-  if (report.enqueued.length > 0) {
-    ctx.stdout(`  已入队 ${report.enqueued.length} 个富化任务（宿主经 prism_work_pending 领取）`)
-  }
   if (dryRun) ctx.stdout('  [dry-run] 未落库')
   for (const file of report.files.filter((f) => f.status === 'skipped').slice(0, 10)) {
     ctx.stdout(`  SKIP ${file.rel}: ${file.reason ?? '未知'}`)
   }
   return 0
-}
-
-/**
- * dry-run 包装：`index()` 只查不写——已存在且源哈希相同 → unchanged；
- * 否则报告 created/updated 但不落库。转换仍真实执行（验证 anydoc 能否处理）。
- */
-function makeDryRunKb(real: KnowledgeService): KnowledgeService {
-  // 用 Object.create 保留原型方法（class 实例的方法不在自有属性上，展开会丢）
-  const wrapper = Object.create(real) as KnowledgeService
-  wrapper.index = async (input) => {
-    const existing = await real.get(input.id)
-    if (existing !== null) {
-      const prev = existing.source_hash
-      return {
-        id: input.id,
-        action: prev === input.source_hash ? ('unchanged' as const) : ('updated' as const),
-      }
-    }
-    return { id: input.id, action: 'created' as const }
-  }
-  return wrapper
 }
 
 /**

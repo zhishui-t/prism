@@ -19,7 +19,7 @@ ${prismSkillMarker('prism')}
 
 # Prism 使用手册（元 Skill）
 
-Prism 是本机的**研发效能控制面**：知识库、知识图谱、代码图谱、架构图谱、专家角色与团队、工作队列、任务台账。
+Prism 是本机的**研发效能控制面**：知识库、知识图谱、代码图谱、架构图谱、专家角色与团队、任务台账。
 **它不执行任务、不调 LLM、不调度 agent**——只提供资产与台账；执行归宿主（你）。
 
 ## 0. 快速路径：先看状态，再决定查还是建
@@ -46,7 +46,9 @@ Prism 是本机的**研发效能控制面**：知识库、知识图谱、代码�
 | 谁调用谁 / 影响面 / 最短路径 | \`prism_graph_query/path/affected/explain/god-nodes\` | [references/graph.md](references/graph.md) |
 | 画架构图 / 时序图 / 数据流图 | \`prism arch render\`（CLI） | [references/arch.md](references/arch.md) |
 | 派团队干活 | 先 \`prism_team_activate\` 看 dispatch，再派发 | [references/team.md](references/team.md) |
-| 异步批处理富化（可选，非主路径） | \`prism_work_pending\` → claim → complete | [references/work.md](references/work.md) |
+| 导入项目文档（二进制） | \`prism_kb_convert\`（→Markdown）→ 你提炼 → \`prism_kb_deposit\` | [references/import.md](references/import.md) |
+| 批量导入整个项目文档 | \`prism_kb_import\`（扫目录建引用索引） | [references/import.md](references/import.md) |
+| 回写你的 LLM 产出（摘要/标签/实体） | \`prism_kb_enrich\` | [references/import.md](references/import.md) |
 | 登记任务 / 回报状态 / 看依赖图 | \`prism_task_register/report/status\` | [references/task.md](references/task.md) |
 | 环境自检 / 换宿主 / 打包 | \`prism doctor\` / \`prism harness show\` | [references/cli.md](references/cli.md) |
 
@@ -89,7 +91,7 @@ prism serve --port 7777            # 起 HTTP 服务 + 控制台
 ## 4. 四个「不」（边界）
 
 - **不侵入调度**：子 agent 管理归宿主，Prism 不碰；
-- **不调 LLM**：Prism 零 API key，LLM 工作走工作队列；
+- **不调 LLM**：Prism 零 API key；需要 LLM 的活（摘要/分类/实体抽取）由**你产出后用 \`prism_kb_enrich\` 回写**；
 - **不做审核**：宿主说落库就落库，Prism 只记录/可视化/审计；
 - **不管版本控制**：Prism **不读 git、不提交、不推送、不写 .gitignore**。
   它只回答「文件在不在」；提交/更新是宿主的职责——**宿主做完任务后自行提交，
@@ -103,16 +105,19 @@ prism serve --port 7777            # 起 HTTP 服务 + 控制台
 - **不编边**：图谱没有的关系不要推断；\`confidence\` 字段（EXTRACTED/INFERRED）照实呈现；
 - **不读全图**：用查询拿子图（\`limit\`/\`depth\` 有界），避免把整张图塞进上下文。
 
-## 5. 工具速查（32 个 MCP 工具）
+## 5. 工具速查（30 个 MCP 工具）
 
 | 分组 | 工具 |
 | :--- | :--- |
-| 知识库（11） | \`prism_kb_search\` \`prism_kb_get\` \`prism_kb_deposit\` \`prism_kb_graph\` \`prism_kb_tree\` \`prism_kb_stats\` \`prism_kb_catalog\` \`prism_kb_path\` \`prism_kb_remove\` \`prism_kb_conflicts\` \`prism_kb_resolve_conflict\` |
+| 知识库（14） | \`prism_kb_search\` \`prism_kb_get\` \`prism_kb_deposit\` \`prism_kb_convert\` \`prism_kb_import\` \`prism_kb_enrich\` \`prism_kb_graph\` \`prism_kb_tree\` \`prism_kb_stats\` \`prism_kb_catalog\` \`prism_kb_path\` \`prism_kb_remove\` \`prism_kb_conflicts\` \`prism_kb_resolve_conflict\` |
 | 代码图谱（7） | \`prism_graph_query\` \`prism_graph_path\` \`prism_graph_explain\` \`prism_graph_affected\` \`prism_graph_god_nodes\` \`prism_graph_summary\` \`prism_graph_status\` |
 | 角色团队（6） | \`prism_role_list\` \`prism_role_get\` \`prism_role_render\` \`prism_context_pack\` \`prism_team_get\` \`prism_team_activate\` |
-| 工作队列（5） | \`prism_work_pending\` \`prism_work_claim\` \`prism_work_complete\` \`prism_work_fail\` \`prism_work_reclaim\` |
 | 任务台账（3） | \`prism_task_register\` \`prism_task_report\` \`prism_task_status\` |
 
+> **导入三件套**：\`prism_kb_convert\`（文档→Markdown，本地 anydoc 转换）→ 你提炼 →
+> \`prism_kb_deposit\` 逐条落库；或 \`prism_kb_import\` 一次扫描整个项目目录建引用索引。
+> \`prism_kb_enrich\` 把你的 LLM 产出（摘要/标签/实体）回写进库（Prism 不调 LLM、不审核）。
+>
 > **MCP 与 CLI 的分工**：需要结构化调用（宿主 agent 用）优先 MCP；一次性/交互式操作（人在终端用）
 > 走 CLI。架构图渲染（\`prism arch render\`）只有 CLI/HTTP，没有 MCP 工具。
 
@@ -149,16 +154,20 @@ const PRISM_SKILL_ASSETS: SkillAsset[] = [
 
 ## 两种导入方式
 
-| 方式 | 谁干活 | 适用 |
+| 方式 | 谁干活 | 工具 |
 | :--- | :--- | :--- |
-| **引用型索引**（机械） | Prism（零 LLM） | 整个项目文档建可检索索引：\`prism kb sync <项目名>\` |
-| **结构化提取**（智能） | **你**（用你的 LLM 能力） | 从文档提取规则/坑/模式，逐条落库 |
+| **引用型索引**（机械） | Prism（零 LLM） | \`prism_kb_import\`（或 CLI \`prism kb sync <项目名>\`） |
+| **结构化提取**（智能） | **你**（用你的 LLM 能力） | \`prism_kb_convert\` 取正文 → 你提炼 → \`prism_kb_deposit\` |
 
-两者不冲突：先 sync 建底，再做结构化提取。
+两者不冲突：先 import 建底，再做结构化提取。
+
+**二进制文档先转换**：docx/pdf/xlsx/pptx/csv 等用 \`prism_kb_convert { path, max_chars? }\`
+拿 Markdown（本地 anydoc 转换，零 LLM；图片型扫描 PDF 返回 \`needs_ocr\`）。
+md/txt/html 直接读原文即可，无需转换。
 
 ## 结构化提取工作流（你来做）
 
-1. **读文档**：项目 docs/、AGENTS.md、README、设计文档、规范文件
+1. **读文档**：项目 docs/、AGENTS.md、README、设计文档、规范文件（二进制先 \`prism_kb_convert\`）
 2. **提取知识单元**（每条一个知识点，不要整篇 dump）：
    - 规则 → \`type: rule\`（"禁止吞异常"）
    - 坑 → \`type: pitfall\`（"Windows 下 tar 路径会被当远程主机"）
@@ -380,43 +389,35 @@ prism team install core-dev                                      # 校验成员 
 `,
   },
   {
-    path: 'references/work.md',
-    content: `# 工作队列（prism_work_*）
+    path: 'references/enrich.md',
+    content: `# 富化回写（prism_kb_enrich）
 
 ## 为什么有它
 
-Prism **不调 LLM**（零 API key）。需要 LLM 的活落成待办，由**你（宿主）拉取执行**：
+Prism **不调 LLM**（零 API key）。需要 LLM 的活（摘要/分类/实体抽取）由**你产出结果后回写**，
+Prism 只做确定性落库（工作队列已移除，改为直付）：
 
-| kind | 用途 |
-| :--- | :--- |
-| \`summarize\` | 知识摘要 |
-| \`classify\` | 标签/分类 |
-| \`extract_entities\` | 实体/关系抽取（进知识图谱） |
-| \`diagram_ir\` | Archify 图表 IR 撰写 |
+| kind | 你产出 | Prism 落库效果 |
+| :--- | :--- | :--- |
+| \`summarize\` | \`{ summary }\` | 落 \`SUMMARY-<entry_id>\` 条目，正文 \`[[entry_id]]\` 建边 |
+| \`classify\` | \`{ labels: [] }\` | 合并进原条目 tags（内容哈希去重，标签没变不产生新版次） |
+| \`extract_entities\` | \`{ entities, relations }\` | 每个实体落 \`type: other\` 条目 + 关系双链建边 |
+| \`diagram_ir\` | Archify IR | **不回写**（用 \`prism arch render\` 消费）；调用返回 skipped |
 
-> **向量化不在队列里**（变更 2）：embedding 由 Prism 内置 BGE-M3 自动完成，宿主无需回填。
-> **知识导入也不经队列**（变更 1）：宿主直接读文档、用 LLM 提取、逐条 \`prism_kb_deposit\`。
-
-## 拉取式流程
+## 调用
 
 \`\`\`
-prism_work_pending { kind?, limit? }        → 列出待办（优先级降序）
-prism_work_claim { id, claimed_by }         → 认领，拿 attempt_token + deadline
-   ↓ 你用自己的 LLM 执行
-prism_work_complete { id, attempt_token, result }  → 回填（Prism 校验后入库）
+prism_kb_enrich { kind, payload, result, by? }
+  payload: { entry_id, layer?, owner?, book?, module?, type? }   # 原条目上下文
+  result:  你的 LLM 产出（结构见上表）
+  by:      执行者标识（写入 deposited_by 留痕）
 \`\`\`
 
-## 并发与护栏
+## 边界
 
-- **同一任务不会被两个宿主认领**（原子迁移 + token）；
-- 回填必须带 \`attempt_token\`，迟到的回填会被拒；
-- 结果按 kind 做 **schema 校验**（如 \`summarize\` 校验摘要非空），失败置 failed 并附原因；
-- 认领超时（默认 30min）会回收为待办；失败未超上限（默认 3 次）也会回收；
-- 积压超上限（默认 1000）停止入队。
-
-## 什么时候检查待办
-
-完成任务后、会话结束时，可调 \`prism_work_pending\` 看有没有 Prism 委派的活。
+- Prism **不审核结果**——你说落就落；结构不符（缺 entry_id/summary 等）则跳过并说明；
+- 回写失败会**抛出**（不静默），据错误修正后重试；
+- 一次调用一种 kind，一对一（不做批处理）。
 `,
   },
   {
@@ -568,7 +569,7 @@ skills_dir: ~/.zcode/skills
 prism serve --port 7777
 \`\`\`
 
-控制台页面：知识库 / 代码图谱 / 角色 / 团队 / 技能 / 任务中心 / 工作队列。
+控制台页面：知识库 / 代码图谱 / 角色 / 团队 / 技能 / 任务中心 / 项目台账。
 （知识图谱与架构图谱**没有一级页**——它们归入「知识库 → 点开一本书 → 详情面板」。）
 
 ## 打包

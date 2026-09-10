@@ -1,0 +1,9 @@
+[submodule "3rd/archify"]
+	path = 3rd/archify
+	url = https://github.com/tt-a1i/archify
+[submodule "3rd/graphify"]
+	path = 3rd/graphify
+	url = https://github.com/Graphify-Labs/graphify
+[submodule "3rd/llama.cpp"]
+	path = 3rd/llama.cpp
+	url = https://github.com/ggml-org/llama.cpp

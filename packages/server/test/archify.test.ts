@@ -37,10 +37,10 @@ const VALID_IR = {
   connections: [{ id: 'a-b', from: 'a', to: 'b', label: '调用' }],
 }
 
-describe('Archify 子工程解析（3rd/archify，vendored）', () => {
-  it('vendoredArchifyEntry 指向 3rd/archify/bin/archify.mjs 且文件存在', () => {
+describe('Archify 子模块解析（3rd/archify）', () => {
+  it('vendoredArchifyEntry 指向 3rd/archify/archify/bin/archify.mjs 且文件存在', () => {
     const entry = vendoredArchifyEntry()
-    expect(entry).toContain(join('3rd', 'archify', 'bin', 'archify.mjs'))
+    expect(entry).toContain(join('3rd', 'archify', 'archify', 'bin', 'archify.mjs'))
     expect(existsSync(entry)).toBe(true)
   })
 
@@ -117,7 +117,7 @@ describe('Archify validate / render（真实调用 vendored CLI）', () => {
 })
 
 describe('Archify 五类图（用 vendored 官方示例验证 IR 规格对齐）', () => {
-  /** 官方示例文件名 → 图类型（3rd/archify/examples）。 */
+  /** 官方示例文件名 → 图类型（3rd/archify/archify/examples）。 */
   const OFFICIAL: Array<{ type: string; file: string }> = [
     { type: 'architecture', file: 'web-app.architecture.json' },
     { type: 'sequence', file: 'async-job-roundtrip.sequence.json' },

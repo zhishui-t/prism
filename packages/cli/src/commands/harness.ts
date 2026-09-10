@@ -15,7 +15,7 @@ import { expandHome } from '../argv.js'
 /** `prism harness <list|show> [--zcode-dir <dir>]`。 */
 export async function runHarness(ctx: CommandContext, args: string[], values: ArgValues): Promise<number> {
   const [sub] = args
-  const zcodeDir = expandHome(values['zcode-dir'] ?? defaultZcodeDir())
+  const zcodeDir = expandHome((values['harness-root'] ?? values['zcode-dir']) ?? defaultZcodeDir())
   try {
     switch (sub) {
       case 'list':

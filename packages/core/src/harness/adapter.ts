@@ -97,6 +97,13 @@ export interface HarnessAdapter<TRole = unknown, TTeam = unknown, TSkill = unkno
   readonly id: string
   readonly displayName: string
 
+  /**
+   * 本 harness 的默认根目录（如 ZCode 的 `~/.zcode`）。
+   * 目录布局（角色/团队/Skill 落点）全部由适配器按此根推导——**上层不得硬编码**，
+   * 这样新增 harness 只需实现适配器 + 注册，不动 dirs/CLI/server。
+   */
+  readonly defaultRoot: string
+
   /** 探测本机是否安装该 harness（只读：查配置目录，不调宿主）。 */
   detect(): Promise<HarnessPresence>
 

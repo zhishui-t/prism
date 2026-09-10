@@ -25,7 +25,12 @@ export const ZCODE_FRONTMATTER_FIELDS = [
 ] as const
 
 export interface ZcodeAdapterOptions {
-  /** ZCode 根目录（如 ~/.zcode；`~` 由 CLI 层展开后传入，Windows 下不得传字面 ~）。 */
+  /**
+   * harness 根目录（如 ~/.zcode；`~` 由 CLI 层展开后传入，Windows 下不得传字面 ~）。
+   * `zcodeDir` 为兼容旧调用保留的别名。
+   */
+  root?: string
+  /** @deprecated 用 `root`。 */
   zcodeDir?: string
   /** 项目根（renderTeamInstructions 注入 `<repo>/AGENTS.md` 用；缺省 → 该方法返回 null）。 */
   repoDir?: string
@@ -36,7 +41,7 @@ export const DEFAULT_ZCODE_DIR = join(homedir(), '.zcode')
 
 /** 创建 ZCode 适配器。 */
 export function createZcodeAdapter(opts: ZcodeAdapterOptions = {}): HarnessAdapter<RoleDefinition, TeamDefinition> {
-  const zcodeDir = opts.zcodeDir ?? DEFAULT_ZCODE_DIR
+  const zcodeDir = opts.root ?? opts.zcodeDir ?? DEFAULT_ZCODE_DIR
   const agentsDir = join(zcodeDir, 'agents')
   // 团队定义落在宿主根的 teams/（agents 的同级）——ZCode 递归扫描 agents/ 下全部 .md，
   // 团队文件含 name+description 会被误注册成 agent（R3 实测 / B7），故必须移出 agents/。
@@ -44,6 +49,7 @@ export function createZcodeAdapter(opts: ZcodeAdapterOptions = {}): HarnessAdapt
   const adapter: HarnessAdapter<RoleDefinition, TeamDefinition> = {
     id: ZCODE_ADAPTER_ID,
     displayName: 'ZCode',
+    defaultRoot: DEFAULT_ZCODE_DIR,
 
     async detect(): Promise<HarnessPresence> {
       if (!existsSync(zcodeDir)) {

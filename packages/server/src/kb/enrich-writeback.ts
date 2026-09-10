@@ -1,7 +1,7 @@
 /**
- * 富化结果回写（work-queue.md §7 流程⑤，此前断链：宿主 complete 后结果被丢弃）。
+ * 富化结果回写（宿主经 MCP `prism_kb_enrich` 直接调用；工作队列已移除）。
  *
- * 回写规则（全部确定性，零 LLM）：
+ * 回写规则（全部确定性，零 LLM——宿主用自己的 LLM 产出结果，Prism 只负责落库）：
  * - `summarize { summary }` → 以 `SUMMARY-<entry_id>` 落一条 `type: summary` 条目，
  *   正文引用原条目（`[[entry_id]]` 建边）；
  * - `classify { labels }` → 取原条目最新版，deposit 同 id 版次 + tags 合并
@@ -9,8 +9,7 @@
  * - `extract_entities { entities, relations }` → 每个实体落一条 `type: other` 条目
  *   （同书 _inbox），实体间 relations 以双链 `[[from]]` 写进正文（建边）。
  *
- * 边界：回写失败不吞——向上抛给调用方（MCP/HTTP complete 已把 work 置 completed，
- * 回写失败由审计留痕 + 错误信息返回宿主重试；不自动回滚 work 状态）。
+ * 边界：回写失败不吞——向上抛给调用方（宿主据错误重试；Prism 不做审核）。
  */
 
 import type { KnowledgeService, DepositInput } from '@prism/knowledge'
@@ -62,7 +61,7 @@ export async function writeEnrichment(
       book: source?.book ?? book,
       content: `${summary}\n\n原条目：[[${entryId}]]`,
       tags: ['enrichment', 'summary'],
-      source: { kind: 'agent', ref: `work:${enrichment.kind}` },
+      source: { kind: 'agent', ref: `enrich:${enrichment.kind}` },
       ...(defaults.deposited_by !== undefined ? { deposited_by: defaults.deposited_by } : {}),
     })
     return {
@@ -93,7 +92,7 @@ export async function writeEnrichment(
       ...(source.module !== '' ? { module: source.module } : {}),
       content: source.content,
       tags: merged,
-      source: { kind: 'agent', ref: `work:${enrichment.kind}` },
+      source: { kind: 'agent', ref: `enrich:${enrichment.kind}` },
       ...(defaults.deposited_by !== undefined ? { deposited_by: defaults.deposited_by } : {}),
     })
     return {
@@ -127,7 +126,7 @@ export async function writeEnrichment(
         book,
         content: `实体类型：${type ?? 'unknown'}`,
         tags: ['enrichment', 'entity'],
-        source: { kind: 'agent', ref: `work:${enrichment.kind}` },
+        source: { kind: 'agent', ref: `enrich:${enrichment.kind}` },
         ...(defaults.deposited_by !== undefined ? { deposited_by: defaults.deposited_by } : {}),
       })
     }
@@ -154,7 +153,7 @@ export async function writeEnrichment(
           book: existing.book,
           content: `${existing.content}\n${line}`,
           tags: existing.tags,
-          source: { kind: 'agent', ref: `work:${enrichment.kind}` },
+          source: { kind: 'agent', ref: `enrich:${enrichment.kind}` },
           ...(defaults.deposited_by !== undefined ? { deposited_by: defaults.deposited_by } : {}),
         })
         edgeCount++

@@ -17,7 +17,7 @@ import { readFile, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import {
-  DEFAULT_ZCODE_DIR,
+  harnessLayout,
   resolveHarness,
   createRoleRegistry,
   createTeamRegistry,
@@ -68,9 +68,14 @@ export function zcodePaths(zcodeDir: string): ZcodePaths {
   }
 }
 
-/** 默认 ZCode 目录（探测起点；不存在时调用方警告但继续，design-v3 §3.6 ①）。 */
+/**
+ * 默认 harness 根目录（探测起点；不存在时调用方警告但继续，design-v3 §3.6 ①）。
+ *
+ * 覆盖优先级：`PRISM_HARNESS_ROOT` > `ZCODE_DIR`（旧名，兼容） > 适配器 `defaultRoot`。
+ * 名称保留 `defaultZcodeDir` 以兼容旧调用；语义已是「当前 harness 的默认根」。
+ */
 export function defaultZcodeDir(): string {
-  return process.env['ZCODE_DIR'] ?? DEFAULT_ZCODE_DIR
+  return process.env['PRISM_HARNESS_ROOT'] ?? process.env['ZCODE_DIR'] ?? harnessLayout().root
 }
 
 /** 已安装 skill 名单（读 `<zcodeDir>/skills/*` 目录名，只读）；目录不存在 → undefined（跳过引用校验）。 */

@@ -4,7 +4,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { AuditLog, prismHome, openPersistence, prismPaths, WorkQueue, BUILTIN_VALIDATORS, WORK_KINDS, type PrismPersistence } from '@prism/core'
+import { prismHome } from '@prism/core'
 
 import { sendJson, toEnvelope, type Envelope } from './http/envelope.js'
 import { Router } from './http/router.js'
@@ -16,7 +16,6 @@ import { consoleRoute, resolveWebDistDir } from './http/routes/console.js'
 import { taskRoutes } from './http/routes/tasks.js'
 import { peopleRoutes } from './http/routes/people.js'
 import { resolveDirsFromHome } from './roles/index.js'
-import { workRoutes } from './http/routes/work.js'
 import { archRoutes } from './http/routes/arch.js'
 import { BuildJobManager } from './graph/jobs.js'
 import { ProjectRegistry } from './graph/registry.js'
@@ -42,8 +41,6 @@ export interface AppOptions {
   buildRunner?: GraphDeps['runner']
   graphifyEnv?: NodeJS.ProcessEnv
   graphifyTimeoutMs?: number
-  /** 注入工作队列（测试注入内存实例）；不传则按 home 打开持久化自建 */
-  workQueue?: WorkQueue
 }
 
 export interface AppHandle {
@@ -72,8 +69,6 @@ export async function createApp(options: AppOptions = {}): Promise<{
   server: Server
   loadKb: () => Promise<KnowledgeService>
   home: string
-  /** 关闭内部自建的工作队列持久化（注入实例由注入方负责） */
-  closeWork: () => void
 }> {
   const home = options.home ?? prismHome()
   const meta: ServerMeta = { version: await readVersion(), startedAt: Date.now(), home }
@@ -94,23 +89,6 @@ export async function createApp(options: AppOptions = {}): Promise<{
   const runner =
     options.buildRunner ??
     defaultGraphifyRunner({ env: options.graphifyEnv, timeoutMs: options.graphifyTimeoutMs })
-
-  // 审计（task/work 的状态变更落 <home>/audit/ JSONL；此前从未实例化——死代码）
-  const audit = new AuditLog({ dir: prismPaths(home).auditDir, queue: openPersistence({ home }).queue })
-
-  // 工作队列（拉取式，work-queue.md）：惰性打开一次，与 HTTP 进程同库（WAL 并发安全）
-  let workQueue: WorkQueue | undefined = options.workQueue
-  let workPersistence: PrismPersistence | undefined
-  const getQueue = async (): Promise<WorkQueue> => {
-    if (workQueue !== undefined) return workQueue
-    workPersistence = openPersistence({ home })
-    const queue = new WorkQueue({ persistence: workPersistence, audit })
-    for (const kind of WORK_KINDS) {
-      queue.registerValidator(kind, BUILTIN_VALIDATORS[kind])
-    }
-    workQueue = queue
-    return queue
-  }
 
   const router = new Router()
   router.add('GET', '/api/health', healthRoute(meta))
@@ -170,15 +148,6 @@ export async function createApp(options: AppOptions = {}): Promise<{
   router.add('GET', '/api/tasks/:id', tasks.get)
   router.add('GET', '/api/dags/:id', tasks.dag)
 
-  // 工作队列（拉取式：宿主经 MCP/HTTP 认领执行 LLM 工作；Prism 不调 LLM）
-  const work = workRoutes({ getQueue })
-  router.add('GET', '/api/work/pending', work.pending)
-  router.add('POST', '/api/work/claim', work.claim)
-  router.add('POST', '/api/work/complete', work.complete)
-  router.add('POST', '/api/work/fail', work.fail)
-  router.add('POST', '/api/work/reclaim', work.reclaim)
-  router.add('GET', '/api/work/stats', work.stats)
-
   // 角色 / 团队 / 技能（design-v3 §3.4 F11；只读 GET，数据源 <home>/roles|teams）
   const zcodeDir = options.zcodeDir ?? process.env['PRISM_ZCODE_DIR'] ?? join(homedir(), '.zcode')
   const people = peopleRoutes({ home, zcodeDir })
@@ -211,12 +180,12 @@ export async function createApp(options: AppOptions = {}): Promise<{
     tasks.close()
   })
 
-  return { server, loadKb, home, closeWork: () => workPersistence?.close() }
+  return { server, loadKb, home }
 }
 
 /** 启动 HTTP 服务（CLI `prism serve` 用）。 */
 export async function startServer(options: AppOptions = {}): Promise<AppHandle> {
-  const { server, loadKb, home, closeWork } = await createApp(options)
+  const { server, loadKb, home } = await createApp(options)
   const port = options.port ?? DEFAULT_PORT
   const host = options.host ?? '127.0.0.1'
   await new Promise<void>((resolve, reject) => {
@@ -237,7 +206,6 @@ export async function startServer(options: AppOptions = {}): Promise<AppHandle> 
     close: () =>
       new Promise<void>((resolve) => {
         server.close(() => {
-          closeWork?.()
           resolve()
         })
       }),
