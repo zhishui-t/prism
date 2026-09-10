@@ -466,7 +466,12 @@ async function main() {
       await cli(['kb', 'import', join(workRoot, 'db.md'), '--json'], hEnv)
 
       const vecRows = await cli(['embedding', 'status', '--json'], hEnv)
-      check('17.1 embedding 服务就绪且 1024 维', JSON.parse(vecRows.stdout).value.alive)
+      const vecStatus = JSON.parse(vecRows.stdout).value
+      check(
+        '17.1 embedding 服务就绪（档位/维度自洽）',
+        vecStatus.alive === true && vecStatus.dim > 0,
+        `tier=${vecStatus.tier} dim=${vecStatus.dim}`,
+      )
 
       // 跨语言语义召回：英文 query 无任何中文 bigram 重叠 → 纯 BM25 零命中
       const bm25Only = await cli(['kb', 'search', 'database performance', '--no-embedding', '--json'], hEnv)

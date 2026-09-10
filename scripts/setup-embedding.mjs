@@ -6,14 +6,16 @@
  *
  *   默认：本地 MinGW + CMake 源码编译 llama.cpp（含 llama-server.exe），
  *         找不到工具链时回落到官方预编译包。
- *   模型：始终需要下载 BGE-M3 GGUF（gpustack/bge-m3-GGUF Q8_0，约 634MB，1024 维）。
+ *   模型：**按算力分档下载**——有显卡装 large(Qwen3-Emb-0.6B)+small；无显卡只装
+ *         small(bge-small-zh, 25MB, 512 维)。default(BGE-M3) 需 --tier default 显式装。
  *
- * GPU 加速（重要）：CPU 推理 BGE-M3 极慢（实测 1500 字 ≈ 7.5s）。检测到显卡即下载
+ * GPU 加速（重要）：CPU 推理大模型极慢（实测 1500 字 ≈ 7.5s）。检测到显卡即下载
  * 官方 **Vulkan** 预编译包（仅约 28MB，NVIDIA/AMD/Intel 通用，无需 CUDA SDK）到
  * `bin-vulkan/`，运行时全部层卸载到 GPU（实测 1500 字 ≈ 44ms，快约 170 倍）。
  *
  * 选项：
  *   --check        只检查是否就绪（退出码 0/1）
+ *   --tier <名>    只装指定档模型（small|default|large）
  *   --bin-only     只装二进制，跳过模型
  *   --model-only   只装模型，跳过二进制
  *   --prebuilt     强制用官方预编译包（不编译）
@@ -24,7 +26,7 @@
  * 产物（均已 gitignore，不进仓库）：
  *   3rd/llama.cpp/bin/llama-server.exe          CPU（本地编译）
  *   3rd/llama.cpp/bin-vulkan/llama-server.exe   GPU（Vulkan 预编译，有显卡时）
- *   3rd/llama.cpp/models/bge-m3-Q8_0.gguf
+ *   3rd/llama.cpp/models/<档位模型>.gguf
  *
  * 验证：prism doctor 会检查 embedding 可用性；检索自动走 BM25+向量混合。
  */
@@ -51,13 +53,39 @@ const LLAMA_TAG = 'b6900'
 const SRC_URL = `https://codeload.github.com/ggml-org/llama.cpp/zip/refs/tags/${LLAMA_TAG}`
 const PREBUILT_URL = `https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_TAG}/llama-${LLAMA_TAG}-bin-win-cpu-x64.zip`
 const VULKAN_URL = `https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_TAG}/llama-${LLAMA_TAG}-bin-win-vulkan-x64.zip`
-const MODEL_FILE = 'bge-m3-Q8_0.gguf'
-/** 下载源按序尝试：国内镜像优先（huggingface.co 直连常被阻断）。 */
-const MODEL_URLS = [
-  `https://hf-mirror.com/gpustack/bge-m3-GGUF/resolve/main/${MODEL_FILE}`,
-  `https://huggingface.co/gpustack/bge-m3-GGUF/resolve/main/${MODEL_FILE}`,
-]
-const MODEL_BYTES = 634_553_760
+
+/**
+ * 模型档位表（**必须与 packages/server/src/kb/embedding-models.ts 一致**；
+ * `embedding-models.test.ts` 做一致性校验防漂移）。
+ * 档位：small=CPU 友好 / default=多语言基线 / large=更强（GPU）。
+ */
+const TIERS = {
+  small: {
+    file: 'bge-small-zh-v1.5-q8_0.gguf',
+    repo: 'CompendiumLabs/bge-small-zh-v1.5-gguf',
+    bytes: 26_472_640,
+  },
+  default: {
+    file: 'bge-m3-Q8_0.gguf',
+    repo: 'gpustack/bge-m3-GGUF',
+    bytes: 634_553_760,
+  },
+  large: {
+    file: 'Qwen3-Embedding-0.6B-Q8_0.gguf',
+    repo: 'Qwen/Qwen3-Embedding-0.6B-GGUF',
+    bytes: 639_150_592,
+  },
+}
+const TIER_NAMES = Object.keys(TIERS)
+
+/** 模型下载源（国内镜像优先；huggingface.co 直连常被阻断）。 */
+function modelUrls(tier) {
+  const { file, repo } = TIERS[tier]
+  return [
+    `https://hf-mirror.com/${repo}/resolve/main/${file}`,
+    `https://huggingface.co/${repo}/resolve/main/${file}`,
+  ]
+}
 
 /**
  * GitHub 直连在国内常被阻断/抖动 → release 下载统一走镜像前缀。
@@ -99,6 +127,26 @@ const MODEL_ONLY = args.includes('--model-only')
 const FORCE_PREBUILT = args.includes('--prebuilt')
 const FORCE = args.includes('--force')
 const FORCE_GPU = args.includes('--gpu')
+
+/** --tier <name>：只装该档模型（不传则由 GPU 探测决定 small/large）。 */
+function argValue(flag) {
+  const i = args.indexOf(flag)
+  return i >= 0 && i + 1 < args.length ? args[i + 1] : undefined
+}
+const REQUESTED_TIER = argValue('--tier')
+
+/** 要安装的档位集合：显式 --tier 则只装它；否则按算力（有卡装 large+small，无卡只装 small）。 */
+function tiersToInstall() {
+  if (REQUESTED_TIER !== undefined) {
+    if (!TIER_NAMES.includes(REQUESTED_TIER)) {
+      throw new Error(`未知档位: ${REQUESTED_TIER}（可用: ${TIER_NAMES.join(' / ')}）`)
+    }
+    return [REQUESTED_TIER]
+  }
+  // 有显卡：强档 + 轻量档兜底（万一显卡不可用仍能跑）；
+  // 无显卡：只装轻量档——bge-m3(default) 在 CPU 上慢到不可用，装了也是浪费 600MB。
+  return FORCE_GPU || detectGpu() !== null ? ['large', 'small'] : ['small']
+}
 const NO_GPU = args.includes('--no-gpu')
 
 function log(msg) {
@@ -378,16 +426,16 @@ async function main() {
 
   const serverExe = join(BIN_DIR, 'llama-server.exe')
   const gpuServerExe = join(GPU_BIN_DIR, 'llama-server.exe')
-  const modelPath = join(MODEL_DIR, MODEL_FILE)
   const binReady = await exists(serverExe)
   const gpuReady = await exists(gpuServerExe)
-  const modelReady = await exists(modelPath)
+  const tierState = TIER_NAMES.map((t) => ({ tier: t, ready: existsSync(join(MODEL_DIR, TIERS[t].file)) }))
+  const anyModelReady = tierState.some((t) => t.ready)
 
   if (CHECK_ONLY) {
     log(`二进制(CPU):  ${binReady ? '就绪' : '缺失'} → ${serverExe}`)
     log(`二进制(GPU):  ${gpuReady ? '就绪' : '缺失'} → ${gpuServerExe}`)
-    log(`模型:        ${modelReady ? '就绪' : '缺失'} → ${modelPath}`)
-    process.exitCode = binReady && modelReady ? 0 : 1
+    for (const t of tierState) log(`模型(${t.tier.padEnd(7)}): ${t.ready ? '就绪' : '缺失'} → ${TIERS[t.tier].file}`)
+    process.exitCode = (binReady || gpuReady) && anyModelReady ? 0 : 1
     return
   }
 
@@ -411,14 +459,22 @@ async function main() {
       log(gpuPlan.want ? `GPU 包已存在，跳过: ${gpuServerExe}` : `跳过 GPU 包：${gpuPlan.reason}`)
     }
 
-    if (!BIN_ONLY && (!modelReady || FORCE)) {
-      await downloadAny(MODEL_URLS, modelPath, MODEL_BYTES)
-      log('模型安装完成')
-    } else if (!BIN_ONLY) {
-      log(`模型已存在，跳过: ${modelPath}`)
+    if (!BIN_ONLY) {
+      const want = tiersToInstall()
+      log(`模型档位: ${want.join(', ')}`)
+      for (const tier of want) {
+        const { file, bytes } = TIERS[tier]
+        const dest = join(MODEL_DIR, file)
+        if (existsSync(dest) && !FORCE) {
+          log(`模型已存在，跳过（${tier}）: ${file}`)
+          continue
+        }
+        await downloadAny(modelUrls(tier), dest, bytes)
+        log(`模型安装完成（${tier}）`)
+      }
     }
     log('\n全部就绪。可用 prism doctor 检查；检索将自动使用向量混合排序。')
-    if (gpuReady || gpuPlan.want) log('检测到 GPU 包 → 运行时将自动优先用 GPU 推理。')
+    log('档位查看: prism embedding models；切换: prism embedding use <small|default|large>')
   } catch (error) {
     process.stderr.write(`[embedding-setup] 失败: ${error instanceof Error ? error.message : String(error)}\n`)
     process.exitCode = 1

@@ -26,7 +26,7 @@ export type {
   KbFactory,
 } from './kb/port.js'
 export { LAYERS, ENTRY_TYPES } from './kb/port.js'
-export { loadKnowledgeService } from './kb/wiring.js'
+export { loadKnowledgeService, applyEmbeddingConfig } from './kb/wiring.js'
 export {
   exportKnowledgeGraph,
   kbGraphWorkDir,
@@ -35,19 +35,29 @@ export {
 } from './kb/graph-export.js'
 // 文档转换探测（doctor 用）；实现与 anydoc 同在 @prism/knowledge
 export { probeConverter } from '@prism/knowledge'
-// 本地向量化（变更 2）：BGE-M3 via llama.cpp，Prism 自理不依赖宿主
+// 本地向量化（变更 2）：Prism 自理，分档（小/默认/强）按算力自动选
 export {
   EMBEDDING_CTX,
   EMBEDDING_DIM,
   EMBEDDING_PORT,
+  activeModel,
+  activeTier,
   embeddingInstalled,
   ensureEmbeddingServer,
   embedText,
   preferredBackend,
+  setEmbeddingTier,
   stopEmbeddingServer,
   type EmbedText,
   type EmbeddingBackend,
 } from './kb/embedding.js'
+export {
+  EMBEDDING_MODELS,
+  EMBEDDING_TIERS,
+  resolveTier,
+  type EmbeddingModelDef,
+  type EmbeddingTier,
+} from './kb/embedding-models.js'
 export { ScanHistory, type ScanRecord } from './kb/scan-history.js'
 export {
   writeEnrichment,

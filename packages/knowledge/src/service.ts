@@ -226,6 +226,8 @@ export class PrismKnowledgeService implements KnowledgeService {
   readonly #ownsPersistence: boolean
   readonly #enqueueEnrichment: KnowledgeServiceOptions['enqueueEnrichment']
   readonly #embed: KnowledgeServiceOptions['embed']
+  /** 当前 embedding 模型 id（分档）；检索只比同模型向量。未装配时为 undefined。 */
+  readonly #embeddingModel: KnowledgeServiceOptions['embeddingModel']
 
   constructor(options: KnowledgeServiceOptions = {}) {
     this.home = options.home ?? prismPaths().home
@@ -240,6 +242,7 @@ export class PrismKnowledgeService implements KnowledgeService {
       options.idFactory ?? (() => `KB-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`)
     this.#enqueueEnrichment = options.enqueueEnrichment
     this.#embed = options.embed
+    this.#embeddingModel = options.embeddingModel
     ensureKbFts(this.persistence.knowledge)
   }
 
@@ -1827,6 +1830,9 @@ export class PrismKnowledgeService implements KnowledgeService {
   /**
    * 为某一条目的最新版写向量（upsert）。未装配 embedding 或计算失败 → no-op。
    * 返回是否写入成功。**不抛**：embedding 属增强，任何失败都不能阻断落库。
+   *
+   * `model` 由注入方（server）在装配时声明当前模型 id（`embeddingModel`）——换档后
+   * 同一条目重算会写成新 model，旧 model 的向量不再被检索（见 #vectorHits）。
    */
   async #writeVector(id: string, version: number, text: string): Promise<boolean> {
     if (this.#embed === undefined) return false
@@ -1839,14 +1845,15 @@ export class PrismKnowledgeService implements KnowledgeService {
     if (vec === null || vec.length === 0) return false
     const nowIso = this.#now().toISOString()
     const blob = vectorToBlob(vec)
+    const model = this.#embeddingModel ?? 'unknown'
     await this.persistence.knowledge.run((raw) => {
       raw
         .prepare(
-          `INSERT INTO kb_vectors (entry_id, version, dim, vec, updated_at)
-           VALUES (?, ?, ?, ?, ?)
-           ON CONFLICT(entry_id, version) DO UPDATE SET dim = excluded.dim, vec = excluded.vec, updated_at = excluded.updated_at`,
+          `INSERT INTO kb_vectors (entry_id, version, dim, vec, model, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(entry_id, version) DO UPDATE SET dim = excluded.dim, vec = excluded.vec, model = excluded.model, updated_at = excluded.updated_at`,
         )
-        .run(id, version, vec.length, blob, nowIso)
+        .run(id, version, vec.length, blob, model, nowIso)
     })
     return true
   }
@@ -1871,15 +1878,21 @@ export class PrismKnowledgeService implements KnowledgeService {
     limit: number,
   ): Promise<number[]> {
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : ''
-    // 只取「当前版次确有向量」的行；dim 不匹配的跳过（换模型后旧向量作废）
+    // 只取「当前版次、且由当前模型产出」的向量：换档/换模型后旧向量必须失效
+    // （不同模型向量空间不共通，即便同维也不可比）。
+    const modelClause = this.#embeddingModel !== undefined ? ' AND v.model = ?' : ''
     const rows = raw
       .prepare(
         `SELECT e.rowid AS rowid, v.vec AS vec, v.dim AS dim
          FROM knowledge_entries e
          JOIN kb_vectors v ON v.entry_id = e.id AND v.version = e.version
-         ${where}`,
+         ${where}${modelClause}`,
       )
-      .all(...params) as unknown as Array<{ rowid: number; vec: Buffer; dim: number }>
+      .all(...params, ...(this.#embeddingModel !== undefined ? [this.#embeddingModel] : [])) as unknown as Array<{
+      rowid: number
+      vec: Buffer
+      dim: number
+    }>
     const scored: Array<{ rowid: number; cos: number }> = []
     for (const row of rows) {
       if (row.dim !== qVec.length) continue

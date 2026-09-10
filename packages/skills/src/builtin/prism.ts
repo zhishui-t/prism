@@ -208,21 +208,27 @@ prism graph build <项目根> --name <项目名> --incremental # 增量（已有
 
 ## 向量化（Prism 自理，不依赖宿主）
 
-embedding 由 Prism **内置 BGE-M3 模型**生成，**不需要你回填**——落库即自动向量化（模型就绪时）。
+embedding 由 Prism **内置模型**生成，**不需要你回填**——落库即自动向量化（模型就绪时）。
 检索默认走 **BM25 + 向量融合（RRF）**：关键词命中不了的同义/跨语言查询也能语义召回。
 
-宿主无需感知；仅当环境缺模型时用以下命令装配（一次性，约 600MB + 本地编译 llama.cpp）：
+**按算力自动分档**（有显卡用强档，无显卡用轻量档，你不用操心）：
+
+| 档位 | 模型 | 维度 | 适用 |
+| :--- | :--- | ---: | :--- |
+| \`small\` | bge-small-zh-v1.5 | 512 | 无 GPU（CPU 友好，约 25MB） |
+| \`default\` | BGE-M3 | 1024 | 多语言基线 |
+| \`large\` | Qwen3-Embedding-0.6B | 1024 | 有 GPU（更强，约 0.2s/条） |
 
 \`\`\`bash
-prism embedding install    # 首次：编译 llama.cpp + 下载 BGE-M3；**有显卡会自动装 GPU(Vulkan) 包**
-prism embedding status     # 查看安装/服务/后端（GPU 或 CPU）
-prism embedding start|stop # 常驻服务（按需自动启动，一般无需手动）
-prism embedding reindex    # 为已有条目补齐向量（幂等）
+prism embedding install                    # 首次：编译 llama.cpp + 按算力装模型（有显卡自动加 GPU/Vulkan 包）
+prism embedding models                     # 查看三档与当前生效项
+prism embedding use <small|default|large>  # 切换档位（写入 prism.yaml；换后跑 reindex 重算向量）
+prism embedding status                     # 安装 / 后端(GPU|CPU) / 档位 / 维度
+prism embedding reindex                    # 为已有条目补齐/重算向量（幂等）
 \`\`\`
 
-**GPU 很关键**：CPU 推理 BGE-M3 极慢（1500 字约 7.5s），装了 GPU 包后约 0.2s
-（快约 170 倍）。若 \`status\` 显示 CPU，跑 \`prism embedding install --gpu\`
-（Vulkan 包仅约 28MB，无需 CUDA SDK，装完自动切换后端）。
+**换档注意**：不同模型向量空间不共通，换档后旧向量自动失效，需 \`prism embedding reindex\`
+按新模型重算（未重算期间该条目仅靠 BM25 命中，不报错）。
 
 未安装时自动降级纯 BM25，**不报错、不阻断落库**。
 `,
@@ -521,16 +527,18 @@ prism serve --port 7777             # HTTP API + 控制台（只读控制面）
 
 ## 本地向量化（prism embedding）
 
-向量化由 Prism 自理（内置 BGE-M3，不调宿主 LLM）；未安装自动降级纯 BM25。
+向量化由 Prism 自理（内置模型、按算力分档，不调宿主 LLM）；未安装自动降级纯 BM25。
 
 \`\`\`bash
-prism embedding install    # 首次装配：编译 llama.cpp + 下载模型（有显卡自动加 GPU/Vulkan 包）
-prism embedding status     # 二进制/模型/服务状态 + 后端（GPU 或 CPU）
-prism embedding start|stop # 常驻服务（一般按需自动启停）
-prism embedding reindex    # 为已有条目补齐向量（幂等）
+prism embedding install                    # 首次装配：编译 llama.cpp + 按算力装模型（有显卡自动加 GPU/Vulkan 包）
+prism embedding models                     # 三档一览（small/default/large）+ 当前生效
+prism embedding use <small|default|large>  # 切换档位（写 prism.yaml；换后 reindex）
+prism embedding status                     # 安装 / 后端(GPU|CPU) / 档位 / 维度
+prism embedding reindex                    # 补齐或重算向量（幂等）
 \`\`\`
 
-**务必用 GPU**：CPU 约慢 170 倍。\`status\` 显示 CPU 时跑 \`prism embedding install --gpu\`。
+**有显卡就用 GPU**：\`status\` 显示 CPU 时跑 \`prism embedding install --gpu\`（Vulkan 包约 28MB）。
+无显卡自动用 \`small\` 档（512 维，CPU 友好）。
 
 ## 运行时宿主适配器（prism harness）
 

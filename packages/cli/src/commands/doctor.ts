@@ -5,8 +5,8 @@ import { join } from 'node:path'
 
 import { openPersistence, prismPaths } from '@prism/core'
 import {
-  EMBEDDING_DIM,
   EMBEDDING_PORT,
+  activeModel,
   embedText,
   embeddingInstalled,
   preferredBackend,
@@ -109,12 +109,13 @@ export async function runDoctor(ctx: CommandContext, _args: string[], values: Ar
   } else {
     const probe = await embedText('健康检查')
     const backend = preferredBackend()
-    const backendLabel = backend === 'gpu' ? 'GPU/Vulkan' : 'CPU（慢，建议 prism embedding install --gpu）'
+    const def = activeModel()
+    const backendLabel = backend === 'gpu' ? 'GPU/Vulkan' : 'CPU（较慢，建议有显卡时装 GPU 包）'
     checks.push({
       name: 'embedding',
       ok: probe.ok,
       detail: probe.ok
-        ? `就绪（BGE-M3 ${EMBEDDING_DIM} 维，${backendLabel}，127.0.0.1:${EMBEDDING_PORT}）`
+        ? `就绪（档位 ${def.tier}／${def.label}，${def.dim} 维，${backendLabel}，127.0.0.1:${EMBEDDING_PORT}）`
         : `已安装但服务不可用：${probe.error ?? '未知'}（prism embedding start）`,
     })
   }

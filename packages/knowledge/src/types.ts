@@ -398,8 +398,14 @@ export interface KnowledgeServiceOptions {
   enqueueEnrichment?: (entry: { id: string; version: number; layer: Layer; book: string; module: string; type: EntryType }) => Promise<void>
   /**
    * 本地向量化（变更 2）：`(text) => Float32Array | null`——由 server 装配注入
-   * （BGE-M3，未安装时返回 null 降级）。knowledge 包只存向量、算余弦，
-   * 不依赖 embedding 实现。注入后：deposit 自动写向量；search 走 BM25+向量混合。
+   * （未安装时返回 null 降级）。knowledge 包只存向量、算余弦，不依赖 embedding 实现。
+   * 注入后：deposit 自动写向量；search 走 BM25+向量混合。
    */
   embed?: (text: string) => Promise<Float32Array | null>
+  /**
+   * 当前 embedding 模型 id（分档用；与 `embed` 配套注入）。
+   * 写入 kb_vectors.model；检索**只比同模型向量**——不同模型（即便同维）向量空间
+   * 不共通，换档后旧向量自动失效，由 reindex 重算。
+   */
+  embeddingModel?: string
 }

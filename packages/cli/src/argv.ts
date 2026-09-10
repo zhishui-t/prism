@@ -4,7 +4,7 @@ import { parseArgs } from 'node:util'
 
 import { prismHome, type PrismPersistence } from '@prism/core'
 import { resolveDirsFromHome, type ResolvedDirs } from '@prism/agents'
-import { defaultZcodeDir } from '@prism/server'
+import { applyEmbeddingConfig, defaultZcodeDir } from '@prism/server'
 import type { BuildRunner, KnowledgeService } from '@prism/server'
 import { runInit } from './commands/init.js'
 import { runServe } from './commands/serve.js'
@@ -170,6 +170,8 @@ const CLI_OPTIONS = {
   /** 变更 2：`prism embedding <install|status|stop|reindex>` 子动作 */
   action: { type: 'string' },
   'no-embedding': { type: 'boolean' },
+  /** embedding 模型档位（small|default|large） */
+  tier: { type: 'string' },
 } as const
 
 export interface ParsedInvocation {
@@ -237,6 +239,7 @@ export type ArgValues = {
   all?: boolean
   action?: string
   'no-embedding'?: boolean
+  tier?: string
 }
 
 /** `~`/`~\/` 前缀展开为用户主目录（Windows/Node 不自动展开；CLI 层统一负责，design-v3 §5 P14）。 */
@@ -332,6 +335,9 @@ export async function runCommand(ctx: CommandContext, argv: string[]): Promise<n
   }
 
   try {
+    // 应用 prism.yaml 配置（embedding 档位等）——须在派发前，保证所有命令
+    // （status/reindex/search…）看到一致的生效档位；env PRISM_EMBEDDING_MODEL 优先级更高。
+    applyEmbeddingConfig(effective.home)
     switch (command) {
       case 'init':
         return await runInit(effective, rest, values)
