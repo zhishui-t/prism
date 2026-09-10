@@ -1,8 +1,8 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { PrismKnowledgeService } from '../src/service.js'
 
@@ -81,6 +81,83 @@ describe('kb reindex（Z2：以文件为真相重建索引）', () => {
       expect((await service.get('K-2', 2))?.status).toBe('active')
     } finally {
       service.close()
+    }
+  })
+})
+
+/** F-A4：`EntryStatus` 4 值全量往返；4 值之外不静默（warning + 回落 active）。 */
+describe('status 往返（F-A4）', () => {
+  async function makeWithFile(status: string): Promise<{ kb: PrismKnowledgeService; file: string }> {
+    const kb = makeService()
+    const deposited = await kb.deposit({
+      id: 'S-1',
+      title: '状态往返',
+      type: 'rule',
+      layer: 'global',
+      book: 'b',
+      module: 'm',
+      content: '状态往返正文。',
+    })
+    const text = readFileSync(deposited.path, 'utf-8')
+    writeFileSync(deposited.path, text.replace('status: active', `status: ${status}`), 'utf-8')
+    return { kb, file: deposited.path }
+  }
+
+  it('latest 版写 candidate → reindex 后仍为 candidate（不再被压平成 active）', async () => {
+    const { kb } = await makeWithFile('candidate')
+    try {
+      expect((await kb.get('S-1'))?.status).toBe('active') // 未重扫前 DB 仍是旧值
+      await kb.reindex()
+      expect((await kb.get('S-1'))?.status).toBe('candidate')
+    } finally {
+      kb.close()
+    }
+  })
+
+  it('latest 版写 superseded → reindex 后仍为 superseded', async () => {
+    const { kb } = await makeWithFile('superseded')
+    try {
+      await kb.reindex()
+      expect((await kb.get('S-1'))?.status).toBe('superseded')
+    } finally {
+      kb.close()
+    }
+  })
+
+  it('4 值之外（candidate-x）→ warning + 回落 active（不静默）', async () => {
+    const { kb } = await makeWithFile('candidate-x')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const report = await kb.reindex()
+      expect(report.skipped).toBe(0) // 回落而非跳过
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(String(warn.mock.calls[0]?.[0])).toContain('candidate-x')
+      expect((await kb.get('S-1'))?.status).toBe('active')
+    } finally {
+      warn.mockRestore()
+      kb.close()
+    }
+  })
+
+  it('软删 → 改源 → 重扫 → 仍 deprecated（BLK-2 回归，status 不复活）', async () => {
+    const kb = makeService()
+    try {
+      const deposited = await kb.deposit({
+        id: 'S-2',
+        title: '软删条目',
+        type: 'rule',
+        layer: 'global',
+        book: 'b',
+        module: 'm',
+        content: '软删正文。',
+      })
+      await kb.remove('S-2')
+      const text = readFileSync(deposited.path, 'utf-8')
+      writeFileSync(deposited.path, text.replace('软删正文。', '软删正文（外部改过）。'), 'utf-8')
+      await kb.reindex()
+      expect((await kb.get('S-2'))?.status).toBe('deprecated')
+    } finally {
+      kb.close()
     }
   })
 })

@@ -230,6 +230,44 @@ describe('留痕与统计（§3.5 content_hash + AuditLog；tree/stats）', () =
   })
 })
 
+/** 版本历史查询面（F-B4）：listVersions 降序 + is_latest；不存在 id → 空数组。 */
+describe('listVersions（F-B4 版本历史查询面）', () => {
+  it('多版次 → 降序返回全部版次 + is_latest 正确', async () => {
+    const kb = new PrismKnowledgeService({ home: mkdtempSync(join(tmpdir(), 'prism-kb-versions-')) })
+    await kb.deposit({ ...BASE, id: 'VER-1', content: '第一版' })
+    await kb.deposit({ ...BASE, id: 'VER-1', content: '第二版' })
+    await kb.deposit({ ...BASE, id: 'VER-1', content: '第三版' })
+
+    const versions = await kb.listVersions('VER-1')
+    expect(versions.map((v) => v.version)).toEqual([3, 2, 1]) // 降序
+    expect(versions.map((v) => v.is_latest)).toEqual([true, false, false])
+    expect(versions.map((v) => v.status)).toEqual(['active', 'superseded', 'superseded'])
+    expect(versions[0]?.title).toBe('禁止吞掉异常')
+    expect(versions[0]?.source_path?.endsWith('v03.md')).toBe(true)
+    expect(versions[2]?.source_path?.endsWith('v01.md')).toBe(true)
+    kb.close()
+  })
+
+  it('单版次 → 1 条；不存在 id → 空数组（不报错）', async () => {
+    const kb = new PrismKnowledgeService({ home: mkdtempSync(join(tmpdir(), 'prism-kb-versions2-')) })
+    await kb.deposit({ ...BASE, id: 'VER-2', content: '唯一版' })
+    expect(await kb.listVersions('VER-2')).toHaveLength(1)
+    expect(await kb.listVersions('NO-SUCH-ID')).toEqual([])
+    kb.close()
+  })
+
+  it('软删后仍列出版次且状态为 deprecated（版本历史不隐藏）', async () => {
+    const kb = new PrismKnowledgeService({ home: mkdtempSync(join(tmpdir(), 'prism-kb-versions3-')) })
+    await kb.deposit({ ...BASE, id: 'VER-3', content: 'a' })
+    await kb.remove('VER-3')
+    const versions = await kb.listVersions('VER-3')
+    expect(versions).toHaveLength(1)
+    expect(versions[0]?.status).toBe('deprecated')
+    expect(versions[0]?.is_latest).toBe(true)
+    kb.close()
+  })
+})
+
 /** 版本去重（2026-09-10）：内容未变不产生新版次。 */
 describe('版本去重', () => {
   it('重复落库同一内容 → unchanged，不新增版次文件', async () => {

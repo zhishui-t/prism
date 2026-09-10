@@ -49,16 +49,26 @@ export function blobToVector(blob: Uint8Array | Buffer): Float32Array {
 }
 
 /**
- * 倒数排名融合：`score(key) = Σ 1/(k + rank)`，rank 从 1 起。
+ * 倒数排名融合：`score(key) = Σ w_route / (k + rank)`，rank 从 1 起。
  * 入参为若干「已按相关性降序排列的 key 列表」；同一 key 在多路命中则分数累加。
  * 返回 key → 融合分（越大越相关）。
+ *
+ * `k` 与 `weights`（分路权重，按 lists 下标对应，F-B3）**均可选**：
+ * 不传时 `k = RRF_K`、每路权重 1 —— 与既有 2 参调用**逐字节等价**。
  */
-export function rrfFuse(lists: ReadonlyArray<ReadonlyArray<number>>, k: number = RRF_K): Map<number, number> {
+export function rrfFuse(
+  lists: ReadonlyArray<ReadonlyArray<number>>,
+  k: number = RRF_K,
+  weights?: ReadonlyArray<number>,
+): Map<number, number> {
   const fused = new Map<number, number>()
-  for (const list of lists) {
+  for (let route = 0; route < lists.length; route++) {
+    const list = lists[route]!
+    const weight = weights?.[route] ?? 1
+    if (weight === 0) continue
     for (let i = 0; i < list.length; i++) {
       const key = list[i]!
-      fused.set(key, (fused.get(key) ?? 0) + 1 / (k + i + 1))
+      fused.set(key, (fused.get(key) ?? 0) + weight / (k + i + 1))
     }
   }
   return fused

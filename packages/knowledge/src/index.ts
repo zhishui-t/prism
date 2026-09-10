@@ -6,12 +6,15 @@
  */
 export type {
   BookNode,
+  BookStructure,
   CatalogEntry,
   DepositInput,
   DepositResult,
   EdgeConfidence,
   EdgeRelation,
+  EntryStatus,
   EntryType,
+  EntryVersion,
   GraphNode,
   GraphPath,
   GraphQuery,

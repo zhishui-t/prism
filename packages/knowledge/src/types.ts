@@ -24,6 +24,15 @@ export type EntryType =
 /** 知识来源类型（design-knowledge-model-v1 §2）。 */
 export type EntryOrigin = 'owned' | 'indexed'
 
+/**
+ * 条目状态（design-v4 §3.1 ①，队长裁决 A2 2026-09-11：3 值 → 4 值）。
+ *
+ * `candidate` 是文档承认的可选中间态（`knowledge-base.md` §3.4），此前被
+ * `#parseVersionFile` 静默压平成 `active`，违反「文件为真相」（R7）。
+ * 4 值之外不静默：warning + 回落 `active`（F-A4）。
+ */
+export type EntryStatus = 'candidate' | 'active' | 'deprecated' | 'superseded'
+
 /** 落库输入（design.md §3.2 DepositInput）。 */
 export interface DepositInput {
   /** 不传则自动生成 */
@@ -45,8 +54,13 @@ export interface DepositInput {
   /** 默认 [] */
   overrides?: string[]
   visibility?: 'global' | 'project' | 'role'
-  source?: { kind: 'import' | 'agent' | 'manual'; ref?: string }
-  deposited_by?: { subject: string; team?: string }
+  source?: { kind: 'import' | 'agent' | 'manual' | 'task'; ref?: string }
+  deposited_by?: { subject: string; team?: string; task_id?: string }
+  /**
+   * 任务来源（F-E2/F-E3）：沉淀由哪条团队任务触发。
+   * 与 `source.kind='task'` 配套落 `knowledge_entries.source` 列（v7）。
+   */
+  origin_task?: { task_id: string; dag_id?: string; stage?: string; role?: string }
 }
 
 /**
@@ -141,7 +155,7 @@ export interface KnowledgeEntry {
   book: string
   /** 未归模块为 ''（文件层面在 _inbox/） */
   module: string
-  status: 'active' | 'deprecated' | 'superseded'
+  status: EntryStatus
   risk: string
   confidence: number
   tags: string[]
@@ -157,6 +171,52 @@ export interface KnowledgeEntry {
   superseded_by?: string
   created_at: string
   updated_at: string
+  /**
+   * 新鲜度（DB 列 `knowledge_entries.freshness`，REAL 默认 1.0）。
+   * 此前只落库、从不读出；F-B1 把它接出来供 context-pack 排序（缺省视为 1.0）。
+   */
+  freshness?: number
+  /** 沉淀留痕（F-E2；`source`/`deposited_by` 两列 v7 起落 DB）。 */
+  deposited_by?: { subject?: string; team?: string; at?: string; task_id?: string }
+}
+
+/**
+ * 书结构（F-A1/F-A2，design-v4 §1 裁决 #1/#2）。
+ *
+ * `modules` 是**已冻结**的模块 slug 清单（有序）；`suggested` 是零 LLM 推导的
+ * 建议（模块 + 条目数，按条目数降序）；`inherits` 只存文件（`_modules.yaml`），
+ * `inherited_from` 是实际生效的继承链。落 `book_structures` 表（DDL 不变）。
+ */
+export interface BookStructure {
+  layer: string
+  book: string
+  /** 每次 freeze 递增 */
+  revision: number
+  /** 冻结清单（有序；本地项覆盖继承项） */
+  modules: string[]
+  /** 推导建议 */
+  suggested: Array<{ slug: string; entries: number }>
+  /** 声明的继承（形如 `["global/java-standards"]`） */
+  inherits: string[]
+  /** 实际生效的继承链 */
+  inherited_from: string[]
+  frozen_at: string | null
+  confirmed_by: string | null
+  updated_at: string
+}
+
+/**
+ * 条目版次（F-B4：版本历史查询面从零到有）。
+ * 数据早已齐全（`knowledge_entries` 按 `(id, version)` 存全部版次 + `is_latest`）。
+ */
+export interface EntryVersion {
+  id: string
+  version: number
+  status: EntryStatus
+  title: string
+  is_latest: boolean
+  updated_at: string
+  source_path: string | null
 }
 
 /** 检索查询（design.md §3.2 SearchQuery）。 */
@@ -187,6 +247,25 @@ export interface SearchQuery {
    * 与既有行为逐字节一致。显式传 `false` 可强制纯关键词检索。
    */
   hybrid?: boolean
+  /**
+   * 混合检索的参数化（F-B3，全部可选；缺省 = 既有模块常量，行为逐字节一致）。
+   * `hybrid_candidates` 默认 50（`vector.ts:22`）；`rrf_k` 默认 60（`:13`）；
+   * `vector_floor` 默认 0.42（`:16`）；`vector_relative` 默认 0.92（`:19`）。
+   */
+  hybrid_candidates?: number
+  rrf_k?: number
+  vector_floor?: number
+  vector_relative?: number
+  /** 分路权重（缺省 1:1 = 现状）；`rrfFuse` 内部分路加权。 */
+  route_weights?: { keyword?: number; vector?: number }
+  /**
+   * 默认 `false`：开启才做 `overrides` 降权 + 返回 `overridden_by`（F-A3；
+   * 保证既有行为不变）。
+   * 队长裁决 A3：边表邻近度（`graph_distance`）本轮**不做**，已移出契约。
+   */
+  graph_boost?: boolean
+  /** 代码符号/文件路径（F-B2 命中加权用）。 */
+  symbols?: string[]
 }
 
 /** 检索结果（design.md §3.2 SearchResult）。score 越大越相关（-bm25）。 */
@@ -203,6 +282,14 @@ export interface SearchResult {
   score: number
   /** 来源地址：`层[/owner]/书/模块/ID@v版次` */
   source: string
+  /** 新鲜度（F-B1；缺省视为 1.0，不影响既有排序）。 */
+  freshness?: number
+  /** 仅 `graph_boost: true` 且存在 `overrides` 边时才有值（F-A3）。 */
+  overridden_by?: string | null
+  /** 命中的 `symbols`（F-B2）。 */
+  graph_hits?: string[]
+  /** 沉淀留痕（F-E2）。 */
+  deposited_by?: { subject?: string; team?: string; at?: string; task_id?: string }
 }
 
 /** 书节点（design.md §3.2 BookNode）。 */
@@ -371,6 +458,19 @@ export interface KnowledgeService {
   conflicts?(options?: { includeResolved?: boolean }): Promise<KnowledgeConflict[]>
   /** 标记冲突已处理（B2）。 */
   resolveConflict?(conflictId: string): Promise<boolean>
+  // ===== 书结构与版本历史（F-A1/F-A2/F-B4；design-v4 §3.1，队长冻结契约）=====
+  // 本阶段（流 A1）只冻结签名，实现由下一阶段补；PrismKnowledgeService 现抛 not_implemented。
+  /** 读回书结构（含 `_modules.yaml` 的 `inherits` 合并结果与 `inherited_from`）。 */
+  bookStructure(layer: string, book: string): Promise<BookStructure | null>
+  /**
+   * 零 LLM 推导书结构：产 `_modules.yaml` + 书级/模块级 `_summary.md`，并 upsert
+   * `book_structures`（幂等覆盖）。返回结构 + 生成的文件清单。
+   */
+  generateBookStructure(input: { layer: string; book: string; confirmed_by?: string }): Promise<{ structure: BookStructure; files: string[] }>
+  /** 固化模块清单（校验 slug、`revision+1`、写文件 + 表）。 */
+  freezeBookStructure(input: { layer: string; book: string; modules?: string[]; confirmed_by?: string; note?: string }): Promise<BookStructure>
+  /** 列出某 id 的全部版次（降序 + `is_latest`）；不存在 → 空数组（不报错）。 */
+  listVersions(id: string): Promise<EntryVersion[]>
 }
 
 /**

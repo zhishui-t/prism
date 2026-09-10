@@ -323,6 +323,31 @@ CREATE VIRTUAL TABLE kb_fts USING fts5(body, seg, tokenize='unicode61');
 | 语义/向量 | Prism 内置 embedding（BM25+余弦 RRF） | 已实现（落库自动向量化） |
 | 混合排序（RRF） | BM25 + 向量 + 图谱 | 有向量后启用 |
 
+#### 5.2.1 候选池与权重参数（F-B3，2026-09-11）
+
+混合检索的一切阈值都可**按查询覆盖**（`SearchQuery`，全部可选；缺省 = 模块常量，
+行为与改动前逐字节一致）：
+
+| 参数 | 默认 | 作用 |
+| :--- | :--- | :--- |
+| `hybrid_candidates` | `HYBRID_CANDIDATES = 50` | 每路候选池上限（最终再截断到 `limit`）；**提高它才能召回长尾** |
+| `rrf_k` | `RRF_K = 60` | RRF 平滑常数 `1/(k+rank)`，越小越强调头部 |
+| `vector_floor` | `VECTOR_FLOOR = 0.42` | 绝对余弦下限（低于视为不相关，防噪声经 RRF 混入） |
+| `vector_relative` | `VECTOR_RELATIVE = 0.92` | 相对阈值：低于 `top × 该系数` 的同路候选丢弃 |
+| `route_weights` | `{keyword: 1, vector: 1}` | 分路权重（`rrfFuse` 内部分路加权）；`vector: 0` 即退化为纯 BM25 |
+| `match_mode` | `all`（AND） | `any` = OR，长任务描述必须用 |
+
+约束与陷阱：
+
+- 非法值（非有限数、`hybrid_candidates < 1`、权重为负）→ `bad_request`，
+  **不静默回落**（否则会在 SQL `LIMIT ?` 处抛更难定位的错）；
+- 候选池是**召回**上限，不是排序上限：`pool = max(limit, hybrid_candidates)`，
+  所以「调大 `hybrid_candidates` 却没调大 `limit`」时结果可能看不出变化；
+- 向量路是**全量扫描**后按余弦截断（**不能**在 SQL 层 `LIMIT`——相关性算完余弦才知道，
+  截断会让插入靠后的相关条目永远召不回，见 AGENTS.md §5 陷阱表）；
+- 回归集：`packages/knowledge/test/retrieval-quality.test.ts`（两字中文词 /
+  跨语言 / >50 同桶候选 / 默认参数等价）。
+
 ### 5.3 分发：上下文包
 
 - 按 token 预算截断；
@@ -501,8 +526,21 @@ prism_work_complete  回填结果
 | 检索（`prism_kb_search`） | **只返回每个 ID 的最新版次**；历史版次不进结果集（避免同一规则重复占位） |
 | 取单条（`prism_kb_get`，不指定版次） | 返回最新版 |
 | 取单条（`prism_kb_get`，指定 `ID@vN`） | 返回该版次；若该版已 `superseded`，**正常返回但附带 `superseded_by` 提示** |
-| 版本历史 | 单独接口/页面列出该 ID 的全部版次 |
+| 版本历史 | 单独接口/页面列出该 ID 的全部版次（`listVersions(id)`：**降序** + `is_latest`；不存在的 id → 空数组） |
 | 显式要求全部版次 | 检索可传 `all_versions: true` 覆盖默认行为 |
+
+**`status` 语义与往返（F-A4，2026-09-11）**：
+
+- 合法值 = §3.4 的 4 值：`candidate | active | deprecated | superseded`，
+  以 `EntryStatus`（`packages/knowledge/src/types.ts`）为唯一真相；
+- **文件为真相**：`reindex` 时 `#parseVersionFile` 按这 4 值**全量往返**——`candidate`
+  不再被静默压平成 `active`；4 值之外的取值 **warning 一条并回落 `active`**
+  （`console.warn`，不静默、也不丢弃该行）；
+- 历史版（非 `max(version)`）恒为 `superseded`；每个 id 的**最新版沿用文件记录的 status**；
+- **重扫保留 status**：软删（`remove` → `deprecated`）会同时写进版次文件 frontmatter，
+  故「软删 → 改源文件 → 重扫」不会让条目复活；要恢复必须显式 `restore()`
+  （回归测试：`packages/knowledge/test/restore.test.ts`、`test/reindex.test.ts`）。
+  引用型条目（`origin='indexed'`）的真相在项目原件，软删只落 DB——reindex 不重建引用型行。
 
 ### 12.3 层间冲突
 

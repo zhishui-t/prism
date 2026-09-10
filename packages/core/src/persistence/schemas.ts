@@ -11,8 +11,8 @@ export const TASKS_SCHEMA_VERSION = 3
 /** core.db 版本：v2 起注册 team_bindings；v3 起 executor_children。 */
 export const CORE_SCHEMA_VERSION = 3
 
-/** knowledge.db 版本：v1 起含条目/边/工作请求等表；v2 补 owner 列；v3 补 origin；v4 补 source_hash；v5 补 kb_vectors（本地向量）；v6 补 kb_vectors.model（分档）。 */
-export const KNOWLEDGE_SCHEMA_VERSION = 6
+/** knowledge.db 版本：v1 起含条目/边/工作请求等表；v2 补 owner 列；v3 补 origin；v4 补 source_hash；v5 补 kb_vectors（本地向量）；v6 补 kb_vectors.model（分档）；v7 补 knowledge_entries.source/deposited_by（沉淀来源落库，F-E2）。 */
+export const KNOWLEDGE_SCHEMA_VERSION = 7
 
 // ===== tasks.db =====
 
@@ -220,6 +220,26 @@ export const KNOWLEDGE_V4_ADD_SOURCE_HASH: DatabaseSchemaStatement = {
   when: (db: DatabaseSync): boolean => !knowledgeEntryColumns(db).includes('source_hash'),
 }
 
+/**
+ * v7 补 `source` 列（F-E2）：沉淀来源落 DB（此前只写 frontmatter，DB 无据可查）。
+ * 载荷 = `JSON.stringify({...input.source, origin_task?})`（kind/ref + 任务来源）。
+ * 可空：老库/老行为为 `NULL`，读侧当 `undefined`。
+ */
+export const KNOWLEDGE_V7_ADD_SOURCE: DatabaseSchemaStatement = {
+  sql: 'ALTER TABLE knowledge_entries ADD COLUMN source TEXT',
+  when: (db: DatabaseSync): boolean => !knowledgeEntryColumns(db).includes('source'),
+}
+
+/**
+ * v7 补 `deposited_by` 列（F-E2）：沉淀留痕落 DB。
+ * 载荷 = `JSON.stringify({...input.deposited_by, at})`（subject/team/task_id + ISO 时间）。
+ * 可空：老库/老行为为 `NULL`，读侧当 `undefined`。
+ */
+export const KNOWLEDGE_V7_ADD_DEPOSITED_BY: DatabaseSchemaStatement = {
+  sql: 'ALTER TABLE knowledge_entries ADD COLUMN deposited_by TEXT',
+  when: (db: DatabaseSync): boolean => !knowledgeEntryColumns(db).includes('deposited_by'),
+}
+
 function knowledgeEntryColumns(db: DatabaseSync): string[] {
   return (db.prepare('PRAGMA table_info(knowledge_entries)').all() as Array<{ name: string }>).map(
     (column) => column.name,
@@ -338,6 +358,8 @@ export const DEFAULT_SCHEMAS: Record<'tasks' | 'core' | 'knowledge', DatabaseSch
       KNOWLEDGE_V2_ADD_OWNER,
       KNOWLEDGE_V3_ADD_ORIGIN,
       KNOWLEDGE_V4_ADD_SOURCE_HASH,
+      KNOWLEDGE_V7_ADD_SOURCE,
+      KNOWLEDGE_V7_ADD_DEPOSITED_BY,
       KB_VECTORS_TABLE_DDL,
       KB_VECTORS_V6_ADD_MODEL,
     ],

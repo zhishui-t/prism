@@ -12,7 +12,7 @@
  * content_hash=SHA256 / 写 AuditLog knowledge.deposited（与 knowledge.superseded）。
  */
 import { createHash, randomUUID } from 'node:crypto'
-import { existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join, sep } from 'node:path'
 
 import { AuditLog, openPersistence, PrismError, prismPaths } from '@prism/core'
@@ -20,7 +20,8 @@ import type { DatabaseSync } from 'node:sqlite'
 import type { PrismPersistence } from '@prism/core'
 
 import { bodyForRowid, ensureKbFts, indexEntry, searchFts } from './index-db.js'
-import { renderMarkdownFile, splitFrontmatter } from './frontmatter.js'
+import { renderMarkdownFile, splitFrontmatter, parseFrontmatter } from './frontmatter.js'
+import type { FrontmatterData, FrontmatterValue } from './frontmatter.js'
 import {
   INBOX_DIR,
   isValidSegment,
@@ -34,6 +35,7 @@ import {
   blobToVector,
   cosine,
   HYBRID_CANDIDATES,
+  RRF_K,
   rrfFuse,
   vectorToBlob,
   VECTOR_FLOOR,
@@ -41,12 +43,15 @@ import {
 } from './vector.js'
 import type {
   BookNode,
+  BookStructure,
   CatalogEntry,
   DepositInput,
   DepositResult,
   EdgeConfidence,
   EdgeRelation,
+  EntryStatus,
   EntryType,
+  EntryVersion,
   GraphNode,
   GraphPath,
   GraphQuery,
@@ -80,6 +85,28 @@ const ENTRY_TYPES: readonly EntryType[] = [
 ]
 const RISKS = ['low', 'medium', 'high'] as const
 const VISIBILITIES = ['global', 'project', 'role'] as const
+
+/**
+ * 合法条目状态（F-A4，design-v4 §3.1 ①）：`candidate` 是文档承认的可选中间态，
+ * `#parseVersionFile` 必须 4 值全量往返——4 值之外才 warning + 回落 `active`。
+ */
+const ENTRY_STATUSES: readonly EntryStatus[] = ['candidate', 'active', 'deprecated', 'superseded']
+
+/** 书结构文件名（design §F-A1：`_modules.yaml` + 书级/模块级 `_summary.md`）。 */
+const MODULES_FILE = '_modules.yaml'
+const SUMMARY_FILE = '_summary.md'
+
+/** 冻结模块 slug 规则（design §F-A1：`[a-z0-9-]+`）。 */
+const MODULE_SLUG_RE = /^[a-z0-9-]+$/
+
+/** `_modules.yaml` 用具名 YAML 标量：安全集不加引号，否则 JSON 双引号（可被自研解析器读回）。 */
+const PLAIN_YAML_RE = /^[A-Za-z0-9_][A-Za-z0-9_.\-/@()]*$/
+
+/**
+ * 引用型（`index`）条目的 `source` 列载荷（F-E2）：`IndexInput` 没有来源字段，
+ * 引用型恒记「导入」——与 `index()` 写审计时的 `source: 'import'` 同口径。
+ */
+const INDEXED_SOURCE_PAYLOAD = { kind: 'import' } as const
 
 const EDGE_RELATIONS: readonly EdgeRelation[] = ['references', 'overrides', 'supersedes', 'related']
 
@@ -130,13 +157,17 @@ interface EntryRow {
   source_hash: string | null
   overrides: string
   supersedes: string | null
+  /** v7 补列（F-E2）：沉淀来源 JSON（`{kind, ref?, origin_task?}`）；老行为 NULL。 */
+  source: string | null
+  /** v7 补列（F-E2）：沉淀留痕 JSON（`{subject?, team?, task_id?, at?}`）；老行为 NULL。 */
+  deposited_by: string | null
   created_at: string
   updated_at: string
 }
 
 const ENTRY_COLUMNS = `rowid, id, version, is_latest, title, type, layer, owner, book, module, status,
   risk, confidence, freshness, visibility, tags, path, content_hash, origin, source_hash,
-  overrides, supersedes, created_at, updated_at`
+  overrides, supersedes, source, deposited_by, created_at, updated_at`
 
 /** knowledge_edges 表行。 */
 interface EdgeRow {
@@ -162,8 +193,8 @@ interface ReindexRow {
   version: number
   title: string
   type: string
-  /** 文件里记录的 status（BLK-2：软删后 reindex 不能复活） */
-  status: 'active' | 'deprecated'
+  /** 文件里记录的 status（BLK-2：软删后 reindex 不能复活；F-A4：4 值全量往返） */
+  status: EntryStatus
   layer: Layer
   owner: string | null
   book: string
@@ -174,6 +205,10 @@ interface ReindexRow {
   visibility: string
   tags: string[]
   overrides: string[]
+  /** F-E2：`source` 列（v7）载荷文本，从 frontmatter 原样带回；缺省 null */
+  source: string | null
+  /** F-E2：`deposited_by` 列（v7）载荷文本；缺省 null */
+  depositedBy: string | null
   contentHash: string
   body: string
   path: string
@@ -217,6 +252,50 @@ interface NormalizedDeposit {
   overrides: string[]
 }
 
+/** 书结构定位（F-A1/F-A2）：`layer` / 可选 `owner` / `book`。 */
+interface BookRef {
+  layer: Layer
+  owner?: string
+  book: string
+}
+
+/** `book_structures` 表行（DDL 见 `core/src/persistence/schemas.ts:264`）。 */
+interface BookStructureRow {
+  layer: string
+  book: string
+  revision: number
+  modules: string
+  suggested: string
+  frozen_at: string | null
+  confirmed_by: string | null
+  updated_at: string
+}
+
+/** `_modules.yaml` 解析结果（**文件为真相**的部分）。 */
+interface ModulesFileState {
+  modules: string[]
+  inherits: string[]
+  revision: number
+  frozenAt: string | null
+  confirmedBy: string | null
+}
+
+/** 推导出的模块建议（F-A1 裁决 #1：`{slug, entries}`，按条目数降序）。 */
+interface SuggestedModule {
+  slug: string
+  entries: number
+}
+
+/** 书内条目轻量视图（渲染 summary 与推导 suggested 用）。 */
+interface BookEntryLite {
+  id: string
+  /** 文件层面模块名（未归类 = `_inbox`） */
+  module: string
+  title: string
+  version: number
+  updated_at: string
+}
+
 export class PrismKnowledgeService implements KnowledgeService {
   readonly home: string
   readonly knowledgeDir: string
@@ -258,7 +337,13 @@ export class PrismKnowledgeService implements KnowledgeService {
     const nowIso = this.#now().toISOString()
     const seg = bigram(`${address.title}\n${content}`)
     const contentHash = createHash('sha256').update(content, 'utf-8').digest('hex')
-    const frontmatterBase = {
+    // F-E2（§3.2 列载荷约定）：`source` = `{...input.source, origin_task?}`；
+    // `deposited_by` = `{...input.deposited_by, at}`。**同一对象同时落 frontmatter 与
+    // DB 两列**——否则自有型 reindex（以文件为真相）重建后 DB 两列恒空。
+    const sourcePayload = buildSourcePayload(input)
+    const depositedByPayload =
+      input.deposited_by !== undefined ? { ...input.deposited_by, at: nowIso } : undefined
+    const frontmatterBase: FrontmatterData = {
       id: address.id,
       title: address.title,
       type: input.type,
@@ -274,12 +359,10 @@ export class PrismKnowledgeService implements KnowledgeService {
       tags: address.tags,
       created: nowIso,
       updated: nowIso,
-      ...(input.source !== undefined ? { source: input.source } : {}),
+      ...(sourcePayload !== undefined ? { source: sourcePayload } : {}),
       overrides: address.overrides,
       supersedes: null,
-      ...(input.deposited_by !== undefined
-        ? { deposited_by: { ...input.deposited_by, at: nowIso } }
-        : {}),
+      ...(depositedByPayload !== undefined ? { deposited_by: depositedByPayload } : {}),
     }
 
     const deposited = await this.persistence.knowledge.run((raw) => {
@@ -362,8 +445,9 @@ export class PrismKnowledgeService implements KnowledgeService {
           .prepare(
             `INSERT INTO knowledge_entries
              (id, version, is_latest, title, type, layer, owner, book, module, status, risk, confidence,
-              freshness, visibility, tags, path, content_hash, overrides, supersedes, created_at, updated_at)
-             VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, 'active', ?, ?, 1.0, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              freshness, visibility, tags, path, content_hash, overrides, supersedes,
+              source, deposited_by, created_at, updated_at)
+             VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, 'active', ?, ?, 1.0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             address.id,
@@ -382,6 +466,9 @@ export class PrismKnowledgeService implements KnowledgeService {
             contentHash,
             JSON.stringify(address.overrides),
             prev ? `${address.id}@v${prev.version}` : null,
+            // F-E2：v7 两列（载荷见上方 sourcePayload / depositedByPayload）
+            sourcePayload !== undefined ? JSON.stringify(sourcePayload) : null,
+            depositedByPayload !== undefined ? JSON.stringify(depositedByPayload) : null,
             nowIso,
             nowIso,
           )
@@ -442,6 +529,7 @@ export class PrismKnowledgeService implements KnowledgeService {
       module: address.module,
       title: address.title,
       overrides: address.overrides,
+      detected_from: 'deposit',
     })
 
     // 富化（summarize/classify/extract_entities/diagram_ir）改由宿主经 MCP
@@ -524,7 +612,7 @@ export class PrismKnowledgeService implements KnowledgeService {
               `UPDATE knowledge_entries SET
                  is_latest = 1, title = ?, type = ?, module = ?, status = ?,
                  tags = ?, path = ?, content_hash = ?, source_hash = ?, origin = 'indexed',
-                 updated_at = ?
+                 source = ?, updated_at = ?
                WHERE id = ? AND version = ?`,
             )
             .run(
@@ -536,6 +624,8 @@ export class PrismKnowledgeService implements KnowledgeService {
               input.path,
               createHash('sha256').update(input.content, 'utf-8').digest('hex'),
               input.source_hash,
+              // F-E2：引用型来源恒为导入（与下方审计 `source: 'import'` 同口径）
+              JSON.stringify(INDEXED_SOURCE_PAYLOAD),
               nowIso,
               address.id,
               prev.version,
@@ -559,9 +649,9 @@ export class PrismKnowledgeService implements KnowledgeService {
             `INSERT INTO knowledge_entries
              (id, version, is_latest, title, type, layer, owner, book, module, status, risk, confidence,
               freshness, visibility, tags, path, content_hash, source_hash, origin, overrides, supersedes,
-              created_at, updated_at)
+              source, created_at, updated_at)
              VALUES (?, 1, 1, ?, ?, ?, ?, ?, ?, 'active', 'low', 0.5, 1.0, 'project', ?, ?, ?, ?, 'indexed',
-                     '[]', NULL, ?, ?)`,
+                     '[]', NULL, ?, ?, ?)`,
           )
           .run(
             address.id,
@@ -575,6 +665,8 @@ export class PrismKnowledgeService implements KnowledgeService {
             input.path,
             createHash('sha256').update(input.content, 'utf-8').digest('hex'),
             input.source_hash,
+            // F-E2：v7 source 列（引用型恒为导入）；deposited_by 无来源方 → NULL
+            JSON.stringify(INDEXED_SOURCE_PAYLOAD),
             nowIso,
             nowIso,
           )
@@ -599,6 +691,17 @@ export class PrismKnowledgeService implements KnowledgeService {
         layer: address.layer,
         source: 'import',
       })
+      // F-A3：引用型写路径**也**检测层间冲突（同 book/module 同名跨层 = 同一知识两处
+      // 定义，漏检即失真）。保持「只记录不阻断」；引用型没有 overrides 声明 → 传 []。
+      await this.#detectConflicts(this.persistence.knowledge.raw, {
+        id: address.id,
+        layer: address.layer,
+        book: address.book,
+        module: address.module,
+        title: address.title,
+        overrides: [],
+        detected_from: 'index',
+      })
       // 本地向量（变更 2）：索引型正文即真相副本，同样可向量化
       const latest = this.persistence.knowledge.raw
         .prepare('SELECT version FROM knowledge_entries WHERE id = ? ORDER BY version DESC LIMIT 1')
@@ -621,6 +724,10 @@ export class PrismKnowledgeService implements KnowledgeService {
    *
    * 为什么用标题判据：Prism 零 LLM，无法判断「语义冲突」；标题相同是**确定性**
    * 的强信号（同名规则覆盖），且不会误报。只记录，不改状态、不阻断落库。
+   *
+   * F-A3：`deposit()` 与 `index()`（引用型）**两条写入路径共用**本方法；
+   * `detected_from` 只作为审计事件字段留痕——**不加列、不进 `conflicts()` 返回体**
+   * （`KnowledgeConflict` 与 `knowledge_conflicts` DDL 均不变，零迁移）。
    */
   async #detectConflicts(
     raw: DatabaseSync,
@@ -631,6 +738,8 @@ export class PrismKnowledgeService implements KnowledgeService {
       module: string
       title: string
       overrides: string[]
+      /** 冲突由哪条写入路径发现（F-A3，仅进审计事件） */
+      detected_from: 'deposit' | 'index'
     },
   ): Promise<void> {
     // 更低层集合（按 LAYERS 的层序取前缀；global 无更低层 → 不检查）
@@ -667,12 +776,20 @@ export class PrismKnowledgeService implements KnowledgeService {
            VALUES (?, ?, ?, 'same_title', 0, ?)`,
         )
         .run(`CF-${randomUUID().slice(0, 12)}`, input.id, low.id, nowIso)
-      await this.audit.record({
-        type: 'knowledge.conflict_detected',
-        high_id: input.id,
-        low_id: low.id,
-        kind: 'same_title',
-      })
+      // `detected_from` 只进审计事件（F-A3）：core 的 `AuditEvent` 联合类型只约束
+      // 必填字段（`audit-log.ts:141`），附加字段照常落 JSONL；用 `Object.assign`
+      // 让附加字段不触发对象字面量的多余属性检查（core 不在本流文件域）。
+      await this.audit.record(
+        Object.assign(
+          {
+            type: 'knowledge.conflict_detected' as const,
+            high_id: input.id,
+            low_id: low.id,
+            kind: 'same_title',
+          },
+          { detected_from: input.detected_from },
+        ),
+      )
     }
   }
 
@@ -709,6 +826,539 @@ export class PrismKnowledgeService implements KnowledgeService {
       .prepare('UPDATE knowledge_conflicts SET resolved = 1 WHERE id = ?')
       .run(conflictId)
     return Number(result.changes) > 0
+  }
+
+  // ===== 书结构与版本历史（F-A1/F-A2/F-B4）=====
+
+  /**
+   * 读回书结构（F-A1/F-A2）。
+   *
+   * 文件为真相：`modules`/`inherits`/`revision`/`frozen_at`/`confirmed_by` 读
+   * `_modules.yaml`；`suggested`/`updated_at` 读 `book_structures` 表。`modules`
+   * 返回的是**合并后**的清单（父链在前，本地覆盖同名项，见 F-A2 裁决）。
+   * 书上既无结构文件、也无表行 → `null`（等价「不存在」）。
+   */
+  async bookStructure(layer: string, book: string): Promise<BookStructure | null> {
+    const ref = this.#locateBook(layer, book)
+    if (ref === null) return null
+    return this.#readStructure(ref, [], false)
+  }
+
+  /**
+   * 生成书结构（F-A1，**零 LLM**）：从 `knowledge_entries`（`is_latest=1`，含
+   * `_inbox`）+ `knowledge_edges`（同模块邻接度）推导 `suggested`（模块 + 条目数，
+   * 按条目数降序），产三份文件：
+   * - `<book>/_modules.yaml`（`modules` 沿用已冻结的本地清单，`inherits` 原样保留）
+   * - 书级 `<book>/_summary.md`
+   * - 每个非空模块 `<book>/<module>/_summary.md`（含 `_inbox`）
+   *
+   * **幂等**：二次执行三份文件逐字节一致、`revision` 不递增（只有 freeze 递增）。
+   * 同步 upsert `book_structures`（`modules` = 继承合并结果，裁决：合并结果落列）。
+   */
+  async generateBookStructure(input: {
+    layer: string
+    book: string
+    confirmed_by?: string
+  }): Promise<{ structure: BookStructure; files: string[] }> {
+    const ref = this.#requireBook(input.layer, input.book)
+    const dir = this.#bookDir(ref)
+    const entries = this.#bookEntries(ref)
+    const local = this.#readModulesFile(dir)
+    const row = this.#readStructureRow(ref)
+    const suggested = deriveSuggested(entries, this.#bookEdgePairs(entries))
+    const merged = this.#mergeInheritedModules(ref, local?.inherits ?? [], [], [])
+    const localModules = local?.modules ?? (row !== null ? parseStringArray(row.modules) : [])
+    const modules = dedupeStrings([...merged.modules, ...localModules])
+    const revision = local?.revision ?? row?.revision ?? 0
+    const frozenAt = local?.frozenAt ?? row?.frozen_at ?? null
+    const confirmedBy = input.confirmed_by ?? local?.confirmedBy ?? row?.confirmed_by ?? null
+    const nowIso = this.#now().toISOString()
+
+    mkdirSync(dir, { recursive: true })
+    const files: string[] = []
+    const modulesFile = join(dir, MODULES_FILE)
+    writeFileSync(
+      modulesFile,
+      renderModulesFile({ layer: ref.layer, book: ref.book, revision, frozenAt, confirmedBy, inherits: local?.inherits ?? [], modules: localModules }),
+      'utf-8',
+    )
+    files.push(modulesFile)
+    files.push(...this.#writeSummaries(ref, dir, entries, suggested))
+
+    this.persistence.knowledge.raw
+      .prepare(
+        `INSERT INTO book_structures (layer, book, revision, modules, suggested, frozen_at, confirmed_by, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(layer, book) DO UPDATE SET
+           revision = excluded.revision, modules = excluded.modules, suggested = excluded.suggested,
+           frozen_at = excluded.frozen_at, confirmed_by = excluded.confirmed_by, updated_at = excluded.updated_at`,
+      )
+      .run(
+        ref.layer,
+        ref.book,
+        revision,
+        JSON.stringify(modules),
+        JSON.stringify(suggested),
+        frozenAt,
+        confirmedBy,
+        nowIso,
+      )
+
+    return {
+      structure: {
+        layer: ref.layer,
+        book: ref.book,
+        revision,
+        modules,
+        suggested,
+        inherits: local?.inherits ?? [],
+        inherited_from: merged.inheritedFrom,
+        frozen_at: frozenAt,
+        confirmed_by: confirmedBy,
+        updated_at: nowIso,
+      },
+      files,
+    }
+  }
+
+  /**
+   * 固化模块清单（F-A1）：校验 slug → `revision+1` → 写文件 + 表。
+   *
+   * 校验（`bad_request`）：非法 slug（须 `[a-z0-9-]+`）、保留名 `_inbox`、
+   * **无条目书**（没有任何 `is_latest` 条目时无可冻结内容）。
+   * `modules` 省略 → 沿用当前 `_modules.yaml` 的本地清单；仍为空 → 取本次推导建议
+   * （即「接受建议」，`_inbox` 不作为可冻结模块）。
+   * **只写本地 `modules`**，父链模块不进文件（`inherits` 保持只读合并，F-A2）。
+   */
+  async freezeBookStructure(input: {
+    layer: string
+    book: string
+    modules?: string[]
+    confirmed_by?: string
+    note?: string
+  }): Promise<BookStructure> {
+    const ref = this.#requireBook(input.layer, input.book)
+    const dir = this.#bookDir(ref)
+    const entries = this.#bookEntries(ref)
+    if (entries.length === 0) {
+      throw new PrismError('bad_request', `书 ${describeRef(ref)} 没有任何条目，无法冻结结构`, {
+        layer: ref.layer,
+        book: ref.book,
+      })
+    }
+    const local = this.#readModulesFile(dir)
+    const row = this.#readStructureRow(ref)
+    const currentLocal = local?.modules ?? (row !== null ? parseStringArray(row.modules) : [])
+    const suggested = deriveSuggested(entries, this.#bookEdgePairs(entries))
+    const requested =
+      input.modules ?? (currentLocal.length > 0 ? currentLocal : suggested.map((s) => s.slug).filter((s) => s !== INBOX_DIR))
+    const modules = this.#validateModuleSlugs(requested)
+
+    const inherits = local?.inherits ?? []
+    const merged = this.#mergeInheritedModules(ref, inherits, [], [])
+    const allModules = dedupeStrings([...merged.modules, ...modules])
+    const revision = (local?.revision ?? row?.revision ?? 0) + 1
+    const nowIso = this.#now().toISOString()
+    const confirmedBy = input.confirmed_by ?? local?.confirmedBy ?? row?.confirmed_by ?? null
+
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(
+      join(dir, MODULES_FILE),
+      renderModulesFile({
+        layer: ref.layer,
+        book: ref.book,
+        revision,
+        frozenAt: nowIso,
+        confirmedBy,
+        inherits,
+        modules,
+      }),
+      'utf-8',
+    )
+    this.#writeSummaries(ref, dir, entries, suggested)
+
+    this.persistence.knowledge.raw
+      .prepare(
+        `INSERT INTO book_structures (layer, book, revision, modules, suggested, frozen_at, confirmed_by, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(layer, book) DO UPDATE SET
+           revision = excluded.revision, modules = excluded.modules, suggested = excluded.suggested,
+           frozen_at = excluded.frozen_at, confirmed_by = excluded.confirmed_by, updated_at = excluded.updated_at`,
+      )
+      .run(
+        ref.layer,
+        ref.book,
+        revision,
+        JSON.stringify(allModules),
+        JSON.stringify(suggested),
+        nowIso,
+        confirmedBy,
+        nowIso,
+      )
+
+    return {
+      layer: ref.layer,
+      book: ref.book,
+      revision,
+      modules: allModules,
+      suggested,
+      inherits,
+      inherited_from: merged.inheritedFrom,
+      frozen_at: nowIso,
+      confirmed_by: confirmedBy,
+      updated_at: nowIso,
+    }
+  }
+
+  // ===== 书结构私有实现 =====
+
+  /** 书结构定位（`layer` / 可选 `owner` / `book`）。 */
+  #bookDir(ref: BookRef): string {
+    const parts = [this.knowledgeDir, ref.layer]
+    if (ref.layer !== 'global') parts.push(ref.owner ?? '')
+    parts.push(ref.book)
+    return join(...parts)
+  }
+
+  /** 定位书（读路径）：解析不了（不存在/无条目且目录不存） → `null`。 */
+  #locateBook(layerRaw: string, bookRaw: string): BookRef | null {
+    const layer = this.#parseLayer(layerRaw)
+    const book = typeof bookRaw === 'string' ? bookRaw.trim() : ''
+    if (!isValidSegment(book)) {
+      throw new PrismError('bad_request', `非法 book 名: ${String(bookRaw)}`, { book: bookRaw })
+    }
+    if (layer === 'global') return { layer, book }
+    const owners = this.#bookOwners(layer, book)
+    if (owners.length === 0) return null
+    if (owners.length > 1) {
+      throw new PrismError(
+        'bad_request',
+        `${layer} 层同名书 ${book} 存在多个 owner（${owners.join('/')}），无法唯一定位`,
+        { layer, book, owners },
+      )
+    }
+    return { layer, owner: owners[0]!, book }
+  }
+
+  /** 定位书（写路径）：定位不了或书上什么都没有 → `bad_request`（不静默造空结构）。 */
+  #requireBook(layerRaw: string, bookRaw: string): BookRef {
+    const ref = this.#locateBook(layerRaw, bookRaw)
+    const exists =
+      ref !== null &&
+      (this.#readModulesFile(this.#bookDir(ref)) !== null ||
+        this.#readStructureRow(ref) !== null ||
+        this.#bookEntries(ref).length > 0)
+    if (ref === null || !exists) {
+      throw new PrismError(
+        'bad_request',
+        `书 ${String(layerRaw)}/${String(bookRaw)} 不存在（无条目、无结构文件）`,
+        { layer: layerRaw, book: bookRaw },
+      )
+    }
+    return ref
+  }
+
+  #parseLayer(value: string): Layer {
+    if (!LAYERS.includes(value as Layer)) {
+      throw new PrismError('bad_request', `非法层: ${String(value)}`, { layer: value })
+    }
+    return value as Layer
+  }
+
+  /**
+   * 书的 owner 候选：优先取条目表的 owner 列（老库 NULL 时按路径反解），
+   * 无条目时回落到磁盘上已存在的 `<layer>/<owner>/<book>` 目录。
+   */
+  #bookOwners(layer: Layer, book: string): string[] {
+    const rows = this.persistence.knowledge.raw
+      .prepare('SELECT owner, path FROM knowledge_entries WHERE layer = ? AND book = ?')
+      .all(layer, book) as Array<{ owner: string | null; path: string }>
+    const owners = new Set<string>()
+    for (const row of rows) {
+      const owner = row.owner ?? ownerFromPath(this.knowledgeDir, row.path)
+      if (owner !== undefined && owner !== '') owners.add(owner)
+    }
+    if (owners.size === 0) {
+      try {
+        for (const entry of readdirSync(join(this.knowledgeDir, layer), { withFileTypes: true })) {
+          if (!entry.isDirectory()) continue
+          if (existsSync(join(this.knowledgeDir, layer, entry.name, book))) owners.add(entry.name)
+        }
+      } catch {
+        // 层目录不存在 → 无候选
+      }
+    }
+    return [...owners].sort()
+  }
+
+  /** 书的条目（最新版、非软删；owner 与书一致；含 `_inbox`）。 */
+  #bookEntries(ref: BookRef): BookEntryLite[] {
+    const rows = this.persistence.knowledge.raw
+      .prepare(
+        `SELECT id, module, title, version, updated_at, owner, path FROM knowledge_entries
+         WHERE layer = ? AND book = ? AND is_latest = 1 AND status != 'deprecated'`,
+      )
+      .all(ref.layer, ref.book) as Array<{
+      id: string
+      module: string
+      title: string
+      version: number
+      updated_at: string
+      owner: string | null
+      path: string
+    }>
+    return rows
+      .filter((row) => (row.owner ?? ownerFromPath(this.knowledgeDir, row.path)) === ref.owner)
+      .map((row) => ({
+        id: row.id,
+        module: row.module === '' ? INBOX_DIR : row.module,
+        title: row.title,
+        version: row.version,
+        updated_at: row.updated_at,
+      }))
+  }
+
+  /** 同书内边对（两个端点都在这本书的最新版条目里）——`suggested` 的同模块邻接度用。 */
+  #bookEdgePairs(entries: BookEntryLite[]): Array<{ from: string; to: string }> {
+    if (entries.length === 0) return []
+    const ids = entries.map((e) => e.id)
+    const rows = this.persistence.knowledge.raw
+      .prepare(
+        `SELECT from_id, to_id FROM knowledge_edges
+         WHERE from_id IN (${ids.map(() => '?').join(', ')})
+           AND to_id IN (${ids.map(() => '?').join(', ')})`,
+      )
+      .all(...ids, ...ids) as Array<{ from_id: string; to_id: string }>
+    return rows.map((row) => ({ from: row.from_id, to: row.to_id }))
+  }
+
+  /** 读 `book_structures` 行。 */
+  #readStructureRow(ref: BookRef): BookStructureRow | null {
+    const row = this.persistence.knowledge.raw
+      .prepare(
+        `SELECT layer, book, revision, modules, suggested, frozen_at, confirmed_by, updated_at
+         FROM book_structures WHERE layer = ? AND book = ?`,
+      )
+      .get(ref.layer, ref.book) as BookStructureRow | undefined
+    return row ?? null
+  }
+
+  /** 读 `_modules.yaml`（不存在/解析不出 modules 数组 → null）。 */
+  #readModulesFile(dir: string): ModulesFileState | null {
+    const file = join(dir, MODULES_FILE)
+    if (!existsSync(file)) return null
+    let text: string
+    try {
+      text = readFileSync(file, 'utf-8')
+    } catch {
+      return null
+    }
+    const data = parseFrontmatter(text)
+    const modules = Array.isArray(data['modules'])
+      ? (data['modules'] as unknown[]).filter((m): m is string => typeof m === 'string')
+      : []
+    const inherits = Array.isArray(data['inherits'])
+      ? (data['inherits'] as unknown[]).filter((m): m is string => typeof m === 'string')
+      : []
+    return {
+      modules,
+      inherits,
+      revision: typeof data['revision'] === 'number' ? data['revision'] : 0,
+      frozenAt: typeof data['frozen_at'] === 'string' ? data['frozen_at'] : null,
+      confirmedBy: typeof data['confirmed_by'] === 'string' ? data['confirmed_by'] : null,
+    }
+  }
+
+  /**
+   * 递归合并 `inherits`（F-A2）：并集去重、**父在前**、本地同名项覆盖父项。
+   * 环 / 缺父 / 缺层 → `PrismError('book_inherit_invalid')`，消息含链路。
+   */
+  #mergeInheritedModules(
+    ref: BookRef,
+    inherits: string[],
+    chain: string[],
+    seen: string[],
+  ): { modules: string[]; inheritedFrom: string[] } {
+    const selfKey = describeRef(ref)
+    const nextChain = [...chain, selfKey]
+    const modules: string[] = []
+    const inheritedFrom: string[] = []
+    for (const raw of inherits) {
+      const parent = this.#parseInheritRef(raw)
+      const parentKey = describeRef(parent)
+      if (nextChain.includes(parentKey)) {
+        throw new PrismError(
+          'book_inherit_invalid',
+          `书结构继承存在环: ${[...nextChain, parentKey].join(' -> ')}`,
+          { chain: [...nextChain, parentKey], ref: selfKey },
+        )
+      }
+      if (seen.includes(parentKey)) continue
+      const parentStructure = this.#readStructure(parent, nextChain, true)
+      if (parentStructure === null) {
+        throw new PrismError(
+          'book_inherit_invalid',
+          `书结构继承缺父: ${selfKey} -> ${parentKey}`,
+          { chain: [...nextChain, parentKey], missing: parentKey, ref: selfKey },
+        )
+      }
+      seen.push(parentKey)
+      // `inherited_from` = **完整继承链**（根 → 叶）：先父书自己的祖先，再父书本尊。
+      for (const ancestor of parentStructure.inherited_from) {
+        if (!inheritedFrom.includes(ancestor)) inheritedFrom.push(ancestor)
+      }
+      if (!inheritedFrom.includes(parentKey)) inheritedFrom.push(parentKey)
+      for (const module of parentStructure.modules) {
+        if (!modules.includes(module)) modules.push(module)
+      }
+    }
+    return { modules, inheritedFrom }
+  }
+
+  /** 解析 `inherits` 项：`<layer>/<book>` 或 project/role 的 `<layer>/<owner>/<book>`。 */
+  #parseInheritRef(raw: string): BookRef {
+    const parts = String(raw).split('/').filter((p) => p !== '')
+    const invalid = (): never => {
+      throw new PrismError(
+        'book_inherit_invalid',
+        `非法继承引用（须 <layer>/<book> 或 <layer>/<owner>/<book>）: ${String(raw)}`,
+        { ref: raw },
+      )
+    }
+    if (parts.length !== 2 && parts.length !== 3) return invalid()
+    const layer = parts[0]!
+    if (!LAYERS.includes(layer as Layer)) return invalid()
+    if (parts.length === 2) {
+      const book = parts[1]!
+      if (!isValidSegment(book)) return invalid()
+      if (layer === 'global') return { layer: 'global', book }
+      const owners = this.#bookOwners(layer as Layer, book)
+      if (owners.length !== 1) {
+        throw new PrismError(
+          'book_inherit_invalid',
+          `继承引用 ${String(raw)} 无法唯一定位（${layer} 层需 <layer>/<owner>/<book>${
+            owners.length > 1 ? `；候选 owner: ${owners.join('/')}` : ''
+          }）`,
+          { ref: raw, owners },
+        )
+      }
+      return { layer: layer as Layer, owner: owners[0]!, book }
+    }
+    const owner = parts[1]!
+    const book = parts[2]!
+    if (!isValidSegment(owner) || !isValidSegment(book)) return invalid()
+    if (layer === 'global') return invalid()
+    return { layer: layer as Layer, owner, book }
+  }
+
+  /**
+   * 读单本书结构（同步；`asParent` 决定「存在」的判定口径）。
+   * - 自身读（`asParent=false`）：文件或表行存在才算「有结构」，否则 `null`；
+   * - 父书读（`asParent=true`）：有条目也算存在（只是没有冻结清单，贡献空清单）。
+   */
+  #readStructure(ref: BookRef, chain: string[], asParent: boolean): BookStructure | null {
+    const dir = this.#bookDir(ref)
+    const file = this.#readModulesFile(dir)
+    const row = this.#readStructureRow(ref)
+    const entries = this.#bookEntries(ref)
+    if (file === null && row === null && (!asParent || entries.length === 0)) return null
+
+    const inherits = file?.inherits ?? []
+    const merged = this.#mergeInheritedModules(ref, inherits, chain, [])
+    const localModules = file?.modules ?? (row !== null ? parseStringArray(row.modules) : [])
+    const suggested: SuggestedModule[] = row !== null ? parseSuggested(row.suggested) : []
+    return {
+      layer: ref.layer,
+      book: ref.book,
+      revision: file?.revision ?? row?.revision ?? 0,
+      modules: dedupeStrings([...merged.modules, ...localModules]),
+      suggested,
+      inherits,
+      inherited_from: merged.inheritedFrom,
+      frozen_at: file?.frozenAt ?? row?.frozen_at ?? null,
+      confirmed_by: file?.confirmedBy ?? row?.confirmed_by ?? null,
+      updated_at: row?.updated_at ?? this.#now().toISOString(),
+    }
+  }
+
+  /** 校验模块 slug 清单（F-A1：`[a-z0-9-]+`；保留名 `_inbox` 不可冻结）。 */
+  #validateModuleSlugs(modules: string[]): string[] {
+    if (modules.length === 0) {
+      throw new PrismError('bad_request', '模块清单为空：请显式传 modules 或先为该书落条目', {
+        modules,
+      })
+    }
+    const out: string[] = []
+    for (const module of modules) {
+      const slug = String(module).trim()
+      if (slug === INBOX_DIR) {
+        throw new PrismError('bad_request', `保留名 ${INBOX_DIR} 不可冻结为模块`, { module: slug })
+      }
+      if (!MODULE_SLUG_RE.test(slug)) {
+        throw new PrismError('bad_request', `非法模块 slug: ${slug}（须匹配 ${MODULE_SLUG_RE.source}）`, {
+          module: slug,
+        })
+      }
+      if (!out.includes(slug)) out.push(slug)
+    }
+    return out
+  }
+
+  /** 写书级 + 各非空模块级 `_summary.md`；返回写下的文件清单（顺序确定）。 */
+  #writeSummaries(
+    ref: BookRef,
+    dir: string,
+    entries: BookEntryLite[],
+    suggested: SuggestedModule[],
+  ): string[] {
+    const files: string[] = []
+    const bookFile = join(dir, SUMMARY_FILE)
+    writeFileSync(bookFile, renderBookSummary(ref, entries, suggested), 'utf-8')
+    files.push(bookFile)
+    for (const module of suggested) {
+      const moduleDir = join(dir, module.slug === INBOX_DIR ? INBOX_DIR : module.slug)
+      mkdirSync(moduleDir, { recursive: true })
+      const moduleFile = join(moduleDir, SUMMARY_FILE)
+      writeFileSync(
+        moduleFile,
+        renderModuleSummary(ref, module.slug, entries.filter((e) => e.module === module.slug)),
+        'utf-8',
+      )
+      files.push(moduleFile)
+    }
+    return files
+  }
+
+  /**
+   * 列出版次（F-B4）：某 id 的全部版次，**降序**（version DESC）+ `is_latest`。
+   * 数据早已齐全（`knowledge_entries` 按 `(id, version)` 存全部版次），本方法只补查询面。
+   * 不存在的 id → 空数组（不报错，与 `get` 的 null 语义区分）。
+   */
+  async listVersions(id: string): Promise<EntryVersion[]> {
+    const rows = this.persistence.knowledge.raw
+      .prepare(
+        `SELECT id, version, status, title, is_latest, path, updated_at FROM knowledge_entries
+         WHERE id = ? ORDER BY version DESC`,
+      )
+      .all(id) as Array<{
+      id: string
+      version: number
+      status: string
+      title: string
+      is_latest: number
+      path: string
+      updated_at: string
+    }>
+    return rows.map((row) => ({
+      id: row.id,
+      version: row.version,
+      status: row.status as EntryStatus,
+      title: row.title,
+      is_latest: row.is_latest === 1,
+      updated_at: row.updated_at,
+      // 该版次的内容文件路径：自有型 = Prism 版次文件（v<NN>.md）；引用型 = 项目原件。
+      source_path: row.path ?? null,
+    }))
   }
 
   // ===== remove（B1：软删优先，被引用禁硬删） =====
@@ -906,8 +1556,9 @@ export class PrismKnowledgeService implements KnowledgeService {
         const insert = raw.prepare(
           `INSERT INTO knowledge_entries
            (id, version, is_latest, title, type, layer, owner, book, module, status, risk, confidence,
-            freshness, visibility, tags, path, content_hash, origin, overrides, supersedes, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'owned', ?, ?, ?, ?)`,
+            freshness, visibility, tags, path, content_hash, origin, overrides, supersedes,
+            source, deposited_by, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'owned', ?, ?, ?, ?, ?, ?)`,
         )
         for (const r of parsedRows) {
           const isLatest = latestByid.get(r.id) === r.version
@@ -934,6 +1585,9 @@ export class PrismKnowledgeService implements KnowledgeService {
             r.contentHash,
             JSON.stringify(r.overrides),
             supersedes,
+            // F-E2：两列随文件重建（frontmatter 里没有 → NULL）
+            r.source,
+            r.depositedBy,
             r.createdAt,
             r.updatedAt,
           )
@@ -1031,6 +1685,7 @@ export class PrismKnowledgeService implements KnowledgeService {
       ? (data['overrides'] as unknown[]).filter((t): t is string => typeof t === 'string')
       : []
     const nowIso = this.#now().toISOString()
+    const sourceValue = data['source']
     return {
       ok: true,
       row: {
@@ -1042,13 +1697,21 @@ export class PrismKnowledgeService implements KnowledgeService {
         owner,
         book,
         module: moduleRaw ?? '',
-        status: str('status') === 'deprecated' ? 'deprecated' : 'active',
+        // F-A4：4 值全量往返；越界 → warning + 回落 active（不静默压平 candidate）。
+        status: parseEntryStatus(str('status'), file),
         risk: str('risk') ?? 'low',
         confidence: typeof data['confidence'] === 'number' ? data['confidence'] : 0.5,
         freshness: typeof data['freshness'] === 'number' ? data['freshness'] : 1.0,
         visibility: str('visibility') ?? layer,
         tags,
         overrides,
+        // F-E2：`source`/`deposited_by` 两列（v7）随文件带回——否则自有型 reindex
+        //（以文件为真相）后 DB 两列恒空。
+        source:
+          typeof sourceValue === 'string' && sourceValue.trim() !== ''
+            ? JSON.stringify({ kind: sourceValue.trim() })
+            : serializeObjectColumn(sourceValue),
+        depositedBy: serializeObjectColumn(data['deposited_by']),
         contentHash: createHash('sha256').update(body, 'utf-8').digest('hex'),
         body,
         path: file,
@@ -1069,6 +1732,16 @@ export class PrismKnowledgeService implements KnowledgeService {
       throw new PrismError('bad_request', '检索词无有效词元')
     }
     const limit = Math.max(1, Math.floor(query.limit ?? 10))
+    // F-B3：候选池与融合参数化（缺省 = 既有模块常量，行为逐字节一致）。
+    const hybridCandidates = positiveIntParam(
+      query.hybrid_candidates,
+      HYBRID_CANDIDATES,
+      'hybrid_candidates',
+    )
+    const rrfK = numberParam(query.rrf_k, RRF_K, 'rrf_k', 0)
+    const vectorFloor = numberParam(query.vector_floor, VECTOR_FLOOR, 'vector_floor', 0)
+    const vectorRelative = numberParam(query.vector_relative, VECTOR_RELATIVE, 'vector_relative', 0)
+    const routeWeights = normalizeRouteWeights(query.route_weights)
 
     // owner 只存在于 project/role 层；未指定 layers 时默认限定这两层
     let layers = this.#validateLayers(query.layers)
@@ -1117,10 +1790,31 @@ export class PrismKnowledgeService implements KnowledgeService {
       const qVec = await this.#embed(query.q)
       if (qVec !== null && qVec.length > 0) {
         // 向量召回全量扫描（见 #vectorHits 注释：SQL LIMIT 会任意截断丢失相关条目）
-        const pool = Math.max(limit, HYBRID_CANDIDATES)
-        const vectorRowids = await this.#vectorHits(raw, clauses, params, qVec, pool)
+        const pool = Math.max(limit, hybridCandidates)
+        const vectorRowids = await this.#vectorHits(
+          raw,
+          clauses,
+          params,
+          qVec,
+          pool,
+          vectorFloor,
+          vectorRelative,
+        )
         if (vectorRowids.length > 0) {
-          return this.#hybridResults(raw, { match, clauses, params, limit, q: query.q, vectorRowids })
+          return this.#applyOverridesBoost(
+            this.#hybridResults(raw, {
+              match,
+              clauses,
+              params,
+              limit,
+              q: query.q,
+              vectorRowids,
+              candidates: hybridCandidates,
+              rrfK,
+              routeWeights,
+            }),
+            query.graph_boost,
+          )
         }
       }
     }
@@ -1138,7 +1832,7 @@ export class PrismKnowledgeService implements KnowledgeService {
       const row = byRowid.get(hit.rowid)
       if (row) results.push(this.#toSearchResult(raw, row, hit.score, query.q))
     }
-    return results
+    return this.#applyOverridesBoost(results, query.graph_boost)
   }
 
   /**
@@ -1155,15 +1849,25 @@ export class PrismKnowledgeService implements KnowledgeService {
       limit: number
       q: string
       vectorRowids: number[]
+      /** 每路候选数上限（F-B3；缺省 = HYBRID_CANDIDATES） */
+      candidates?: number
+      /** RRF 常数 k（F-B3；缺省 = RRF_K） */
+      rrfK?: number
+      /** 分路权重 [关键词, 向量]（F-B3；缺省 1:1） */
+      routeWeights?: readonly number[]
     },
   ): SearchResult[] {
     const bm25Hits = searchFts(raw, {
       match: input.match,
       where: input.clauses.join(' AND '),
       params: input.params,
-      limit: HYBRID_CANDIDATES,
+      limit: input.candidates ?? HYBRID_CANDIDATES,
     })
-    const fused = rrfFuse([bm25Hits.map((h) => h.rowid), input.vectorRowids])
+    const fused = rrfFuse(
+      [bm25Hits.map((h) => h.rowid), input.vectorRowids],
+      input.rrfK ?? RRF_K,
+      input.routeWeights,
+    )
     if (fused.size === 0) return []
     const ranked = [...fused.entries()].sort((a, b) => b[1] - a[1]).slice(0, input.limit)
     const ids = ranked.map(([rowid]) => rowid)
@@ -1177,6 +1881,48 @@ export class PrismKnowledgeService implements KnowledgeService {
       if (row) results.push(this.#toSearchResult(raw, row, score, input.q))
     }
     return results
+  }
+
+  /**
+   * `overrides` 运行时生效（F-A3）——**仅在调用方显式传 `graph_boost: true` 时**。
+   *
+   * 读 `knowledge_edges` 的 `overrides` 边（`from` 显式覆盖 `to`，写入点见 `#writeEdges`），
+   * 对**被覆盖**的条目在同相关性下**降权**（`score × 0.5`）并返回
+   * `overridden_by: <覆盖者 id>@v<版次>`；**不删除、不过滤**（预算友好 + 可解释）。
+   *
+   * 未传 `graph_boost`（缺省）→ **原样返回同一数组**，与改动前逐字节一致
+   * （保护既有检索行为；裁决 A3 明确不做边表邻近度）。
+   */
+  #applyOverridesBoost(results: SearchResult[], graphBoost?: boolean): SearchResult[] {
+    if (graphBoost !== true || results.length === 0) return results
+    const raw = this.persistence.knowledge.raw
+    const ids = results.map((r) => r.id)
+    // 覆盖者必须仍是最新版且未软删——已被软删/取代的覆盖声明不应再生效。
+    const rows = raw
+      .prepare(
+        `SELECT e.to_id AS to_id, e.from_id AS from_id, src.version AS from_version
+         FROM knowledge_edges e
+         JOIN knowledge_entries src ON src.id = e.from_id AND src.is_latest = 1
+         WHERE e.relation = 'overrides' AND e.to_id IN (${ids.map(() => '?').join(', ')})
+           AND src.status != 'deprecated'
+         ORDER BY e.from_id`,
+      )
+      .all(...ids) as Array<{ to_id: string; from_id: string; from_version: number }>
+    if (rows.length === 0) return results
+    const coveredBy = new Map<string, string>()
+    for (const row of rows) {
+      // 多条覆盖声明时取 id 升序的第一条（确定性）
+      if (!coveredBy.has(row.to_id)) {
+        coveredBy.set(row.to_id, `${row.from_id}@v${row.from_version}`)
+      }
+    }
+    const boosted = results.map((result) => {
+      const overriddenBy = coveredBy.get(result.id)
+      if (overriddenBy === undefined) return result
+      return { ...result, score: result.score * 0.5, overridden_by: overriddenBy }
+    })
+    // 降权后重排（被覆盖条目在同相关性下靠后）；sort 稳定 → 同分保持原相对序。
+    return boosted.sort((a, b) => b.score - a.score)
   }
 
   // ===== get =====
@@ -1836,6 +2582,11 @@ export class PrismKnowledgeService implements KnowledgeService {
     }
     if (row.source_hash !== null && row.source_hash !== undefined) entry.source_hash = row.source_hash
     if (owner !== undefined) entry.owner = owner
+    // F-B1：DB `freshness` 列读出（此前只落库、从不读出）。
+    if (typeof row.freshness === 'number') entry.freshness = row.freshness
+    // F-E2：`deposited_by` 列（v7）读出；老库 NULL → 不设该字段（向后兼容）。
+    const depositedBy = parseJsonObject<NonNullable<KnowledgeEntry['deposited_by']>>(row.deposited_by)
+    if (depositedBy !== undefined) entry.deposited_by = depositedBy
     if (row.status === 'superseded') {
       entry.superseded_by = `${row.id}@v${row.version + 1}`
     }
@@ -1860,6 +2611,8 @@ export class PrismKnowledgeService implements KnowledgeService {
       row.module === '' ? INBOX_DIR : row.module,
       `${row.id}@v${row.version}`,
     ].join('/')
+    // F-E2：`deposited_by` 列（v7）读出；老库 NULL → 不设该字段（向后兼容）。
+    const depositedBy = parseJsonObject<NonNullable<SearchResult['deposited_by']>>(row.deposited_by)
     return {
       id: row.id,
       version: row.version,
@@ -1872,6 +2625,9 @@ export class PrismKnowledgeService implements KnowledgeService {
       excerpt: computeExcerpt(content, query),
       score,
       source,
+      // F-B1：新鲜度（DB 列读出，供 context-pack 排序；缺省视为 1.0）。
+      ...(typeof row.freshness === 'number' ? { freshness: row.freshness } : {}),
+      ...(depositedBy !== undefined ? { deposited_by: depositedBy } : {}),
     }
   }
 
@@ -1931,6 +2687,8 @@ export class PrismKnowledgeService implements KnowledgeService {
     params: string[],
     qVec: Float32Array,
     limit: number,
+    floorValue: number = VECTOR_FLOOR,
+    relative: number = VECTOR_RELATIVE,
   ): Promise<number[]> {
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : ''
     // 只取「当前版次、且由当前模型产出」的向量：换档/换模型后旧向量必须失效
@@ -1958,7 +2716,7 @@ export class PrismKnowledgeService implements KnowledgeService {
     if (scored.length === 0) return []
     scored.sort((a, b) => b.cos - a.cos)
     const top = scored[0]!.cos
-    const floor = Math.max(VECTOR_FLOOR, top * VECTOR_RELATIVE)
+    const floor = Math.max(floorValue, top * relative)
     return scored
       .filter((s) => s.cos >= floor)
       .slice(0, limit)
@@ -2001,6 +2759,287 @@ function parseStringArray(json: string): string[] {
   } catch {
     return []
   }
+}
+
+// ===== 书结构（F-A1/F-A2）的纯函数 =====
+
+/** 书地址的规范文本（`layer[/owner]/book`）——继承环/缺父的错误消息与链路口径。 */
+function describeRef(ref: BookRef): string {
+  return [ref.layer, ...(ref.owner !== undefined ? [ref.owner] : []), ref.book].join('/')
+}
+
+/** 稳定字符串比较（不依赖 locale，保证生成文件逐字节确定）。 */
+function compareStrings(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0
+}
+
+/** 并集去重（保序：先出现的保留在前 —— 继承「父在前、本地覆盖同名项」靠它落实）。 */
+function dedupeStrings(values: string[]): string[] {
+  const out: string[] = []
+  for (const value of values) if (!out.includes(value)) out.push(value)
+  return out
+}
+
+/**
+ * 零 LLM 推导模块建议（F-A1）：模块 + 条目数；同条目数时按**同模块邻接度**
+ * （两个端点都在本模块内的边数）降序，再按 slug 升序；`_inbox`（未归类）恒排最后
+ * ——与 `tree()` 的既有约定一致。全程确定性。含 `_inbox`（口径与 `tree()` 对齐）。
+ */
+function deriveSuggested(
+  entries: BookEntryLite[],
+  edges: Array<{ from: string; to: string }>,
+): SuggestedModule[] {
+  const counts = new Map<string, number>()
+  const moduleOf = new Map<string, string>()
+  for (const entry of entries) {
+    counts.set(entry.module, (counts.get(entry.module) ?? 0) + 1)
+    moduleOf.set(entry.id, entry.module)
+  }
+  const adjacency = new Map<string, number>()
+  for (const edge of edges) {
+    const from = moduleOf.get(edge.from)
+    const to = moduleOf.get(edge.to)
+    if (from === undefined || to === undefined || from !== to) continue
+    adjacency.set(from, (adjacency.get(from) ?? 0) + 1)
+  }
+  return [...counts.entries()]
+    .map(([slug, count]) => ({ slug, entries: count }))
+    .sort(
+      (a, b) =>
+        b.entries - a.entries ||
+        (adjacency.get(b.slug) ?? 0) - (adjacency.get(a.slug) ?? 0) ||
+        inboxRank(a.slug) - inboxRank(b.slug) ||
+        compareStrings(a.slug, b.slug),
+    )
+}
+
+/** `_inbox` 排序权重（未归类恒最后，对齐 `tree()`）。 */
+function inboxRank(slug: string): number {
+  return slug === INBOX_DIR ? 1 : 0
+}
+
+/** 解析 `book_structures.suggested` 列（`{slug, entries}[]`）；损坏数据 → 空。 */
+function parseSuggested(json: string): SuggestedModule[] {
+  try {
+    const value: unknown = JSON.parse(json)
+    if (!Array.isArray(value)) return []
+    return value
+      .filter(
+        (item): item is { slug: string; entries: number } =>
+          typeof item === 'object' &&
+          item !== null &&
+          typeof (item as { slug?: unknown }).slug === 'string' &&
+          typeof (item as { entries?: unknown }).entries === 'number',
+      )
+      .map((item) => ({ slug: item.slug, entries: item.entries }))
+  } catch {
+    return []
+  }
+}
+
+/** YAML 标量（安全集不加引号；其余走 JSON 双引号，可被 `parseFrontmatter` 读回）。 */
+function yamlScalar(value: string): string {
+  if (value !== '' && PLAIN_YAML_RE.test(value) && Number.isNaN(Number(value))) return value
+  return JSON.stringify(value)
+}
+
+/** YAML 行内数组（`[a, b]`；空数组 `[]`）。 */
+function yamlList(values: string[]): string {
+  return `[${values.map(yamlScalar).join(', ')}]`
+}
+
+/**
+ * 渲染 `_modules.yaml`（**幂等**：同输入同字节——不含任何时钟字段，
+ * 时间只进 `book_structures.updated_at`）。
+ */
+function renderModulesFile(input: {
+  layer: string
+  book: string
+  revision: number
+  frozenAt: string | null
+  confirmedBy: string | null
+  inherits: string[]
+  modules: string[]
+}): string {
+  return (
+    [
+      '# generated: true —— 由 Prism 书结构工具生成（F-A1，零 LLM）；请勿手工编辑。',
+      '# modules = 本地冻结清单（freeze 写入，revision+1）；inherits = 只读继承的父书（并集去重、父在前、本地覆盖）。',
+      `layer: ${yamlScalar(input.layer)}`,
+      `book: ${yamlScalar(input.book)}`,
+      'generated: true',
+      `revision: ${input.revision}`,
+      `frozen_at: ${input.frozenAt === null ? 'null' : yamlScalar(input.frozenAt)}`,
+      `confirmed_by: ${input.confirmedBy === null ? 'null' : yamlScalar(input.confirmedBy)}`,
+      `inherits: ${yamlList(input.inherits)}`,
+      `modules: ${yamlList(input.modules)}`,
+      '',
+    ].join('\n')
+  )
+}
+
+/** 表格单元格转义（标题可能含 `|`）。 */
+function cell(text: string): string {
+  return text.replace(/\|/g, '\\|')
+}
+
+/** 条目集里最大的 `updated_at`（空集 → `—`）。 */
+function latestUpdated(entries: BookEntryLite[]): string {
+  let latest = ''
+  for (const entry of entries) if (entry.updated_at > latest) latest = entry.updated_at
+  return latest === '' ? '—' : latest
+}
+
+/** 书级 `_summary.md`：层 + 模块清单（含条目数）+ 条目总数 + 最近更新。 */
+function renderBookSummary(
+  ref: BookRef,
+  entries: BookEntryLite[],
+  suggested: SuggestedModule[],
+): string {
+  return (
+    [
+      `# ${cell(ref.book)} 书总纲`,
+      '',
+      '> generated: true —— 由 `prism kb structure generate` 生成（F-A1，零 LLM）；请勿手工编辑。',
+      `> 层：${describeRef(ref)} ｜ 条目：${entries.length} ｜ 模块：${suggested.length} ｜ 最近更新：${latestUpdated(entries)}`,
+      '',
+      '## 模块清单',
+      '',
+      '| 模块 | 条目数 |',
+      '| :--- | ---: |',
+      ...suggested.map((module) => `| ${cell(module.slug)} | ${module.entries} |`),
+      '',
+      '## 说明',
+      '',
+      '- 模块清单是**推导建议**（按条目数降序）；冻结请执行 `prism kb structure freeze`（写 `_modules.yaml`）。',
+      '- 本文件是派生产物：不进条目表、不进检索。',
+      '',
+    ].join('\n')
+  )
+}
+
+/** 模块级 `_summary.md`：该模块条目清单（按 id 升序）+ 最近更新。 */
+function renderModuleSummary(ref: BookRef, slug: string, entries: BookEntryLite[]): string {
+  const sorted = [...entries].sort((a, b) => compareStrings(a.id, b.id))
+  return (
+    [
+      `# ${cell(slug)} 模块总纲`,
+      '',
+      '> generated: true —— 由 `prism kb structure generate` 生成（F-A1，零 LLM）；请勿手工编辑。',
+      `> 书：${describeRef(ref)} ｜ 模块：${cell(slug)} ｜ 条目：${entries.length} ｜ 最近更新：${latestUpdated(entries)}`,
+      '',
+      '## 条目',
+      '',
+      '| 条目 | 版次 | 标题 | 最近更新 |',
+      '| :--- | ---: | :--- | :--- |',
+      ...sorted.map(
+        (entry) => `| \`${cell(entry.id)}\` | ${entry.version} | ${cell(entry.title)} | ${entry.updated_at} |`,
+      ),
+      '',
+    ].join('\n')
+  )
+}
+
+/**
+ * 解析 DB 中的 JSON **对象**列（v7 的 `source`/`deposited_by`，F-E2）。
+ * 空值（老库 NULL）与损坏数据一律返回 `undefined`（读侧当「无留痕」）。
+ */
+function parseJsonObject<T extends object>(json: string | null | undefined): T | undefined {
+  if (json === null || json === undefined || json === '') return undefined
+  try {
+    const value: unknown = JSON.parse(json)
+    return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as T) : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * v7 `source` 列的载荷形状（F-E2，§3.2）：`{kind, ref?, origin_task?}`。
+ * 用 `type` 别名（而非 interface）以便赋给 frontmatter 的值类型（隐式索引签名）。
+ */
+type DepositSourcePayload = {
+  kind?: 'import' | 'agent' | 'manual' | 'task'
+  ref?: string
+  origin_task?: { task_id: string; dag_id?: string; stage?: string; role?: string }
+}
+
+/**
+ * 构造 `source` 载荷：`{...input.source, origin_task?}`（§3.2）。
+ * 两者都未提供 → `undefined`（两列写 NULL，与「老行为 NULL」一致，读侧得 `undefined`）。
+ */
+function buildSourcePayload(input: DepositInput): DepositSourcePayload | undefined {
+  if (input.source === undefined && input.origin_task === undefined) return undefined
+  const payload: DepositSourcePayload = {}
+  if (input.source !== undefined) {
+    payload.kind = input.source.kind
+    if (input.source.ref !== undefined) payload.ref = input.source.ref
+  }
+  if (input.origin_task !== undefined) payload.origin_task = { ...input.origin_task }
+  return payload
+}
+
+/**
+ * 可选数值参数（F-B3）：缺省回落既有模块常量（**行为逐字节不变**）；
+ * 显式传入但非法（非有限数 / 小于下限）→ `bad_request`（不静默吞掉错误参数，
+ * 否则会在 SQL `LIMIT ?` 处抛出更难定位的错）。
+ */
+function numberParam(
+  value: number | undefined,
+  fallback: number,
+  name: string,
+  min: number,
+): number {
+  if (value === undefined) return fallback
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < min) {
+    throw new PrismError('bad_request', `${name} 必须是不小于 ${min} 的有限数`, { [name]: value })
+  }
+  return value
+}
+
+/** 同上，取正整数（候选池等需要 `LIMIT` 的参数）。 */
+function positiveIntParam(
+  value: number | undefined,
+  fallback: number,
+  name: string,
+): number {
+  if (value === undefined) return fallback
+  return Math.max(1, Math.floor(numberParam(value, fallback, name, 1)))
+}
+
+/** 分路权重归一（F-B3）：缺省 `undefined`（= 每路 1，与既有 2 参调用一致）。 */
+function normalizeRouteWeights(
+  weights: { keyword?: number; vector?: number } | undefined,
+): readonly number[] | undefined {
+  if (weights === undefined) return undefined
+  const keyword = numberParam(weights.keyword, 1, 'route_weights.keyword', 0)
+  const vector = numberParam(weights.vector, 1, 'route_weights.vector', 0)
+  return [keyword, vector]
+}
+
+/**
+ * 解析版次文件 frontmatter 的 `status`（F-A4）。
+ *
+ * `EntryStatus` 4 值全量往返（`candidate` 不再被压平成 `active`，违反「文件为真相」R7）；
+ * 4 值之外**不静默**：`console.warn` 一条并回落 `active`（保持既有容错行为）。
+ */
+export function parseEntryStatus(value: string | undefined, file: string): EntryStatus {
+  if (value === undefined) return 'active'
+  if ((ENTRY_STATUSES as readonly string[]).includes(value)) return value as EntryStatus
+  console.warn(
+    `[prism/knowledge] 未知 status ${JSON.stringify(value)}（${file}）→ 回落 active；合法值: ${ENTRY_STATUSES.join('/')}`,
+  )
+  return 'active'
+}
+
+/**
+ * frontmatter 的嵌套对象（`source`/`deposited_by`）→ DB 文本列（F-E2）。
+ * 非对象或空对象 → `null`（读侧得 `undefined`，等价「无留痕」）。
+ */
+function serializeObjectColumn(value: FrontmatterValue | undefined): string | null {
+  if (value === null || value === undefined) return null
+  if (typeof value !== 'object' || Array.isArray(value)) return null
+  return Object.keys(value).length === 0 ? null : JSON.stringify(value)
 }
 
 /** 从原文截取摘要：命中查询词的窗口，未命中取开头。 */
