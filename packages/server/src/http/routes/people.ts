@@ -37,6 +37,7 @@ export function peopleRoutes(deps: PeopleDeps): {
   team: (ctx: RouteContext) => Promise<Envelope>
   teamActivate: (ctx: RouteContext) => Promise<Envelope>
   skills: (ctx: RouteContext) => Promise<Envelope>
+  skillUsage: (ctx: RouteContext) => Promise<Envelope>
 } {
   const dirs = resolveDirsFromHome(deps.home, { zcodeDir: deps.zcodeDir, zcodeDirExplicit: true })
   const rolesDir = dirs.rolesDir
@@ -73,5 +74,46 @@ export function peopleRoutes(deps: PeopleDeps): {
 
   const skills = async (): Promise<Envelope> => ok(listBuiltinSkills())
 
-  return { roles, role, teams, team, teamActivate, skills }
+  /**
+   * 技能使用视图（team-definition.md §6.3 合并公式）：
+   * 每个技能 → 谁在用它（角色白名单 / 团队声明）+ 是否已装。
+   *
+   * 设计裁决：Skill 本身不分层、不遮蔽；「层」只体现在**谁指定了它**。
+   * 这里把三份数据（内置清单、角色 skills、团队 skills、宿主已装）合成一张视图。
+   */
+  const skillUsage = async (): Promise<Envelope> => {
+    const [roleList, teamList, installed] = await Promise.all([
+      loadRoles(rolesDir),
+      loadTeams(teamsDir),
+      knownSkills(),
+    ])
+    const usage = new Map<string, { name: string; builtin: boolean; installed: boolean; roles: string[]; teams: string[] }>()
+    const ensure = (name: string) => {
+      let entry = usage.get(name)
+      if (entry === undefined) {
+        entry = { name, builtin: false, installed: false, roles: [], teams: [] }
+        usage.set(name, entry)
+      }
+      return entry
+    }
+    for (const skill of listBuiltinSkills()) {
+      ensure(skill.name).builtin = true
+    }
+    for (const name of installed ?? []) {
+      ensure(name).installed = true
+    }
+    for (const role of roleList) {
+      for (const name of role.skills ?? []) {
+        ensure(name).roles.push(role.name)
+      }
+    }
+    for (const team of teamList) {
+      for (const name of team.skills ?? []) {
+        ensure(name).teams.push(team.team_id)
+      }
+    }
+    return ok([...usage.values()].sort((a, b) => a.name.localeCompare(b.name)))
+  }
+
+  return { roles, role, teams, team, teamActivate, skills, skillUsage }
 }

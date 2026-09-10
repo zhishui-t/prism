@@ -101,13 +101,13 @@ prism serve --port 7777            # 起 HTTP 服务 + 控制台
 - **不编边**：图谱没有的关系不要推断；\`confidence\` 字段（EXTRACTED/INFERRED）照实呈现；
 - **不读全图**：用查询拿子图（\`limit\`/\`depth\` 有界），避免把整张图塞进上下文。
 
-## 5. 工具速查（28 个 MCP 工具）
+## 5. 工具速查（29 个 MCP 工具）
 
 | 分组 | 工具 |
 | :--- | :--- |
 | 知识库（11） | \`prism_kb_search\` \`prism_kb_get\` \`prism_kb_deposit\` \`prism_kb_graph\` \`prism_kb_tree\` \`prism_kb_stats\` \`prism_kb_catalog\` \`prism_kb_path\` \`prism_kb_remove\` \`prism_kb_conflicts\` \`prism_kb_resolve_conflict\` |
 | 代码图谱（7） | \`prism_graph_query\` \`prism_graph_path\` \`prism_graph_explain\` \`prism_graph_affected\` \`prism_graph_god_nodes\` \`prism_graph_summary\` \`prism_graph_status\` |
-| 角色团队（4） | \`prism_role_list\` \`prism_role_render\` \`prism_team_get\` \`prism_team_activate\` |
+| 角色团队（5） | \`prism_role_list\` \`prism_role_get\` \`prism_role_render\` \`prism_team_get\` \`prism_team_activate\` |
 | 工作队列（3） | \`prism_work_pending\` \`prism_work_claim\` \`prism_work_complete\` |
 | 任务台账（3） | \`prism_task_register\` \`prism_task_report\` \`prism_task_status\` |
 
@@ -470,7 +470,7 @@ pnpm run package      # → dist/prism-<version>.tgz（解压即用，无需 pnp
 export const prismSkill: PrismSkill = {
   name: 'prism',
   description:
-    '使用 Prism 平台能力时触发：检索/沉淀知识（kb）、查询知识图谱与代码图谱（graph）、渲染架构图（arch）、启用团队与派发角色（team/role）、领取 LLM 待办（work）、登记与回报任务（task）。或用户提到 prism、PRISM_HOME、知识库、落库、代码图谱、影响面、架构图、启用团队、任务台账时使用。',
+    '使用 Prism 平台能力时触发：检索/沉淀知识（kb）、查询知识图谱与代码图谱（graph）、渲染架构图（arch）、启用团队与派发角色（team/role）、领取 LLM 待办（work）、登记与回报任务（task）。或用户提到 prism、PRISM_HOME、知识库、落库、代码图谱、影响面、架构图、启用团队、任务台账时使用。注意：纯代码结构问答优先 graphify；本 Skill 负责 Prism 服务接入与资产消费。',
   content: PRISM_SKILL_CONTENT,
   assets: PRISM_SKILL_ASSETS,
   builtin: true,

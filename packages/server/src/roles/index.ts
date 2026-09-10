@@ -47,6 +47,9 @@ export {
   migrateTeams,
   // 启用（P8：dispatch 仅由 installed 推导）
   activateTeam,
+  // 团队沉淀策略机械执行（team-definition.md §5）
+  applyDepositPolicy,
+  priorityScore,
   // frontmatter / 标记
   splitFrontmatter,
   parseFrontmatter,

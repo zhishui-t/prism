@@ -371,6 +371,29 @@ async function main() {
       Array.isArray(histList[0]?.missing) && Array.isArray(histList[0]?.unreadable),
     )
 
+    // ===== 14. 角色/团队/技能：技能使用视图 + skill 子命令 =====
+    const usage = await cli(['--json', 'skill', 'list'], env) // 保底：命令可用
+    check('14.1 skill list 可用', usage.code === 0)
+
+    const skillValidate = await cli(['skill', 'validate', '--json'], env)
+    const validateResult = JSON.parse(skillValidate.stdout)
+    check(
+      '14.2 skill validate 内置 Skill 无错误',
+      skillValidate.code === 0 && validateResult.ok === true,
+      `n=${validateResult.value?.length ?? 0}`,
+    )
+
+    const roleGet = await cli(['role', 'show', 'dev-1', '--json'], env)
+    check('14.3 role show 返回单个角色定义', roleGet.code === 0 && JSON.parse(roleGet.stdout).value.name === 'dev-1')
+
+    // 技能使用视图（HTTP）
+    const usageRes = await fetchJson(`${base}/api/skills/usage`)
+    check(
+      '14.4 /api/skills/usage 返回合并视图',
+      usageRes.status === 200 && Array.isArray(usageRes.body.value),
+      `n=${usageRes.body.value?.length ?? 0}`,
+    )
+
     // ===== 9. 真实宿主零污染 =====
     const realAfter = await listDir(REAL_ZCODE)
     check(

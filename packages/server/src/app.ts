@@ -183,6 +183,7 @@ export async function createApp(options: AppOptions = {}): Promise<{
   router.add('GET', '/api/teams/:id', people.team)
   router.add('GET', '/api/teams/:id/activate', people.teamActivate)
   router.add('GET', '/api/skills', people.skills)
+  router.add('GET', '/api/skills/usage', people.skillUsage)
 
   // 控制台静态兜底（GET /*）必须注册在最后：/api、/studio 优先，不劫持（返工单 F03）
   const webDist = options.webDist ?? resolveWebDistDir()

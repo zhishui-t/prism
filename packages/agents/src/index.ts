@@ -49,6 +49,12 @@ export { TeamParseError, parseTeamMarkdown, parseWorkflowTable, parseRoleCell } 
 export type { ParseTeamOptions } from './team/parse.js'
 export { validateTeam, stripInstanceMarker, ORCHESTRATOR_ROLES, ENTRY_TYPES, KNOWLEDGE_LAYERS } from './team/validate.js'
 export type { ValidateTeamOptions } from './team/validate.js'
+export {
+  applyDepositPolicy,
+  priorityScore,
+  type DepositPolicyOutcome,
+  type PolicyDepositInput,
+} from './team/deposit-policy.js'
 export { activateTeam } from './team/activate.js'
 export type { ActivateTeamOptions } from './team/activate.js'
 export { renderZcodeTeam, teamMarker, hasTeamMarker } from './team/render.js'

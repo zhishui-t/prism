@@ -8,6 +8,7 @@ import { useAsync } from '../components/useAsync.ts'
  */
 export function SkillsPage() {
   const skills = useAsync(() => teamApi.skills(), [])
+  const usage = useAsync(() => teamApi.skillUsage(), [])
 
   return (
     <>
@@ -42,6 +43,40 @@ export function SkillsPage() {
                       {s.builtin ? '内置' : '外部'}
                     </span>
                   </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </State>
+      </div>
+
+      {/* 谁在用这个 Skill：角色白名单 ∪ 团队声明（合并视图，team-definition.md §6.3） */}
+      <div className="card">
+        <h3>使用情况</h3>
+        <State
+          loading={usage.loading}
+          error={usage.error}
+          empty={!usage.loading && !usage.error && (usage.data?.length ?? 0) === 0}
+          emptyText="还没有任何 Skill 被角色或团队引用"
+        >
+          <table>
+            <thead>
+              <tr>
+                <th style={{ width: 180 }}>Skill</th>
+                <th style={{ width: 90 }}>已装</th>
+                <th>被哪些角色引用</th>
+                <th>被哪些团队声明</th>
+              </tr>
+            </thead>
+            <tbody>
+              {usage.data?.map((u) => (
+                <tr key={u.name}>
+                  <td className="mono">{u.name}</td>
+                  <td>
+                    <span className={`tag${u.installed ? ' ok' : ''}`}>{u.installed ? '已装' : '未装'}</span>
+                  </td>
+                  <td className="small muted">{u.roles.length > 0 ? u.roles.join(', ') : '—'}</td>
+                  <td className="small muted">{u.teams.length > 0 ? u.teams.join(', ') : '—'}</td>
                 </tr>
               ))}
             </tbody>

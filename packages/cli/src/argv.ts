@@ -56,7 +56,7 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
   prism team list | show <id> | validate <id>
   prism team install <id> [--force]        校验团队与成员；确保团队定义在 teams_dir（旧源目录一次性迁移）
   prism team activate <id>
-  prism skill list | install [name...] [--force]
+  prism skill list | install | update | uninstall | validate [name...] [--force]
 
 目录解析（装配语义简化——角色/团队/Skill 直接住在宿主目录）：
   <PRISM_HOME>/prism.yaml 可选覆盖：roles_dir（默认 ~/.zcode/agents）、

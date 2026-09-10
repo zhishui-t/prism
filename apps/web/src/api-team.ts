@@ -98,6 +98,15 @@ async function request<T>(path: string): Promise<T> {
   return body.value
 }
 
+/** 技能使用视图（/api/skills/usage）。 */
+export interface SkillUsage {
+  name: string
+  builtin: boolean
+  installed: boolean
+  roles: string[]
+  teams: string[]
+}
+
 export const teamApi = {
   roles: () => request<RoleDefinition[]>('/api/roles'),
   role: (name: string) => request<RoleDefinition>(`/api/roles/${encodeURIComponent(name)}`),
@@ -105,4 +114,5 @@ export const teamApi = {
   team: (id: string) => request<TeamDefinition>(`/api/teams/${encodeURIComponent(id)}`),
   activate: (id: string) => request<TeamActivation>(`/api/teams/${encodeURIComponent(id)}/activate`),
   skills: () => request<PrismSkill[]>('/api/skills'),
+  skillUsage: () => request<SkillUsage[]>('/api/skills/usage'),
 }

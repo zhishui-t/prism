@@ -6,7 +6,17 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { prismHome, openPersistence, PrismError, WorkQueue, WORK_KINDS, BUILTIN_VALIDATORS, TaskLedger, type WorkKind } from '@prism/core'
 
-import { activateTeam, loadRole, loadRoles, loadTeam, renderZcodeRole, resolveDirsFromHome, zcodePaths } from '../roles/index.js'
+import {
+  activateTeam,
+  applyDepositPolicy,
+  installedSkillNames,
+  loadRole,
+  loadRoles,
+  loadTeam,
+  renderZcodeRole,
+  resolveDirsFromHome,
+  zcodePaths,
+} from '../roles/index.js'
 import {
   runGraphify,
   graphPath as queryGraphPath,
@@ -224,6 +234,19 @@ export function createMcpTools(deps: McpDeps): McpTool[] {
     return { count: roles.length, roles, agents_dir: zcode.agentsDir }
   }
 
+  /** 取单个角色定义（装配器按名拉取，免拉全量）。 */
+  const roleGet = async (args: Record<string, unknown>): Promise<unknown> => {
+    const name = asString(args.name)
+    if (name === undefined) {
+      throw new Error('prism_role_get 需要 { name }')
+    }
+    const role = await loadRole(rolesDir, name, { knownSkills: await installedSkillNames(zcodeDir) })
+    if (role === null) {
+      throw new Error(`角色不存在: ${name}（数据源 ${rolesDir}/<name>/AGENTS.md）`)
+    }
+    return role
+  }
+
   const roleRender = async (args: Record<string, unknown>): Promise<unknown> => {
     const name = asString(args.name)
     if (name === undefined) {
@@ -341,12 +364,55 @@ export function createMcpTools(deps: McpDeps): McpTool[] {
             properties: { subject: { type: 'string' }, team: { type: 'string' } },
             description: '留痕：谁/哪个团队落库',
           },
+          team_id: {
+            type: 'string',
+            description: '按该团队的 deposit 策略机械校验（enabled/require_note/rules）；省略则不校验',
+          },
         },
         required: ['title', 'type', 'layer', 'book', 'content'],
       },
       call: async (args) => {
-        const input = args as unknown as DepositInput
-        return await (await kb()).deposit(input)
+        const raw = args as unknown as DepositInput & { team_id?: string }
+        const teamId = asString(raw.team_id)
+        // 团队沉淀策略：机械校验 + 默认值 + rules 覆盖（team-definition.md §5）
+        if (teamId !== undefined) {
+          const team = await requireTeam(teamId)
+          const outcome = applyDepositPolicy(team.deposit, {
+            title: raw.title,
+            type: raw.type,
+            layer: raw.layer,
+            book: raw.book,
+            content: raw.content,
+            ...(raw.owner !== undefined ? { owner: raw.owner } : {}),
+            ...(raw.module !== undefined ? { module: raw.module } : {}),
+            ...(raw.tags !== undefined ? { tags: raw.tags } : {}),
+            ...(raw.risk !== undefined ? { risk: raw.risk } : {}),
+            ...(raw.source !== undefined ? { source: raw.source } : {}),
+          })
+          if (!outcome.allowed) {
+            throw new Error(`沉淀策略拒绝：${outcome.errors.join('；')}`)
+          }
+          const p = outcome.input
+          return await (await kb()).deposit({
+            title: p.title,
+            type: p.type as DepositInput['type'],
+            layer: p.layer as DepositInput['layer'],
+            book: p.book,
+            content: p.content,
+            ...(p.owner !== undefined ? { owner: p.owner } : {}),
+            ...(p.module !== undefined ? { module: p.module } : {}),
+            ...(p.tags !== undefined ? { tags: p.tags } : {}),
+            ...(p.risk !== undefined ? { risk: p.risk as DepositInput['risk'] } : {}),
+            ...(p.source !== undefined ? { source: p.source } : {}),
+            ...(p.visibility !== undefined
+              ? { visibility: p.visibility as DepositInput['visibility'] }
+              : {}),
+            ...(raw.confidence !== undefined ? { confidence: raw.confidence } : {}),
+            ...(raw.overrides !== undefined ? { overrides: raw.overrides } : {}),
+            ...(raw.deposited_by !== undefined ? { deposited_by: raw.deposited_by } : {}),
+          })
+        }
+        return await (await kb()).deposit(raw)
       },
     },
     {
@@ -587,6 +653,16 @@ export function createMcpTools(deps: McpDeps): McpTool[] {
       description: '列出 Prism 角色库角色（数据源 <PRISM_HOME>/roles/；供装配器拉取定义）',
       inputSchema: { type: 'object', properties: {} },
       call: roleList,
+    },
+    {
+      name: 'prism_role_get',
+      description: '取单个角色定义（含 skills/知识绑定/核心第一原则/校验 issues）',
+      inputSchema: {
+        type: 'object',
+        properties: { name: { type: 'string', description: '角色名（kebab-case）' } },
+        required: ['name'],
+      },
+      call: roleGet,
     },
     {
       name: 'prism_role_render',
