@@ -4,9 +4,10 @@ import { ok, type Envelope } from '../envelope.js'
 import type { RouteContext } from '../router.js'
 import { ENTRY_TYPES, LAYERS, type DepositInput, type EdgeRelation, type KnowledgeService, type Layer } from '../../kb/port.js'
 import { exportKnowledgeGraph } from '../../kb/graph-export.js'
+import { ScanHistory } from '../../kb/scan-history.js'
 
 /** kb 路由工厂：注入知识服务端口（真实服务运行时装载；测试注入内存桩）。 */
-export function kbRoutes(getKb: () => Promise<KnowledgeService>): {
+export function kbRoutes(getKb: () => Promise<KnowledgeService>, home: string): {
   search: (ctx: RouteContext) => Promise<Envelope>
   get: (ctx: RouteContext) => Promise<Envelope>
   tree: (ctx: RouteContext) => Promise<Envelope>
@@ -19,6 +20,7 @@ export function kbRoutes(getKb: () => Promise<KnowledgeService>): {
   remove: (ctx: RouteContext) => Promise<Envelope>
   conflicts: (ctx: RouteContext) => Promise<Envelope>
   resolveConflict: (ctx: RouteContext) => Promise<Envelope>
+  scanHistory: (ctx: RouteContext) => Promise<Envelope>
 } {
   const search = async (ctx: RouteContext): Promise<Envelope> => {
     const q = ctx.query.get('q')?.trim() ?? ''
@@ -126,6 +128,15 @@ export function kbRoutes(getKb: () => Promise<KnowledgeService>): {
     return ok({ id, resolved: await kb.resolveConflict(id) })
   }
 
+  /** 扫描历史：`GET /api/kb/scan-history?project=<名>&limit=20`。 */
+  const scanHistory = async (ctx: RouteContext): Promise<Envelope> => {
+    const project = ctx.query.get('project')?.trim() || undefined
+    const limitRaw = ctx.query.get('limit')
+    const limit = limitRaw !== null && limitRaw !== '' ? Number(limitRaw) : 20
+    const history = new ScanHistory(home)
+    return ok(await history.list(project, Number.isFinite(limit) ? limit : 20))
+  }
+
   /** 图谱邻域/概览：`?id=<节点>&depth=1&relations=references&limit=50`。 */
   const graph = async (ctx: RouteContext): Promise<Envelope> => {
     const id = ctx.query.get('id')?.trim() || undefined
@@ -189,7 +200,7 @@ export function kbRoutes(getKb: () => Promise<KnowledgeService>): {
     return ok(found)
   }
 
-  return { search, get, tree, stats, catalog, deposit, graph, path, exportGraph, remove, conflicts, resolveConflict }
+  return { search, get, tree, stats, catalog, deposit, graph, path, exportGraph, remove, conflicts, resolveConflict, scanHistory }
 }
 
 /** 关系类型查询参数（`relations=references,overrides`；非法 → bad_request）。 */

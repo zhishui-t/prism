@@ -111,7 +111,7 @@ export async function createApp(options: AppOptions = {}): Promise<{
   const router = new Router()
   router.add('GET', '/api/health', healthRoute(meta))
 
-  const kb = kbRoutes(loadKb)
+  const kb = kbRoutes(loadKb, home)
   router.add('GET', '/api/kb/search', kb.search)
   router.add('GET', '/api/kb/get/:id', kb.get)
   router.add('GET', '/api/kb/tree', kb.tree)
@@ -124,6 +124,7 @@ export async function createApp(options: AppOptions = {}): Promise<{
   router.add('POST', '/api/kb/entry/:id/remove', kb.remove)
   router.add('GET', '/api/kb/conflicts', kb.conflicts)
   router.add('POST', '/api/kb/conflicts/:id/resolve', kb.resolveConflict)
+  router.add('GET', '/api/kb/scan-history', kb.scanHistory)
 
   const graph = graphRoutes({
     registry,

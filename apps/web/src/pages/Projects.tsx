@@ -1,4 +1,4 @@
-import { api, type GraphProject } from '../api.ts'
+import { api, type GraphProject, type ScanRecord } from '../api.ts'
 import { State } from '../components/State.tsx'
 import { useAsync } from '../components/useAsync.ts'
 
@@ -65,6 +65,8 @@ export function ProjectsPage() {
         </State>
       </div>
 
+      <ScanHistoryCard />
+
       <div className="card">
         <h3>常用命令</h3>
         <pre className="mono small" style={{ background: 'var(--panel-2)', padding: 12, borderRadius: 8, margin: 0, whiteSpace: 'pre-wrap' }}>
@@ -76,6 +78,69 @@ prism project remove <项目名> --yes               # 从台账移除（不动�
         </pre>
       </div>
     </>
+  )
+}
+
+/**
+ * 扫描历史：孤儿索引（源文件已删）与不可读目录的历史留痕。
+ * 只读展示——`missing` 条目需要人来决定「重建索引还是清理条目」。
+ */
+function ScanHistoryCard() {
+  const history = useAsync(() => api.kbScanHistory(undefined, 15), [])
+  const list = history.data ?? []
+
+  return (
+    <div className="card">
+      <div className="row" style={{ justifyContent: 'space-between' }}>
+        <h3 style={{ margin: 0 }}>扫描历史</h3>
+        <button onClick={history.reload}>刷新</button>
+      </div>
+      <State
+        loading={history.loading}
+        error={history.error}
+        empty={!history.loading && !history.error && list.length === 0}
+        emptyText="还没有扫描记录。执行 prism kb sync <项目名> 后这里会出现。"
+      >
+        <table>
+          <thead>
+            <tr>
+              <th style={{ width: 150 }}>时间</th>
+              <th style={{ width: 120 }}>项目</th>
+              <th>结果</th>
+              <th style={{ width: 130 }}>孤儿/不可读</th>
+            </tr>
+          </thead>
+          <tbody>
+            {list.map((r, i) => (
+              <tr key={`${r.project}-${r.scanned_at}-${i}`}>
+                <td className="mono small muted">{fmt(r.scanned_at)}</td>
+                <td className="mono small">{r.project}</td>
+                <td className="small muted">
+                  发现 {r.discovered} → 新建 {r.created} · 更新 {r.updated} · 未变 {r.unchanged}
+                  {r.skipped > 0 ? ` · 跳过 ${r.skipped}` : ''}
+                </td>
+                <td className="small">
+                  <ScanFlags record={r} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </State>
+    </div>
+  )
+}
+
+function ScanFlags({ record }: { record: ScanRecord }) {
+  const flags: string[] = []
+  if (record.missing.length > 0) flags.push(`孤儿 ${record.missing.length}`)
+  if (record.unreadable.length > 0) flags.push(`不可读 ${record.unreadable.length}`)
+  if (record.truncated) flags.push('已截断')
+  if (flags.length === 0) return <span className="muted">—</span>
+  return (
+    <span className="tag warn" title={record.missing.join(', ')}>
+      {flags.join(' · ')}
+    </span>
   )
 }
 

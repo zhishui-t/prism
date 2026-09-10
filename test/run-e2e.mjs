@@ -358,6 +358,19 @@ async function main() {
     const afterResolve = await cli(['kb', 'conflicts', '--json'], env)
     check('12.3 已处理冲突不再出现在默认列表', JSON.parse(afterResolve.stdout).value.length === conflicts.length - 1)
 
+    // ===== 13. 扫描历史（孤儿索引不再输出即焚） =====
+    const hist = await cli(['kb', 'history', 'demo', '--json'], env)
+    const histList = JSON.parse(hist.stdout).value
+    check(
+      '13.1 扫描历史已落盘',
+      hist.code === 0 && histList.length >= 1 && histList[0].project === 'demo',
+      `n=${histList.length}`,
+    )
+    check(
+      '13.2 历史含孤儿索引字段',
+      Array.isArray(histList[0]?.missing) && Array.isArray(histList[0]?.unreadable),
+    )
+
     // ===== 9. 真实宿主零污染 =====
     const realAfter = await listDir(REAL_ZCODE)
     check(

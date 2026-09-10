@@ -80,6 +80,21 @@ export interface GraphProject {
   scanned_sources?: number
 }
 
+/** 扫描历史记录（/api/kb/scan-history）。 */
+export interface ScanRecord {
+  project: string
+  root: string
+  scanned_at: string
+  discovered: number
+  created: number
+  updated: number
+  unchanged: number
+  skipped: number
+  missing: string[]
+  unreadable: string[]
+  truncated: boolean
+}
+
 /** 层间冲突（/api/kb/conflicts）。 */
 export interface KbConflict {
   id: string
@@ -334,6 +349,13 @@ export const api = {
   },
 
   /** 知识图谱导出（借 Graphify 渲染/Obsidian） */
+  kbScanHistory: (project?: string, limit = 20) => {
+    const qs = new URLSearchParams()
+    if (project !== undefined) qs.set('project', project)
+    qs.set('limit', String(limit))
+    return request<ScanRecord[]>(`/api/kb/scan-history?${qs.toString()}`)
+  },
+
   kbConflicts: (includeResolved = false) =>
     request<KbConflict[]>(`/api/kb/conflicts${includeResolved ? '?include_resolved=true' : ''}`),
 

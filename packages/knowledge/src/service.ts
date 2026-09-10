@@ -34,6 +34,7 @@ import type {
   BookNode,
   CatalogEntry,
   DepositInput,
+  DepositResult,
   EdgeConfidence,
   EdgeRelation,
   EntryType,
@@ -238,7 +239,7 @@ export class PrismKnowledgeService implements KnowledgeService {
 
   // ===== deposit =====
 
-  async deposit(input: DepositInput): Promise<{ id: string; version: number; path: string }> {
+  async deposit(input: DepositInput): Promise<DepositResult> {
     const address = this.#validateAndNormalize(input)
     const content = input.content
     const nowIso = this.#now().toISOString()
@@ -274,11 +275,18 @@ export class PrismKnowledgeService implements KnowledgeService {
       try {
         const prev = raw
           .prepare(
-            `SELECT version, layer, book, owner, path FROM knowledge_entries
+            `SELECT version, layer, book, owner, path, content_hash FROM knowledge_entries
              WHERE id = ? ORDER BY version DESC LIMIT 1`,
           )
           .get(address.id) as
-          | { version: number; layer: string; book: string; owner: string | null; path: string }
+          | {
+              version: number
+              layer: string
+              book: string
+              owner: string | null
+              path: string
+              content_hash: string
+            }
           | undefined
 
         // id 冲突：同 id 已存在但 layer/book/owner 与既有不一致 → id_conflict（§3.5）
@@ -299,6 +307,17 @@ export class PrismKnowledgeService implements KnowledgeService {
                 owner: address.owner ?? null,
               },
             })
+          }
+          // 去重：正文哈希与最新版相同 → 不产生新版次（版本只为「内容变化」服务）。
+          // 重复导入同一文件不再堆叠 v02/v03…，历史交给 git（Prism 不管版本控制）。
+          if (prev.content_hash === contentHash) {
+            raw.exec('COMMIT')
+            return {
+              id: address.id,
+              version: prev.version,
+              path: prev.path,
+              action: 'unchanged' as const,
+            }
           }
         }
 
@@ -362,7 +381,12 @@ export class PrismKnowledgeService implements KnowledgeService {
           nowIso,
         })
         raw.exec('COMMIT')
-        return { id: address.id, version, path: files.versionFile }
+        return {
+          id: address.id,
+          version,
+          path: files.versionFile,
+          action: prev ? ('updated' as const) : ('created' as const),
+        }
       } catch (error) {
         try {
           raw.exec('ROLLBACK')
@@ -374,6 +398,9 @@ export class PrismKnowledgeService implements KnowledgeService {
         throw error
       }
     })
+
+    // 无实质变更 → 不写审计、不检测冲突、不入队（否则每次重复导入都刷一遍）
+    if (deposited.action === 'unchanged') return deposited
 
     // 留痕（§3.5：写 AuditLog）。审计失败向上抛出（条目已提交，重试产生新版次）。
     await this.audit.record({

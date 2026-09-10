@@ -5,6 +5,7 @@ import { splitFrontmatter, type FrontmatterData } from '@prism/knowledge'
 import {
   ENTRY_TYPES,
   ProjectRegistry,
+  ScanHistory,
   idFromRel,
   loadKnowledgeService,
   exportKnowledgeGraph,
@@ -51,6 +52,8 @@ export async function runKb(ctx: CommandContext, args: string[], values: ArgValu
       return await kbConflicts(ctx, values)
     case 'resolve':
       return await kbResolve(ctx, rest)
+    case 'history':
+      return await kbHistory(ctx, rest, values)
     case 'export':
       return await kbExport(ctx, rest, values)
     default:
@@ -104,8 +107,11 @@ async function kbImport(ctx: CommandContext, args: string[], values: ArgValues):
   })
   if (ctx.json) {
     ctx.stdout(JSON.stringify({ ok: true, value: result }))
+  } else if (result.action === 'unchanged') {
+    ctx.stdout(`${result.id}@v${result.version} 内容未变，跳过（不产生新版次）`)
   } else {
-    ctx.stdout(`已落库 ${result.id}@v${result.version} → ${result.path}`)
+    const verb = result.action === 'created' ? '已落库' : '已更新'
+    ctx.stdout(`${verb} ${result.id}@v${result.version} → ${result.path}`)
   }
   return 0
 }
@@ -359,6 +365,23 @@ async function kbSync(ctx: CommandContext, args: string[], values: ArgValues): P
     await registry.markScanned(projectName, report.discovered)
   }
 
+  // 扫描历史落盘（append-only JSONL；报告不再「输出即焚」）
+  if (!dryRun) {
+    await new ScanHistory(ctx.home ?? prismPaths().home).append({
+      project: projectName,
+      root: report.root,
+      scanned_at: new Date().toISOString(),
+      discovered: report.discovered,
+      created: report.created,
+      updated: report.updated,
+      unchanged: report.unchanged,
+      skipped: report.skipped,
+      missing: report.missing,
+      unreadable: report.unreadable,
+      truncated: report.truncated,
+    })
+  }
+
   if (ctx.json) {
     ctx.stdout(JSON.stringify({ ok: true, value: report }))
     return 0
@@ -497,6 +520,39 @@ async function kbResolve(ctx: CommandContext, args: string[]): Promise<number> {
     return 1
   }
   return resolved ? 0 : 1
+}
+
+/**
+ * `prism kb history [项目名] [--limit N]`
+ * 查看扫描历史（含孤儿索引明细）——报告不再输出即焚。
+ */
+async function kbHistory(ctx: CommandContext, args: string[], values: ArgValues): Promise<number> {
+  const project = args[0]
+  const limit = values.limit !== undefined ? Number(values.limit) : 20
+  const history = new ScanHistory(ctx.home ?? prismPaths().home)
+  const list = await history.list(project, Number.isFinite(limit) ? limit : 20)
+  if (ctx.json) {
+    ctx.stdout(JSON.stringify({ ok: true, value: list }))
+    return 0
+  }
+  if (list.length === 0) {
+    ctx.stdout(project !== undefined ? `（${project} 没有扫描历史）` : '（还没有扫描历史）')
+    return 0
+  }
+  for (const r of list) {
+    ctx.stdout(
+      `${r.scanned_at.replace('T', ' ').slice(0, 19)}  ${r.project}  ` +
+        `发现 ${r.discovered} → 新建 ${r.created} · 更新 ${r.updated} · 未变 ${r.unchanged} · 跳过 ${r.skipped}`,
+    )
+    if (r.missing.length > 0) {
+      ctx.stdout(`  ⚠ 孤儿索引 ${r.missing.length} 条: ${r.missing.slice(0, 5).join(', ')}${r.missing.length > 5 ? ' …' : ''}`)
+    }
+    if (r.unreadable.length > 0) {
+      ctx.stdout(`  ⚠ 不可读目录 ${r.unreadable.length} 个`)
+    }
+  }
+  ctx.stdout(`共 ${list.length} 条记录 · ${history.path}`)
+  return 0
 }
 
 /** `prism kb reindex`：以文件为真相重建索引（Z2；手工编辑/迁移知识文件后收敛漂移）。 */async function kbReindex(ctx: CommandContext): Promise<number> {  const kb = await getKb(ctx)

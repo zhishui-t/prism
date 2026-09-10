@@ -72,6 +72,22 @@ export interface IndexInput {
   tags?: string[]
 }
 
+/**
+ * 落库结果。
+ *
+ * `action` 语义（2026-09-10 加）：
+ * - `created`：新条目 v1；
+ * - `updated`：正文变化 → 版次 +1；
+ * - `unchanged`：**正文哈希与最新版相同 → 不产生新版次**（版本只为「内容变化」服务，
+ *   重复导入同一文件不再堆叠历史）。
+ */
+export interface DepositResult {
+  id: string
+  version: number
+  path: string
+  action: 'created' | 'updated' | 'unchanged'
+}
+
 /** 引用型索引结果。 */
 export interface IndexResult {
   id: string
@@ -296,7 +312,7 @@ export interface CatalogEntry {
  */
 export interface KnowledgeService {
   /** 落库：新条目 v1，同 id 沉淀为 version+1，旧版置 superseded。 */
-  deposit(input: DepositInput): Promise<{ id: string; version: number; path: string }>
+  deposit(input: DepositInput): Promise<DepositResult>
   /**
    * 索引一条「引用型」知识（项目文件为真相）：不写副本、不递增版次。
    * 源哈希未变 → `unchanged`（跳过）；变了 → `updated`；不存在 → `created`。

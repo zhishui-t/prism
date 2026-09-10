@@ -229,3 +229,52 @@ describe('留痕与统计（§3.5 content_hash + AuditLog；tree/stats）', () =
     }
   })
 })
+
+/** 版本去重（2026-09-10）：内容未变不产生新版次。 */
+describe('版本去重', () => {
+  it('重复落库同一内容 → unchanged，不新增版次文件', async () => {
+    const { PrismKnowledgeService } = await import('../src/service.js')
+    const { makeTempDir } = await import('../../server/test/helpers.js')
+    const { readdir } = await import('node:fs/promises')
+    const { dirname } = await import('node:path')
+
+    const kb = new PrismKnowledgeService({ home: await makeTempDir('prism-dedup-') })
+    const base = { id: 'D-1', title: 'T', type: 'rule' as const, layer: 'global' as const, book: 'b', content: '相同内容' }
+
+    const first = await kb.deposit(base)
+    expect(first.action).toBe('created')
+    expect(first.version).toBe(1)
+
+    const second = await kb.deposit(base)
+    expect(second.action).toBe('unchanged')
+    expect(second.version).toBe(1) // 版本不涨
+
+    // 磁盘上只有 v01，没有 v02
+    const files = await readdir(dirname(first.path))
+    expect(files.filter((f) => /^v\d+\.md$/.test(f))).toEqual(['v01.md'])
+
+    // 内容变了 → updated
+    const third = await kb.deposit({ ...base, content: '改了内容' })
+    expect(third.action).toBe('updated')
+    expect(third.version).toBe(2)
+    kb.close()
+  })
+
+  it('unchanged 不写审计、不重复投富化任务', async () => {
+    const { PrismKnowledgeService } = await import('../src/service.js')
+    const { makeTempDir } = await import('../../server/test/helpers.js')
+    const enrichCalls: number[] = []
+    const kb = new PrismKnowledgeService({
+      home: await makeTempDir('prism-dedup2-'),
+      enqueueEnrichment: async (e) => {
+        enrichCalls.push(e.version)
+      },
+    })
+    const base = { id: 'D-2', title: 'T', type: 'rule' as const, layer: 'global' as const, book: 'b', content: 'x' }
+    await kb.deposit(base)
+    await kb.deposit(base)
+    await kb.deposit(base)
+    expect(enrichCalls).toEqual([1]) // 只有第一次
+    kb.close()
+  })
+})
