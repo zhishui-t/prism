@@ -75,15 +75,6 @@ export { activateTeam } from './team/activate.js'
 export type { ActivateTeamOptions } from './team/activate.js'
 export { renderZcodeTeam, teamMarker, hasTeamMarker } from './team/render.js'
 
-// 适配器
-export {
-  createZcodeAdapter,
-  DEFAULT_ZCODE_DIR,
-  ZCODE_ADAPTER_ID,
-  ZCODE_FRONTMATTER_FIELDS,
-} from './adapters/zcode.js'
-export type { ZcodeAdapterOptions } from './adapters/zcode.js'
-
 // 注册表
 export { createRoleRegistry, createTeamRegistry } from './registry.js'
 export type { ImportFailures } from './registry.js'
@@ -93,13 +84,21 @@ export { installRoles, installTeamDefinitions, initRole, migrateTeams, InstallEr
 export type { InstallTeamsOptions, InitRoleOptions, MigrateTeamsOptions } from './install.js'
 
 // 宿主适配器注册表（deployment-model §1：编译期多适配器，运行期只激活一个）
+// **新增 harness 只改 `harness-manifest.ts`（加一行），本文件无需改动**——
+// 清单与默认 id 从这里转出，消费方拿到的都是通用符号。
 export {
   buildHarnessRegistry,
   resolveHarness,
   harnessLayout,
   harnessSummary,
 } from './harness.js'
-export { DEFAULT_HARNESS_ID, HARNESS_ENV_VAR, ZCODE_HARNESS_ID } from './harness-id.js'
+export {
+  HARNESS_MANIFEST,
+  DEFAULT_HARNESS_ID,
+  HARNESS_ENV_VAR,
+  type HarnessEntry,
+  type HarnessFactoryOptions,
+} from './harness-manifest.js'
 export type {
   PrismHarnessAdapter,
   BuildHarnessRegistryOptions,
@@ -107,6 +106,16 @@ export type {
   ResolvedHarness,
   HarnessLayout,
 } from './harness.js'
+
+// 内置适配器：**转出各个适配器是历史包袱**（内部已有清单）。仍保留 zcode 的
+// 具名导出供既有调用方使用；新增 harness 不必在此追加导出（走 HARNESS_MANIFEST）。
+export {
+  createZcodeAdapter,
+  DEFAULT_ZCODE_DIR,
+  ZCODE_ADAPTER_ID,
+  ZCODE_FRONTMATTER_FIELDS,
+} from './adapters/zcode.js'
+export type { ZcodeAdapterOptions } from './adapters/zcode.js'
 
 // 目录解析（装配语义简化：直接住在宿主目录；prism.yaml 可选覆盖）
 export {

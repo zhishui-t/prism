@@ -1,20 +1,25 @@
 /**
  * 宿主适配器注册表（deployment-model.md §1）：
- * **编译期登记全部适配器，运行期只激活一个**。
+ * **编译期登记清单里的全部适配器，运行期只激活一个**。
  *
- * 选择优先级：`PRISM_HARNESS` 环境变量 > `prism.yaml: harness` 键 > 默认 `zcode`。
+ * 选择优先级：`PRISM_HARNESS` 环境变量 > `prism.yaml: harness` 键 > 默认项。
  * 不做运行时多 harness 路由——换 harness = 改配置重启。
  *
- * 目前只编译进 ZCode 适配器；未来新增 harness 在此注册即可，其余代码不动。
+ * 新增 harness **只改 `harness-manifest.ts`**（加一行）；本文件无需改动。
  */
 
 import { createHarnessRegistry, PrismError, type HarnessAdapter } from '@prism/core'
 
-import { createZcodeAdapter } from './adapters/zcode.js'
-import { DEFAULT_HARNESS_ID, HARNESS_ENV_VAR } from './harness-id.js'
-import type { RoleDefinition, TeamDefinition } from './types.js'
+import {
+  DEFAULT_HARNESS_ID,
+  HARNESS_ENV_VAR,
+  HARNESS_MANIFEST,
+  type HarnessEntry,
+  type HarnessFactoryOptions,
+  type PrismHarnessAdapter,
+} from './harness-manifest.js'
 
-export type PrismHarnessAdapter = HarnessAdapter<RoleDefinition, TeamDefinition>
+export type { PrismHarnessAdapter } from './harness-manifest.js'
 
 export interface BuildHarnessRegistryOptions {
   /** harness 根目录（如 ZCode 的 ~/.zcode）；缺省用适配器 `defaultRoot`。 */
@@ -23,24 +28,26 @@ export interface BuildHarnessRegistryOptions {
   zcodeDir?: string
   /** 项目根（renderTeamInstructions 注入 <repo>/AGENTS.md 用）。 */
   repoDir?: string
+  /** 清单覆盖（测试用；缺省 HARNESS_MANIFEST）。 */
+  manifest?: readonly HarnessEntry[]
 }
 
 /**
- * 构建注册表并登记全部已编译适配器（**不激活**）。
- * 调用方用 `resolveHarness()` 决定激活哪个。
- *
- * **新增 harness 的唯二改动点之一**：在此 `registry.register(<新适配器>)`；
- * 另一个是实现适配器文件。目录布局由适配器自述，上层无需改动。
+ * 构建注册表：把清单里登记的全部适配器注册进来（**不激活**）。
+ * 调用方用 `resolveHarness()` 决定激活哪个。**新增 harness 不必改本函数**——
+ * 只在 `harness-manifest.ts` 的 `HARNESS_MANIFEST` 加一行。
  */
 export function buildHarnessRegistry(
   options: BuildHarnessRegistryOptions = {},
 ): ReturnType<typeof createHarnessRegistry> {
   const registry = createHarnessRegistry()
   const root = options.root ?? options.zcodeDir
-  const adapterOptions: { root?: string; repoDir?: string } = {}
-  if (root !== undefined) adapterOptions.root = root
-  if (options.repoDir !== undefined) adapterOptions.repoDir = options.repoDir
-  registry.register(createZcodeAdapter(adapterOptions) as unknown as HarnessAdapter)
+  const createOptions: HarnessFactoryOptions = {}
+  if (root !== undefined) createOptions.root = root
+  if (options.repoDir !== undefined) createOptions.repoDir = options.repoDir
+  for (const entry of options.manifest ?? HARNESS_MANIFEST) {
+    registry.register(entry.create(createOptions) as unknown as HarnessAdapter)
+  }
   return registry
 }
 

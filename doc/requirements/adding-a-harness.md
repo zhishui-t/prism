@@ -1,19 +1,41 @@
 # 新增一个 harness（宿主适配器）
 
-> **结论：新增 harness = 写一个适配器文件 + 在 `harness.ts` 注册一行。**
-> 目录布局、CLI 根目录、MCP 数据源全部由适配器自述推导，上层无需改动。
-> 若你发现必须改 `dirs.ts` / CLI / server，那是耦合 bug，请按本文件修正。
+> **结论：新增 harness = 只改一个文件 `packages/agents/src/harness-manifest.ts`**
+> （在 `HARNESS_MANIFEST` 加一行 `{ id, create }`）。
+> 适配器实现可放 `adapters/<id>.ts`，简单 harness 甚至能内联在清单里。
+> 目录布局、CLI 根目录、MCP 数据源全部由适配器自述推导，其余文件无需改动。
+> 若你发现要改 `harness.ts` / `dirs.ts` / `index.ts` / CLI / server，那是耦合 bug。
 
-## 为什么能做到「只改一个文件」
+## 唯一登记点：`harness-manifest.ts`
 
-历史坑（已修，2026-09-10）：`resolveDirs` 曾直接 `join(root, 'agents'|'teams'|'skills')`，
-根目录名在 CLI（`--zcode-dir`）、server（`zcodePaths`/`defaultZcodeDir`）、
-MCP（`~/.zcode` 兜底）里各写一遍——换 harness 要改 4+ 个文件。
+```ts
+// packages/agents/src/harness-manifest.ts
+import { createMyAdapter, MY_ADAPTER_ID } from './adapters/my-harness.js'
 
-现在统一为**数据驱动**：
+export const HARNESS_MANIFEST: readonly HarnessEntry[] = [
+  { id: ZCODE_ADAPTER_ID, create: createZcodeAdapter },
+  { id: MY_ADAPTER_ID, create: createMyAdapter },   // ← 只加这一行
+]
+```
+
+- `DEFAULT_HARNESS_ID` 自动取 `isDefault: true` 的条目（缺省取首项），**不需要**再维护
+  一个 id 常量文件（旧的 `harness-id.ts` 已删除）。
+- `index.ts` 无需为新 harness 追加命名导出——消费方用 `HARNESS_MANIFEST` /
+  `resolveHarness()` / `harnessLayout()` 这些**通用符号**即可。
+
+## 为什么能做到「只改一处」
+
+历史坑（两轮才修完，2026-09-10）：
+1. 目录名曾写死在 4 处（`dirs.ts` 的 `join(root,'agents'|'teams'|'skills')`、CLI 的
+   `--zcode-dir`、server 的 `zcodePaths`/`defaultZcodeDir`、MCP 的 `~/.zcode` 兜底）；
+2. 登记样板曾分散在 `harness.ts`（注册）+ `harness-id.ts`（id 常量/默认值）+
+   `index.ts`（逐适配器导出）。
+
+现在统一为**数据驱动 + 单一清单**：
 
 | 关注点 | 唯一来源 | 消费方 |
 | :--- | :--- | :--- |
+| 登记项 / 默认项 | `HARNESS_MANIFEST` | `buildHarnessRegistry()` |
 | 根目录默认 | `adapter.defaultRoot` | `harnessLayout()` → `defaultZcodeDir()` |
 | 角色目录 | `adapter.agent.globalDir` | `resolveDirs()` |
 | 团队目录 | `adapter.agent.teamDir` | `resolveDirs()` |
@@ -64,15 +86,16 @@ export function createMyAdapter(opts: { root?: string; repoDir?: string } = {}):
 }
 ```
 
-### 2. 注册（唯一一处登记）
+### 2. 登记（唯一一处改动）
 
-`packages/agents/src/harness.ts` 的 `buildHarnessRegistry()` 加一行：
+在 `packages/agents/src/harness-manifest.ts` 的 `HARNESS_MANIFEST` 加一行：
 
 ```ts
-registry.register(createMyAdapter(adapterOptions) as unknown as HarnessAdapter)
+{ id: MY_ADAPTER_ID, create: createMyAdapter },
 ```
 
-导出适配器工厂（`packages/agents/src/index.ts`）以便测试直接构造。
+**不需要**改 `harness.ts`（自动遍历清单注册）、**不需要**加 id 常量文件、**不需要**
+改 `index.ts` 导出。
 
 ### 3. 激活
 
@@ -84,7 +107,8 @@ PRISM_HARNESS=myharness prism harness show     # 环境变量（优先级最高�
 ## 验证清单
 
 - [ ] `pnpm -r typecheck && pnpm lint`
-- [ ] `pnpm test`（`harness-layout.test.ts` 锁死「布局随适配器变」）
+- [ ] `pnpm test`（`harness-layout.test.ts` + `harness-manifest.test.ts` 锁死
+      「布局随适配器变」「清单加一行即可激活」）
 - [ ] `PRISM_HARNESS=<id> prism harness show` 输出的目录与适配器自述一致
 - [ ] `PRISM_HARNESS=<id> prism role install ...` 落到适配器声明的 `globalDir`
 - [ ] 用适配器的 `parseRole` 跑通一次导入（往返一致）

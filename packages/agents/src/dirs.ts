@@ -25,7 +25,7 @@ import { isAbsolute, dirname, join } from 'node:path'
 
 import { prismHome } from '@prism/core'
 
-import { DEFAULT_HARNESS_ID } from './harness-id.js'
+import { DEFAULT_HARNESS_ID } from './harness-manifest.js'
 import { harnessLayout } from './harness.js'
 
 /** prism.yaml 的标量键（仅这些键，多余键忽略）。 */

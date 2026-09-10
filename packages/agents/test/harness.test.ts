@@ -5,7 +5,7 @@ import {
   harnessSummary,
   resolveHarness,
 } from '../src/harness.js'
-import { DEFAULT_HARNESS_ID, HARNESS_ENV_VAR } from '../src/harness-id.js'
+import { DEFAULT_HARNESS_ID, HARNESS_ENV_VAR } from '../src/harness-manifest.js'
 import { parsePrismConfig, resolveDirs } from '../src/dirs.js'
 
 describe('harness 常量与注册表（deployment-model §1）', () => {
