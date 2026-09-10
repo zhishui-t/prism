@@ -76,6 +76,7 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
   prism kb convert <file> [--out <path>] [--max-chars N]                             文档转 Markdown（anydoc，零 LLM）
   prism kb enrich <kind> --payload <json> --result <json> [--by <who>]               回写富化结果（摘要/标签/实体）
   prism kb remove <id> [--hard --yes]     软删（默认置 deprecated）；硬删需 --hard 且无引用
+  prism kb restore <id>                   恢复软删条目（deprecated → active）
   prism kb conflicts [--all]              层间冲突列表（默认未处理）
   prism kb resolve <conflict-id>          标记冲突已处理
   prism kb reindex                        以文件为真相重建索引（手工改过知识文件后用）

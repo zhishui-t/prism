@@ -80,4 +80,32 @@ describe('层间冲突检测（B2）', () => {
     expect(await kb.resolveConflict('nope')).toBe(false)
     kb.close()
   })
+
+  it('role vs project 同名 → 记录冲突（高层可覆盖更低层；此前漏检）', async () => {
+    const kb = await makeKb()
+    await kb.deposit({ id: 'P-1', title: '异常处理', type: 'rule', layer: 'project', owner: 'proj', book: 'b', module: 'm', content: '项目' })
+    await kb.deposit({ id: 'R-1', title: '异常处理', type: 'rule', layer: 'role', owner: 'dev-1', book: 'b', module: 'm', content: '角色' })
+    expect((await kb.conflicts()).map((c) => `${c.high_id}->${c.low_id}`)).toContain('R-1->P-1')
+    kb.close()
+  })
+
+  it('role 同名同时命中 global 与 project → 记录对应全部组合', async () => {
+    const kb = await makeKb()
+    await kb.deposit({ id: 'G-1', title: '日志规范', type: 'rule', layer: 'global', book: 'b', module: 'm', content: 'g' })
+    // P-1 落库即对 G-1 记一条（project 覆盖 global）
+    await kb.deposit({ id: 'P-1', title: '日志规范', type: 'rule', layer: 'project', owner: 'proj', book: 'b', module: 'm', content: 'p' })
+    // R-1 落库对 global 与 project 各记一条
+    await kb.deposit({ id: 'R-1', title: '日志规范', type: 'rule', layer: 'role', owner: 'dev-1', book: 'b', module: 'm', content: 'r' })
+    const pairs = (await kb.conflicts()).map((c) => `${c.high_id}->${c.low_id}`).sort()
+    expect(pairs).toEqual(['P-1->G-1', 'R-1->G-1', 'R-1->P-1'])
+    kb.close()
+  })
+
+  it('global 层同名不触发（同层不算层间冲突）', async () => {
+    const kb = await makeKb()
+    await kb.deposit({ id: 'G-1', title: 'X', type: 'rule', layer: 'global', book: 'b', module: 'm', content: 'x' })
+    await kb.deposit({ id: 'G-2', title: 'X', type: 'rule', layer: 'global', book: 'b', module: 'm', content: 'x2' })
+    expect(await kb.conflicts()).toHaveLength(0)
+    kb.close()
+  })
 })

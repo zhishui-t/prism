@@ -13,15 +13,12 @@ export const AUDIT_EVENT_TYPES = [
   'knowledge.superseded',
   'knowledge.deposited',
   'knowledge.deprecated',
+  'knowledge.restored',
   'knowledge.deleted',
   'knowledge.approved',
   'knowledge.rejected',
   'knowledge.conflict_detected',
   'import.confirmed',
-  'work.enqueued',
-  'work.claimed',
-  'work.completed',
-  'work.expired',
   'team.switched',
 ] as const
 
@@ -40,15 +37,12 @@ export type AuditEvent =
   | (AuditEventBase & { type: 'knowledge.superseded'; new_id: string; old_id: string; reason: string })
   | (AuditEventBase & { type: 'knowledge.deposited'; knowledge_id: string; layer: string; source: string })
   | (AuditEventBase & { type: 'knowledge.deprecated'; knowledge_id: string; layer: string; source: string })
+  | (AuditEventBase & { type: 'knowledge.restored'; knowledge_id: string; layer: string; source: string })
   | (AuditEventBase & { type: 'knowledge.deleted'; knowledge_id: string; layer: string })
   | (AuditEventBase & { type: 'knowledge.approved'; knowledge_id: string; subject: string; degraded: boolean })
   | (AuditEventBase & { type: 'knowledge.rejected'; knowledge_id: string; subject: string; reason: string })
   | (AuditEventBase & { type: 'knowledge.conflict_detected'; high_id: string; low_id: string; kind: string })
   | (AuditEventBase & { type: 'import.confirmed'; job_id: string; candidate_id: string })
-  | (AuditEventBase & { type: 'work.enqueued'; request_id: string; kind: string })
-  | (AuditEventBase & { type: 'work.claimed'; request_id: string; claimed_by: string })
-  | (AuditEventBase & { type: 'work.completed'; request_id: string; ok: boolean })
-  | (AuditEventBase & { type: 'work.expired'; request_id: string })
   | (AuditEventBase & { type: 'team.switched'; session_id: string; from_team: string; to_team: string })
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never
@@ -64,15 +58,12 @@ export const AUDIT_EVENT_REQUIRED_FIELDS: Record<AuditEventType, readonly string
   'knowledge.superseded': ['new_id', 'old_id', 'reason'],
   'knowledge.deposited': ['knowledge_id', 'layer', 'source'],
   'knowledge.deprecated': ['knowledge_id', 'layer', 'source'],
+  'knowledge.restored': ['knowledge_id', 'layer', 'source'],
   'knowledge.deleted': ['knowledge_id', 'layer'],
   'knowledge.approved': ['knowledge_id', 'subject', 'degraded'],
   'knowledge.rejected': ['knowledge_id', 'subject', 'reason'],
   'knowledge.conflict_detected': ['high_id', 'low_id', 'kind'],
   'import.confirmed': ['job_id', 'candidate_id'],
-  'work.enqueued': ['request_id', 'kind'],
-  'work.claimed': ['request_id', 'claimed_by'],
-  'work.completed': ['request_id', 'ok'],
-  'work.expired': ['request_id'],
   'team.switched': ['session_id', 'from_team', 'to_team'],
 }
 

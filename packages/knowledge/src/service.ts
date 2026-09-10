@@ -62,6 +62,7 @@ import type {
   Layer,
   ReindexReport,
   RemoveResult,
+  RestoreResult,
   SearchQuery,
   SearchResult,
 } from './types.js'
@@ -481,11 +482,19 @@ export class PrismKnowledgeService implements KnowledgeService {
       try {
         const prev = raw
           .prepare(
-            `SELECT version, source_hash, origin, layer, book, owner FROM knowledge_entries
+            `SELECT version, source_hash, origin, layer, book, owner, status FROM knowledge_entries
              WHERE id = ? ORDER BY version DESC LIMIT 1`,
           )
           .get(address.id) as
-          | { version: number; source_hash: string | null; origin: string; layer: string; book: string; owner: string | null }
+          | {
+              version: number
+              source_hash: string | null
+              origin: string
+              layer: string
+              book: string
+              owner: string | null
+              status: string
+            }
           | undefined
 
         // 位置冲突：同 id 已在别处 → 拒绝（与 deposit 同口径）
@@ -506,11 +515,14 @@ export class PrismKnowledgeService implements KnowledgeService {
         }
 
         if (prev !== undefined) {
-          // 引用型同一行更新（不做版次）；若原先是自有型，转为引用型需显式覆盖整行
+          // 引用型同一行更新（不做版次）；若原先是自有型，转为引用型需显式覆盖整行。
+          // **保留 status**：软删是用户的治理动作，源文件内容变化不该让它静默复活
+          // （否则 `remove` 对引用型就失去意义——下次 kb sync 就撤销了）。
+          // 要恢复须显式 `restore()`。
           raw
             .prepare(
               `UPDATE knowledge_entries SET
-                 is_latest = 1, title = ?, type = ?, module = ?, status = 'active',
+                 is_latest = 1, title = ?, type = ?, module = ?, status = ?,
                  tags = ?, path = ?, content_hash = ?, source_hash = ?, origin = 'indexed',
                  updated_at = ?
                WHERE id = ? AND version = ?`,
@@ -519,6 +531,7 @@ export class PrismKnowledgeService implements KnowledgeService {
               address.title,
               input.type ?? 'doc',
               address.module,
+              prev.status === 'deprecated' ? 'deprecated' : 'active',
               JSON.stringify(address.tags),
               input.path,
               createHash('sha256').update(input.content, 'utf-8').digest('hex'),
@@ -603,6 +616,9 @@ export class PrismKnowledgeService implements KnowledgeService {
    * 检测层间冲突：同一 book/module 下**标题相同**的条目跨层共存，
    * 且高层未显式声明 `overrides: [低层ID]` → 记一条 `same_title` 冲突。
    *
+   * 层序 `global < project < role`：新条目要与**所有更低层**比对——
+   * project 比 global；role 比 global + project（此前只比 global，漏了 project↔role）。
+   *
    * 为什么用标题判据：Prism 零 LLM，无法判断「语义冲突」；标题相同是**确定性**
    * 的强信号（同名规则覆盖），且不会误报。只记录，不改状态、不阻断落库。
    */
@@ -617,19 +633,28 @@ export class PrismKnowledgeService implements KnowledgeService {
       overrides: string[]
     },
   ): Promise<void> {
-    // 只在 project/role 层检查（global 是最底层，没有「更低层」）
-    if (input.layer === 'global') return
+    // 更低层集合（按 LAYERS 的层序取前缀；global 无更低层 → 不检查）
+    const rank = LAYERS.indexOf(input.layer)
+    if (rank <= 0) return
+    const lowerLayers = LAYERS.slice(0, rank)
     const lows = raw
       .prepare(
-        `SELECT id, title FROM knowledge_entries
-         WHERE is_latest = 1 AND layer = 'global' AND book = ? AND module = ?
+        `SELECT id, title, layer FROM knowledge_entries
+         WHERE is_latest = 1 AND layer IN (${lowerLayers.map(() => '?').join(', ')})
+           AND book = ? AND module = ?
            AND status != 'deprecated' AND title = ? AND id != ?`,
       )
-      .all(input.book, input.module, input.title, input.id) as Array<{ id: string; title: string }>
+      .all(...lowerLayers, input.book, input.module, input.title, input.id) as Array<{
+      id: string
+      title: string
+      layer: string
+    }>
     const nowIso = this.#now().toISOString()
     for (const low of lows) {
       // 已显式声明 overrides → 不算冲突（就近覆盖是有意为之）
       if (input.overrides.includes(low.id)) continue
+      // 同层不算「层间」冲突（同层同名由别处治理，不在此报告）
+      if (low.layer === input.layer) continue
       const existing = raw
         .prepare(
           `SELECT id FROM knowledge_conflicts WHERE high_id = ? AND low_id = ? AND kind = 'same_title'`,
@@ -784,6 +809,47 @@ export class PrismKnowledgeService implements KnowledgeService {
     }
     await this.audit.record({ type: 'knowledge.deleted', knowledge_id: id, layer: latest.layer })
     return { id, mode: 'hard', references: 0 }
+  }
+
+  /**
+   * 恢复软删条目（`remove` 的逆操作）：最新版 `deprecated → active`。
+   * 幂等：本就 active 时 `restored=false`，不写审计。
+   *
+   * 自有型：同时把版次文件 frontmatter 的 `status` 改回 active——否则 reindex
+   * （以文件为真相）会把 deprecated 读回来、撤销恢复。引用型：只改 DB（项目原件只读）。
+   */
+  async restore(id: string): Promise<RestoreResult> {
+    const raw = this.persistence.knowledge.raw
+    const latest = raw
+      .prepare(`SELECT ${ENTRY_COLUMNS} FROM knowledge_entries WHERE id = ? AND is_latest = 1`)
+      .get(id) as EntryRow | undefined
+    if (latest === undefined) {
+      throw new PrismError('not_found', `条目不存在: ${id}`)
+    }
+    if (latest.status !== 'deprecated') {
+      return { id, restored: false }
+    }
+
+    if (latest.origin === 'owned') {
+      const fileText = readContentFile(latest.path)
+      if (fileText !== null) {
+        const { data, body } = splitFrontmatter(fileText)
+        if (data !== null) {
+          writeFileSync(latest.path, renderMarkdownFile({ ...data, status: 'active' }, body), 'utf-8')
+        }
+      }
+    }
+    const nowIso = this.#now().toISOString()
+    raw
+      .prepare(`UPDATE knowledge_entries SET status = 'active', updated_at = ? WHERE id = ? AND is_latest = 1`)
+      .run(nowIso, id)
+    await this.audit.record({
+      type: 'knowledge.restored',
+      knowledge_id: id,
+      layer: latest.layer,
+      source: 'manual',
+    })
+    return { id, restored: true }
   }
 
   // ===== reindex（Z2：以文件为真相重建索引） =====

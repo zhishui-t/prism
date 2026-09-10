@@ -9,7 +9,6 @@ import { TeamsPage } from './pages/Teams.tsx'
 import { SkillsPage } from './pages/Skills.tsx'
 
 // 知识图谱/架构图谱没有一级页：它们归入「知识库 → 书内」（用户裁决）。
-// 注意 pages/KnowledgeGraph.tsx 与 pages/Arch.tsx 已无引用，保留仅作参考。
 export type PageKey = 'knowledge' | 'graph' | 'projects' | 'roles' | 'teams' | 'skills' | 'tasks' 
 
 const NAV: Array<{ key: PageKey; label: string; group?: string }> = [

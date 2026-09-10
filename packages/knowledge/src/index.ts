@@ -27,6 +27,7 @@ export type {
   Layer,
   ReindexReport,
   RemoveResult,
+  RestoreResult,
   SearchQuery,
   SearchResult,
 } from './types.js'

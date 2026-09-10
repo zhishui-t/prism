@@ -328,6 +328,18 @@ async function main() {
       JSON.parse(afterReindexDel.stdout).value.status === 'deprecated',
     )
 
+    // 引用型软删后源变更重扫不复活（回归）；显式 restore 才恢复
+    const restoreRes = await cli(['kb', 'restore', 'E2E-B', '--json'], env)
+    const restoredGet = await cli(['kb', 'get', 'E2E-B', '--json'], env)
+    check(
+      '11.4b kb restore 恢复软删条目',
+      restoreRes.code === 0 &&
+        JSON.parse(restoreRes.stdout).value.restored === true &&
+        JSON.parse(restoredGet.stdout).value.status === 'active',
+    )
+    // 恢复后再软删一次（后续 11.5 的引用检查不受影响）
+    await cli(['kb', 'remove', 'E2E-B', '--json'], env)
+
     // 硬删被引用条目 → 拒绝
     const hardDel = await cli(['kb', 'remove', 'E2E-A', '--hard', '--yes', '--json'], env)
     check('11.5 被引用条目禁止硬删', hardDel.code !== 0 && hardDel.stderr.includes('referenced'))

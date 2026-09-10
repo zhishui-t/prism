@@ -24,9 +24,9 @@
 | `init-and-registration.md` | 接入初始化：`prism init` 注册 MCP + 复制 Skill |
 | `prism-skill.md` | Prism 自身 Skill：装配器 + 使用入口 |
 | `knowledge-injection.md` | 注入：MCP 拉取 / 上下文包 / AGENTS.md 静态注入 |
-| `deployment-model.md` | 部署：编译期多 harness / 运行期单 harness、多会话共享、WAL 并发 |
+| `deployment-model.md` | 部署：多 harness（内置+运行期插件）/ 单激活、多会话共享、WAL 并发 |
 | `code-graph.md` | 代码图谱：用 Graphify 工具/页面，产物放项目根 |
-| `work-queue.md` | 工作队列：拉取式，委派宿主执行 LLM 工作 |
+| ~~`work-queue.md`~~ | **已废弃**（工作队列移除；富化改宿主直付，见该文顶部） |
 | `task-center.md` | 任务中心：被动台账、依赖图、回报协议 |
 | `cli-mcp-surface.md` | CLI 与 MCP 完整命令面 |
 | `model-negotiation.md` | 边界声明：Prism 不参与子 agent 管理与模型选择 |
@@ -119,7 +119,7 @@
 | skill-loading | 同步目标 `~/.zcode/skills/` 还是 `~/.agents/skills/` |
 | knowledge-injection | 上下文包默认预算 |
 | code-graph | 建图触发（仅手动/团队启用自动）、多项目图谱合并 |
-| work-queue | 超时回收时长、积压上限、重试次数 |
+| ~~work-queue~~ | 已废弃（队列移除） |
 | task-center | 是否批量登记、实时推送方式 |
 | cli-mcp-surface | MCP 传输（stdio/HTTP） |
 

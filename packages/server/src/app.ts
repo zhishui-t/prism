@@ -107,6 +107,7 @@ export async function createApp(options: AppOptions = {}): Promise<{
   router.add('GET', '/api/kb/path', kb.path)
   router.add('POST', '/api/kb/export', kb.exportGraph)
   router.add('POST', '/api/kb/entry/:id/remove', kb.remove)
+  router.add('POST', '/api/kb/entry/:id/restore', kb.restore)
   router.add('GET', '/api/kb/conflicts', kb.conflicts)
   router.add('POST', '/api/kb/conflicts/:id/resolve', kb.resolveConflict)
   router.add('GET', '/api/kb/scan-history', kb.scanHistory)

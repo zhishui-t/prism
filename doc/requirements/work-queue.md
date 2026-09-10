@@ -1,9 +1,17 @@
-# Prism 工作队列设计（讨论稿 v0.1）
+# Prism 工作队列设计（讨论稿 v0.1）— ⚠ 已废弃
 
-> 状态：**讨论稿，待确认**
-> 日期：2026-09-09
-> 范围：Prism 需要 LLM 工作时（embedding/摘要/图表 IR），如何交给宿主执行。
-> 原则：**Prism 不调 LLM**；工作经队列委派宿主；拉取式，不侵入。
+> ## ⚠ 本文已废弃（2026-09-10）
+>
+> **工作队列已从 Prism 移除。** 本文仅作历史记录保留，不要再据它实现。
+>
+> 替代方案：
+> - 需要 LLM 的富化（摘要/分类/实体抽取）→ 宿主用自己的 LLM 产出后调
+>   MCP **`prism_kb_enrich`** 直接回写（确定性落库，无队列）。
+> - 向量化 → Prism **内置 embedding 自理**（BGE-M3 / Qwen3，按算力分档），不依赖宿主。
+>
+> 因此：`work_requests` 表、`prism_work_pending/claim/complete/fail/reclaim` 工具、
+> `/api/work/*` 路由、CLI `work` 命令、控制台「工作队列」页**均已删除**。
+> 错误码中的队列护栏码亦已移除。参见 `knowledge-base.md` 顶部「实现状态修订」。
 
 ---
 

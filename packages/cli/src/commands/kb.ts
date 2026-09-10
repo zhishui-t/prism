@@ -50,6 +50,8 @@ export async function runKb(ctx: CommandContext, args: string[], values: ArgValu
       return await kbSync(ctx, rest, values)
     case 'remove':
       return await kbRemove(ctx, rest, values)
+    case 'restore':
+      return await kbRestore(ctx, rest)
     case 'conflicts':
       return await kbConflicts(ctx, values)
     case 'resolve':
@@ -501,6 +503,38 @@ async function kbRemove(ctx: CommandContext, args: string[], values: ArgValues):
       ctx.stdout(`已软删 ${id}（status=deprecated，保留审计；被 ${result.references} 条边引用）`)
     } else {
       ctx.stdout(`已硬删 ${id}（版次行、边、文件均已移除）`)
+    }
+    return 0
+  } catch (error) {
+    if (error instanceof PrismError) {
+      ctx.stderr(`错误 [${error.code}] ${error.message}`)
+      return 1
+    }
+    throw error
+  }
+}
+
+/**
+ * `prism kb restore <id>`
+ * 恢复软删条目（deprecated → active）；幂等。
+ */
+async function kbRestore(ctx: CommandContext, args: string[]): Promise<number> {
+  const id = args[0]
+  if (id === undefined) {
+    ctx.stderr('用法: prism kb restore <id>')
+    return 1
+  }
+  const kb = await getKb(ctx)
+  if (kb.restore === undefined) {
+    ctx.stderr('错误 [unsupported] 当前知识服务未实现 restore')
+    return 1
+  }
+  try {
+    const result = await kb.restore(id)
+    if (ctx.json) {
+      ctx.stdout(JSON.stringify({ ok: true, value: result }))
+    } else {
+      ctx.stdout(result.restored ? `已恢复 ${id}（status=active）` : `${id} 本就未软删（status=active，未改动）`)
     }
     return 0
   } catch (error) {

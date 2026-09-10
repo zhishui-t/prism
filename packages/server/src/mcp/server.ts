@@ -674,6 +674,22 @@ export function createMcpTools(deps: McpDeps): McpTool[] {
       },
     },
     {
+      name: 'prism_kb_restore',
+      description: '恢复软删条目（deprecated → active）；幂等，本就 active 时 restored=false',
+      inputSchema: {
+        type: 'object',
+        properties: { id: { type: 'string' } },
+        required: ['id'],
+      },
+      call: async (args) => {
+        const id = asString(args.id)
+        if (id === undefined) throw new Error('prism_kb_restore 需要 { id }')
+        const service = await kb()
+        if (service.restore === undefined) throw new Error('当前知识服务未实现 restore')
+        return await service.restore(id)
+      },
+    },
+    {
       name: 'prism_kb_conflicts',
       description: '层间冲突列表（同名跨层且未声明 overrides）；默认只返回未处理的',
       inputSchema: {
@@ -974,7 +990,7 @@ export async function handleRpcRequest(request: JsonRpcRequest, tools: McpTool[]
         return respond({ content: [{ type: 'text', text: JSON.stringify(value, null, 2) }], isError: false })
       } catch (error) {
         // 工具执行错误按 MCP 约定走 result.isError，而非 JSON-RPC error。
-        // PrismError 带上 [code] 前缀——宿主需要按错误码分支（如 work_already_claimed / task_stale_revision）。
+        // PrismError 带上 [code] 前缀——宿主需要按错误码分支（如 task_stale_revision / harness_not_found）。
         const text =
           error instanceof PrismError
             ? `[${error.code}] ${error.message}`

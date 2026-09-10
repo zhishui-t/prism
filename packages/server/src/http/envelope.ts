@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import { isPrismError, PrismError } from '@prism/core'
 
-/** design.md §4 固定错误码集合（含工作队列护栏码，work-queue.md §6）。 */
+/** design.md §4 固定错误码集合（工作队列已移除，其护栏码一并删除）。 */
 export const ERROR_CODES = [
   'bad_request',
   'not_found',
@@ -12,10 +12,6 @@ export const ERROR_CODES = [
   'graphify_failed',
   'graphify_timeout',
   'build_in_progress',
-  'work_already_claimed',
-  'work_token_mismatch',
-  'work_result_invalid',
-  'work_backlog_full',
   'invalid_status_transition',
   'task_stale_revision',
   'archify_missing',
@@ -49,10 +45,6 @@ const ERROR_STATUS: Record<ErrorCode, number> = {
   graphify_failed: 500,
   graphify_timeout: 504,
   build_in_progress: 409,
-  work_already_claimed: 409,
-  work_token_mismatch: 409,
-  work_result_invalid: 422,
-  work_backlog_full: 429,
   invalid_status_transition: 409,
   task_stale_revision: 409,
   archify_missing: 500,

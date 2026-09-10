@@ -104,6 +104,13 @@ export interface RemoveResult {
   references: number
 }
 
+/** 恢复软删条目（deprecated → active）。 */
+export interface RestoreResult {
+  id: string
+  /** 恢复前的状态；本就 active 时 restored=false（幂等） */
+  restored: boolean
+}
+
 /**
  * 层间冲突（B2，§12.3）。
  *
@@ -355,6 +362,11 @@ export interface KnowledgeService {
    * 只允许软删；`hard=true` 且无引用时才真删行与文件。
    */
   remove?(id: string, options?: { hard?: boolean }): Promise<RemoveResult>
+  /**
+   * 恢复软删条目：最新版 `deprecated → active`（幂等；本就 active 时 restored=false）。
+   * 与 `remove` 对称——`remove` 的「可恢复」由本方法兑现（此前无入口，是个空承诺）。
+   */
+  restore?(id: string): Promise<RestoreResult>
   /** 层间冲突列表（B2）；未解决在前。 */
   conflicts?(options?: { includeResolved?: boolean }): Promise<KnowledgeConflict[]>
   /** 标记冲突已处理（B2）。 */
