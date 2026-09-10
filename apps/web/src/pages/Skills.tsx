@@ -1,12 +1,21 @@
 import { teamApi } from '../api-team.ts'
 import { State } from '../components/State.tsx'
 import { useAsync } from '../components/useAsync.ts'
+import type { NavTarget } from '../nav.ts'
 
 /**
  * 技能页：Prism 自有 Skill 列表。
  * Skill 本身不分层——分层是"在哪儿被指定"的效果（全局/团队/角色）。
+ *
+ * 本页「使用情况」是**反向视图**（skill → 谁引用）；角色/团队详情里的「有效 Skill」是
+ * **正向视图**（角色 × 团队 → 能用的 skill）。两者并存，互相链接（F-D2）。
  */
-export function SkillsPage() {
+export function SkillsPage({
+  onOpenEffective,
+}: {
+  /** 跳转到角色/团队详情的有效集（正向视图） */
+  onOpenEffective?: (target: NavTarget) => void
+} = {}) {
   const skills = useAsync(() => teamApi.skills(), [])
   const usage = useAsync(() => teamApi.skillUsage(), [])
 
@@ -52,35 +61,68 @@ export function SkillsPage() {
 
       {/* 谁在用这个 Skill：角色白名单 ∪ 团队声明（合并视图，team-definition.md §6.3） */}
       <div className="card">
-        <h3>使用情况</h3>
+        <div className="row" style={{ justifyContent: 'space-between' }}>
+          <h3 style={{ margin: 0 }}>使用情况</h3>
+          <span className="small muted">点角色 / 团队名 → 看它的「有效 Skill」（正向视图）</span>
+        </div>
         <State
           loading={usage.loading}
           error={usage.error}
           empty={!usage.loading && !usage.error && (usage.data?.length ?? 0) === 0}
           emptyText="还没有任何 Skill 被角色或团队引用"
         >
-          <table>
-            <thead>
-              <tr>
-                <th style={{ width: 180 }}>Skill</th>
-                <th style={{ width: 90 }}>已装</th>
-                <th>被哪些角色引用</th>
-                <th>被哪些团队声明</th>
-              </tr>
-            </thead>
-            <tbody>
-              {usage.data?.map((u) => (
-                <tr key={u.name}>
-                  <td className="mono">{u.name}</td>
-                  <td>
-                    <span className={`tag${u.installed ? ' ok' : ''}`}>{u.installed ? '已装' : '未装'}</span>
-                  </td>
-                  <td className="small muted">{u.roles.length > 0 ? u.roles.join(', ') : '—'}</td>
-                  <td className="small muted">{u.teams.length > 0 ? u.teams.join(', ') : '—'}</td>
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th style={{ width: 180 }}>Skill</th>
+                  <th style={{ width: 90 }}>已装</th>
+                  <th>被哪些角色引用</th>
+                  <th>被哪些团队声明</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {usage.data?.map((u) => (
+                  <tr key={u.name}>
+                    <td className="mono">{u.name}</td>
+                    <td>
+                      <span className={`tag${u.installed ? ' ok' : ''}`}>{u.installed ? '已装' : '未装'}</span>
+                    </td>
+                    <td className="small muted">
+                      {u.roles.length === 0
+                        ? '—'
+                        : u.roles.map((r, i) => (
+                            <span key={r}>
+                              {i > 0 && ', '}
+                              <button
+                                className="rel-link"
+                                onClick={() => onOpenEffective?.({ page: 'roles', role: r })}
+                              >
+                                {r}
+                              </button>
+                            </span>
+                          ))}
+                    </td>
+                    <td className="small muted">
+                      {u.teams.length === 0
+                        ? '—'
+                        : u.teams.map((t, i) => (
+                            <span key={t}>
+                              {i > 0 && ', '}
+                              <button
+                                className="rel-link"
+                                onClick={() => onOpenEffective?.({ page: 'teams', team: t })}
+                              >
+                                {t}
+                              </button>
+                            </span>
+                          ))}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </State>
       </div>
     </>

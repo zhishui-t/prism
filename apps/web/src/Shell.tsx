@@ -7,9 +7,10 @@ import { TasksPage } from './pages/Tasks.tsx'
 import { RolesPage } from './pages/Roles.tsx'
 import { TeamsPage } from './pages/Teams.tsx'
 import { SkillsPage } from './pages/Skills.tsx'
+import type { NavTarget, PageKey } from './nav.ts'
 
 // 知识图谱/架构图谱没有一级页：它们归入「知识库 → 书内」（用户裁决）。
-export type PageKey = 'knowledge' | 'graph' | 'projects' | 'roles' | 'teams' | 'skills' | 'tasks' 
+export type { PageKey } 
 
 const NAV: Array<{ key: PageKey; label: string; group?: string }> = [
   { key: 'knowledge', label: '知识库' },
@@ -23,6 +24,13 @@ const NAV: Array<{ key: PageKey; label: string; group?: string }> = [
 
 export function Shell() {
   const [page, setPage] = useState<PageKey>('knowledge')
+  /** 跨页跳转意图（F-D2 有效集 ↔ 使用情况互链）；每次 navigate 都换新对象，页面据此重设选中项。 */
+  const [nav, setNav] = useState<NavTarget | undefined>(undefined)
+
+  const navigate = (target: NavTarget) => {
+    setPage(target.page)
+    setNav(target)
+  }
 
   let lastGroup: string | undefined
   return (
@@ -40,7 +48,10 @@ export function Shell() {
                 {showGroup && <span className="nav-group">{item.group}</span>}
                 <button
                   className={`nav-item${page === item.key ? ' active' : ''}`}
-                  onClick={() => setPage(item.key)}
+                  onClick={() => {
+                    setPage(item.key)
+                    setNav(undefined)
+                  }}
                 >
                   {item.label}
                 </button>
@@ -53,9 +64,19 @@ export function Shell() {
         {page === 'knowledge' && <KnowledgePage />}
         {page === 'graph' && <CodeGraphPage />}
         {page === 'projects' && <ProjectsPage />}
-        {page === 'roles' && <RolesPage />}
-        {page === 'teams' && <TeamsPage />}
-        {page === 'skills' && <SkillsPage />}
+        {page === 'roles' && (
+          <RolesPage
+            nav={nav?.page === 'roles' ? nav : undefined}
+            onOpenSkills={() => navigate({ page: 'skills' })}
+          />
+        )}
+        {page === 'teams' && (
+          <TeamsPage
+            nav={nav?.page === 'teams' ? nav : undefined}
+            onOpenSkills={() => navigate({ page: 'skills' })}
+          />
+        )}
+        {page === 'skills' && <SkillsPage onOpenEffective={(t) => navigate(t)} />}
         {page === 'tasks' && <TasksPage />}      </main>
     </div>
   )

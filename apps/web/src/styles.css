@@ -265,6 +265,67 @@ tr:last-child td { border-bottom: 0; }
 }
 .rel-link:hover { text-decoration: underline; }
 
+/* ===== 移动端优先公共前置（ui-spec-v4 §1.2） ===== */
+
+/* 既有宽表在小屏的横向滚动兜底（新界面本身不用宽表） */
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.table-scroll table { min-width: 560px; }
+
+/* 表单单元：标签 + 控件 + 字段级错误文案 */
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field .label { font-size: 12.5px; color: var(--muted); }
+.field .err-text { font-size: 12px; color: var(--err); }
+.form-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+
+/* 成员数量步进器 */
+.stepper { display: inline-flex; align-items: center; gap: 6px; }
+.stepper button { width: 30px; height: 30px; padding: 0; line-height: 1; }
+.stepper .n { min-width: 20px; text-align: center; font-family: var(--mono); }
+
+/* 列表行（版本历史 / 有效 Skill）：整行可点，移动端触达高度 ≥44px */
+.list-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-left: 3px solid transparent;
+  border-radius: 0;
+  padding: 10px 8px;
+}
+.list-row:hover:not(:disabled) { background: var(--panel-2); border-color: transparent; }
+.list-row > .list-main { flex: 1; min-width: 0; }
+
+/* 提交区（小屏 sticky，保证长表单滚动中始终可点） */
+.form-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 640px) {
+  .main { padding: 14px 12px 32px; }
+  .topbar { height: auto; padding: 8px 12px; gap: 10px; flex-wrap: wrap; }
+  .topnav { gap: 2px; }
+  .card { padding: 12px; }
+  .grow { min-width: 0; }
+  /* 移动端 ≥15px 防 iOS 聚焦自动缩放 */
+  .field input, .field select, .field textarea { font-size: 15px; }
+  .form-actions {
+    position: sticky;
+    bottom: 0;
+    z-index: 5;
+    background: var(--panel);
+    border-top: 1px solid var(--border);
+    padding: 10px 0;
+  }
+}
+
 /* 书/模块详情面板 */
 .scope-panel { margin-top: 14px; }
 .mini-graph {

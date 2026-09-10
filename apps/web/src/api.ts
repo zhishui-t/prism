@@ -37,6 +37,20 @@ export interface KnowledgeEntry {
   updated_at: string
 }
 
+/**
+ * 条目版本历史（F-B4，design-v4 §3.1 EntryVersion 契约）。
+ * `status` 用 string 而非联合类型：未知值要**原文显示**（不隐藏），见 ui-spec §4.2。
+ */
+export interface EntryVersion {
+  id: string
+  version: number
+  status: string
+  title: string
+  is_latest: boolean
+  updated_at: string
+  source_path: string | null
+}
+
 /** 目录条目（星图/下钻用）。 */
 export interface CatalogEntry {
   id: string
@@ -281,6 +295,18 @@ export const api = {
     request<KnowledgeEntry>(
       `/api/kb/get/${encodeURIComponent(id)}${version ? `?version=${version}` : ''}`,
     ),
+
+  /**
+   * 条目版本历史（F-B4 → GET /api/kb/versions/:id）。
+   * 服务端形状在 design-v4 §3.4 记为 `{versions}`、ui-spec §4.4 记为裸数组 → 两种都接受。
+   */
+  kbVersions: async (id: string): Promise<EntryVersion[]> => {
+    const value = await request<EntryVersion[] | { versions: EntryVersion[] }>(
+      `/api/kb/versions/${encodeURIComponent(id)}`,
+    )
+    if (Array.isArray(value)) return value
+    return value?.versions ?? []
+  },
 
   kbTree: (layer?: string) =>
     request<BookNode[]>(`/api/kb/tree${layer ? `?layer=${encodeURIComponent(layer)}` : ''}`),

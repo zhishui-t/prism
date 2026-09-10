@@ -1,8 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import { teamApi, type RoleDefinition, type ValidationIssue } from '../api-team.ts'
+import { EffectiveSkills } from '../components/EffectiveSkills.tsx'
 import { State } from '../components/State.tsx'
 import { useAsync } from '../components/useAsync.ts'
+import type { NavTarget } from '../nav.ts'
 
 const COLOR_MAP: Record<string, string> = {
   red: '#e05555',
@@ -15,10 +17,22 @@ const COLOR_MAP: Record<string, string> = {
   cyan: '#3ac0c4',
 }
 
-/** 角色页：角色库列表 + 详情（核心第一原则 / 边界 / 能力 / 知识绑定）。 */
-export function RolesPage() {
+/** 角色页：角色库列表 + 详情（核心第一原则 / 边界 / 能力 / 知识绑定 / 有效 Skill）。 */
+export function RolesPage({
+  nav,
+  onOpenSkills,
+}: {
+  /** 跨页跳转意图（有效集反向视图 → 本页展开指定角色） */
+  nav?: NavTarget
+  onOpenSkills?: () => void
+} = {}) {
   const roles = useAsync(() => teamApi.roles(), [])
   const [selected, setSelected] = useState<string>('')
+
+  // 从「技能 → 使用情况」跳进来时展开目标角色
+  useEffect(() => {
+    if (nav?.role !== undefined && nav.role !== '') setSelected(nav.role)
+  }, [nav])
 
   const detail = useAsync(
     () => (selected ? teamApi.role(selected) : Promise.resolve(undefined)),
@@ -87,6 +101,7 @@ export function RolesPage() {
           loading={detail.loading}
           error={detail.error}
           onClose={() => setSelected('')}
+          onOpenSkills={onOpenSkills}
         />
       )}
     </>
@@ -99,12 +114,14 @@ function RoleDetail({
   loading,
   error,
   onClose,
+  onOpenSkills,
 }: {
   name: string
   detail: RoleDefinition | undefined
   loading: boolean
   error: string | undefined
   onClose: () => void
+  onOpenSkills?: () => void
 }) {
   return (
     <div className="card">
@@ -165,6 +182,8 @@ function RoleDetail({
                 </table>
               </div>
             )}
+            {/* F-D2 有效集（正向视图）：正文上方；与技能页「使用情况」互链 */}
+            <EffectiveSkills key={name} role={name} roleFixed onOpenUsage={onOpenSkills} />
             <pre
               className="mono"
               style={{

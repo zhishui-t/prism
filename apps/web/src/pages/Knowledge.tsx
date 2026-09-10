@@ -1165,14 +1165,34 @@ function MiniGraph({ view }: { view: KbGraphView }) {
   )
 }
 
-/** 条目详情面板：正文 + 元数据 + 关系（含双链邻居）。 */
+/** 条目详情面板：正文 + 版本历史（F-B4）+ 元数据 + 关系（含双链邻居）。 */
 function EntryPanel({ id, onClose, onSelect }: { id: string; onClose: () => void; onSelect: (id: string) => void }) {
-  const entry = useAsync(() => api.kbGet(id), [id])
+  const [tab, setTab] = useState<'body' | 'versions'>('body')
+  /** undefined = 最新版（与既有行为一致）；有值 = 查看该历史版次。 */
+  const [version, setVersion] = useState<number | undefined>(undefined)
+  const entry = useAsync(() => api.kbGet(id, version), [id, version])
+  const versions = useAsync(() => api.kbVersions(id), [id])
   const neighbors = useAsync(() => api.kbGraph({ id, depth: 1 }), [id])
   const [removing, setRemoving] = useState(false)
   const [note, setNote] = useState('')
 
-  /** 软删（可恢复）：二次确认，避免误点。 */
+  // 换条目时回到「正文 + 最新版」：面板不保留上一条目的视图状态
+  useEffect(() => {
+    setTab('body')
+    setVersion(undefined)
+    setNote('')
+  }, [id])
+
+  /** 版次降序（服务端已降序，这里再保证一次，空数组不报错）。 */
+  const list = useMemo(
+    () => [...(versions.data ?? [])].sort((a, b) => b.version - a.version),
+    [versions.data],
+  )
+  const latest = list.find((v) => v.is_latest)?.version
+  /** 正在看历史版（版次表未加载完时保守判定为历史版 → 不提供软删）。 */
+  const viewingHistory = version !== undefined && (latest === undefined || version !== latest)
+
+  /** 软删（可恢复）：二次确认，避免误点。历史版不提供软删。 */
   const doRemove = async () => {
     if (!window.confirm(`软删条目「${entry.data?.title ?? id}」？
 
@@ -1190,12 +1210,18 @@ function EntryPanel({ id, onClose, onSelect }: { id: string; onClose: () => void
     }
   }
 
+  /** 点版本 → 回正文看该版次（用户点版本的目的就是看内容）。 */
+  const openVersion = (v: number) => {
+    setVersion(v)
+    setTab('body')
+  }
+
   return (
     <aside className="entry-panel">
       <div className="row" style={{ justifyContent: 'space-between', marginBottom: 10 }}>
         <strong>条目详情</strong>
         <div className="row" style={{ gap: 6 }}>
-          {entry.data !== undefined && entry.data.status === 'active' && (
+          {entry.data !== undefined && entry.data.status === 'active' && !viewingHistory && (
             <button onClick={() => void doRemove()} disabled={removing} title="软删（可恢复）">
               {removing ? '删除中…' : '软删'}
             </button>
@@ -1208,58 +1234,164 @@ function EntryPanel({ id, onClose, onSelect }: { id: string; onClose: () => void
           {note}
         </div>
       )}
-      <State loading={entry.loading} error={entry.error}>
-        {entry.data && (
-          <>
-            <div className="mono small muted">{id}@v{entry.data.version}</div>
-            <h3 style={{ margin: '4px 0 10px', fontSize: 16 }}>{entry.data.title}</h3>
-            <div className="row" style={{ gap: 6, marginBottom: 10 }}>
-              <span className="tag" style={{ color: TYPE_COLOR[entry.data.type] }}>
-                {TYPE_LABEL[entry.data.type] ?? entry.data.type}
-              </span>
-              <span className="tag">{LAYER_LABEL[entry.data.layer] ?? entry.data.layer}</span>
-              <span className="tag">{entry.data.book}</span>
-              {entry.data.module !== '' && <span className="tag">{entry.data.module}</span>}
-              <span className={`tag${entry.data.risk === 'high' ? ' err' : entry.data.risk === 'medium' ? ' warn' : ''}`}>
-                risk {entry.data.risk}
-              </span>
+
+      {/* 标签栏（沿用 ScopePanel 的 tab 约定：选中 = button.primary） */}
+      <div className="row" style={{ gap: 6, marginBottom: 10 }}>
+        <button className={tab === 'body' ? 'primary' : ''} aria-pressed={tab === 'body'} onClick={() => setTab('body')}>
+          正文
+        </button>
+        <button
+          className={tab === 'versions' ? 'primary' : ''}
+          aria-pressed={tab === 'versions'}
+          onClick={() => setTab('versions')}
+        >
+          {/* 未加载前不显示数字，避免闪一个假数字 */}
+          {versions.data !== undefined ? `版本 (${list.length})` : '版本'}
+        </button>
+      </div>
+
+      {tab === 'body' && (
+        <>
+          {entry.data !== undefined && entry.error !== undefined && (
+            <div className="error" role="alert" style={{ marginBottom: 8 }}>
+              {version !== undefined ? `切换到 v${version} 失败：${entry.error}` : `请求失败：${entry.error}`}{' '}
+              <button className="rel-link" onClick={entry.reload}>
+                重试
+              </button>
             </div>
-            <pre className="entry-body">{entry.data.content}</pre>
+          )}
+          {entry.data !== undefined && entry.loading && (
+            <div className="small muted" style={{ marginBottom: 6 }}>
+              加载中…
+            </div>
+          )}
+          {entry.data === undefined ? (
+            <State loading={entry.loading} error={entry.error}>{null}</State>
+          ) : (
+            <div aria-live="polite">
+              <div className="mono small muted">
+                {id}@v{entry.data.version}
+                {viewingHistory && (
+                  <>
+                    {' '}
+                    <span className="tag">历史版本</span>
+                  </>
+                )}
+              </div>
+              <h3 style={{ margin: '4px 0 10px', fontSize: 16 }}>{entry.data.title}</h3>
+              <div className="row" style={{ gap: 6, marginBottom: 10 }}>
+                <span className="tag" style={{ color: TYPE_COLOR[entry.data.type] }}>
+                  {TYPE_LABEL[entry.data.type] ?? entry.data.type}
+                </span>
+                <span className="tag">{LAYER_LABEL[entry.data.layer] ?? entry.data.layer}</span>
+                <span className="tag">{entry.data.book}</span>
+                {entry.data.module !== '' && <span className="tag">{entry.data.module}</span>}
+                <span className={`tag${entry.data.risk === 'high' ? ' err' : entry.data.risk === 'medium' ? ' warn' : ''}`}>
+                  risk {entry.data.risk}
+                </span>
+              </div>
+              <pre className="entry-body">{entry.data.content}</pre>
 
-            {neighbors.data && neighbors.data.edges.length > 0 && (
-              <>
-                <div className="small muted" style={{ margin: '12px 0 6px' }}>
-                  关系（{neighbors.data.edges.length}）
-                </div>
-                <ul className="rel-list">
-                  {dedupeRelations(neighbors.data.edges, id).map((r) => (
-                    <li key={`${r.dir}-${r.other}-${r.relation}`} className="small">
-                      <span className="mono muted">{r.dir} {r.relation}</span>{' '}
-                      <button
-                        className="rel-link"
-                        onClick={() => onSelect(r.other)}
-                        title="查看该条目"
-                      >
-                        {r.other}
-                      </button>
-                    </li>
+              {neighbors.data && neighbors.data.edges.length > 0 && (
+                <>
+                  <div className="small muted" style={{ margin: '12px 0 6px' }}>
+                    关系（{neighbors.data.edges.length}）
+                  </div>
+                  <ul className="rel-list">
+                    {dedupeRelations(neighbors.data.edges, id).map((r) => (
+                      <li key={`${r.dir}-${r.other}-${r.relation}`} className="small">
+                        <span className="mono muted">{r.dir} {r.relation}</span>{' '}
+                        <button
+                          className="rel-link"
+                          onClick={() => onSelect(r.other)}
+                          title="查看该条目"
+                        >
+                          {r.other}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+
+              {entry.data.tags.length > 0 && (
+                <div className="row" style={{ gap: 4, marginTop: 10 }}>
+                  {entry.data.tags.map((t) => (
+                    <span key={t} className="tag small">#{t}</span>
                   ))}
-                </ul>
-              </>
-            )}
+                </div>
+              )}
+            </div>
+          )}
+        </>
+      )}
 
-            {entry.data.tags.length > 0 && (
-              <div className="row" style={{ gap: 4, marginTop: 10 }}>
-                {entry.data.tags.map((t) => (
-                  <span key={t} className="tag small">#{t}</span>
+      {tab === 'versions' && (
+        <>
+          <State loading={versions.loading} error={versions.error}>
+            {list.length === 0 ? (
+              <div className="empty">没找到该条目的版本记录。条目可能已从库中移除。</div>
+            ) : list.length === 1 ? (
+              <div className="empty">
+                此条目只有 1 个版本（当前 v{list[0].version}）。
+                <div className="small muted" style={{ marginTop: 6 }}>
+                  有新版本时这里会出现历史。
+                </div>
+              </div>
+            ) : (
+              <div>
+                {list.map((v) => (
+                  <button
+                    key={v.version}
+                    className={`list-row${v.is_latest ? '' : ' muted'}`}
+                    style={{ borderLeft: `3px solid ${v.is_latest ? 'var(--accent)' : 'transparent'}` }}
+                    onClick={() => openVersion(v.version)}
+                    title={`查看 v${v.version} 正文`}
+                  >
+                    <span className="mono" style={{ minWidth: 34 }}>
+                      v{v.version}
+                    </span>
+                    {v.is_latest && <span className="tag ok">当前</span>}
+                    <span className={`tag${STATUS_TAG[v.status] ?? ''}`}>{v.status}</span>
+                    {entry.data !== undefined && entry.data.version === v.version && (
+                      <span className="tag">查看中</span>
+                    )}
+                    <span className="list-main small muted" style={{ textAlign: 'right' }}>
+                      {fmtTime(v.updated_at)}
+                    </span>
+                  </button>
                 ))}
               </div>
             )}
-          </>
-        )}
-      </State>
+            <div className="small muted" style={{ marginTop: 10 }}>
+              版本来自条目文件；索引流水请用 <span className="mono">prism kb scan-history</span>
+            </div>
+          </State>
+          {versions.error !== undefined && (
+            <div className="row" style={{ marginTop: 8 }}>
+              <button onClick={versions.reload}>重试</button>
+            </div>
+          )}
+        </>
+      )}
     </aside>
   )
+}
+
+/** 版次状态 → 标签变体（未知值不隐藏，原文显示）。 */
+const STATUS_TAG: Record<string, string> = {
+  active: ' ok',
+  deprecated: ' err',
+  superseded: ' warn',
+}
+
+/** ISO 时间 → `YYYY-MM-DD HH:mm`（解析失败原样返回，不隐藏）。 */
+function fmtTime(iso: string): string {
+  if (iso === '') return '—'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
 
 export type { KbGraphNode }
