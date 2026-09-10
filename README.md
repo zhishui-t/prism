@@ -48,10 +48,14 @@ git clone --recurse-submodules https://github.com/zhishui-t/prism.git
 cd prism
 pnpm install
 pnpm run 3rd:build     # 安装 graphify 的 Python 依赖（archify 免构建）
+pnpm run 3rd:setup     # 下 anydoc 平台二进制 + llama.cpp 编译/模型（可选，按需）
 
 # 已 clone 过、但没带 --recurse-submodules：
-# git submodule update --init --recursive
+pnpm run 3rd:init      # = git submodule update --init --recursive
 ```
+
+> `anydoc`（文档转 Markdown）与向量化运行时是**平台相关**的，不进仓库也不随包分发，
+> 由 `3rd:setup` 在目标机按自身平台生成（见 [3rd/README.md](./3rd/README.md)）。
 
 ### 2.3 接入宿主
 
@@ -108,7 +112,8 @@ prism/
 ├── 3rd/               # git submodule（锁定上游发布 tag，见 3rd/README.md）
 │   ├── archify/       # v2.16.0（自包含 Node CLI，免构建）
 │   ├── graphify/      # v0.9.57（Python，免构建）
-│   └── llama.cpp/     # b10883（C++，本地编译 → 3rd/llama-runtime/）
+│   ├── llama.cpp/     # b10883（C++，本地编译 → 3rd/llama-runtime/）
+│   └── anydoc/        # v0.2.4（Rust/napi，平台预编译 → 3rd/anydoc-runtime/）
 ├── doc/requirements/  # 需求与设计文档（16 篇，含决策记录）
 └── test/              # 端到端测试
 ```
@@ -317,7 +322,9 @@ pnpm test          # 535 单测
 pnpm test:e2e      # 66 项端到端
 pnpm lint          # ESLint
 pnpm build         # 构建全部包 + web
+pnpm run 3rd:init  # 初始化子模块（首次）
 pnpm run 3rd:build # 安装 graphify Python 依赖
+pnpm run 3rd:setup # 下 anydoc + 编译 llama.cpp（可选）
 pnpm run package   # 打包 tarball
 ```
 

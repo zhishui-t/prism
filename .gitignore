@@ -13,6 +13,10 @@ coverage/
 # 由 `prism embedding install` / scripts/setup-embedding.mjs 生成
 3rd/llama-runtime/
 
+# anydoc 运行时（上游 JS 包装层副本 + 平台预编译 .node，约 8MB；Rust 无本机工具链不可自编译）
+# 由 scripts/setup-anydoc.mjs 生成
+3rd/anydoc-runtime/
+
 # Prism 本地运行状态（知识库/图谱/审计/团队运行态）
 .prism/
 

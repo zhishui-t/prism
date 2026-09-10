@@ -91,7 +91,7 @@ export async function runDoctor(ctx: CommandContext, _args: string[], values: Ar
     checks.push({ name: 'graphify', ok: false, detail: `${msg(error)}（可设 GRAPHIFY_BIN）` })
   }
 
-  // 5) 文档转换（@firecrawl/anydoc）：kb sync 转 docx/pdf 等的前提
+  // 5) 文档转换（anydoc 三方件）：kb sync 转 docx/pdf 等的前提
   const converterError = await probeConverter()
   checks.push({
     name: 'anydoc',
@@ -99,7 +99,7 @@ export async function runDoctor(ctx: CommandContext, _args: string[], values: Ar
     detail:
       converterError === null
         ? '文档转换可用（docx/pdf/xlsx/pptx/csv → Markdown）'
-        : `${converterError}（kb sync 只能处理 md/txt；重新 pnpm install 或从 tarball 解压）`,
+        : `${converterError}（未安装则 kb sync 只能处理 md/txt）`,
   })
 
   // 6) 本地向量化（变更 2，可选增强）：未安装不算失败——检索自动回落纯 BM25

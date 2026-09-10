@@ -21,7 +21,6 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@firecrawl/anydoc": "0.2.4",
     "@prism/core": "workspace:*"
   },
   "devDependencies": {

@@ -17,8 +17,9 @@
     "web:dev": "pnpm --filter @prism/web dev",
     "web:build": "pnpm --filter @prism/web build",
     "3rd:build": "python -m pip install -q \"tree-sitter>=0.23.0,<0.26\" tree-sitter-python tree-sitter-typescript tree-sitter-javascript networkx numpy rapidfuzz",
-    "3rd:check": "node 3rd/archify/archify/bin/archify.mjs --help && python -c \"import sys; sys.path.insert(0, '3rd/graphify'); import graphify; print('graphify import ok')\" && python -c \"import tree_sitter, networkx, rapidfuzz; print('deps ok')\"",
+    "3rd:check": "node 3rd/archify/archify/bin/archify.mjs --help && python -c \"import sys; sys.path.insert(0, '3rd/graphify'); import graphify; print('graphify import ok')\" && python -c \"import tree_sitter, networkx, rapidfuzz; print('deps ok')\" && node scripts/setup-anydoc.mjs --check",
     "3rd:init": "git submodule update --init --recursive",
+    "3rd:setup": "node scripts/setup-anydoc.mjs && node scripts/setup-embedding.mjs",
     "package": "node scripts/package.mjs",
     "test:e2e": "node test/run-e2e.mjs"
   },

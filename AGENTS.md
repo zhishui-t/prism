@@ -132,7 +132,7 @@ pnpm test:e2e      # 5. 端到端（涉及 CLI/HTTP/Web 时）
 | Graphify / Archify 封装 | `packages/server/src/graph/{graphify,archify}.ts` |
 | CLI 命令 | `packages/cli/src/commands/` |
 | 控制台页面 | `apps/web/src/pages/` |
-| 三方依赖（submodule）/ 向量化 | `3rd/`（见 `3rd/README.md`）；`packages/server/src/kb/embedding.ts` |
+| 三方件（submodule）/ 向量化 / 文档转换 | `3rd/`（见 `3rd/README.md`）；embedding: `packages/server/src/kb/embedding.ts`；anydoc: `packages/knowledge/src/convert.ts` |
 
 ---
 
@@ -146,7 +146,8 @@ pnpm test:e2e
 # 3rd 子模块（submodule）
 pnpm run 3rd:init      # git submodule update --init --recursive（克隆后一次）
 pnpm run 3rd:build     # 安装 graphify Python 依赖
-pnpm run 3rd:check     # 可用性自检（archify + graphify + Python 依赖）
+pnpm run 3rd:check     # 可用性自检（archify + graphify + Python 依赖 + anydoc）
+pnpm run 3rd:setup     # 下 anydoc 平台二进制 + llama.cpp 编译/模型（可选）
 
 # 打包
 pnpm run package       # → dist/prism-<version>.tgz

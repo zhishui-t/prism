@@ -7,3 +7,6 @@
 [submodule "3rd/llama.cpp"]
 	path = 3rd/llama.cpp
 	url = https://github.com/ggml-org/llama.cpp
+[submodule "3rd/anydoc"]
+	path = 3rd/anydoc
+	url = https://github.com/firecrawl/anydoc

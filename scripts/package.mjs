@@ -13,15 +13,18 @@
  *   ├── packages/<name>/package.json
  *   ├── node_modules/@prism/<name> → 物化的包副本（真实目录，非符号链接）
  *   ├── apps/web/dist/             # 控制台静态资源
- *   ├── 3rd/archify/               # vendored 子工程（自包含）
- *   ├── 3rd/graphify/              # vendored 子工程（Python，需本机装依赖）
+ *   ├── 3rd/archify/               # submodule 源码（自包含 CLI）
+ *   ├── 3rd/graphify/              # submodule 源码（Python，需本机装依赖）
+ *   ├── 3rd/anydoc/                # submodule 源码（Rust；运行时由目标机下载）
+ *   ├── scripts/setup-*.mjs        # 运行时安装脚本（embedding / anydoc）
  *   ├── README.md / AGENTS.md / LICENSE
  *   └── package.json
  *
  * 设计要点：
- * - **仅 workspace 内部包 + 少量外部运行时依赖**（如 @firecrawl/anydoc 做文档转换），
- *   二者都会物化进 tarball，解压后无需 `pnpm install`；
+ * - **仅 workspace 内部包**物化进 tarball，解压后无需 `pnpm install`；
  * - workspace 包在开发态是符号链接，打包时**物化**为真实目录，避免解压后链接失效；
+ * - 三方件走 **git submodule + 安装脚本**：archify/graphify 随包（免构建）；llama.cpp 与
+ *   anydoc 的运行时由目标机跑脚本生成（平台相关，不随包）；
  * - graphify 的 Python 依赖（tree-sitter 等）需目标机 `pnpm run 3rd:build` 安装——
  *   tarball 不携带 Python 环境，bin/prism.js 启动时会检测并给出提示。
  */
@@ -64,8 +67,7 @@ async function materializeDependency(dep, nodeModulesDir, fromDir = ROOT) {
   const pkgJsonPath = join(dst, 'package.json')
   if (!(await exists(pkgJsonPath))) return
   const pkgJson = JSON.parse(await readFile(pkgJsonPath, 'utf-8'))
-  // optionalDependencies 也要带（anydoc 的平台原生绑定走这里，缺了会报
-  // "Cannot find native binding"）；但只带**本机已安装**的那些。
+  // optionalDependencies 也带上（平台原生绑定常走这里）；只带**本机已安装**的那些。
   const childDeps = { ...(pkgJson.dependencies ?? {}), ...(pkgJson.optionalDependencies ?? {}) }
   for (const child of Object.keys(childDeps)) {
     if (child.startsWith('@prism/')) continue
@@ -175,8 +177,8 @@ async function main() {
   }
   log(`物化 workspace 依赖: ${PKG_NAMES.length} 个包`)
 
-  // 5b) 物化**外部运行时依赖**（IMP-1）：@prism/knowledge 依赖 @firecrawl/anydoc，
-  //     不带上的话解压环境里 kb sync 转 docx/pdf 会静默降级为失败（动态 import 被 catch）。
+  // 5b) 物化**外部运行时依赖**：遍历各包 dependencies 的外部闭包（不含 devDependencies）。
+  //     三方件现已全走 submodule，故此步通常为空；保留以兜住将来新增的外部 npm 依赖。
   //     只带 dependencies 的运行时闭包，不含 devDependencies。
   const externalDeps = new Set()
   for (const name of PKG_NAMES) {
@@ -198,21 +200,24 @@ async function main() {
   await cp(join(ROOT, 'apps', 'web', 'dist'), join(stageDir, 'apps', 'web', 'dist'), { recursive: true })
 
   // 7) 第三方子模块（archify 自包含 CLI；graphify Python 源码）——解压即用需要它们的**源码**。
-  //    排除运行时目录：
+  //    排除运行时/超大目录：
   //    - 3rd/llama.cpp：C++ 源码，目标机用 `prism embedding install` 自行 clone/编译（源码 submodule 很大）
   //    - 3rd/llama-runtime：本地编译的二进制 + 模型（1.5GB），由 install 脚本生成
+  //    - 3rd/anydoc-runtime：平台预编译 .node（目标机自行下载对应平台），由 setup-anydoc.mjs 生成
   await cp(join(ROOT, '3rd'), join(stageDir, '3rd'), {
     recursive: true,
     filter: (src) => {
       if (src.includes('node_modules') || src.includes('__pycache__') || src.includes('.git')) return false
       const top = src.split(/[/\\]3rd[/\\]/)[1]?.split(/[/\\]/)[0]
-      return top !== 'llama.cpp' && top !== 'llama-runtime'
+      return top !== 'llama.cpp' && top !== 'llama-runtime' && top !== 'anydoc-runtime'
     },
   })
 
-  // 7b) 向量化安装脚本（`prism embedding install` 依赖；小文件，随包发）
+  // 7b) 三方件安装脚本（`prism embedding install` / anydoc 转换依赖；小文件，随包发）
   await mkdir(join(stageDir, 'scripts'), { recursive: true })
-  await cp(join(ROOT, 'scripts', 'setup-embedding.mjs'), join(stageDir, 'scripts', 'setup-embedding.mjs'))
+  for (const script of ['setup-embedding.mjs', 'setup-anydoc.mjs']) {
+    await cp(join(ROOT, 'scripts', script), join(stageDir, 'scripts', script))
+  }
 
   // 8) 文档与许可
   for (const file of ['README.md', 'AGENTS.md', 'LICENSE']) {
@@ -274,9 +279,13 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 const here = dirname(fileURLToPath(import.meta.url))
 const root = join(here, '..')
 
-// 代码图谱依赖 Python 版 graphify（vendored 子工程，需本机装依赖）
+// 代码图谱/知识导出依赖 graphify（submodule，需本机装 Python 依赖）
 if (!existsSync(join(root, '3rd', 'graphify', 'pyproject.toml'))) {
-  process.stderr.write('[prism] 警告: 未找到 3rd/graphify 子工程，代码图谱不可用\\n')
+  process.stderr.write('[prism] 警告: 未找到 3rd/graphify 子模块，代码图谱不可用（pnpm run 3rd:init）\\n')
+}
+// 文档转换依赖 anydoc 运行时（平台相关，未随包分发，需本机生成）
+if (!existsSync(join(root, '3rd', 'anydoc-runtime', 'anydoc.js'))) {
+  process.stderr.write('[prism] 提示: anydoc 运行时未安装，文档转换降级（node scripts/setup-anydoc.mjs）\\n')
 }
 
 // Windows 绝对路径必须转 file:// URL 才能被 ESM 加载器接受
