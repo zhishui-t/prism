@@ -7,7 +7,7 @@
 
 ## 1. 项目一句话
 
-Prism 是团队的知识与协作**控制面**：管理知识库、知识图谱、代码图谱、架构图谱、角色/团队定义、工作队列、任务台账，通过 MCP/HTTP 供宿主 agent 使用。
+Prism 是团队的知识与协作**控制面**：管理知识库、知识图谱、代码图谱、架构图谱、角色/团队定义、任务台账，通过 MCP/HTTP 供宿主 agent 使用。
 
 **它不执行、不调度、不调 LLM、不管版本控制。**
 
@@ -20,10 +20,10 @@ Prism 是团队的知识与协作**控制面**：管理知识库、知识图谱�
 | # | 红线 | 原因 |
 | :--- | :--- | :--- |
 | R1 | **不侵入宿主 agent 调度** | 宿主（ZCode/Codex 等）有自己的子 agent 管理，各不一样，Prism 不猜 |
-| R2 | **不调 LLM** | 需要 LLM 的活落成工作队列待办，宿主自己拉取执行 |
+| R2 | **不调 LLM** | 需要 LLM 的活由宿主产出结果后调 `prism_kb_enrich` 直接回写（无队列） |
 | R3 | **不做审核** | 宿主说落库就落库；沉淀规则写在团队定义里，Prism 只记录/可视化/审计 |
 | R4 | **绝不把全图/全库塞进上下文** | 检索返回子集，尊重预算 |
-| R5 | **测试绝不写真实宿主目录** | 所有测试用临时目录（`ZCODE_DIR`/`--zcode-dir` 重定向） |
+| R5 | **测试绝不写真实宿主目录** | 所有测试用临时目录（`PRISM_HARNESS_ROOT`/`--harness-root` 重定向；旧名亦认） |
 | R6 | **不硬编码 `~/.zcode`** | 路径全部参数化，通过适配器/配置注入 |
 | R7 | **文件为真相，数据库为索引** | 知识正文是 Markdown 文件；DB 只是可重建的索引 |
 | R8 | **不管版本控制** | 不读 git、不提交、不推送、不写 `.gitignore`；只回答「文件在不在」。提交/更新是宿主的职责，宿主做完任务后自行提交再触发刷新 |
@@ -40,7 +40,7 @@ cli ──→ server ──→ agents ──→ core
  └────────┴──────────┴──────────┴──→ knowledge（core 之外独立）
 ```
 
-- **core**：纯域模型，不含任何宿主耦合。状态机、持久化、审计、熔断、工作队列、任务台账。
+- **core**：纯域模型，不含任何宿主耦合。状态机、持久化、审计、熔断、任务台账、HarnessAdapter 接口。
 - **knowledge**：知识库领域。只依赖 core。
 - **agents**：角色/团队定义 + 宿主适配器。只依赖 core。
 - **skills**：Skill 定义与安装。只依赖 core。
@@ -53,12 +53,18 @@ cli ──→ server ──→ agents ──→ core
 ### 3.2 宿主适配器
 
 ```ts
-interface HarnessAdapter { agent, dispatch, model, skill, instructions, renderRole, parseRole, ... }
+interface HarnessAdapter { defaultRoot, agent, dispatch, model, skill, instructions, mcp,
+                           renderRole, renderTeamDefinition, parseRole, ... }
 ```
 
-- **编译期登记多个适配器，运行期只激活一个**（`prism.yaml: harness` 键）。
+- **内置 + 运行期插件，运行期只激活一个**（`prism.yaml: harness` 键 / `PRISM_HARNESS`）。
 - 换 harness = 改配置重启，**不是**同时接多个（见 `doc/requirements/deployment-model.md`）。
-- 新增 harness：实现适配器 + 注册 + 补文档，不改其他代码。
+- **新增 harness 不改 Prism 代码**：把适配包放进 `<PRISM_HOME>/harnesses/<name>/`
+  （`harness.json` + 入口 `.mjs`）即自动注册（`packages/agents/src/harness-plugins.ts`）。
+  进发行版的内置适配器才改 `harness-manifest.ts`。
+- **适配器自述全部宿主约定**（根目录 / 角色·团队·Skill 目录 / MCP 注册位置与形态 /
+  产物渲染格式 / 指令文件）——通用层不得出现任何具体 harness 命名（R6 的延伸）。
+  配方见 `doc/requirements/adding-a-harness.md`。
 
 ### 3.3 存储
 
@@ -74,7 +80,7 @@ interface HarnessAdapter { agent, dispatch, model, skill, instructions, renderRo
 
 ```bash
 pnpm typecheck     # 1. 类型
-pnpm test          # 2. 单测（382）
+pnpm test          # 2. 单测（535）
 pnpm lint          # 3. 风格
 pnpm build         # 4. 构建
 pnpm test:e2e      # 5. 端到端（涉及 CLI/HTTP/Web 时）
@@ -103,12 +109,15 @@ pnpm test:e2e      # 5. 端到端（涉及 CLI/HTTP/Web 时）
 | **trigram 检索中文** | 两字词（「性能」）搜不到 | 用 **bigram + unicode61** |
 | **ZCode 递归扫 agents/** | 团队文件被注册成假 agent | 团队落 `roles_dir` 同级 `teams/`，不在 `agents/` 内 |
 | **默认链写真实宿主** | 测试污染 `~/.zcode` | 写守卫（`guard_required`）+ 测试用临时目录 |
-| **pnpm 严格 peer 解析** | graphify 的 11 个可选 peer 报错 | graphify 用 npm 独立安装，不进 workspace |
+| **3rd 源码别进本仓历史** | 曾 vendored 291 个第三方文件，升级即巨大 diff | 一律 **git submodule** 锁 tag；构建产物落 gitignore 的运行时目录 |
 | **mtime 单位差** | 刚建完图就报「陈旧」 | Python manifest 是秒、Node stat 是毫秒，需归一 |
 | **Windows `spawn` .cmd** | EINVAL | `.cmd` 走 `shell: true`；`.js` 走 `node` + `prefixArgs` |
 | **镜像契约** | 两处定义漂移 | 单一真相源，消费方 re-export |
 | **bare sleep 测异步** | 负载下 flake | 用轮询 API（如 `waitFor(jobId, timeout)`） |
 | **架构图产物失联** | 产物不知属于哪本书 | 渲染时写 sidecar `<name>.meta.json`（`--book/--module`）；界面按作用域过滤 |
+| **专属 env 泄漏到别的 harness** | 插件 harness 的 `defaultRoot` 被 `ZCODE_DIR` 覆盖 | 通用覆盖只认 `PRISM_HARNESS_ROOT`；专属变量由对应适配器内部消费 |
+| **软删被重扫静默撤销** | 引用型条目改源文件后 `status` 回到 active | 索引更新**保留 status**；恢复须显式 `restore`（不是靠重扫） |
+| **SQL `LIMIT` 截断向量召回** | 库一大，插入靠后的相关条目永远召不回 | 向量相关性算完余弦才知道，SQL 层不能按 rowid 截断（需全扫） |
 
 ---
 
@@ -116,14 +125,14 @@ pnpm test:e2e      # 5. 端到端（涉及 CLI/HTTP/Web 时）
 
 | 要改什么 | 去哪 |
 | :--- | :--- |
-| 任务状态机 / 持久化 / 工作队列 / 台账 | `packages/core/src/{state,persistence,work,tasks}/` |
+| 任务状态机 / 持久化 / 台账 | `packages/core/src/{state,persistence,tasks}/` |
 | 知识条目 / 检索 / 知识图谱 | `packages/knowledge/src/` |
 | 角色 / 团队 / 适配器 / 目录解析 | `packages/agents/src/` |
 | HTTP 路由 / MCP 工具 | `packages/server/src/{http/routes,mcp}/` |
 | Graphify / Archify 封装 | `packages/server/src/graph/{graphify,archify}.ts` |
 | CLI 命令 | `packages/cli/src/commands/` |
 | 控制台页面 | `apps/web/src/pages/` |
-| vendored 子工程 | `3rd/`（见 `3rd/README.md`） |
+| 三方依赖（submodule）/ 向量化 | `3rd/`（见 `3rd/README.md`）；`packages/server/src/kb/embedding.ts` |
 
 ---
 
@@ -134,9 +143,10 @@ pnpm test:e2e      # 5. 端到端（涉及 CLI/HTTP/Web 时）
 pnpm typecheck / test / lint / build
 pnpm test:e2e
 
-# 3rd 子工程
+# 3rd 子模块（submodule）
+pnpm run 3rd:init      # git submodule update --init --recursive（克隆后一次）
 pnpm run 3rd:build     # 安装 graphify Python 依赖
-pnpm run 3rd:check     # 可用性自检
+pnpm run 3rd:check     # 可用性自检（archify + graphify + Python 依赖）
 
 # 打包
 pnpm run package       # → dist/prism-<version>.tgz
