@@ -9,6 +9,7 @@ import type { BuildRunner, KnowledgeService } from '@prism/server'
 import { runInit } from './commands/init.js'
 import { runServe } from './commands/serve.js'
 import { runDoctor } from './commands/doctor.js'
+import { runEmbedding } from './commands/embedding.js'
 import { runKb } from './commands/kb.js'
 import { runWork } from './commands/work.js'
 import { runTask } from './commands/task.js'
@@ -102,6 +103,7 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
   prism inject <项目根> [--team <团队id>] [--remove]  把 Prism 指引写进项目 AGENTS.md 标记块
   prism project add <项目根目录> [--name <项目名>]   登记项目台账（不建图、不扫描）
   prism project list | show <名> | remove <名> [--yes]
+  prism embedding status | install | start | stop | reindex   本地向量化（BGE-M3，Prism 自理）
 
 全局：--home <path>  --json  --zcode-dir <path>（role/team/skill/install 类统一收 ZCode 根，~ 自动展开）
       --yes   确认写入默认宿主目录（写守卫；默认链写入无 --yes 会被阻止，B6）`
@@ -165,6 +167,9 @@ const CLI_OPTIONS = {
   task: { type: 'string' },
   request: { type: 'string' },
   all: { type: 'boolean' },
+  /** 变更 2：`prism embedding <install|status|stop|reindex>` 子动作 */
+  action: { type: 'string' },
+  'no-embedding': { type: 'boolean' },
 } as const
 
 export interface ParsedInvocation {
@@ -230,6 +235,8 @@ export type ArgValues = {
   request?: string
   audit_type?: string
   all?: boolean
+  action?: string
+  'no-embedding'?: boolean
 }
 
 /** `~`/`~\/` 前缀展开为用户主目录（Windows/Node 不自动展开；CLI 层统一负责，design-v3 §5 P14）。 */
@@ -332,6 +339,8 @@ export async function runCommand(ctx: CommandContext, argv: string[]): Promise<n
         return await runServe(effective, rest, values)
       case 'doctor':
         return await runDoctor(effective, rest, values)
+      case 'embedding':
+        return await runEmbedding(effective, rest, values)
       case 'kb':
         return await runKb(effective, rest, values)
       case 'work':

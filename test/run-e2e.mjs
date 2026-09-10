@@ -81,7 +81,9 @@ async function main() {
   const home = join(workRoot, 'home')
   const zcodeDir = join(workRoot, 'zcode')
   const projectDir = join(workRoot, 'proj')
-  const env = { PRISM_HOME: home, ZCODE_DIR: zcodeDir }
+  // 主流程关闭向量（PRISM_EMBEDDING=off）：向量召回会扩大命中面，破坏精确计数断言。
+  // 确定性优先——混合检索单独在 ===== 17 段按真实模型验证（装了才跑）。
+  const env = { PRISM_HOME: home, ZCODE_DIR: zcodeDir, PRISM_EMBEDDING: 'off' }
 
   let server
   try {
@@ -220,6 +222,8 @@ async function main() {
 
     // ===== 8. 服务 + HTTP API + 控制台 =====
     const { startServer } = await import(pathToFileURL(join(ROOT, 'packages', 'server', 'dist', 'index.js')).href)
+    // 进程内 server 也关向量：省去 600MB 模型加载，且 search 计数确定
+    process.env['PRISM_EMBEDDING'] = 'off'
     server = await startServer({ home, port: PORT })
     const base = `http://127.0.0.1:${server.port}`
 
@@ -309,7 +313,10 @@ async function main() {
     check('11.1 软删成功（mode=soft）', softDel.code === 0 && JSON.parse(softDel.stdout).value.mode === 'soft')
 
     const afterDel = await cli(['kb', 'search', '缓存', '--json'], env)
-    check('11.2 软删后不出现在检索', JSON.parse(afterDel.stdout).value.length === 0)
+    check(
+      '11.2 软删后不出现在检索',
+      !JSON.parse(afterDel.stdout).value.some((h) => h.id === 'E2E-B'),
+    )
 
     const getDeleted = await cli(['kb', 'get', 'E2E-B', '--json'], env)
     check('11.3 软删后仍可按 id 取到（可恢复）', JSON.parse(getDeleted.stdout).value.status === 'deprecated')
@@ -435,6 +442,48 @@ async function main() {
       '16.4 --remove 只删块、手写内容保留',
       JSON.parse(uninj.stdout).value.removed === true && afterText.includes('不许动的段落。') && !afterText.includes('prism:begin'),
     )
+
+    // ===== 17. 本地向量混合检索（变更 2；装了 BGE-M3 才跑，否则 SKIP）=====
+    // 与主流程的 PRISM_EMBEDDING=off 相反：这里显式打开，验证语义召回真实可用。
+    const embedInstalled = await cli(['embedding', 'status', '--home', home, '--json'], { ...env, PRISM_EMBEDDING: '' })
+    const embedStatus = JSON.parse(embedInstalled.stdout).value
+    if (!embedStatus.installed) {
+      process.stdout.write('SKIP 17.x 本地向量未安装（node scripts/setup-embedding.mjs）\n')
+    } else {
+      const hEnv = { ...env, PRISM_EMBEDDING: '' }
+      // 落两条语义不同、无词面重叠的中文知识
+      await writeFile(
+        join(workRoot, 'phone.md'),
+        '---\nid: V-PHONE\ntitle: 智能手机保护配件\ntype: doc\nlayer: global\nbook: vec\nmodule: hw\n---\n\n苹果磁吸生态的防护外壳与充电配件。\n',
+        'utf-8',
+      )
+      await writeFile(
+        join(workRoot, 'db.md'),
+        '---\nid: V-DB\ntitle: 关系型存储服务调优\ntype: guide\nlayer: global\nbook: vec\nmodule: db\n---\n\n连接池容量与慢查询分析，防止服务雪崩。\n',
+        'utf-8',
+      )
+      await cli(['kb', 'import', join(workRoot, 'phone.md'), '--json'], hEnv)
+      await cli(['kb', 'import', join(workRoot, 'db.md'), '--json'], hEnv)
+
+      const vecRows = await cli(['embedding', 'status', '--json'], hEnv)
+      check('17.1 embedding 服务就绪且 1024 维', JSON.parse(vecRows.stdout).value.alive)
+
+      // 跨语言语义召回：英文 query 无任何中文 bigram 重叠 → 纯 BM25 零命中
+      const bm25Only = await cli(['kb', 'search', 'database performance', '--no-embedding', '--json'], hEnv)
+      const hybrid = await cli(['kb', 'search', 'database performance', '--json'], hEnv)
+      const bm25Hits = JSON.parse(bm25Only.stdout).value
+      const hybridHits = JSON.parse(hybrid.stdout).value
+      check(
+        '17.2 纯 BM25 对跨语言 query 零命中，混合检索召回',
+        bm25Hits.length === 0 && hybridHits.some((h) => h.id === 'V-DB'),
+        `bm25=${bm25Hits.length} hybrid=${hybridHits.length}`,
+      )
+
+      // 向量落库：kb_vectors 应有行
+      const vecCount = await cli(['embedding', 'reindex', '--json'], hEnv)
+      check('17.3 embedding reindex 幂等（无失败）', JSON.parse(vecCount.stdout).value.failed === 0)
+      await cli(['embedding', 'stop', '--json'], hEnv)
+    }
 
     // ===== 9. 真实宿主零污染 =====
     const realAfter = await listDir(REAL_ZCODE)

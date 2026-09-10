@@ -7,6 +7,10 @@ coverage/
 3rd/graphify/**/__pycache__/
 3rd/graphify/**/*.pyc
 
+# 本地向量化运行时产物（编译出的 llama.cpp 二进制 + BGE-M3 模型，约 600MB）
+# 由 `prism embedding install` / scripts/setup-embedding.mjs 生成，不入库
+3rd/llama.cpp/
+
 # Prism 本地运行状态（知识库/图谱/审计/团队运行态）
 .prism/
 

@@ -65,9 +65,9 @@ describe('WorkQueue 基本流转（pending → claimed → completed）', () => 
   it('kind / priority_min 过滤', async () => {
     const { queue, close } = makeQueue()
     try {
-      await queue.enqueue({ kind: 'embed', payload: {}, priority: 1, id: 'e1' })
+      await queue.enqueue({ kind: 'classify', payload: {}, priority: 1, id: 'e1' })
       await queue.enqueue({ kind: 'summarize', payload: {}, priority: 5, id: 's1' })
-      expect((await queue.pending({ kind: 'embed' })).map((w) => w.id)).toEqual(['e1'])
+      expect((await queue.pending({ kind: 'classify' })).map((w) => w.id)).toEqual(['e1'])
       expect((await queue.pending({ priority_min: 3 })).map((w) => w.id)).toEqual(['s1'])
     } finally {
       close()
@@ -132,21 +132,21 @@ describe('结果校验（§5：校验失败 → failed 并附原因）', () => {
     }
   })
 
-  it('embed 维度不符 → 拒绝；维度正确 → 通过', async () => {
+  it('diagram_ir 结构非法 → 拒绝；合法 → 通过', async () => {
     const { queue, close } = makeQueue()
     try {
-      const bad = await queue.enqueue({ kind: 'embed', payload: { dim: 3 } })
+      const bad = await queue.enqueue({ kind: 'diagram_ir', payload: {} })
       const badClaim = await queue.claim(bad.id, 'h')
       await expect(
-        queue.complete({ id: bad.id, attempt_token: badClaim.attempt_token, result: { vector: [1, 2] } }),
+        queue.complete({ id: bad.id, attempt_token: badClaim.attempt_token, result: { diagram_type: 'architecture' } }),
       ).rejects.toMatchObject({ code: 'work_result_invalid' })
 
-      const good = await queue.enqueue({ kind: 'embed', payload: { dim: 2 } })
+      const good = await queue.enqueue({ kind: 'diagram_ir', payload: {} })
       const goodClaim = await queue.claim(good.id, 'h')
       const done = await queue.complete({
         id: good.id,
         attempt_token: goodClaim.attempt_token,
-        result: { vector: [0.1, 0.2] },
+        result: { diagram_type: 'architecture', meta: { title: '总览' } },
       })
       expect(done.status).toBe('completed')
     } finally {
@@ -240,7 +240,7 @@ describe('护栏（§6：重试 / 超时回收 / 积压上限）', () => {
     const { queue, close } = makeQueue()
     try {
       await queue.enqueue({ kind: 'classify', payload: {}, id: 'a' })
-      await queue.enqueue({ kind: 'embed', payload: {}, id: 'b' })
+      await queue.enqueue({ kind: 'summarize', payload: {}, id: 'b' })
       const claim = await queue.claim('a', 'h')
       await queue.complete({ id: 'a', attempt_token: claim.attempt_token, result: { labels: ['x'] } })
       const stats = await queue.stats()

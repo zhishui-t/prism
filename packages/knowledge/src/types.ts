@@ -174,6 +174,12 @@ export interface SearchQuery {
    * 否则要求全部词元会零命中。
    */
   match_mode?: 'all' | 'any'
+  /**
+   * 是否启用混合检索（BM25 + 向量 RRF）。**默认 true**——但仅在装配了
+   * `options.embed` 且 query 向量可算时生效；未装配/算不出时静默回落纯 BM25，
+   * 与既有行为逐字节一致。显式传 `false` 可强制纯关键词检索。
+   */
+  hybrid?: boolean
 }
 
 /** 检索结果（design.md §3.2 SearchResult）。score 越大越相关（-bm25）。 */
@@ -390,4 +396,10 @@ export interface KnowledgeServiceOptions {
    * `enrich_on_deposit` 开关决定是否启用。
    */
   enqueueEnrichment?: (entry: { id: string; version: number; layer: Layer; book: string; module: string; type: EntryType }) => Promise<void>
+  /**
+   * 本地向量化（变更 2）：`(text) => Float32Array | null`——由 server 装配注入
+   * （BGE-M3，未安装时返回 null 降级）。knowledge 包只存向量、算余弦，
+   * 不依赖 embedding 实现。注入后：deposit 自动写向量；search 走 BM25+向量混合。
+   */
+  embed?: (text: string) => Promise<Float32Array | null>
 }

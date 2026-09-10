@@ -3,6 +3,7 @@ import { PrismError, WorkQueue, openPersistence, prismPaths } from '@prism/core'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
+import { embedText } from './embedding.js'
 import type { KnowledgeService } from './port.js'
 
 /**
@@ -34,13 +35,25 @@ export function enrichmentEnabled(home?: string): boolean {
  *
  * A4：若 `prism.yaml` 开启 `enrich_on_deposit`，注入入队回调——
  * 落库后自动投 `summarize`/`classify` 任务给宿主（Prism 自身零 LLM）。
+ *
+ * 变更 2：注入本地 embedding（BGE-M3 via llama.cpp）——落库自动写向量、检索走
+ * BM25+向量混合。未安装 embedding 时 `embedText` 返回 ok:false，此处转成 null，
+ * knowledge 侧静默跳过、纯 BM25 降级（不炸、不阻塞落库）。
  */
 export async function loadKnowledgeService(home?: string): Promise<KnowledgeService> {
   try {
     const enqueue = enrichmentEnabled(home)
       ? buildEnqueueCallback(home)
       : undefined
-    return createKnowledgeService({ home, ...(enqueue !== undefined ? { enqueueEnrichment: enqueue } : {}) })
+    const embed: (text: string) => Promise<Float32Array | null> = async (text) => {
+      const r = await embedText(text)
+      return r.ok && r.vector !== undefined ? r.vector : null
+    }
+    return createKnowledgeService({
+      home,
+      embed,
+      ...(enqueue !== undefined ? { enqueueEnrichment: enqueue } : {}),
+    })
   } catch (error) {
     throw new PrismError(
       'internal',

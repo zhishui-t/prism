@@ -17,11 +17,16 @@ import type { AuditLog } from '../audit/audit-log.js'
 import type { PrismPersistence } from '../persistence/persistence.js'
 import { PrismError } from '../state/errors.js'
 
-/** 工作类型（§1）。 */
-export type WorkKind = 'embed' | 'summarize' | 'classify' | 'extract_entities' | 'diagram_ir'
+/**
+ * 工作类型（§1）。**只收「需要宿主 LLM 的理解类」工作**——Prism 自身零 LLM。
+ *
+ * 注：`embed` 已移除（2026-09-10）：向量化改由 Prism 内置 BGE-M3 完成，
+ * 不再是宿主的活（变更 2）。知识导入同样不经队列——宿主在 Skill 里直接
+ * 读文档、用自己的 LLM 提取、逐条 `kb_deposit`（变更 1）。
+ */
+export type WorkKind = 'summarize' | 'classify' | 'extract_entities' | 'diagram_ir'
 
 export const WORK_KINDS: readonly WorkKind[] = [
-  'embed',
   'summarize',
   'classify',
   'extract_entities',

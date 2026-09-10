@@ -95,12 +95,12 @@ describe('writeEnrichment', () => {
     kb.close()
   })
 
-  it('embed（无回写消费端）→ 返回 null', async () => {
+  it('未知 kind（无回写消费端）→ 返回 null', async () => {
     const kb = new PrismKnowledgeService({ home: await makeTempDir('prism-wb-') })
     const report = await writeEnrichment(kb, {
-      kind: 'embed',
+      kind: 'unknown_kind',
       payload: { entry_id: 'x' },
-      result: { vector: [0.1, 0.2] },
+      result: {},
     })
     expect(report).toBeNull()
     kb.close()

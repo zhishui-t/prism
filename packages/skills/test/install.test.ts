@@ -70,13 +70,14 @@ describe('installSkills（design-v3 §5 冲突策略；全部写临时目录）'
     expect(await readdir(target)).toContain('prism')
   })
 
-  it('内置 prism skill 带 references/（渐进披露），安装后 7 个引用文件就位', async () => {
+  it('内置 prism skill 带 references/（渐进披露），安装后 8 个引用文件就位', async () => {
     await installSkills({ targetDir: target, skills: listBuiltinSkills() })
     const refs = await readdir(join(target, 'prism', 'references'))
     expect(refs.sort()).toEqual([
       'arch.md',
       'cli.md',
       'graph.md',
+      'import.md',
       'knowledge.md',
       'task.md',
       'team.md',

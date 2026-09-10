@@ -9,25 +9,6 @@ import type { WorkKind, WorkResultValidator } from './work-queue.js'
 const isRecord = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v)
 
-/** embed：`{ vector: number[] }`，维度正确、数值有限。 */
-export const validateEmbed: WorkResultValidator = (_payload, result) => {
-  if (!isRecord(result)) return '结果必须是对象'
-  const vector = result['vector']
-  if (!Array.isArray(vector)) return '缺少 vector 数组'
-  if (vector.length === 0) return 'vector 不能为空'
-  for (let i = 0; i < vector.length; i++) {
-    const value = vector[i]
-    if (typeof value !== 'number' || !Number.isFinite(value)) {
-      return `vector[${i}] 不是有限数值`
-    }
-  }
-  const dim = _payload !== null && isRecord(_payload) ? _payload['dim'] : undefined
-  if (typeof dim === 'number' && dim > 0 && vector.length !== dim) {
-    return `vector 维度不符：期望 ${dim}，实际 ${vector.length}`
-  }
-  return null
-}
-
 /** summarize：`{ summary: string }`，非空。 */
 export const validateSummarize: WorkResultValidator = (_payload, result) => {
   if (!isRecord(result)) return '结果必须是对象'
@@ -89,7 +70,6 @@ export const validateDiagramIr: WorkResultValidator = (_payload, result) => {
 
 /** 内置校验器表（WorkQueue 构造后按 kind 注册）。 */
 export const BUILTIN_VALIDATORS: Record<WorkKind, WorkResultValidator> = {
-  embed: validateEmbed,
   summarize: validateSummarize,
   classify: validateClassify,
   extract_entities: validateExtractEntities,

@@ -30,6 +30,15 @@ import {
   writeEntryFiles,
 } from './store.js'
 import { bigram, toMatchExpression } from './tokenize.js'
+import {
+  blobToVector,
+  cosine,
+  HYBRID_CANDIDATES,
+  rrfFuse,
+  vectorToBlob,
+  VECTOR_FLOOR,
+  VECTOR_RELATIVE,
+} from './vector.js'
 import type {
   BookNode,
   CatalogEntry,
@@ -216,6 +225,7 @@ export class PrismKnowledgeService implements KnowledgeService {
   readonly #idFactory: () => string
   readonly #ownsPersistence: boolean
   readonly #enqueueEnrichment: KnowledgeServiceOptions['enqueueEnrichment']
+  readonly #embed: KnowledgeServiceOptions['embed']
 
   constructor(options: KnowledgeServiceOptions = {}) {
     this.home = options.home ?? prismPaths().home
@@ -229,6 +239,7 @@ export class PrismKnowledgeService implements KnowledgeService {
     this.#idFactory =
       options.idFactory ?? (() => `KB-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`)
     this.#enqueueEnrichment = options.enqueueEnrichment
+    this.#embed = options.embed
     ensureKbFts(this.persistence.knowledge)
   }
 
@@ -418,6 +429,9 @@ export class PrismKnowledgeService implements KnowledgeService {
       })
     }
 
+    // 本地向量（变更 2）：装配了 embedding 才写；失败静默（增强不阻断落库）
+    await this.#writeVector(deposited.id, deposited.version, `${address.title}\n${content}`)
+
     // B2：层间冲突检测（只记录不阻断，§12.3）
     await this.#detectConflicts(this.persistence.knowledge.raw, {
       id: deposited.id,
@@ -580,6 +594,13 @@ export class PrismKnowledgeService implements KnowledgeService {
         layer: address.layer,
         source: 'import',
       })
+      // 本地向量（变更 2）：索引型正文即真相副本，同样可向量化
+      const latest = this.persistence.knowledge.raw
+        .prepare('SELECT version FROM knowledge_entries WHERE id = ? ORDER BY version DESC LIMIT 1')
+        .get(address.id) as { version: number } | undefined
+      if (latest !== undefined) {
+        await this.#writeVector(address.id, latest.version, `${address.title}\n${input.content}`)
+      }
     }
     return { id: address.id, action }
   }
@@ -748,6 +769,7 @@ export class PrismKnowledgeService implements KnowledgeService {
         for (const row of rows) tx.prepare('DELETE FROM kb_fts WHERE rowid = ?').run(row.rowid)
         tx.prepare('DELETE FROM knowledge_entries WHERE id = ?').run(id)
         tx.prepare('DELETE FROM knowledge_edges WHERE from_id = ? OR to_id = ?').run(id, id)
+        tx.prepare('DELETE FROM kb_vectors WHERE entry_id = ?').run(id)
         tx.exec('COMMIT')
       } catch (error) {
         try {
@@ -1013,6 +1035,26 @@ export class PrismKnowledgeService implements KnowledgeService {
     }
 
     const raw = this.persistence.knowledge.raw
+
+    // 装配了 embedding 且未禁用 → 混合检索（BM25 + 向量 RRF 融合）。
+    // query 向量算不出（未安装/启动失败）时静默回落纯 BM25，结果与既有一致。
+    if (this.#embed !== undefined && query.hybrid !== false) {
+      const qVec = await this.#embed(query.q)
+      if (qVec !== null && qVec.length > 0) {
+        // 向量召回的候选面 = 同一过滤条件 + limit 放大（RRF 需要比最终 limit 更宽的池）
+        const pool = Math.max(limit, HYBRID_CANDIDATES)
+        const vectorRowids = await this.#vectorHits(
+          raw,
+          this.#candidateRowids(raw, clauses, params, pool),
+          qVec,
+          pool,
+        )
+        if (vectorRowids.length > 0) {
+          return this.#hybridResults(raw, { match, clauses, params, limit, q: query.q, vectorRowids })
+        }
+      }
+    }
+
     const hits = searchFts(raw, { match, where: clauses.join(' AND '), params, limit })
     if (hits.length === 0) return []
 
@@ -1025,6 +1067,53 @@ export class PrismKnowledgeService implements KnowledgeService {
     for (const hit of hits) {
       const row = byRowid.get(hit.rowid)
       if (row) results.push(this.#toSearchResult(raw, row, hit.score, query.q))
+    }
+    return results
+  }
+
+  /** 向量召回候选集：按现有过滤条件取最新版条目 rowid（不受 BM25 是否能命中左右）。 */
+  #candidateRowids(raw: DatabaseSync, clauses: string[], params: string[], limit: number): number[] {
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : ''
+    const rows = raw
+      .prepare(`SELECT e.rowid FROM knowledge_entries e ${where} LIMIT ?`)
+      .all(...params, limit) as unknown as Array<{ rowid: number }>
+    return rows.map((r) => r.rowid)
+  }
+
+  /**
+   * 融合：BM25 序（FTS 命中，按 -bm25 降序）+ 向量序（余弦降序）经 RRF 合并。
+   * 最终 score 用 RRF 融合分（越大越相关），与既有「-bm25」同为「越大越好」语义。
+   * 某条目仅单路命中时另一路空贡献，RRF 天然降权，符合「双路命中更可信」。
+   */
+  #hybridResults(
+    raw: DatabaseSync,
+    input: {
+      match: string
+      clauses: string[]
+      params: string[]
+      limit: number
+      q: string
+      vectorRowids: number[]
+    },
+  ): SearchResult[] {
+    const bm25Hits = searchFts(raw, {
+      match: input.match,
+      where: input.clauses.join(' AND '),
+      params: input.params,
+      limit: HYBRID_CANDIDATES,
+    })
+    const fused = rrfFuse([bm25Hits.map((h) => h.rowid), input.vectorRowids])
+    if (fused.size === 0) return []
+    const ranked = [...fused.entries()].sort((a, b) => b[1] - a[1]).slice(0, input.limit)
+    const ids = ranked.map(([rowid]) => rowid)
+    const rows = raw
+      .prepare(`SELECT ${ENTRY_COLUMNS} FROM knowledge_entries WHERE rowid IN (${ids.map(() => '?').join(', ')})`)
+      .all(...ids) as unknown as EntryRow[]
+    const byRowid = new Map(rows.map((r) => [r.rowid, r]))
+    const results: SearchResult[] = []
+    for (const [rowid, score] of ranked) {
+      const row = byRowid.get(rowid)
+      if (row) results.push(this.#toSearchResult(raw, row, score, input.q))
     }
     return results
   }
@@ -1723,6 +1812,77 @@ export class PrismKnowledgeService implements KnowledgeService {
       score,
       source,
     }
+  }
+
+  // ===== 本地向量（变更 2）=====
+
+  /** 是否装配了 embedding（未装配 → 全链路纯 BM25，行为与既有一致）。 */
+  get embeddingEnabled(): boolean {
+    return this.#embed !== undefined
+  }
+
+  /**
+   * 为某一条目的最新版写向量（upsert）。未装配 embedding 或计算失败 → no-op。
+   * 返回是否写入成功。**不抛**：embedding 属增强，任何失败都不能阻断落库。
+   */
+  async #writeVector(id: string, version: number, text: string): Promise<boolean> {
+    if (this.#embed === undefined) return false
+    let vec: Float32Array | null = null
+    try {
+      vec = await this.#embed(text)
+    } catch {
+      return false
+    }
+    if (vec === null || vec.length === 0) return false
+    const nowIso = this.#now().toISOString()
+    const blob = vectorToBlob(vec)
+    await this.persistence.knowledge.run((raw) => {
+      raw
+        .prepare(
+          `INSERT INTO kb_vectors (entry_id, version, dim, vec, updated_at)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(entry_id, version) DO UPDATE SET dim = excluded.dim, vec = excluded.vec, updated_at = excluded.updated_at`,
+        )
+        .run(id, version, vec.length, blob, nowIso)
+    })
+    return true
+  }
+
+  /**
+   * 向量召回：对候选集现存最新版向量算余弦，按相似度降序返回 rowid。
+   * 过滤：`cos < VECTOR_FLOOR` 视为不相关丢弃；再保留 `>= top * VECTOR_RELATIVE`
+   * 的同量级候选（防弱相关经 RRF 混入结果）。无 query 向量或无候选 → 空。
+   */
+  async #vectorHits(
+    raw: DatabaseSync,
+    rowids: number[],
+    qVec: Float32Array,
+    limit: number,
+  ): Promise<number[]> {
+    if (rowids.length === 0) return []
+    const entryIds = raw
+      .prepare(
+        `SELECT rowid, id, version FROM knowledge_entries
+         WHERE rowid IN (${rowids.map(() => '?').join(', ')})`,
+      )
+      .all(...rowids) as unknown as Array<{ rowid: number; id: string; version: number }>
+    const scored: Array<{ rowid: number; cos: number }> = []
+    for (const e of entryIds) {
+      const row = raw
+        .prepare('SELECT dim, vec FROM kb_vectors WHERE entry_id = ? AND version = ?')
+        .get(e.id, e.version) as { dim: number; vec: Buffer } | undefined
+      if (row === undefined) continue
+      const vec = blobToVector(row.vec)
+      if (vec.length !== qVec.length) continue
+      scored.push({ rowid: e.rowid, cos: cosine(qVec, vec) })
+    }
+    scored.sort((a, b) => b.cos - a.cos)
+    const top = scored[0]?.cos ?? 0
+    const floor = Math.max(VECTOR_FLOOR, top * VECTOR_RELATIVE)
+    return scored
+      .filter((s) => s.cos >= floor)
+      .slice(0, limit)
+      .map((s) => s.rowid)
   }
 
   /**

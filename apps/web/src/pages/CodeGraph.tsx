@@ -5,9 +5,11 @@ import { State } from '../components/State.tsx'
 import { useAsync } from '../components/useAsync.ts'
 
 /**
- * 代码图谱页（独立一级页）：
+ * 代码图谱页（独立一级页，**只读**）：
  * 能力用 Graphify 工具（vendored Python 子工程）、显示用其自带 HTML、产物落项目根 graphify-out/。
- * Prism 只做编排（建图触发、陈旧标记、查询），不重画图谱。
+ *
+ * 用户裁决（2026-09-10）：**构建/导入不在 Web 触发**——Prism 是控制面，建图与知识导入
+ * 是宿主的职责（Prism Skill 指引宿主执行 CLI）。Web 只做查看、查询、状态与导出。
  */
 export function CodeGraphPage() {
   const projects = useAsync(() => api.graphProjects(), [])
@@ -30,35 +32,6 @@ export function CodeGraphPage() {
     [current],
   )
 
-  const onBuild = async () => {
-    if (!current) return
-    setBusy(true)
-    setNotice('')
-    try {
-      const { job_id } = await api.graphBuild(current)
-      setNotice(`建图任务已提交：${job_id}（零 token 模式）`)
-      // 轮询任务状态
-      let done = false
-      for (let i = 0; i < 120 && !done; i++) {
-        await new Promise((r) => setTimeout(r, 1000))
-        const st = await api.graphBuildStatus(job_id)
-        if (st.status === 'done') {
-          setNotice(`建图完成：${job_id}`)
-          done = true
-          projects.reload()
-          status.reload()
-        } else if (st.status === 'failed') {
-          setNotice(`建图失败：${st.error ?? '未知错误'}`)
-          done = true
-        }
-      }
-    } catch (e) {
-      setNotice(`提交失败：${e instanceof Error ? e.message : String(e)}`)
-    } finally {
-      setBusy(false)
-    }
-  }
-
   const onQuery = async () => {
     if (!current || !q.trim()) return
     setBusy(true)
@@ -72,7 +45,7 @@ export function CodeGraphPage() {
     }
   }
 
-  /** 导出为其他格式（obsidian/wiki/svg/graphml…）。 */
+  /** 导出为其他格式（obsidian/wiki/svg/graphml…）——只读变换，保留。 */
   const onExport = async (format: string) => {
     if (!current) return
     setExporting(true)
@@ -95,6 +68,7 @@ export function CodeGraphPage() {
       <h2 className="page-title">代码图谱</h2>
       <p className="page-desc">
         由 Graphify 构建与渲染（AST 解析，代码零 token）；产物落项目根 <span className="mono">graphify-out/</span>。
+        本页只读——建图由宿主执行 <span className="mono">prism graph build</span>。
       </p>
 
       <div className="card">
@@ -114,9 +88,6 @@ export function CodeGraphPage() {
               </option>
             ))}
           </select>
-          <button className="primary" onClick={onBuild} disabled={!current || busy}>
-            {busy ? '处理中…' : '建图 / 增量'}
-          </button>
           {current && (
             <a href={studioUrl} target="_blank" rel="noreferrer">
               <button type="button">新窗口打开图谱</button>
@@ -136,6 +107,8 @@ export function CodeGraphPage() {
               <option value="svg">SVG 矢量图</option>
               <option value="graphml">GraphML</option>
               <option value="wiki">Wiki Markdown</option>
+              <option value="neo4j">Neo4j Cypher</option>
+              <option value="falkordb">FalkorDB Cypher</option>
               <option value="callflow-html">调用流 HTML</option>
             </select>
           )}
@@ -149,7 +122,7 @@ export function CodeGraphPage() {
         )}
         {!projects.loading && !projects.error && (projects.data?.length ?? 0) === 0 && (
           <div className="empty" style={{ marginTop: 12 }}>
-            还没有已建图的项目。用 <span className="mono">prism graph build &lt;项目路径&gt;</span> 建图。
+            还没有已建图的项目。由宿主执行 <span className="mono">prism graph build &lt;项目路径&gt; --name &lt;项目名&gt;</span> 建图。
           </div>
         )}
 

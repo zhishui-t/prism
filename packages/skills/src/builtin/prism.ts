@@ -40,12 +40,13 @@ Prism 是本机的**研发效能控制面**：知识库、知识图谱、代码�
 | :--- | :--- | :--- |
 | 查规范 / 安全红线 / 架构决策 | \`prism_kb_search\` → \`prism_kb_get\` | [references/knowledge.md](references/knowledge.md) |
 | 用户说「记住 / 沉淀 / 落库」 | \`prism_kb_deposit\`（必带来源） |
+| **导入项目知识/文档** | **宿主自己做**：读文档 → 用你的 LLM 能力提取 → 逐条 \`prism_kb_deposit\` | [references/import.md](references/import.md) |
 | 派发子代理前组装上下文 | \`prism_context_pack\`（按角色知识绑定 + 预算） | [references/knowledge.md](references/knowledge.md) |
 | 知识之间的引用关系 / 找关联条目 | \`prism_kb_graph\` | [references/knowledge.md](references/knowledge.md) |
 | 谁调用谁 / 影响面 / 最短路径 | \`prism_graph_query/path/affected/explain/god-nodes\` | [references/graph.md](references/graph.md) |
 | 画架构图 / 时序图 / 数据流图 | \`prism arch render\`（CLI） | [references/arch.md](references/arch.md) |
 | 派团队干活 | 先 \`prism_team_activate\` 看 dispatch，再派发 | [references/team.md](references/team.md) |
-| 有需要 LLM 的活（向量化/摘要/抽取） | \`prism_work_pending\` → claim → complete | [references/work.md](references/work.md) |
+| 异步批处理富化（可选，非主路径） | \`prism_work_pending\` → claim → complete | [references/work.md](references/work.md) |
 | 登记任务 / 回报状态 / 看依赖图 | \`prism_task_register/report/status\` | [references/task.md](references/task.md) |
 | 环境自检 / 换宿主 / 打包 | \`prism doctor\` / \`prism harness show\` | [references/cli.md](references/cli.md) |
 
@@ -139,6 +140,87 @@ prism task   list/show/graph/register/report/stats
 
 /** 附带文件：按需读取的细节（渐进披露）。 */
 const PRISM_SKILL_ASSETS: SkillAsset[] = [
+  {
+    path: 'references/import.md',
+    content: `# 导入项目知识（宿主工作流）
+
+**你（宿主）是导入的执行者。** Prism 是库房，不调 LLM、不在 Web 触发导入——
+读取、理解、提取全由你完成，Prism 只负责校验落库与检索。
+
+## 两种导入方式
+
+| 方式 | 谁干活 | 适用 |
+| :--- | :--- | :--- |
+| **引用型索引**（机械） | Prism（零 LLM） | 整个项目文档建可检索索引：\`prism kb sync <项目名>\` |
+| **结构化提取**（智能） | **你**（用你的 LLM 能力） | 从文档提取规则/坑/模式，逐条落库 |
+
+两者不冲突：先 sync 建底，再做结构化提取。
+
+## 结构化提取工作流（你来做）
+
+1. **读文档**：项目 docs/、AGENTS.md、README、设计文档、规范文件
+2. **提取知识单元**（每条一个知识点，不要整篇 dump）：
+   - 规则 → \`type: rule\`（"禁止吞异常"）
+   - 坑 → \`type: pitfall\`（"Windows 下 tar 路径会被当远程主机"）
+   - 模式 → \`type: pattern\`（"写守卫：默认目录前必须确认"）
+   - 指南 → \`type: guide\`（"如何发布版本"）
+3. **判断归属**：
+   - 公司级规范 → \`layer: global\`
+   - 本项目知识 → \`layer: project\` + \`owner: <项目名>\`
+   - 角色专属 → \`layer: role\` + \`owner: <角色名>\`
+   - 书 = 项目名（一个项目一本书）；模块 = 文档主题或目录
+4. **逐条落库**：
+
+\`\`\`json
+prism_kb_deposit({
+  title: "禁止吞掉异常",
+  type: "rule",
+  layer: "project",
+  owner: "order-platform",
+  book: "order-platform",
+  module: "exception",
+  content: "捕获异常后必须记录并重新抛出……",
+  risk: "high",
+  tags: ["java", "exception"],
+  source: { kind: "agent", ref: "docs/standards/java.md#L42" },
+  deposited_by: { subject: "<你的标识>" }
+})
+\`\`\`
+
+## 硬约定
+
+- **必带 source.ref**：指回原文件与行号，人可回溯
+- **必带 deposited_by**：留痕
+- **提取而非复制**：如果条目内容和原文一样，就不该建条目（直接用引用型索引）
+- 正文里的 \`[[条目id]]\` 会自动建边——相关知识点互链
+- 同 id 再 deposit = 新版次（内容没变会自动跳过，不会堆叠）
+
+## 建代码图谱（也是你执行）
+
+\`\`\`bash
+prism graph build <项目根> --name <项目名>              # 全量（零 token）
+prism graph build <项目根> --name <项目名> --incremental # 增量（已有图谱时）
+\`\`\`
+
+建完后 Web 控制台「代码图谱」页查看（只读）；宿主做完任务提交代码后自行触发增量重建。
+
+## 向量化（Prism 自理，不依赖宿主）
+
+embedding 由 Prism **内置 BGE-M3 模型**生成，**不需要你回填**——落库即自动向量化（模型就绪时）。
+检索默认走 **BM25 + 向量融合（RRF）**：关键词命中不了的同义/跨语言查询也能语义召回。
+
+宿主无需感知；仅当环境缺模型时用以下命令装配（一次性，约 600MB + 本地编译 llama.cpp）：
+
+\`\`\`bash
+prism embedding install    # 首次：本地 MinGW+CMake 编译 llama.cpp + 下载 BGE-M3（缺工具链时回落预编译包）
+prism embedding status     # 查看安装/服务状态
+prism embedding start|stop # 常驻服务（按需自动启动，一般无需手动）
+prism embedding reindex    # 为已有条目补齐向量（幂等）
+\`\`\`
+
+未安装时自动降级纯 BM25，**不报错、不阻断落库**。
+`,
+  },
   {
     path: 'references/knowledge.md',
     content: `# 知识库（prism_kb_*）
@@ -295,11 +377,13 @@ Prism **不调 LLM**（零 API key）。需要 LLM 的活落成待办，由**你
 
 | kind | 用途 |
 | :--- | :--- |
-| \`embed\` | 知识向量化（RAG） |
 | \`summarize\` | 知识摘要 |
 | \`classify\` | 标签/分类 |
 | \`extract_entities\` | 实体/关系抽取（进知识图谱） |
 | \`diagram_ir\` | Archify 图表 IR 撰写 |
+
+> **向量化不在队列里**（变更 2）：embedding 由 Prism 内置 BGE-M3 自动完成，宿主无需回填。
+> **知识导入也不经队列**（变更 1）：宿主直接读文档、用 LLM 提取、逐条 \`prism_kb_deposit\`。
 
 ## 拉取式流程
 
@@ -314,7 +398,7 @@ prism_work_complete { id, attempt_token, result }  → 回填（Prism 校验后�
 
 - **同一任务不会被两个宿主认领**（原子迁移 + token）；
 - 回填必须带 \`attempt_token\`，迟到的回填会被拒；
-- 结果按 kind 做 **schema 校验**（如 \`embed\` 校验维度与数值有限），失败置 failed 并附原因；
+- 结果按 kind 做 **schema 校验**（如 \`summarize\` 校验摘要非空），失败置 failed 并附原因；
 - 认领超时（默认 30min）会回收为待办；失败未超上限（默认 3 次）也会回收；
 - 积压超上限（默认 1000）停止入队。
 
@@ -423,10 +507,22 @@ prism arch render architecture ir.json --book order-platform --module order   # 
 
 \`\`\`bash
 prism init --zcode-dir <宿主根>    # ①探测 ②建骨架 ③装 Skill ④写 MCP 注册 ⑤提示重启
-prism doctor                        # 环境自检（Node/目录/DB/graphify/端口）
+prism doctor                        # 环境自检（Node/目录/DB/graphify/embedding/端口）
+prism serve --port 7777             # HTTP API + 控制台（只读控制面）
 \`\`\`
 
 **写守卫**：目标为默认宿主目录且未显式指定 → 拒绝（\`guard_required\`）；加 \`--yes\` 或显式 \`--zcode-dir\`。
+
+## 本地向量化（prism embedding）
+
+向量化由 Prism 自理（内置 BGE-M3，不调宿主 LLM）；未安装自动降级纯 BM25。
+
+\`\`\`bash
+prism embedding install    # 首次装配：本地编译 llama.cpp + 下载模型（缺工具链回落预编译包）
+prism embedding status     # 二进制/模型/服务状态
+prism embedding start|stop # 常驻服务（一般按需自动启停）
+prism embedding reindex    # 为已有条目补齐向量（幂等）
+\`\`\`
 
 ## 运行时宿主适配器（prism harness）
 

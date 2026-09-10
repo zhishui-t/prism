@@ -98,7 +98,7 @@ async function workEnqueue(
 ): Promise<number> {
   const kind = values.kind ?? args[0]
   if (kind === undefined) {
-    ctx.stderr('用法: prism work enqueue --kind <embed|summarize|classify|extract_entities|diagram_ir> --payload <json>')
+    ctx.stderr('用法: prism work enqueue --kind <summarize|classify|extract_entities|diagram_ir> --payload <json>')
     return 1
   }
   let payload: unknown = {}

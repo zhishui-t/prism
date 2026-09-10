@@ -15,7 +15,6 @@ export {
 
 export {
   BUILTIN_VALIDATORS,
-  validateEmbed,
   validateSummarize,
   validateClassify,
   validateExtractEntities,

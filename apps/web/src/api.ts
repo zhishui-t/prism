@@ -385,15 +385,6 @@ export const api = {
 
   graphProjects: () => request<GraphProject[]>('/api/graph/projects'),
 
-  graphBuild: (project: string) =>
-    request<{ job_id: string }>('/api/graph/build', {
-      method: 'POST',
-      body: JSON.stringify({ project }),
-    }),
-
-  graphBuildStatus: (jobId: string) =>
-    request<{ status: string; log?: string; error?: string }>(`/api/graph/build/${jobId}`),
-
   graphQuery: (project: string, q: string) =>
     request<{ nodes?: unknown[]; edges?: unknown[]; text?: string }>(
       `/api/graph/query?project=${encodeURIComponent(project)}&q=${encodeURIComponent(q)}`,

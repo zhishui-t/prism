@@ -137,6 +137,8 @@ async function kbSearch(ctx: CommandContext, args: string[], values: ArgValues):
     book: values.book,
     module: values.module,
     limit: values.limit !== undefined ? Number(values.limit) : undefined,
+    // 变更 2：`--no-embedding` 强制纯 BM25（调试/对照用）
+    ...(values['no-embedding'] === true ? { hybrid: false } : {}),
     ...(visibilities !== undefined && visibilities.length > 0 ? { visibilities } : {}),
   })
   if (ctx.json) {

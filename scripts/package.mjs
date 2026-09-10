@@ -198,10 +198,20 @@ async function main() {
   await cp(join(ROOT, 'apps', 'web', 'dist'), join(stageDir, 'apps', 'web', 'dist'), { recursive: true })
 
   // 7) vendored 子工程（archify 自包含；graphify Python 源码）
+  //    排除 3rd/llama.cpp：那是本地编译的向量运行时 + 600MB 模型，目标机用
+  //    `prism embedding install` 自行生成（tarball 不能背这么大的二进制）。
   await cp(join(ROOT, '3rd'), join(stageDir, '3rd'), {
     recursive: true,
-    filter: (src) => !src.includes('node_modules') && !src.includes('__pycache__') && !src.includes('.git'),
+    filter: (src) =>
+      !src.includes('node_modules') &&
+      !src.includes('__pycache__') &&
+      !src.includes('.git') &&
+      !src.split(/[/\\]3rd[/\\]/)[1]?.startsWith('llama.cpp'),
   })
+
+  // 7b) 向量化安装脚本（`prism embedding install` 依赖；小文件，随包发）
+  await mkdir(join(stageDir, 'scripts'), { recursive: true })
+  await cp(join(ROOT, 'scripts', 'setup-embedding.mjs'), join(stageDir, 'scripts', 'setup-embedding.mjs'))
 
   // 8) 文档与许可
   for (const file of ['README.md', 'AGENTS.md', 'LICENSE']) {

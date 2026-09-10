@@ -11,8 +11,8 @@ export const TASKS_SCHEMA_VERSION = 3
 /** core.db 版本：v2 起注册 team_bindings；v3 起 executor_children。 */
 export const CORE_SCHEMA_VERSION = 3
 
-/** knowledge.db 版本：v1 起含条目/边/工作请求等表；v2 起补 owner 列与 work 队列护栏列。 */
-export const KNOWLEDGE_SCHEMA_VERSION = 4
+/** knowledge.db 版本：v1 起含条目/边/工作请求等表；v2 补 owner 列；v3 补 origin；v4 补 source_hash；v5 补 kb_vectors（本地向量）。 */
+export const KNOWLEDGE_SCHEMA_VERSION = 5
 
 // ===== tasks.db =====
 
@@ -162,6 +162,20 @@ export const KNOWLEDGE_ENTRIES_TABLE_DDL = `CREATE TABLE IF NOT EXISTS knowledge
  * v2 存量库补 owner 列（Z1）：owner 原为「路径段反解」的隐式约定，路径一变即失准；
  * 落为显式列后读取优先取列，`ownerFromPath` 仅作老库/兜底。
  */
+/**
+ * 知识条目向量（变更 2：Prism 内置 embedding，BGE-M3 1024 维）。
+ * entry_id + version 主键：新版次覆盖旧向量；vec 为 little-endian float32 BLOB。
+ * 检索为混合排序（BM25 + 余弦 RRF 融合），条目量数千级全表扫足够（更大规模再上 sqlite-vec）。
+ */
+export const KB_VECTORS_TABLE_DDL = `CREATE TABLE IF NOT EXISTS kb_vectors (
+    entry_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    dim INTEGER NOT NULL,
+    vec BLOB NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (entry_id, version)
+)`
+
 export const KNOWLEDGE_V2_ADD_OWNER: DatabaseSchemaStatement = {
   sql: 'ALTER TABLE knowledge_entries ADD COLUMN owner TEXT',
   when: (db: DatabaseSync): boolean => !knowledgeEntryColumns(db).includes('owner'),
@@ -352,6 +366,7 @@ export const DEFAULT_SCHEMAS: Record<'tasks' | 'core' | 'knowledge', DatabaseSch
       KNOWLEDGE_V2_ADD_OWNER,
       KNOWLEDGE_V3_ADD_ORIGIN,
       KNOWLEDGE_V4_ADD_SOURCE_HASH,
+      KB_VECTORS_TABLE_DDL,
       WORK_V2_ADD_DEADLINE,
       WORK_V2_ADD_FAIL_COUNT,
     ],

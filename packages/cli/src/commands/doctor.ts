@@ -4,7 +4,16 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { openPersistence, prismPaths } from '@prism/core'
-import { probeConverter, resolveGraphifyCommand, runGraphify, vendoredGraphifyVersion } from '@prism/server'
+import {
+  EMBEDDING_DIM,
+  EMBEDDING_PORT,
+  embedText,
+  embeddingInstalled,
+  probeConverter,
+  resolveGraphifyCommand,
+  runGraphify,
+  vendoredGraphifyVersion,
+} from '@prism/server'
 
 import type { ArgValues, CommandContext } from '../argv.js'
 
@@ -89,7 +98,25 @@ export async function runDoctor(ctx: CommandContext, _args: string[], values: Ar
         : `${converterError}（kb sync 只能处理 md/txt；重新 pnpm install 或从 tarball 解压）`,
   })
 
-  // 6) 端口占用
+  // 6) 本地向量化（变更 2，可选增强）：未安装不算失败——检索自动回落纯 BM25
+  if (!embeddingInstalled()) {
+    checks.push({
+      name: 'embedding',
+      ok: true,
+      detail: `未安装（可选；装后检索走 BM25+向量混合）：prism embedding install`,
+    })
+  } else {
+    const probe = await embedText('健康检查')
+    checks.push({
+      name: 'embedding',
+      ok: probe.ok,
+      detail: probe.ok
+        ? `就绪（BGE-M3 ${EMBEDDING_DIM} 维，127.0.0.1:${EMBEDDING_PORT}）`
+        : `已安装但服务不可用：${probe.error ?? '未知'}（prism embedding start）`,
+    })
+  }
+
+  // 7) 端口占用
   const port = values.port !== undefined ? Number(values.port) : 7777
   const portFree = await probePort(port, values.host)
   checks.push({
