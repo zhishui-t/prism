@@ -70,6 +70,7 @@ export {
   type DepositPolicyOutcome,
   type PolicyDepositInput,
 } from './team/deposit-policy.js'
+export { resolveTeamExtends, MAX_EXTENDS_DEPTH, type TeamResolver, type MergeTeamInput } from './team/extends.js'
 export { activateTeam } from './team/activate.js'
 export type { ActivateTeamOptions } from './team/activate.js'
 export { renderZcodeTeam, teamMarker, hasTeamMarker } from './team/render.js'

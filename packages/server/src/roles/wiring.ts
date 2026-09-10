@@ -26,6 +26,7 @@ import {
   parseRoleMarkdown,
   parseTeamMarkdown,
   renderMarkdownFile,
+  resolveTeamExtends,
   validateRole,
   validateTeam,
   type FrontmatterData,
@@ -145,8 +146,25 @@ export async function loadTeam(
     return null
   }
   const roles = opts.roles ?? (opts.rolesDir !== undefined ? await loadRoles(opts.rolesDir) : [])
-  const team = parseTeamMarkdown(await readFile(file, 'utf-8'), { sourcePath: file })
+  const declared = new Set<string>()
+  const parsed = parseTeamMarkdown(await readFile(file, 'utf-8'), { sourcePath: file, declaredKeys: declared })
+  // extends 解析（team-definition.md §2.1）：父级做基底，子级显式声明覆盖
+  const team =
+    parsed.extends !== null && parsed.extends !== ''
+      ? await resolveTeamExtends({ team: parsed, declared }, async (id) => await loadTeamRaw(teamsDir, id))
+      : parsed
   return { ...team, issues: validateTeam(team, { roles, knownSkills: opts.knownSkills }).issues }
+}
+
+/** 不做 extends/校验的原样加载（extends 链的父级解析用，避免递归校验）。 */
+async function loadTeamRaw(teamsDir: string, teamId: string): Promise<TeamDefinition | null> {
+  const candidates = [join(teamsDir, teamId, 'AGENTS.md'), join(teamsDir, `${teamId}.md`)]
+  const file = candidates.find((c) => existsSync(c))
+  if (file === undefined) return null
+  const declared = new Set<string>()
+  const parsed = parseTeamMarkdown(await readFile(file, 'utf-8'), { sourcePath: file, declaredKeys: declared })
+  if (parsed.extends === null || parsed.extends === '') return parsed
+  return await resolveTeamExtends({ team: parsed, declared }, async (id) => await loadTeamRaw(teamsDir, id))
 }
 
 // ---------------------------------------------------------------------------

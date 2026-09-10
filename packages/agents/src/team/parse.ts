@@ -28,6 +28,11 @@ export class TeamParseError extends Error {
 
 export interface ParseTeamOptions {
   sourcePath?: string
+  /**
+   * 传出**显式声明**的 frontmatter 键（extends 合并用：区分「声明了空数组」与「没声明」）。
+   * 传入一个 Set，解析器填入。
+   */
+  declaredKeys?: Set<string>
 }
 
 const WORKFLOW_HEADING = '## 工作流'
@@ -48,6 +53,9 @@ export function parseTeamMarkdown(raw: string, opts: ParseTeamOptions = {}): Tea
   const deposit = parseDeposit(data.deposit)
   // 工作流表格错误行号以**整份文件**计（design-v3 §7）：body 之前的行数 = 基准偏移
   const baseLine = raw.endsWith(body) ? raw.slice(0, raw.length - body.length).split('\n').length - 1 : 0
+  if (opts.declaredKeys !== undefined) {
+    for (const key of Object.keys(data)) opts.declaredKeys.add(key)
+  }
   const team: TeamDefinition = {
     team_id: str(data.team_id) ?? '',
     name: str(data.name) ?? '',
