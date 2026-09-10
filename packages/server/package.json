@@ -15,7 +15,8 @@
   "files": ["dist"],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit && pnpm run typecheck:test",
+    "typecheck:test": "tsc -p tsconfig.testcheck.json --noEmit"
   },
   "dependencies": {
     "@prism/agents": "workspace:*",

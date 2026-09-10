@@ -59,12 +59,14 @@ describe('MCP 角色/团队工具（design-v3 §3.4 P6；stdio JSON-RPC 手写�
     await rm(tmp, { recursive: true, force: true }).catch(() => {})
   })
 
-  it('tools/list 含新增工具（累计 31 个）', async () => {
+  it('tools/list 含新增工具（累计 35 个，design-v4 增 versions/skill_effective/team_create/book_structure）', async () => {
     const response = await handleRpcRequest(rpc(1, 'tools/list'), tools)
     const names = ((response?.result as { tools: Array<{ name: string }> })?.tools ?? []).map((t) => t.name)
     expect(names).toEqual([
       'prism_kb_search',
       'prism_kb_get',
+      'prism_kb_versions',
+      'prism_kb_book_structure',
       'prism_kb_deposit',
       'prism_kb_convert',
       'prism_kb_import',
@@ -88,9 +90,11 @@ describe('MCP 角色/团队工具（design-v3 §3.4 P6；stdio JSON-RPC 手写�
       'prism_role_list',
       'prism_role_get',
       'prism_context_pack',
+      'prism_skill_effective',
       'prism_role_render',
       'prism_team_get',
       'prism_team_activate',
+      'prism_team_create',
       'prism_task_register',
       'prism_task_report',
       'prism_task_status',
@@ -122,6 +126,8 @@ describe('MCP 角色/团队工具（design-v3 §3.4 P6；stdio JSON-RPC 手写�
     const response = await handleRpcRequest(rpc(4, 'tools/call', { name: 'prism_role_render', arguments: { name: 'ghost' } }), tools)
     expect(response?.result).toMatchObject({ isError: true })
     expect(textOf(response)).toContain('角色不存在: ghost')
+    // 角色侧落点就是目录式（role import 写 <roles_dir>/<name>/AGENTS.md）——本文案**正确**，勿随团队一起改
+    expect(textOf(response)).toContain('<name>/AGENTS.md')
   })
 
   it('tools/call prism_team_get → 团队定义；prism_team_activate → dispatch 状态', async () => {
@@ -145,5 +151,8 @@ describe('MCP 角色/团队工具（design-v3 §3.4 P6；stdio JSON-RPC 手写�
     const missing = await handleRpcRequest(rpc(7, 'tools/call', { name: 'prism_team_activate', arguments: { team_id: 'nope' } }), tools)
     expect(missing?.result).toMatchObject({ isError: true })
     expect(textOf(missing)).toContain('团队不存在: nope')
+    // ui-spec-v4 §8-D5：文案报真实落点 <id>.md，目录式仅作兼容形态（旧文案只写 <id>/AGENTS.md → 引导错路径）
+    expect(textOf(missing)).toContain('<id>.md')
+    expect(textOf(missing)).toContain('兼容 <id>/AGENTS.md 双形态')
   })
 })

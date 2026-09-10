@@ -8,14 +8,17 @@ import { ensureHarnessPluginsLoaded } from '@prism/agents'
 
 import {
   activateTeam,
-  applyDepositPolicy,
+  createTeamDefinition,
   installedSkillNames,
+  loadEffectiveSkills,
   loadRole,
   loadRoles,
   loadTeam,
   renderZcodeRole,
   resolveDirsFromHome,
   harnessPaths,
+  teamNotFoundMessage,
+  type NewTeamBody,
 } from '../roles/index.js'
 import {
   runGraphify,
@@ -28,9 +31,11 @@ import {
 import { inspectGraphStatus, ProjectRegistry } from '../graph/registry.js'
 import { convertFileToMarkdown } from '../kb/convert-file.js'
 import { makeDryRunKb, scanProject } from '../kb/scan.js'
-import type { DepositInput, GraphQuery, KnowledgeService, SearchQuery } from '../kb/port.js'
+import type { GraphQuery, KnowledgeService, Layer, SearchQuery } from '../kb/port.js'
+import { depositWithPolicy, type DepositRequest } from '../kb/deposit-entry.js'
 import { loadKnowledgeService } from '../kb/wiring.js'
 import { buildContextPack } from '../kb/context-pack.js'
+import { buildDepositSuggestions } from '../tasks/deposit-suggestions.js'
 import { writeEnrichment } from '../kb/enrich-writeback.js'
 
 /**
@@ -226,7 +231,7 @@ export function createMcpTools(deps: McpDeps): McpTool[] {
     }
     const team = await loadTeam(teamsDir, id, { rolesDir })
     if (team === null) {
-      throw new Error(`团队不存在: ${id}（数据源 ${teamsDir}/<id>/AGENTS.md）`)
+      throw new Error(teamNotFoundMessage(teamsDir, id))
     }
     return team
   }
@@ -239,6 +244,8 @@ export function createMcpTools(deps: McpDeps): McpTool[] {
   /**
    * 上下文包（knowledge-injection.md §4 模式 B）：
    * 按角色知识绑定 + 任务关键词检索，组装带预算的包。Prism 只产包、不写 prompt。
+   *
+   * F-B1/F-B2：增 `layers`/`books`/`symbols`/`max_excerpt_chars`（全部可选，缺省行为不变）。
    */
   const contextPack = async (args: Record<string, unknown>): Promise<unknown> => {
     const roleName = asString(args.role)
@@ -250,11 +257,113 @@ export function createMcpTools(deps: McpDeps): McpTool[] {
     if (role === null) {
       throw new Error(`角色不存在: ${roleName}（数据源 ${rolesDir}/<name>/AGENTS.md）`)
     }
+    const layers = asStringArray(args.layers)
+    const books = asStringArray(args.books)
+    const symbols = asStringArray(args.symbols)
+    const maxExcerptChars = asPositiveInt(args.max_excerpt_chars)
     return await buildContextPack(await kb(), {
       role: roleName,
       binding: role.knowledge,
       task,
       ...(typeof args.budget_tokens === 'number' ? { budgetTokens: args.budget_tokens } : {}),
+      ...(layers !== undefined ? { layers: layers as Layer[] } : {}),
+      ...(books !== undefined ? { books } : {}),
+      ...(symbols !== undefined ? { symbols } : {}),
+      ...(maxExcerptChars !== undefined ? { maxExcerptChars } : {}),
+    })
+  }
+
+  /**
+   * 条目版本历史（F-B4）：`{ id }` → `{ versions: EntryVersion[] }`（降序 + `is_latest`）。
+   * 不存在 id → 空数组（不报错）。
+   */
+  const kbVersions = async (args: Record<string, unknown>): Promise<unknown> => {
+    const id = asString(args.id)
+    if (id === undefined) {
+      throw new Error('prism_kb_versions 需要 { id }')
+    }
+    return { versions: await (await kb()).listVersions(id) }
+  }
+
+  /**
+   * 书结构（F-A1/F-A2，design-v4 §3.4 冻结面）：`{ action: show|generate|freeze, layer, book, ... }`。
+   *
+   * 与 CLI `prism kb structure`（t14）**同口径**：
+   * - `show` → `BookStructure`（`modules` 已是父链在前、本地覆盖同名的**合并结果**）；
+   *   结构未生成（或书不存在）→ `not_found`（**不是**空结构）；
+   * - `generate` → `{ structure, files }`（零 LLM；幂等：`revision` 只有 freeze 递增）；
+   * - `freeze` → `BookStructure`（`revision+1`；`modules` 省略则沿用当前清单/接受建议）；
+   * - 字段名 `inherited_from`/`frozen_at`/`confirmed_by` **原样 snake_case**（不做驼峰改写）。
+   *
+   * 非法层/同名书多 owner/非法 slug/无条目书 → 知识侧 `bad_request`（owner 消歧是契约行为，不是缺陷）。
+   */
+  const kbBookStructure = async (args: Record<string, unknown>): Promise<unknown> => {
+    const action = asString(args.action)
+    if (action !== 'show' && action !== 'generate' && action !== 'freeze') {
+      throw new PrismError(
+        'bad_request',
+        `prism_kb_book_structure 的 action 必须为 show/generate/freeze: ${JSON.stringify(args.action ?? null)}`,
+      )
+    }
+    const layer = asString(args.layer)
+    const book = asString(args.book)
+    if (layer === undefined || book === undefined) {
+      throw new PrismError('bad_request', 'prism_kb_book_structure 需要 { action, layer, book }')
+    }
+    const service = await kb()
+    if (action === 'show') {
+      const structure = await service.bookStructure(layer, book)
+      if (structure === null) {
+        throw new PrismError('not_found', `书结构不存在: ${layer}/${book}（尚未 generate/freeze，或该书无条目）`)
+      }
+      return structure
+    }
+    const confirmedBy = asString(args.confirmed_by)
+    if (action === 'generate') {
+      return await service.generateBookStructure({
+        layer,
+        book,
+        ...(confirmedBy !== undefined ? { confirmed_by: confirmedBy } : {}),
+      })
+    }
+    // freeze：显式给 modules 但筛完为空 → bad_request（对齐 CLI：给了空值不静默当「没给」）
+    let modules: string[] | undefined
+    if (args.modules !== undefined) {
+      if (!Array.isArray(args.modules) || args.modules.some((m) => typeof m !== 'string')) {
+        throw new PrismError('bad_request', 'prism_kb_book_structure 的 modules 必须是字符串数组')
+      }
+      modules = (args.modules as string[]).map((m) => m.trim()).filter((m) => m !== '')
+      if (modules.length === 0) {
+        throw new PrismError('bad_request', 'modules 需要至少一个模块 slug（如 ["core","api"]）')
+      }
+    }
+    const note = asString(args.note)
+    return await service.freezeBookStructure({
+      layer,
+      book,
+      ...(modules !== undefined ? { modules } : {}),
+      ...(confirmedBy !== undefined ? { confirmed_by: confirmedBy } : {}),
+      ...(note !== undefined ? { note } : {}),
+    })
+  }
+
+  /**
+   * F-D2 有效 Skill 集：`{ role, team? }` → `EffectiveSkillSet`。
+   * 与 HTTP `GET /api/skills/effective`、CLI `prism skill effective` 共用
+   * `loadEffectiveSkills`（口径一致由该单点保证）；角色/团队不存在 → `not_found`。
+   */
+  const skillEffective = async (args: Record<string, unknown>): Promise<unknown> => {
+    const roleName = asString(args.role)
+    if (roleName === undefined) {
+      throw new Error('prism_skill_effective 需要 { role }')
+    }
+    const teamId = asString(args.team)
+    return await loadEffectiveSkills({
+      roleId: roleName,
+      teamsDir,
+      rolesDir,
+      harnessRoot,
+      ...(teamId !== undefined ? { teamId } : {}),
     })
   }
 
@@ -362,6 +471,38 @@ export function createMcpTools(deps: McpDeps): McpTool[] {
       },
     },
     {
+      name: 'prism_kb_versions',
+      description: '列某条目的全部版次历史（降序 + is_latest；不存在 id → 空数组，不报错）',
+      inputSchema: {
+        type: 'object',
+        properties: { id: { type: 'string', description: '知识条目 id' } },
+        required: ['id'],
+      },
+      call: kbVersions,
+    },
+    {
+      name: 'prism_kb_book_structure',
+      description:
+        '书结构（F-A1/F-A2）：action=show 读回合并后的模块清单（父链在前）+ inherited_from + revision/frozen_at/confirmed_by/suggested；action=generate 零 LLM 推导并产 _modules.yaml + 书级/模块级 _summary.md（幂等，返回 {structure, files}）；action=freeze 固化模块清单（revision+1；省略 modules 则沿用当前清单或接受建议）。与 CLI `prism kb structure` 同口径（字段名 snake_case 原样，结构未生成 → not_found）',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          action: { enum: ['show', 'generate', 'freeze'], description: '动作' },
+          layer: { enum: ['global', 'project', 'role'], description: '层' },
+          book: { type: 'string', description: '书（project/role 层同名书多 owner → bad_request，不猜）' },
+          modules: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'freeze 专用：显式冻结的模块 slug 清单（省略则沿用当前清单或接受建议）',
+          },
+          confirmed_by: { type: 'string', description: 'generate/freeze 专用：确认人留痕' },
+          note: { type: 'string', description: 'freeze 专用：备注' },
+        },
+        required: ['action', 'layer', 'book'],
+      },
+      call: kbBookStructure,
+    },
+    {
       name: 'prism_kb_deposit',
       description: '落库一条知识（宿主说落就落）；project/role 层必须提供 owner',
       inputSchema: {
@@ -381,62 +522,61 @@ export function createMcpTools(deps: McpDeps): McpTool[] {
           visibility: { enum: ['global', 'project', 'role'] },
           source: {
             type: 'object',
-            properties: { kind: { enum: ['import', 'agent', 'manual'] }, ref: { type: 'string' } },
+            properties: { kind: { enum: ['import', 'agent', 'manual', 'task'] }, ref: { type: 'string' } },
           },
           deposited_by: {
             type: 'object',
-            properties: { subject: { type: 'string' }, team: { type: 'string' } },
+            properties: {
+              subject: { type: 'string' },
+              team: { type: 'string' },
+              task_id: { type: 'string' },
+            },
             description: '留痕：谁/哪个团队落库',
           },
           team_id: {
             type: 'string',
             description: '按该团队的 deposit 策略机械校验（enabled/require_note/rules）；省略则不校验',
           },
+          task_id: {
+            type: 'string',
+            description: 'F-E2 任务来源：写 origin_task.task_id，并把 source.kind 置为 task',
+          },
+          dag_id: { type: 'string', description: 'F-E2 任务来源：写 origin_task.dag_id' },
+          stage: { type: 'string', description: 'F-E2 任务来源：写 origin_task.stage' },
         },
         required: ['title', 'type', 'layer', 'book', 'content'],
       },
       call: async (args) => {
-        const raw = args as unknown as DepositInput & { team_id?: string }
-        const teamId = asString(raw.team_id)
+        const raw = args as unknown as DepositRequest & Record<string, unknown>
+        // F-E2：`task_id`/`dag_id`/`stage` → `origin_task` + `source.kind='task'`（与 HTTP/CLI 同口径）
+        const taskId = asString(raw['task_id'])
+        const dagId = asString(raw['dag_id'])
+        const stage = asString(raw['stage'])
+        const originTask =
+          taskId !== undefined
+            ? {
+                task_id: taskId,
+                ...(dagId !== undefined ? { dag_id: dagId } : {}),
+                ...(stage !== undefined ? { stage } : {}),
+              }
+            : undefined
+        const source =
+          originTask !== undefined
+            ? { kind: 'task' as const, ...(raw.source?.ref !== undefined ? { ref: raw.source.ref } : {}) }
+            : raw.source
         // 团队沉淀策略：机械校验 + 默认值 + rules 覆盖（team-definition.md §5）
-        if (teamId !== undefined) {
-          const team = await requireTeam(teamId)
-          const outcome = applyDepositPolicy(team.deposit, {
-            title: raw.title,
-            type: raw.type,
-            layer: raw.layer,
-            book: raw.book,
-            content: raw.content,
-            ...(raw.owner !== undefined ? { owner: raw.owner } : {}),
-            ...(raw.module !== undefined ? { module: raw.module } : {}),
-            ...(raw.tags !== undefined ? { tags: raw.tags } : {}),
-            ...(raw.risk !== undefined ? { risk: raw.risk } : {}),
-            ...(raw.source !== undefined ? { source: raw.source } : {}),
-          })
-          if (!outcome.allowed) {
-            throw new Error(`沉淀策略拒绝：${outcome.errors.join('；')}`)
-          }
-          const p = outcome.input
-          return await (await kb()).deposit({
-            title: p.title,
-            type: p.type as DepositInput['type'],
-            layer: p.layer as DepositInput['layer'],
-            book: p.book,
-            content: p.content,
-            ...(p.owner !== undefined ? { owner: p.owner } : {}),
-            ...(p.module !== undefined ? { module: p.module } : {}),
-            ...(p.tags !== undefined ? { tags: p.tags } : {}),
-            ...(p.risk !== undefined ? { risk: p.risk as DepositInput['risk'] } : {}),
-            ...(p.source !== undefined ? { source: p.source } : {}),
-            ...(p.visibility !== undefined
-              ? { visibility: p.visibility as DepositInput['visibility'] }
-              : {}),
-            ...(raw.confidence !== undefined ? { confidence: raw.confidence } : {}),
-            ...(raw.overrides !== undefined ? { overrides: raw.overrides } : {}),
-            ...(raw.deposited_by !== undefined ? { deposited_by: raw.deposited_by } : {}),
-          })
-        }
-        return await (await kb()).deposit(raw)
+        // 实现单点在 kb/deposit-entry.ts，与 HTTP `POST /api/kb/deposit` 共用
+        return await depositWithPolicy(
+          {
+            kb,
+            loadTeam: async (teamId) => await requireTeam(teamId),
+          },
+          {
+            ...raw,
+            ...(source !== undefined ? { source } : {}),
+            ...(originTask !== undefined ? { origin_task: originTask } : {}),
+          },
+        )
       },
     },
     {
@@ -825,10 +965,45 @@ export function createMcpTools(deps: McpDeps): McpTool[] {
           role: { type: 'string', description: '角色名（用其 knowledge 绑定限定层/书）' },
           task: { type: 'string', description: '任务描述（作为检索词）' },
           budget_tokens: { type: 'integer', minimum: 100, maximum: 100000, description: 'token 预算，默认 4000' },
+          layers: {
+            type: 'array',
+            items: { enum: ['global', 'project', 'role'] },
+            description: 'F-B1：显式覆盖角色绑定的层集合（缺省取角色绑定）',
+          },
+          books: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'F-B1：显式覆盖角色绑定的书过滤（缺省取角色绑定）',
+          },
+          symbols: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'F-B2：代码符号/文件路径；命中 title+excerpt 的条目 relevance×1.15 并在 graph_hits 写出',
+          },
+          max_excerpt_chars: {
+            type: 'integer',
+            minimum: 1,
+            maximum: 100000,
+            description: '每项最多保留的正文字符数，默认 600',
+          },
         },
         required: ['role', 'task'],
       },
       call: contextPack,
+    },
+    {
+      name: 'prism_skill_effective',
+      description:
+        '有效 Skill 集（F-D2）：角色 ×（可选）团队 → 能用的 skill（含来源标注 global/team/role 与宿主是否已装）+ 缺失告警。与 HTTP /api/skills/effective、CLI 同口径',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          role: { type: 'string', description: '角色名（kebab-case）' },
+          team: { type: 'string', description: '团队 id（可选；提供则并入团队声明的 skills）' },
+        },
+        required: ['role'],
+      },
+      call: skillEffective,
     },
     {
       name: 'prism_role_render',
@@ -864,6 +1039,36 @@ export function createMcpTools(deps: McpDeps): McpTool[] {
         required: ['team_id'],
       },
       call: teamActivate,
+    },
+    {
+      name: 'prism_team_create',
+      description:
+        '新建团队定义（写 <teams_dir>/<team_id>.md；与 HTTP POST /api/teams 同一实现）。teams_dir 必填——写路径一律显式参数化，绝不回落到默认宿主目录',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          team_id: { type: 'string', description: '新团队 id（kebab-case，= 落盘文件名）' },
+          name: { type: 'string', description: '中文名（缺省 = team_id）' },
+          description: { type: 'string' },
+          members: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: { role: { type: 'string' }, count: { type: 'integer', minimum: 1 } },
+              required: ['role'],
+            },
+            description: '成员角色（必须已存在于角色库）',
+          },
+          deposit: {
+            type: 'object',
+            description: '沉淀策略（enabled/default_layer/default_type/priority/require_note；可选）',
+          },
+          workflow_template: { enum: ['minimal', 'core-dev'], description: '工作流模板，缺省 minimal' },
+          teams_dir: { type: 'string', description: '**必填**：写入目录（防误写真实宿主）' },
+        },
+        required: ['team_id', 'members', 'teams_dir'],
+      },
+      call: async (args) => await createTeamDefinition(args as NewTeamBody, rolesDir),
     },
     {
       name: 'prism_task_register',
@@ -902,7 +1107,7 @@ export function createMcpTools(deps: McpDeps): McpTool[] {
     {
       name: 'prism_task_report',
       description:
-        '回报任务状态（被动台账：执行方推状态，Prism 只记录）。状态机校验转移合法性 + 乐观并发（expected_revision）',
+        '回报任务状态（被动台账：执行方推状态，Prism 只记录）。状态机校验转移合法性 + 乐观并发（expected_revision）。COMPLETED 返回 deposit_hint=await_close；CLOSED 返回 deposit_suggestions（F-E3，只建议不落库）',
       inputSchema: {
         type: 'object',
         properties: {
@@ -916,7 +1121,26 @@ export function createMcpTools(deps: McpDeps): McpTool[] {
         },
         required: ['task_id', 'to_status', 'by'],
       },
-      call: async (args) => await (await ledger()).report(args as never),
+      call: async (args) => {
+        const row = await (await ledger()).report(args as never)
+        // F-E3（队长裁决 A4）：COMPLETED 只提示待收口；CLOSED 才给建议清单（只建议、不落库）
+        if (row.status === 'COMPLETED') {
+          return { ...row, deposit_hint: 'await_close' as const }
+        }
+        if (row.status !== 'CLOSED') {
+          return row
+        }
+        const team = await loadTeam(teamsDir, row.team_id, { rolesDir })
+        if (team === null) {
+          return row
+        }
+        const suggestions = buildDepositSuggestions({
+          policy: team.deposit,
+          stage: row.stage,
+          description: row.description,
+        })
+        return suggestions.length === 0 ? row : { ...row, deposit_suggestions: suggestions }
+      },
     },
     {
       name: 'prism_task_status',
@@ -1015,6 +1239,18 @@ export function invalidParams(message: string): JsonRpcResponse {
 
 function asString(value: unknown): string | undefined {
   return typeof value === 'string' && value !== '' ? value : undefined
+}
+
+/** 字符串数组参数（F-B1/F-B2 的 layers/books/symbols）：非数组 → undefined；元素只取非空字符串。 */
+function asStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  return value.filter((v): v is string => typeof v === 'string' && v !== '')
+}
+
+/** 正整数参数（max_excerpt_chars）：非法/缺省 → undefined（不静默改成别的值）。 */
+function asPositiveInt(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) return undefined
+  return value
 }
 
 /**

@@ -31,13 +31,15 @@ describe('MCP stdio（手写 JSON-RPC，design.md §4 最小 5 工具 + design-v
     })
   })
 
-  it('tools/list → 固定 31 个工具（kb 15 + graph 7 + role/team 6 + task 3）', async () => {
+  it('tools/list → 固定 35 个工具（kb 17 + graph 7 + role/team 8 + task 3；design-v4 增 versions/skill_effective/team_create/book_structure）', async () => {
     const tools = createMcpTools({ home: await makeTempDir('prism-mcp-') })
     const res = await handleRpcRequest(rpc('tools/list'), tools)
     const names = ((res?.result as { tools: Array<{ name: string }> }).tools).map((t) => t.name)
     expect(names).toEqual([
       'prism_kb_search',
       'prism_kb_get',
+      'prism_kb_versions',
+      'prism_kb_book_structure',
       'prism_kb_deposit',
       'prism_kb_convert',
       'prism_kb_import',
@@ -61,9 +63,11 @@ describe('MCP stdio（手写 JSON-RPC，design.md §4 最小 5 工具 + design-v
       'prism_role_list',
       'prism_role_get',
       'prism_context_pack',
+      'prism_skill_effective',
       'prism_role_render',
       'prism_team_get',
       'prism_team_activate',
+      'prism_team_create',
       'prism_task_register',
       'prism_task_report',
       'prism_task_status',
@@ -129,7 +133,9 @@ describe('MCP stdio（手写 JSON-RPC，design.md §4 最小 5 工具 + design-v
 
 describe('MCP 富化直付工具（prism_kb_enrich，工作队列已移除）', () => {
   it('summarize 直付 → 落 SUMMARY 条目', async () => {
-    // 用真实知识服务：MemoryKb 的 deposit 不返回 action，无法验证落库动作
+    // 用真实知识服务：本用例验的是「真实落库动作」（created/unchanged 的去重语义）。
+    // MemoryKb 桩现已返回 action（粗粒度 created/updated + 正文哈希 unchanged），
+    // 桩侧契约由 kb-port-conformance.test.ts 锁定。
     const { PrismKnowledgeService } = await import('@prism/knowledge')
     const kb = new PrismKnowledgeService({ home: await makeTempDir('prism-mcp-enrich-kb-') })
     await kb.deposit({ id: 'K-1', title: '订单规则', type: 'rule', layer: 'global', book: 'b', content: '订单必须幂等。' })

@@ -21,9 +21,9 @@ import {
 const isWin = process.platform === 'win32'
 
 async function tempDir(): Promise<string> {
-  return await mkdir(join(tmpdir(), `prism-graphify-${Date.now()}-${Math.random().toString(36).slice(2)}`), {
-    recursive: true,
-  })
+  const dir = join(tmpdir(), `prism-graphify-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+  await mkdir(dir, { recursive: true })
+  return dir
 }
 
 describe('resolveGraphifyCommand（Windows .cmd 处理）', () => {

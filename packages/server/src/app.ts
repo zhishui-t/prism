@@ -96,7 +96,7 @@ export async function createApp(options: AppOptions = {}): Promise<{
   const dirs = resolveDirsFromHome(home, {
     ...(options.harnessRoot !== undefined ? { harnessRoot: options.harnessRoot, rootExplicit: true } : {}),
   })
-  const kb = kbRoutes(loadKb, home, dirs.rolesDir)
+  const kb = kbRoutes(loadKb, home, dirs.rolesDir, dirs.teamsDir)
   router.add('GET', '/api/kb/search', kb.search)
   router.add('GET', '/api/kb/get/:id', kb.get)
   router.add('GET', '/api/kb/tree', kb.tree)
@@ -112,6 +112,10 @@ export async function createApp(options: AppOptions = {}): Promise<{
   router.add('POST', '/api/kb/conflicts/:id/resolve', kb.resolveConflict)
   router.add('GET', '/api/kb/scan-history', kb.scanHistory)
   router.add('GET', '/api/kb/context-pack', kb.contextPack)
+  router.add('GET', '/api/kb/versions/:id', kb.versions)
+  // 书结构（F-A1/F-A2，design-v4 §3.4）：只读写 knowledgeDir（R5/R6：不接目录参数）
+  router.add('GET', '/api/kb/book-structure', kb.bookStructure)
+  router.add('POST', '/api/kb/book-structure', kb.bookStructureAction)
 
   const graph = graphRoutes({
     registry,
@@ -152,15 +156,18 @@ export async function createApp(options: AppOptions = {}): Promise<{
   router.add('GET', '/api/tasks/:id', tasks.get)
   router.add('GET', '/api/dags/:id', tasks.dag)
 
-  // 角色 / 团队 / 技能（design-v3 §3.4 F11；只读 GET，数据源由激活适配器推导）
+  // 角色 / 团队 / 技能（design-v3 §3.4 F11：数据源由激活适配器推导）
+  // 只读 GET + 唯一的写路由 POST /api/teams（F-C3：只写 body 显式 teams_dir）
   const people = peopleRoutes({ home, harnessRoot: dirs.harnessRoot })
   router.add('GET', '/api/roles', people.roles)
   router.add('GET', '/api/roles/:name', people.role)
   router.add('GET', '/api/teams', people.teams)
+  router.add('POST', '/api/teams', people.createTeam)
   router.add('GET', '/api/teams/:id', people.team)
   router.add('GET', '/api/teams/:id/activate', people.teamActivate)
   router.add('GET', '/api/skills', people.skills)
   router.add('GET', '/api/skills/usage', people.skillUsage)
+  router.add('GET', '/api/skills/effective', people.skillsEffective)
 
   // 控制台静态兜底（GET /*）必须注册在最后：/api、/studio 优先，不劫持（返工单 F03）
   const webDist = options.webDist ?? resolveWebDistDir()

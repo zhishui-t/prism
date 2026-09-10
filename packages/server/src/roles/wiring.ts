@@ -19,6 +19,7 @@ import { join } from 'node:path'
 import {
   harnessLayout,
   resolveHarness,
+  computeEffectiveSkills,
   createRoleRegistry,
   createTeamRegistry,
   installRoles as installAgentsRoles,
@@ -29,12 +30,14 @@ import {
   resolveTeamExtends,
   validateRole,
   validateTeam,
+  type EffectiveSkillSet,
   type FrontmatterData,
   type InstallResult,
   type RoleDefinition,
   type TeamDefinition,
 } from '@prism/agents'
 import { PrismError } from '@prism/core'
+import { listBuiltinSkills } from '@prism/skills'
 
 // ---------------------------------------------------------------------------
 // 路径约定（agents ZCode 适配器推导；P14：子路径只在此处出现）
@@ -165,6 +168,18 @@ export async function loadTeam(
   return { ...team, issues: validateTeam(team, { roles, knownSkills: opts.knownSkills }).issues }
 }
 
+/**
+ * 「团队不存在」文案单点（ui-spec-v4 §8-D5）。
+ *
+ * **真实落点在前**：`<teamsDir>/<id>.md` 是 agents `installTeamDefinitions`
+ * 的产物形态（`packages/agents/src/install.ts`：`join(teamsDir, `${team.team_id}.md`)`）；
+ * 目录式 `<id>/AGENTS.md` 仍可被 `loadTeam` 双形态探测到，故只作**兼容形态**附带说明。
+ * HTTP / MCP / KB 三面共用本函数——文案曾是三个变体（显式镜像漂移），收敛到此处。
+ */
+export function teamNotFoundMessage(teamsDir: string, teamId: string): string {
+  return `团队不存在: ${teamId}（数据源 ${teamsDir}/<id>.md，兼容 <id>/AGENTS.md 双形态）`
+}
+
 /** 不做 extends/校验的原样加载（extends 链的父级解析用，避免递归校验）。 */
 async function loadTeamRaw(teamsDir: string, teamId: string): Promise<TeamDefinition | null> {
   const candidates = [join(teamsDir, teamId, 'AGENTS.md'), join(teamsDir, `${teamId}.md`)]
@@ -219,6 +234,60 @@ export async function installTeam(opts: InstallTeamOptions): Promise<InstallResu
     written: [...rolesResult.written, ...teamResult.written],
     skipped: [...rolesResult.skipped, ...teamResult.skipped],
   }
+}
+
+// ---------------------------------------------------------------------------
+// Skill 有效集装配（F-D2 / design-v4 §3.4：「四处口径一致」的唯一保证）
+// ---------------------------------------------------------------------------
+
+export interface LoadEffectiveSkillsInput {
+  /** 角色 id（不存在 → `PrismError('not_found')`，HTTP 侧即 404 信封） */
+  roleId: string
+  /** 团队 id（可选；提供但不存在 → 同样 `not_found`，不静默降级为「无团队」） */
+  teamId?: string
+  teamsDir: string
+  rolesDir: string
+  harnessRoot: string
+}
+
+/**
+ * 有效 Skill 集装配：取角色定义 + （可选）团队定义 + 已装名单 → 调纯函数
+ * `computeEffectiveSkills`（`@prism/agents`）。**MCP / HTTP / CLI 三入口共用本函数**，
+ * 因此「同角色同团队 → 同输出」可判定、可测试（design-v4 §F-D1/F-D2）。
+ *
+ * `installed` 缺省（宿主 skills 目录不存在）→ 不判 `skill_not_installed`，与既有
+ * `installedSkillNames()` 语义一致；`known` = 内置清单 ∪ 已装（判 `skill_unknown`）。
+ */
+export async function loadEffectiveSkills(input: LoadEffectiveSkillsInput): Promise<EffectiveSkillSet> {
+  const installed = await installedSkillNames(input.harnessRoot)
+  const known = [...listBuiltinSkills().map((skill) => skill.name), ...(installed ?? [])]
+
+  const role = await loadRole(input.rolesDir, input.roleId)
+  if (role === null) {
+    throw new PrismError(
+      'not_found',
+      `角色不存在: ${input.roleId}（数据源 ${input.rolesDir}/<name>/AGENTS.md | <name>.md）`,
+    )
+  }
+
+  const teamId = input.teamId !== undefined && input.teamId !== '' ? input.teamId : undefined
+  let teamSkills: string[] | undefined
+  if (teamId !== undefined) {
+    const team = await loadTeam(input.teamsDir, teamId, { rolesDir: input.rolesDir })
+    if (team === null) {
+      throw new PrismError('not_found', teamNotFoundMessage(input.teamsDir, teamId))
+    }
+    teamSkills = team.skills
+  }
+
+  return computeEffectiveSkills({
+    roleSkills: role.skills ?? [],
+    ...(teamSkills !== undefined ? { teamSkills } : {}),
+    ...(installed !== undefined ? { installed } : {}),
+    known,
+    role: input.roleId,
+    ...(teamId !== undefined ? { team: teamId } : {}),
+  })
 }
 
 // ---------------------------------------------------------------------------

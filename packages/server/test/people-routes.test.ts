@@ -1,4 +1,5 @@
-import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -82,13 +83,19 @@ describe('people 路由（design-v3 §3.4 F11：信封 + issues + activate）', 
     expect(missBody).toMatchObject({ ok: false, error: { code: 'not_found' } })
   })
 
-  it('GET /api/teams → 团队数组携带 issues；GET /api/teams/:id', async () => {
+  it('GET /api/teams → { teams, teamsDir }（F-C3 只读目录字段）；GET /api/teams/:id', async () => {
     const list = await fetch(`${base}/api/teams`)
-    const listBody = (await list.json()) as { ok: boolean; value: Array<{ team_id: string; issues: unknown[]; workflow: unknown[] }> }
+    const listBody = (await list.json()) as {
+      ok: boolean
+      value: { teams: Array<{ team_id: string; issues: unknown[]; workflow: unknown[] }>; teamsDir: string }
+    }
     expect(listBody.ok).toBe(true)
-    expect(listBody.value.map((t) => t.team_id)).toContain('core-dev')
-    expect(Array.isArray(listBody.value[0].issues)).toBe(true)
-    expect(listBody.value[0].workflow.length).toBe(7)
+    expect(listBody.value.teams.map((t) => t.team_id)).toContain('core-dev')
+    expect(Array.isArray(listBody.value.teams[0].issues)).toBe(true)
+    expect(listBody.value.teams[0].workflow.length).toBe(7)
+    // design-v4 §3.4 / ui-spec §8-D1：只读 teamsDir 供新建表单预填（不得为 undefined）
+    // 路径分隔符随 prism.yaml 原样回传（/ 或 \），比较前归一
+    expect(listBody.value.teamsDir.replaceAll('\\', '/')).toBe(join(home, 'teams').replaceAll('\\', '/'))
 
     const one = await fetch(`${base}/api/teams/core-dev`)
     const oneBody = (await one.json()) as { ok: boolean; value: { team_id: string; deposit: Record<string, unknown> } }
@@ -97,6 +104,32 @@ describe('people 路由（design-v3 §3.4 F11：信封 + issues + activate）', 
 
     const miss = await fetch(`${base}/api/teams/nope`)
     expect(miss.status).toBe(404)
+  })
+
+  /**
+   * ui-spec-v4 §8-D5：团队 not_found 文案必须报**真实落点** `<teams_dir>/<id>.md`
+   * （agents `installTeamDefinitions` 的产物形态），目录式 `<id>/AGENTS.md` 只作兼容形态附带说明
+   * ——旧文案只写 `<id>/AGENTS.md`，用户会去错路径。两个 HTTP 入口文案同源；错误码保持 not_found。
+   */
+  it('ui-spec §8-D5：团队 not_found 文案指向真实落点 <id>.md（并注明兼容 <id>/AGENTS.md）', async () => {
+    const list = await fetch(`${base}/api/teams`)
+    const teamsDirShown = ((await list.json()) as { value: { teamsDir: string } }).value.teamsDir
+    const norm = (s: string): string => s.replaceAll('\\', '/')
+    const expectedSource = `数据源 ${norm(teamsDirShown)}/<id>.md`
+
+    const get = await fetch(`${base}/api/teams/nope`)
+    const getBody = (await get.json()) as { error: { code: string; message: string } }
+    expect(get.status).toBe(404)
+    expect(getBody.error.code).toBe('not_found')
+    expect(norm(getBody.error.message)).toContain(expectedSource)
+    expect(getBody.error.message).toContain('兼容 <id>/AGENTS.md 双形态')
+
+    // teamActivate 分支（同一文案单点）
+    const activate = await fetch(`${base}/api/teams/nope/activate`)
+    const activateBody = (await activate.json()) as { error: { code: string; message: string } }
+    expect(activate.status).toBe(404)
+    expect(activateBody.error.code).toBe('not_found')
+    expect(norm(activateBody.error.message)).toContain(expectedSource)
   })
 
   it('GET /api/teams/:id/activate → TeamActivation（dispatch 仅由 installed 推导，P8）', async () => {
@@ -132,5 +165,135 @@ describe('people 路由（design-v3 §3.4 F11：信封 + issues + activate）', 
     expect(body.ok).toBe(true)
     expect(body.value.map((s) => s.name)).toContain('prism')
     expect(body.value.every((s) => s.builtin)).toBe(true)
+  })
+})
+
+/** F-C3 `POST /api/teams` + F-D2 `GET /api/skills/effective`（design-v4 §3.4）。 */
+describe('people 写路由（F-C3 新建团队）与有效集（F-D2）', () => {
+  let app: AppHandle
+  let base: string
+  let tmp: string
+  let home: string
+  let writeDir: string
+
+  beforeAll(async () => {
+    tmp = await mkdtemp(join(tmpdir(), 'prism-people-create-'))
+    home = join(tmp, 'home')
+    writeDir = join(tmp, 'managed-teams')
+    await mkdir(home, { recursive: true })
+    // 读源=临时目录（避免真实宿主）；**写目标另给**（写路径只认 body.teams_dir）
+    await writeFile(
+      join(home, 'prism.yaml'),
+      `roles_dir: ${join(home, 'roles').replaceAll('\\', '/')}\nteams_dir: ${join(home, 'teams').replaceAll('\\', '/')}\n`,
+      'utf-8',
+    )
+    await mkdir(join(home, 'roles', 'dev-1'), { recursive: true })
+    await writeFile(join(home, 'roles', 'dev-1', 'AGENTS.md'), ZCODE_ROLE_MD, 'utf-8')
+    await mkdir(join(home, 'roles', 'tester'), { recursive: true })
+    await writeFile(join(home, 'roles', 'tester', 'AGENTS.md'), ZCODE_ROLE_MD.replace(/dev-1/g, 'tester'), 'utf-8')
+    app = await startServer({ home, harnessRoot: join(tmp, 'zcode'), port: 0 })
+    base = `http://127.0.0.1:${app.port}`
+  })
+
+  afterAll(async () => {
+    await app.close()
+    await rm(tmp, { recursive: true, force: true }).catch(() => {})
+  })
+
+  const post = (payload: unknown): Promise<Response> =>
+    fetch(`${base}/api/teams`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+
+  it('缺 teams_dir → 400 + teams_dir_required（不回落默认宿主目录）', async () => {
+    const res = await post({ team_id: 'demo-team', name: '演示', members: [{ role: 'dev-1', count: 1 }] })
+    const body = (await res.json()) as { ok: boolean; error: { code: string; message: string } }
+    expect(res.status).toBe(400)
+    expect(body.ok).toBe(false)
+    expect(body.error.message).toContain('teams_dir_required')
+    // 关键：默认 teams_dir（home/teams）下不该出现任何文件
+    expect(existsSync(join(home, 'teams', 'demo-team.md'))).toBe(false)
+  })
+
+  it('非法 team_id（非 kebab）→ 400 + team_id_invalid', async () => {
+    const res = await post({ team_id: 'Demo_Team', members: [{ role: 'dev-1', count: 1 }], teams_dir: writeDir })
+    const body = (await res.json()) as { error: { message: string } }
+    expect(res.status).toBe(400)
+    expect(body.error.message).toContain('team_id_invalid')
+  })
+
+  it('members 为空 → 400 + members_invalid', async () => {
+    const res = await post({ team_id: 'demo-team', members: [], teams_dir: writeDir })
+    const body = (await res.json()) as { error: { message: string } }
+    expect(res.status).toBe(400)
+    expect(body.error.message).toContain('members_invalid')
+  })
+
+  it('成员角色不存在 → 400 + member_role_unknown（不落盘）', async () => {
+    const res = await post({
+      team_id: 'demo-team',
+      members: [{ role: 'ghost-role', count: 1 }],
+      teams_dir: writeDir,
+    })
+    const body = (await res.json()) as { error: { message: string } }
+    expect(res.status).toBe(400)
+    expect(body.error.message).toContain('member_role_unknown')
+    expect(existsSync(join(writeDir, 'demo-team.md'))).toBe(false)
+  })
+
+  it('正例：写显式 teams_dir → {path, issues} + 文件落盘 + 读回列出（闭环）', async () => {
+    const res = await post({
+      team_id: 'demo-team',
+      name: '演示团队',
+      description: '由 POST /api/teams 创建',
+      members: [
+        { role: 'dev-1', count: 1 },
+        { role: 'tester', count: 1 },
+      ],
+      deposit: { enabled: true, default_layer: 'global', default_type: 'rule', priority: 'high', require_note: false },
+      teams_dir: writeDir,
+    })
+    const body = (await res.json()) as { ok: boolean; value: { path: string; issues: Array<{ level: string }> } }
+    expect(res.status).toBe(200)
+    expect(body.ok).toBe(true)
+    expect(body.value.path.replaceAll('\\', '/')).toBe(join(writeDir, 'demo-team.md').replaceAll('\\', '/'))
+    expect(existsSync(body.value.path)).toBe(true)
+    // 沉淀策略被采用（控制台会回读核对这 5 个字段）
+    const md = await readFile(body.value.path, 'utf-8')
+    expect(md).toContain('default_layer: global')
+    expect(md).toContain('require_note: false')
+
+    // 闭环：改用同一目录作为读源 → loadTeams 能看到（扁平 `<id>.md` 形态）
+    await writeFile(
+      join(home, 'prism.yaml'),
+      `roles_dir: ${join(home, 'roles').replaceAll('\\', '/')}\nteams_dir: ${writeDir.replaceAll('\\', '/')}\n`,
+      'utf-8',
+    )
+    const app2 = await startServer({ home, harnessRoot: join(tmp, 'zcode'), port: 0 })
+    try {
+      const list = await fetch(`http://127.0.0.1:${app2.port}/api/teams`)
+      const listBody = (await list.json()) as { value: { teams: Array<{ team_id: string }> } }
+      expect(listBody.value.teams.map((t) => t.team_id)).toContain('demo-team')
+    } finally {
+      await app2.close()
+    }
+  })
+
+  it('已存在 → 409 id_conflict（不静默覆盖）', async () => {
+    const res = await post({ team_id: 'demo-team', members: [{ role: 'dev-1', count: 1 }], teams_dir: writeDir })
+    const body = (await res.json()) as { error: { code: string } }
+    expect(res.status).toBe(409)
+    expect(body.error.code).toBe('id_conflict')
+  })
+
+  it('F-D2 GET /api/skills/effective 角色不存在 → 404 信封', async () => {
+    const res = await fetch(`${base}/api/skills/effective?role=ghost`)
+    const body = (await res.json()) as { ok: boolean; error: { code: string; message: string } }
+    expect(res.status).toBe(404)
+    expect(body.ok).toBe(false)
+    expect(body.error.code).toBe('not_found')
+    expect(body.error.message).toContain('角色不存在')
   })
 })

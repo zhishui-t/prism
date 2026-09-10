@@ -22,6 +22,10 @@ export type {
   TeamActivation,
   InstallOptions,
   InstallResult,
+  EffectiveSkill,
+  EffectiveSkillSet,
+  TeamInitOptions,
+  TeamScaffold,
 } from '@prism/agents'
 
 // 行为委托：解析 / 校验 / 渲染 / 装配 / 启用 / frontmatter / 标记 / 常量
@@ -45,6 +49,10 @@ export {
   installTeamDefinitions,
   initRole,
   migrateTeams,
+  // 团队脚手架渲染（F-C1/F-C3 同一实现；只渲染不落盘）+ Skill 有效集纯函数（F-D1）
+  renderTeamScaffold,
+  parseMembersSpec,
+  computeEffectiveSkills,
   // 启用（P8：dispatch 仅由 installed 推导）
   activateTeam,
   // 团队沉淀策略机械执行（team-definition.md §5）
@@ -100,7 +108,7 @@ export {
   type ResolvedDirs,
 } from '@prism/agents'
 
-// server 侧 glue（目录加载 + issues、装配组合、兼容 shim、路径约定）
+// server 侧 glue（目录加载 + issues、装配组合、兼容 shim、路径约定、有效集装配）
 export {
   loadRoles,
   loadRole,
@@ -112,10 +120,22 @@ export {
   renderPrismRole,
   harnessPaths,
   defaultHarnessRoot,
+  loadEffectiveSkills,
+  teamNotFoundMessage,
   type HarnessPaths,
   type InstallTeamOptions,
   type ParseRoleOptions,
+  type LoadEffectiveSkillsInput,
 } from './wiring.js'
+
+// 新建团队定义（F-C3：HTTP POST /api/teams 与 MCP prism_team_create 共用写路径）
+export {
+  createTeamDefinition,
+  asNonEmptyString,
+  parseMembers,
+  type NewTeamBody,
+  type CreateTeamResult,
+} from './team-create.js'
 
 // 出厂团队模板（server 侧资产）
 export { CORE_DEV_TEAM_MD } from './templates.js'

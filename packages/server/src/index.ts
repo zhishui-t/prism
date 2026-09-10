@@ -17,16 +17,25 @@ export type {
   Layer,
   EntryType,
   DepositInput,
+  DepositResult,
   KnowledgeEntry,
   SearchQuery,
   SearchResult,
   BookNode,
+  BookStructure,
+  EntryVersion,
   KbStats,
   KnowledgeService,
   KbFactory,
 } from './kb/port.js'
 export { LAYERS, ENTRY_TYPES } from './kb/port.js'
 export { loadKnowledgeService, applyEmbeddingConfig } from './kb/wiring.js'
+// 落库入口（F-E2：MCP/HTTP/CLI 共用同一团队沉淀策略；CLI `prism kb deposit --team` 用）
+export {
+  depositWithPolicy,
+  type DepositEntryDeps,
+  type DepositRequest,
+} from './kb/deposit-entry.js'
 export {
   exportKnowledgeGraph,
   kbGraphWorkDir,
@@ -88,6 +97,14 @@ export {
   type ConvertFileOptions,
   type ConvertFileResult,
 } from './kb/convert-file.js'
+
+// 任务完成 → 沉淀建议清单（F-E3：只建议不落库；CLI `task report` 与 MCP 共用）
+export {
+  buildDepositSuggestions,
+  inferDepositKinds,
+  type DepositSuggestion,
+  type DepositSuggestionInput,
+} from './tasks/deposit-suggestions.js'
 
 // 图谱
 export {
@@ -157,6 +174,11 @@ export type {
   TeamActivation,
   InstallResult,
   InstallOptions,
+  EffectiveSkill,
+  EffectiveSkillSet,
+  TeamInitOptions,
+  TeamScaffold,
+  LoadEffectiveSkillsInput,
 } from './roles/index.js'
 export {
   ORCHESTRATOR_ROLES,
@@ -192,6 +214,11 @@ export {
   loadTeam,
   installedSkillNames,
   parseRoleFile,
+  // 团队脚手架渲染（F-C1/F-C3 同一实现）+ Skill 有效集（F-D1 纯函数 / F-D2 装配）
+  renderTeamScaffold,
+  parseMembersSpec,
+  computeEffectiveSkills,
+  loadEffectiveSkills,
   // 目录解析（装配语义简化：prism.yaml 覆盖适配器默认）
   loadPrismConfig,
   parsePrismConfig,

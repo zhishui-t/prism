@@ -70,7 +70,10 @@ Prism 提供 `prism mcp install` 写入 ZCode 配置：
 | `prism_graph_explain` | 节点解释 |
 | `prism_graph_affected` | 变更影响面（review-analysis） |
 | `prism_team_activate` | 拉取团队运行时配置 |
-| `prism_context_pack` | 生成上下文包（模式 B） |
+| `prism_team_create` | 新建团队定义（写显式 `teams_dir`；与 HTTP `POST /api/teams` 同一实现） |
+| `prism_skill_effective` | 有效 Skill 集（角色 × 团队；与 HTTP `/api/skills/effective` 同一装配点） |
+| `prism_kb_versions` | 条目版本历史（降序 + `is_latest`） |
+| `prism_context_pack` | 生成上下文包（模式 B；入参见 §4.2） |
 
 **关键**：每个返回都带**来源地址**（`层/书/模块/规则ID@版次` 或 `文件:行号`），便于 agent 引用与溯源。
 
@@ -88,13 +91,20 @@ Prism 提供 `prism mcp install` 写入 ZCode 配置：
 宿主：prism_context_pack {
   role: "security-auditor",
   task: "审计 src/auth.ts 的变更",
-  budget_tokens: 4000
+  budget_tokens: 4000,
+  // 以下全部可选（缺省 = 用角色绑定 / 600 字符）；HTTP 同名 query 参数亦可
+  layers: ["global", "project"],   // 显式覆盖角色绑定的层集合
+  books: ["security-redline"],     // 显式覆盖角色绑定的书过滤
+  symbols: ["validateToken", "src/auth.ts"],  // 代码符号/路径：命中 → relevance ×1.15
+  max_excerpt_chars: 600
 }
    ↓
 Prism 按角色知识绑定 + 任务关键词检索，组装带预算的包
    ↓
-返回 { items: [...], total_chars, truncated: bool, sources: [...] }
+返回 { items: [...], normalized_by, total_chars, truncated: bool, sources: [...] }
 ```
+
+HTTP 等价面：`GET /api/kb/context-pack?role=&task=&budget_tokens=&layers=&books=&symbols=&max_excerpt_chars=`
 
 ### 4.3 包的结构
 
@@ -112,16 +122,22 @@ Prism 按角色知识绑定 + 任务关键词检索，组装带预算的包
       "module": "credential",
       "excerpt": "...",
       "relevance": 0.91,
-      "source": "global/security-redline/credential/SEC-RED-007@v3"
+      "source": "global/security-redline/credential/SEC-RED-007@v3",
+      "graph_hits": ["validateToken"]
     }
   ],
-  "graph_hits": [
-    { "node": "validateToken", "file": "src/auth.ts", "line": 42, "relation": "calls" }
-  ],
+  "normalized_by": "candidate_max",
   "total_chars": 3820,
   "truncated": false
 }
 ```
+
+**`relevance` 是跨查询不可比的**：它以**本次候选**的最高 `score` 归一（`normalized_by: "candidate_max"`），
+只用于包内排序，不可当绝对相关度存起来比较。
+
+`graph_hits` 是**命中的 `symbols` 子串**（判定基 = 条目 `title` + `excerpt`，大小写敏感），
+不是图谱节点。**边表邻近度（`graph_distance`）本轮未实现**（队长裁决 A3，记技术债，
+见 `knowledge-base.md` §图谱联动的未实现承诺）。
 
 ### 4.4 宿主如何注入
 
@@ -138,9 +154,10 @@ Prism 按角色知识绑定 + 任务关键词检索，组装带预算的包
 | 项 | 规则 |
 | :--- | :--- |
 | 预算 | 调用方给定 `budget_tokens`，Prism 截断并标 `truncated` |
-| 分层权重 | role 层 > project 层 > global 层（同相关性下） |
-| 新鲜度 | 越高越靠前 |
-| 图谱命中 | 代码符号命中的知识加权（如查 `validateToken` 时提升相关红线） |
+| 相关度乘法链 | `base = min(1, score/maxScore)` → `× layerWeight` → `× freshnessFactor` → `× graphBoost` → **末尾 `clamp(0,1)`**（design-v4 F-B1/F-B2） |
+| 分层权重 | `role 1.0 / project 0.85 / global 0.72`（同相关性下 role 层优先） |
+| 新鲜度 | `freshnessFactor = 0.9 + 0.1 × clamp(freshness, 0, 1)`；**`freshness` 缺省视为 1.0 → 因子恰为 1.0**（不改变既有排序） |
+| 图谱命中 | `symbols` 命中 `title`+`excerpt`（大小写敏感子串）→ `× 1.15`；命中的符号写进 `items[].graph_hits` |
 | 版本 | 默认只取最新版次 |
 
 ---
