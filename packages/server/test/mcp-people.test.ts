@@ -52,7 +52,7 @@ describe('MCP 角色/团队工具（design-v3 §3.4 P6；stdio JSON-RPC 手写�
     await writeFile(join(home, 'roles', 'dev-1', 'AGENTS.md'), ZCODE_ROLE_MD, 'utf-8')
     await mkdir(join(home, 'teams', 'core-dev'), { recursive: true })
     await writeFile(join(home, 'teams', 'core-dev', 'AGENTS.md'), TEAM_MD, 'utf-8')
-    tools = createMcpTools({ home, zcodeDir: join(tmp, 'zcode'), kbFactory: async () => { throw new Error('本测试不消费 kb') } })
+    tools = createMcpTools({ home, harnessRoot: join(tmp, 'zcode'), kbFactory: async () => { throw new Error('本测试不消费 kb') } })
   })
 
   afterAll(async () => {
@@ -104,7 +104,7 @@ describe('MCP 角色/团队工具（design-v3 §3.4 P6；stdio JSON-RPC 手写�
     expect(value.roles[0].name).toBe('dev-1')
   })
 
-  it('tools/call prism_role_render → ZCode 格式（marker + target 路径来自 zcodeDir 推导）', async () => {
+  it('tools/call prism_role_render → ZCode 格式（marker + target 路径来自 harnessRoot 推导）', async () => {
     const response = await handleRpcRequest(
       rpc(3, 'tools/call', { name: 'prism_role_render', arguments: { name: 'dev-1', model: 'custom:x' } }),
       tools,

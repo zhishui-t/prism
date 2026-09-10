@@ -8,7 +8,7 @@
  * - installTeam：成员角色装配 + 团队定义装配的组合（前置成员存在性校验）
  * - parseRoleFile：agents parseRoleMarkdown 的签名兼容 shim（filename 回落）
  * - renderPrismRole：Prism 原生角色序列化（agents renderMarkdownFile 组合；agents 无等价物，CLI 导入落盘用）
- * - zcodePaths/defaultZcodeDir：路径约定取自 agents ZCode 适配器（configFile 是 init 域约定，适配器没有）
+ * - harnessPaths/defaultHarnessRoot：路径约定取自 agents ZCode 适配器（configFile 是 init 域约定，适配器没有）
  * - installedSkillNames：已装 skill 名单（knownSkills 校验输入）
  */
 
@@ -40,7 +40,7 @@ import { PrismError } from '@prism/core'
 // 路径约定（agents ZCode 适配器推导；P14：子路径只在此处出现）
 // ---------------------------------------------------------------------------
 
-export interface ZcodePaths {
+export interface HarnessPaths {
   root: string
   /** `~/.zcode/agents`（角色产物目录 = adapter.agent.globalDir） */
   agentsDir: string
@@ -57,14 +57,14 @@ export interface ZcodePaths {
  * （prism.yaml `harness` 键 / `PRISM_HARNESS` 环境变量；默认 zcode）——
  * 未来接入其他 harness 时，此处自动跟随，调用方无需改动。
  */
-export function zcodePaths(zcodeDir: string): ZcodePaths {
-  const adapter = resolveHarness({ zcodeDir }).adapter
+export function harnessPaths(harnessRoot: string): HarnessPaths {
+  const adapter = resolveHarness({ harnessRoot }).adapter
   return {
-    root: zcodeDir,
+    root: harnessRoot,
     agentsDir: adapter.agent.globalDir,
-    teamDir: adapter.agent.teamDir ?? join(zcodeDir, 'teams'),
-    skillsDir: adapter.skill.nativeDir ?? join(zcodeDir, 'skills'),
-    configFile: join(zcodeDir, 'cli', 'config.json'),
+    teamDir: adapter.agent.teamDir ?? join(harnessRoot, 'teams'),
+    skillsDir: adapter.skill.nativeDir ?? join(harnessRoot, 'skills'),
+    configFile: join(harnessRoot, 'cli', 'config.json'),
   }
 }
 
@@ -73,16 +73,15 @@ export function zcodePaths(zcodeDir: string): ZcodePaths {
  *
  * 覆盖优先级：`PRISM_HARNESS_ROOT`（通用） > 适配器 `defaultRoot`。
  * 注意：`ZCODE_DIR` **不在此生效**——它是 ZCode 专属旧变量，由 zcode 适配器自己消费
- * （见 adapters/zcode.ts），否则会泄漏到其它 harness。名称保留 `defaultZcodeDir`
- * 以兼容旧调用；语义已是「当前 harness 的默认根」。
+ * （见 adapters/zcode.ts），否则会泄漏到其它 harness。
  */
-export function defaultZcodeDir(): string {
+export function defaultHarnessRoot(): string {
   return process.env['PRISM_HARNESS_ROOT'] ?? harnessLayout().root
 }
 
-/** 已安装 skill 名单（读 `<zcodeDir>/skills/*` 目录名，只读）；目录不存在 → undefined（跳过引用校验）。 */
-export async function installedSkillNames(zcodeDir: string): Promise<string[] | undefined> {
-  const dir = zcodePaths(zcodeDir).skillsDir
+/** 已安装 skill 名单（读 `<harnessRoot>/skills/*` 目录名，只读）；目录不存在 → undefined（跳过引用校验）。 */
+export async function installedSkillNames(harnessRoot: string): Promise<string[] | undefined> {
+  const dir = harnessPaths(harnessRoot).skillsDir
   if (!existsSync(dir)) {
     return undefined
   }
@@ -185,7 +184,7 @@ export interface InstallTeamOptions {
   team: TeamDefinition
   /** ZCode agents 目录（成员角色落点） */
   agentsDir: string
-  /** 团队定义落点（默认 `<zcodeDir>/teams`；B7：绝不再写 `<agentsDir>/teams`，会被宿主误注册为 agent） */
+  /** 团队定义落点（默认 `<harnessRoot>/teams`；B7：绝不再写 `<agentsDir>/teams`，会被宿主误注册为 agent） */
   teamDir?: string
   env?: { model?: string; thoughtLevel?: string }
   force?: boolean

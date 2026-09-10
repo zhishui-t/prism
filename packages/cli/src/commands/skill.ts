@@ -10,7 +10,7 @@ import { guardWriteTarget, resolveTargetDirs } from '../argv.js'
 
 /**
  * `prism skill list/install`（design-v3 §3.5 F10；本期裁剪 update/uninstall/uninit）。
- * 安装目标 = resolveDirs().skillsDir（prism.yaml 可覆盖；默认 `<zcodeDir>/skills/`，
+ * 安装目标 = resolveDirs().skillsDir（prism.yaml 可覆盖；默认 `<harnessRoot>/skills/`，
  * adapter.skill.nativeDir 约定），不硬编码。
  */
 export async function runSkill(ctx: CommandContext, args: string[], values: ArgValues): Promise<number> {
@@ -152,7 +152,7 @@ export async function runSkill(ctx: CommandContext, args: string[], values: ArgV
     }
 
     default:
-      ctx.stderr(`未知子命令: skill ${sub ?? ''}\n用法: prism skill list | install [name...] [--zcode-dir <dir>] [--force]`)
+      ctx.stderr(`未知子命令: skill ${sub ?? ''}\n用法: prism skill list | install [name...] [--harness-root <dir>] [--force]`)
       return 1
   }
 }

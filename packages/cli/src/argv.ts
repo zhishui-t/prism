@@ -51,9 +51,9 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
   prism role list [--source <dir>]         列出角色（默认 roles_dir，见下）
   prism role show <name>                   查看角色定义
   prism role init <name> [--force]         从模板创建角色到 roles_dir（新命令）
-  prism role import [--from <dir>] [--to <dir>]   从 ZCode agents 目录导入（默认 --from ~/.zcode/agents，--to roles_dir）
+  prism role import [--from <dir>] [--to <dir>]   从宿主 agents 目录导入（默认 --from <harness 根>/agents，--to roles_dir）
   prism role validate [--source <dir>]     校验角色定义
-  prism role render <name> [--model --thought-level]   渲染 ZCode 格式（预览，不写盘）
+  prism role render <name> [--model --thought-level]   渲染为当前 harness 原生格式（预览，不写盘）
   prism role install <name...> [--source <dir>] [--force]   角色（源≠roles_dir 时）初始化/迁移到 roles_dir
   prism team list | show <id> | validate <id>
   prism team install <id> [--force]        校验团队与成员；确保团队定义在 teams_dir（旧源目录一次性迁移）
@@ -61,11 +61,11 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
   prism skill list | install | update | uninstall | validate [name...] [--force]
 
 目录解析（装配语义简化——角色/团队/Skill 直接住在宿主目录）：
-  <PRISM_HOME>/prism.yaml 可选覆盖：roles_dir（默认 ~/.zcode/agents）、
-  teams_dir（默认 ~/.zcode/teams，roles_dir 同级——不在 agents/ 内，避开 ZCode 递归扫描）、skills_dir（默认 ~/.zcode/skills）；
-  --harness-root 仅作为默认推导基准（--zcode-dir 兼容旧名）。
+  <PRISM_HOME>/prism.yaml 可选覆盖：roles_dir / teams_dir / skills_dir；
+  缺省落点由**激活的 harness 适配器**自述（ZCode 为 ~/.zcode/{agents,teams,skills}）。
+  --harness-root 覆盖 harness 根（--zcode-dir 兼容旧名）。
   prism kb import <file.md> [--layer --owner --book --module]
-  prism kb sync <项目名|项目根> [--owner --book --module] [--enqueue] [--dry-run]   扫描项目文档建引用索引
+  prism kb sync <项目名|项目根> [--owner --book --module] [--dry-run]   扫描项目文档建引用索引
   prism kb search <query> [--layer --book --limit]
   prism kb get <id[@version]>
   prism kb tree [--layer]
@@ -100,7 +100,7 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
   prism project list | show <名> | remove <名> [--yes]
   prism embedding status | install | start | stop | reindex   本地向量化（BGE-M3，Prism 自理）
 
-全局：--home <path>  --json  --harness-root <path>（role/team/skill/install 类统一收宿主根，~ 自动展开；--zcode-dir 为兼容旧名）
+全局：--home <path>  --json  --harness-root <path>（role/team/skill/install 类统一收宿主根，~ 自动展开；--harness-root 为兼容旧名）
       --yes   确认写入默认宿主目录（写守卫；默认链写入无 --yes 会被阻止，B6）`
 
 /** 全部子命令接受的选项（并集；strict:false 容忍未知项）。 */
@@ -121,7 +121,7 @@ const CLI_OPTIONS = {
   project: { type: 'string' },
   timeout: { type: 'string' },
   // design-v3 §3.5 F10 / §5 P14：role/team/skill 命令面
-  /** 变更 3：harness 根目录（通用名；`--zcode-dir` 为兼容旧名） */
+  /** harness 根目录（通用名；`--zcode-dir` 为兼容旧名，见 harnessRootOverride） */
   'harness-root': { type: 'string' },
   'zcode-dir': { type: 'string' },
   yes: { type: 'boolean' },
@@ -155,7 +155,6 @@ const CLI_OPTIONS = {
   format: { type: 'string' },
   'dry-run': { type: 'boolean' },
   remove: { type: 'boolean' },
-  enqueue: { type: 'boolean' },
   hard: { type: 'boolean' },
   audit_type: { type: 'string' },
   visibility: { type: 'string' },
@@ -228,7 +227,6 @@ export type ArgValues = {
   format?: string
   'dry-run'?: boolean
   remove?: boolean
-  enqueue?: boolean
   hard?: boolean
   visibility?: string
   knowledge?: string
@@ -257,7 +255,7 @@ export function expandHome(path: string): string {
 /**
  * 解析「显式指定的 harness 根」——**只认 flag 与 env 覆盖，无则 undefined**。
  *
- * 与 `defaultZcodeDir()` 的区别很关键：后者总会回落到 **zcode 的**默认根，若拿它去
+ * 与 `defaultHarnessRoot()` 的区别很关键：后者总会回落到 **zcode 的**默认根，若拿它去
  * 解析插件适配器，会把 `~/.zcode` 硬塞给插件，覆盖插件自述的 `defaultRoot`（实测 bug）。
  * 未显式指定时应返回 undefined，让 `harnessLayout()` 用**被激活适配器**的默认根。
  *
@@ -266,7 +264,7 @@ export function expandHome(path: string): string {
 export function harnessRootOverride(values: ArgValues): { root?: string; explicit: boolean } {
   const flag = values['harness-root'] ?? values['zcode-dir']
   if (flag !== undefined && flag !== '') return { root: expandHome(flag), explicit: true }
-  // 只认**通用** env；`ZCODE_DIR` 是 zcode 专属，由 zcode 适配器自己消费——
+  // 只认**通用** env；`ZCODE_DIR` 是 zcode 专属旧变量，由 zcode 适配器自己消费——
   // 在此读取会把它泄漏给其它 harness（插件实测：覆盖插件 defaultRoot）
   const envRoot = process.env['PRISM_HARNESS_ROOT']
   if (envRoot !== undefined && envRoot !== '') return { root: expandHome(envRoot), explicit: false }
@@ -278,18 +276,18 @@ export function harnessRootOverride(values: ArgValues): { root?: string; explici
  * `<PRISM_HOME>/prism.yaml`（可选）覆盖适配器默认；`--harness-root` 只作为默认推导基准。
  * 优先级：prism.yaml 显式键 > 显式根覆盖 > **激活适配器的默认根**。
  *
- * 显式性口径（B6 守卫）：只有 **--harness-root（或旧名 --zcode-dir）** / prism.yaml 键
- * 算「用户显式指定」；env `PRISM_HARNESS_ROOT`/`ZCODE_DIR` 不算（保持守卫生效）。
+ * 显式性口径（B6 守卫）：只有 **--harness-root（或旧名 --harness-root）** / prism.yaml 键
+ * 算「用户显式指定」；env `PRISM_HARNESS_ROOT`/`PRISM_HARNESS_ROOT` 不算（保持守卫生效）。
  */
 export function resolveTargetDirs(ctx: CommandContext, values: ArgValues): ResolvedDirs {
   const { root, explicit } = harnessRootOverride(values)
-  return resolveDirsFromHome(ctx.home, { ...(root !== undefined ? { zcodeDir: root } : {}), zcodeDirExplicit: explicit })
+  return resolveDirsFromHome(ctx.home, { ...(root !== undefined ? { harnessRoot: root } : {}), rootExplicit: explicit })
 }
 
 export type GuardedTarget = 'roles' | 'teams' | 'skills'
 
 /**
- * B6 写守卫：目标目录取自默认链（非 --zcode-dir / prism.yaml 显式指定 → 真实宿主目录）时，
+ * B6 写守卫：目标目录取自默认链（非 --harness-root / prism.yaml 显式指定 → 真实宿主目录）时，
  * 必须显式 `--yes` 才放行；否则打印提示并返回 false（调用方立即退出，不产生任何写入）。
  * 返回 true = 放行（目录显式指定，或用户已 --yes 确认）。
  */
@@ -307,8 +305,8 @@ export function guardWriteTarget(
     return true
   }
   ctx.stderr(
-    `已阻止写入 [guard_required]: 检测到目标为默认宿主目录 ${dirPath}（未经 --zcode-dir / prism.yaml 显式指定），` +
-      `将写入 ${plannedWrites} 个文件；加 --zcode-dir 指定其他位置，或加 --yes 确认。`,
+    `已阻止写入 [guard_required]: 检测到目标为默认宿主目录 ${dirPath}（未经 --harness-root / prism.yaml 显式指定），` +
+      `将写入 ${plannedWrites} 个文件；加 --harness-root 指定其他位置，或加 --yes 确认。`,
   )
   return false
 }

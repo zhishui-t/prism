@@ -24,8 +24,8 @@ import { loadKnowledgeService } from './kb/wiring.js'
 export interface AppOptions {
   /** PRISM_HOME 覆盖；默认 prismHome() */
   home?: string
-  /** ZCode 宿主根目录（/api/teams/:id/activate 判装配状态）；默认 PRISM_ZCODE_DIR → ~/.zcode */
-  zcodeDir?: string
+  /** ZCode 宿主根目录（/api/teams/:id/activate 判装配状态）；默认 PRISM_HARNESS_ROOT → ~/.zcode */
+  harnessRoot?: string
   /** 监听端口；默认 7777 */
   port?: number
   /** 监听地址；默认 127.0.0.1（仅本机，不暴露局域网） */
@@ -94,7 +94,7 @@ export async function createApp(options: AppOptions = {}): Promise<{
 
   // 目录解析一次：未显式指定根 → 用激活适配器的默认根（支持插件 harness）。
   const dirs = resolveDirsFromHome(home, {
-    ...(options.zcodeDir !== undefined ? { zcodeDir: options.zcodeDir, zcodeDirExplicit: true } : {}),
+    ...(options.harnessRoot !== undefined ? { harnessRoot: options.harnessRoot, rootExplicit: true } : {}),
   })
   const kb = kbRoutes(loadKb, home, dirs.rolesDir)
   router.add('GET', '/api/kb/search', kb.search)
@@ -152,7 +152,7 @@ export async function createApp(options: AppOptions = {}): Promise<{
   router.add('GET', '/api/dags/:id', tasks.dag)
 
   // 角色 / 团队 / 技能（design-v3 §3.4 F11；只读 GET，数据源由激活适配器推导）
-  const people = peopleRoutes({ home, zcodeDir: dirs.zcodeDir })
+  const people = peopleRoutes({ home, harnessRoot: dirs.harnessRoot })
   router.add('GET', '/api/roles', people.roles)
   router.add('GET', '/api/roles/:name', people.role)
   router.add('GET', '/api/teams', people.teams)

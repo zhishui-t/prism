@@ -39,7 +39,7 @@ export interface SkillValidationResult {
 }
 
 export interface SkillInstallOptions {
-  /** 安装目标目录（来自 --zcode-dir / adapter.skill.nativeDir 推导，绝不硬编码） */
+  /** 安装目标目录（来自 --harness-root / adapter.skill.nativeDir 推导，绝不硬编码） */
   targetDir: string
   skills: PrismSkill[]
   /** 一律覆盖（design-v3 §5） */

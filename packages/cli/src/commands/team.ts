@@ -150,7 +150,7 @@ export async function runTeam(ctx: CommandContext, args: string[], values: ArgVa
         teamWritten = migration.written.length
       } else if (!alreadyManaged) {
         if (!guardWriteTarget(ctx, values, dirs, 'teams', 1)) return 1
-        const result = await installTeamDefinitions({ targetDir: dirs.zcodeDir, teamsDir, teams: [team], force: values.force })
+        const result = await installTeamDefinitions({ targetDir: dirs.harnessRoot, teamsDir, teams: [team], force: values.force })
         teamWritten = result.written.length + result.skipped.length
       }
       if (ctx.json) {

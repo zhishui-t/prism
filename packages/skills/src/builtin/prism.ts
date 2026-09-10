@@ -55,7 +55,7 @@ Prism 是本机的**研发效能控制面**：知识库、知识图谱、代码�
 ## 1.5 第一次接入：从零到能用
 
 \`\`\`bash
-prism init --zcode-dir <宿主根>   # ①探测 ②建骨架 ③装本 Skill ④写 MCP 注册 ⑤提示重启
+prism init --harness-root <宿主根>   # ①探测 ②建骨架 ③装本 Skill ④写 MCP 注册 ⑤提示重启
 prism doctor                       # 自检：Node 版本 / 目录 / DB / graphify / 端口
 prism serve --port 7777            # 起 HTTP 服务 + 控制台
 \`\`\`
@@ -75,7 +75,7 @@ prism serve --port 7777            # 起 HTTP 服务 + 控制台
    - \`native\`：角色已装进宿主目录，直接 \`subagent_type: "<角色名>"\` 派发；
    - \`fallback\`：未装——用 \`general-purpose\` 派发，并把它返回的 \`definition\`（核心契约 + 职责）粘进 prompt 开头；交付报告须注明「降级派发」。
 2. 角色文件在**会话启动时扫描一次**：新装/改写的角色要**下一会话**才能 native 派发。
-3. 装配：\`prism role import --from <宿主agents目录> --zcode-dir <宿主根>\`，或 \`prism role init <name>\`。
+3. 装配：\`prism role import --from <宿主agents目录> --harness-root <宿主根>\`，或 \`prism role init <name>\`。
 
 ## 3. 硬约定（违反会被评审打回）
 
@@ -124,7 +124,7 @@ prism serve --port 7777            # 起 HTTP 服务 + 控制台
 ## 6. CLI 速查
 
 \`\`\`
-prism init [--zcode-dir <宿主根>] [--yes]     # 接入：注册 MCP + 装 Skill + 建骨架
+prism init [--harness-root <宿主根>] [--yes]     # 接入：注册 MCP + 装 Skill + 建骨架
 prism serve [--port 7777]                     # HTTP API + 控制台
 prism doctor                                   # 环境自检
 prism harness list | show                      # 运行时宿主适配器
@@ -140,7 +140,7 @@ prism work   pending/enqueue/claim/complete/fail/reclaim/stats
 prism task   list/show/graph/register/report/stats
 \`\`\`
 
-**写守卫**：目标是默认宿主目录且未显式指定时会拒绝（\`guard_required\`），需 \`--yes\` 或显式 \`--zcode-dir\`。
+**写守卫**：目标是默认宿主目录且未显式指定时会拒绝（\`guard_required\`），需 \`--yes\` 或显式 \`--harness-root\`。
 `
 
 /** 附带文件：按需读取的细节（渐进披露）。 */
@@ -376,7 +376,7 @@ prism graph affected "<节点>" --depth 2 --project <名>
 ## 装配（CLI）
 
 \`\`\`bash
-prism role import --from ~/.zcode/agents --zcode-dir ~/.zcode   # 从宿主目录导入
+prism role import --from ~/.zcode/agents --harness-root ~/.zcode   # 从宿主目录导入
 prism role init my-role                                          # 从模板新建
 prism role validate dev-1                                        # 校验
 prism team install core-dev                                      # 校验成员 + 确保团队文件
@@ -519,12 +519,12 @@ prism arch render architecture ir.json --book order-platform --module order   # 
 ## 接入初始化
 
 \`\`\`bash
-prism init --zcode-dir <宿主根>    # ①探测 ②建骨架 ③装 Skill ④写 MCP 注册 ⑤提示重启
+prism init --harness-root <宿主根>    # ①探测 ②建骨架 ③装 Skill ④写 MCP 注册 ⑤提示重启
 prism doctor                        # 环境自检（Node/目录/DB/graphify/embedding/端口）
 prism serve --port 7777             # HTTP API + 控制台（只读控制面）
 \`\`\`
 
-**写守卫**：目标为默认宿主目录且未显式指定 → 拒绝（\`guard_required\`）；加 \`--yes\` 或显式 \`--zcode-dir\`。
+**写守卫**：目标为默认宿主目录且未显式指定 → 拒绝（\`guard_required\`）；加 \`--yes\` 或显式 \`--harness-root\`。
 
 ## 本地向量化（prism embedding）
 
@@ -543,19 +543,21 @@ prism embedding reindex                    # 补齐或重算向量（幂等）
 
 ## 运行时宿主适配器（prism harness）
 
-Prism 编译期支持多 harness、**运行期只激活一个**：
+Prism 支持多 harness（内置 + **运行期插件**），**运行期只激活一个**：
 
 优先级：\`PRISM_HARNESS\` 环境变量 > \`<PRISM_HOME>/prism.yaml\` 的 \`harness\` 键 > 默认 \`zcode\`。
+第三方扩展 harness **不必改 Prism 代码**——把适配包放进 \`<PRISM_HOME>/harnesses/\` 即自动注册。
 
 \`\`\`bash
-prism harness list     # 已编译适配器 + 当前激活项 + 来源
+prism harness list     # 内置 + 插件适配器 + 当前激活项 + 来源
 prism harness show     # 当前适配器约定（角色目录/团队目录/Skill 目录/派发机制/模型声明）
 \`\`\`
 
 ## 配置（<PRISM_HOME>/prism.yaml）
 
 \`\`\`yaml
-harness: zcode
+harness: zcode                 # 激活哪个适配器（缺省 zcode）
+# 以下可选覆盖；不写则用激活适配器自述的目录
 roles_dir: ~/.zcode/agents
 teams_dir: ~/.zcode/teams     # roles_dir 同级——不在 agents/ 内（避免被宿主当 agent 扫到）
 skills_dir: ~/.zcode/skills

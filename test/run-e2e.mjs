@@ -33,7 +33,7 @@ function check(name, ok, detail = '') {
   if (ok !== true) failures++
 }
 
-/** 运行 CLI（注入 PRISM_HOME / ZCODE_DIR 隔离）。 */
+/** 运行 CLI（注入 PRISM_HOME / PRISM_HARNESS_ROOT 隔离）。 */
 function cli(args, env = {}) {
   return new Promise((resolvePromise) => {
     const child = spawn(process.execPath, [CLI, ...args], {
@@ -79,22 +79,22 @@ async function main() {
 
   const workRoot = await mkdtemp(join(tmpdir(), 'prism-e2e-'))
   const home = join(workRoot, 'home')
-  const zcodeDir = join(workRoot, 'zcode')
+  const harnessRoot = join(workRoot, 'zcode')
   const projectDir = join(workRoot, 'proj')
   // 主流程关闭向量（PRISM_EMBEDDING=off）：向量召回会扩大命中面，破坏精确计数断言。
   // 确定性优先——混合检索单独在 ===== 17 段按真实模型验证（装了才跑）。
-  const env = { PRISM_HOME: home, ZCODE_DIR: zcodeDir, PRISM_EMBEDDING: 'off' }
+  const env = { PRISM_HOME: home, PRISM_HARNESS_ROOT: harnessRoot, PRISM_EMBEDDING: 'off' }
 
   let server
   try {
     await mkdir(join(projectDir, 'src'), { recursive: true })
     await mkdir(home, { recursive: true })
 
-    // ===== 1. init：注册 MCP + 装 Skill + 建骨架（显式 --zcode-dir） =====
-    const init = await cli(['init', '--home', home, '--zcode-dir', zcodeDir, '--json'], env)
+    // ===== 1. init：注册 MCP + 装 Skill + 建骨架（显式 --harness-root） =====
+    const init = await cli(['init', '--home', home, '--harness-root', harnessRoot, '--json'], env)
     check('1.1 init 成功', init.code === 0, init.stderr.trim().slice(0, 160))
     const initReport = JSON.parse(init.stdout)
-    check('1.2 init 装 Skill 到 zcodeDir', initReport.value.skills.written.length >= 1)
+    check('1.2 init 装 Skill 到 harnessRoot', initReport.value.skills.written.length >= 1)
     check(
       '1.3 init 写 MCP 注册',
       initReport.value.mcp.status === 'written' || initReport.value.mcp.status === 'unchanged',
@@ -151,7 +151,7 @@ async function main() {
       '---\nname: dev-1\ndescription: "E2E 开发角色"\ncolor: blue\n---\n\n## 核心契约\n**交付可运行增量。**\n',
       'utf-8',
     )
-    const roleImport = await cli(['role', 'import', '--from', workRoot, '--zcode-dir', zcodeDir, '--json'], env)
+    const roleImport = await cli(['role', 'import', '--from', workRoot, '--harness-root', harnessRoot, '--json'], env)
     check('3.1 role import 成功', roleImport.code === 0)
     const roles = await cli(['role', 'list', '--json'], env)
     check('3.2 role list 含 dev-1', JSON.parse(roles.stdout).value.some((r) => r.name === 'dev-1'))

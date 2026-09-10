@@ -146,7 +146,7 @@ export interface TeamActivation {
   rework_limit: number
 }
 
-/** 角色装配选项（目标目录由参数传入，**绝不硬编码 ~/.zcode**）。 */
+/** 角色装配选项（目标目录由参数传入，**绝不硬编码宿主根**）。 */
 export interface InstallOptions {
   targetDir: string
   roles: RoleDefinition[]
@@ -155,6 +155,8 @@ export interface InstallOptions {
     thoughtLevel?: string
   }
   force?: boolean
+  /** 渲染用适配器；缺省取激活适配器（测试可注入，避免硬编码 ZCode 格式）。 */
+  adapter?: import('@prism/core').HarnessAdapter<RoleDefinition, TeamDefinition>
 }
 
 export interface InstallResult {

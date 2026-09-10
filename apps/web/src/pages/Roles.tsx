@@ -38,7 +38,7 @@ export function RolesPage() {
           loading={roles.loading}
           error={roles.error}
           empty={!roles.loading && !roles.error && (roles.data?.length ?? 0) === 0}
-          emptyText="还没有角色。用 `prism role import` 从 ~/.zcode/agents 导入。"
+          emptyText="还没有角色。用 `prism role import` 从宿主 agents 目录导入。"
         >
           <table>
             <thead>

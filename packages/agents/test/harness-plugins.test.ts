@@ -142,11 +142,11 @@ describe('harness 适配器插件（放目录即注册，零代码侵入）', ()
     expect(ids.filter((i) => i === 'acme-harness')).toHaveLength(1)
   })
 
-  it('ZCODE_DIR 不泄漏到插件 harness（插件用自述 defaultRoot）', async () => {
-    // 回归：env ZCODE_DIR 曾是通用覆盖源，会把 zcode 的根塞给插件（实测 bug）
+  it('PRISM_HARNESS_ROOT 不泄漏到插件 harness（插件用自述 defaultRoot）', async () => {
+    // 回归：env PRISM_HARNESS_ROOT 曾是通用覆盖源，会把 zcode 的根塞给插件（实测 bug）
     const dir = fresh()
     writePlugin(dir, 'acme', 'acme-harness')
-    process.env['ZCODE_DIR'] = '/should/not/leak'
+    process.env['PRISM_HARNESS_ROOT'] = '/should/not/leak'
     try {
       await ensureHarnessPluginsLoaded()
       const resolved = resolveHarness({ configuredId: 'acme-harness' })
@@ -154,7 +154,7 @@ describe('harness 适配器插件（放目录即注册，零代码侵入）', ()
       expect(resolved.adapter.defaultRoot).toBe('/tmp/acme-harness')
       expect(resolved.adapter.agent.globalDir).not.toContain('should')
     } finally {
-      delete process.env['ZCODE_DIR']
+      delete process.env['PRISM_HARNESS_ROOT']
     }
   })
 })

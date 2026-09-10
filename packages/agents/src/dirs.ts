@@ -1,18 +1,16 @@
 /**
  * 目录解析（装配语义简化，用户已批准）：**直接住在宿主目录**。
  *
- * `<PRISM_HOME>/prism.yaml`（可选配置，四个标量键）覆盖适配器默认值；
- * 无配置 → 用 ZCode 适配器默认（开箱即"所见即所得"）：
- *   harness:    <默认 zcode>（运行时激活的宿主适配器）
- *   roles_dir:  <默认 ~/.zcode/agents>
- *   teams_dir:  <默认 ~/.zcode/teams>（roles_dir 的**同级** teams/，不在 agents/ 内）
- *   skills_dir: <默认 ~/.zcode/skills>
+ * `<PRISM_HOME>/prism.yaml`（可选配置，四个标量键）覆盖**激活适配器**的默认值；
+ * 无配置 → 用适配器自述的默认目录（开箱即"所见即所得"）：
+ *   harness:    运行时激活的宿主适配器（缺省取清单默认项，当前 zcode）
+ *   roles_dir:  `<root>/agents`（适配器 `agent.globalDir`；ZCode 的 root = ~/.zcode）
+ *   teams_dir:  适配器 `agent.teamDir`；未约定则 roles_dir 的**同级** teams/
+ *   skills_dir: 适配器 `skill.nativeDir`；不支持 Skill 则 `<root>/skills`
  *
- * **teams_dir 为何不在 agents/ 下（R3 实测，返工单 B7）**：ZCode 的角色扫描
- * `collectAgentMarkdownPaths` 会**递归**遍历 `~/.zcode/agents/` 下全部 `.md`
- * （源码见 D:\Program Files\ZCode\resources\app.asar → /out/host/index.js），
- * 团队文件 frontmatter 恰好含 `name`+`description`（ZCode 注册 agent 的判据），
- * 会被静默注册成一个假 agent，污染宿主 agent 命名空间。故团队落在 roles_dir 的
+ * **teams 为何不在 agents/ 下（R3 实测，返工单 B7，以 ZCode 为例）**：宿主会**递归**
+ * 遍历 `~/.zcode/agents/` 下全部 `.md` 并注册为 agent；团队文件 frontmatter 恰好含
+ * `name`+`description`，会被误注册成假 agent、污染命名空间。故团队落在 roles_dir 的
  * **同级** `teams/`：仍在宿主目录树内可被人工查看，但不在任何 agent 扫描路径上。
  *
  * prism.yaml 解析为**最小实现**：逐行 `key: value`，只认上述四个标量键；
@@ -53,11 +51,11 @@ export interface ResolvedDirs {
   /** 运行时激活的宿主适配器 id（prism.yaml `harness` 键；缺省 zcode）。 */
   harness: string
   /** 作为默认推导基准的 harness 根目录（如 ZCode 的 ~/.zcode）。 */
-  zcodeDir: string
+  harnessRoot: string
   /**
    * **写守卫（B6）**：逐键标记该目录是否取自「默认链」——
    * 即既非 prism.yaml 显式配置、也非调用方显式指定根目录，而是回落到真实宿主默认。
-   * guard=true 的目录**写前必须确认**（CLI：--yes / --zcode-dir / prism.yaml）。
+   * guard=true 的目录**写前必须确认**（CLI：--yes / --harness-root / prism.yaml）。
    */
   guard: {
     roles: boolean
@@ -116,37 +114,37 @@ export function expandTildePath(path: string): string {
 }
 
 /**
- * 解析目录集：prism.yaml 显式键 > 适配器默认（由 zcodeDir 推导）。
+ * 解析目录集：prism.yaml 显式键 > 适配器默认（由 harnessRoot 推导）。
  * @param config prism.yaml 解析结果（null/undefined = 无配置文件，全默认）
- * @param opts.zcodeDir 适配器根（缺省 ~/.zcode；CLI 显式 --zcode-dir 也从这里进）
- * @param opts.zcodeDirExplicit 调用方是否显式指定了 zcodeDir（仅 CLI 的 --zcode-dir / prism.yaml 键算显式；
- *   env ZCODE_DIR 只重定向默认链落点、**不算显式**——守卫保持生效，测试可用它安全隔离；
+ * @param opts.harnessRoot 适配器根（缺省 ~/.zcode；CLI 显式 --harness-root 也从这里进）
+ * @param opts.rootExplicit 调用方是否显式指定了 harnessRoot（仅 CLI 的 --harness-root / prism.yaml 键算显式；
+ *   env PRISM_HARNESS_ROOT 只重定向默认链落点、**不算显式**——守卫保持生效，测试可用它安全隔离；
  *   false 且键无配置 → guard=true，写前需确认，B6 防护）
  */
 export function resolveDirs(
   config?: PrismDirConfig | null,
-  opts: { zcodeDir?: string; zcodeDirExplicit?: boolean } = {},
+  opts: { harnessRoot?: string; rootExplicit?: boolean } = {},
 ): ResolvedDirs {
   const harnessId = config?.harness !== undefined && config.harness !== '' ? config.harness : DEFAULT_HARNESS_ID
-  const explicit = opts.zcodeDirExplicit === true
+  const explicit = opts.rootExplicit === true
   // 目录布局全部由**激活的适配器**推导（不再硬编码 agents/teams/skills）——
   // 新增 harness 只需实现适配器 + 注册，本函数无需改动。
-  const layout = harnessLayout(harnessId, opts.zcodeDir)
-  const zcodeDir = layout.root
+  const layout = harnessLayout(harnessId, opts.harnessRoot)
+  const harnessRoot = layout.root
   const rolesDir = layout.rolesDir
   const resolved: ResolvedDirs = {
     rolesDir,
     // 适配器未约定 teamDir 时回落到 roles_dir 同级 teams/（避开 agent 扫描路径，B7）
     teamsDir: layout.teamsDir ?? join(dirname(rolesDir), 'teams'),
-    skillsDir: layout.skillsDir ?? join(zcodeDir, 'skills'),
+    skillsDir: layout.skillsDir ?? join(harnessRoot, 'skills'),
     source: config !== null && config !== undefined ? 'config' : 'default',
     harness: harnessId,
-    zcodeDir,
+    harnessRoot,
     guard: { roles: true, teams: true, skills: true },
   }
   const has = (key: keyof PrismDirConfig): boolean =>
     config !== null && config !== undefined && config[key] !== undefined && config[key] !== ''
-  // 显式 zcodeDir → 全部放行；否则逐键按「prism.yaml 是否配置」判定（teams 缺省跟随 roles_dir 落点）
+  // 显式 harnessRoot → 全部放行；否则逐键按「prism.yaml 是否配置」判定（teams 缺省跟随 roles_dir 落点）
   if (!explicit) {
     resolved.guard.roles = !has('roles_dir')
     resolved.guard.teams = !has('teams_dir') && !has('roles_dir')
@@ -157,7 +155,7 @@ export function resolveDirs(
   for (const [key, value] of Object.entries(config ?? {})) {
     if (value === undefined || value === '') continue
     const expanded = expandTildePath(value)
-    const absolute = isAbsolute(expanded) ? expanded : join(zcodeDir, expanded) // 相对路径相对 ZCode 根解释
+    const absolute = isAbsolute(expanded) ? expanded : join(harnessRoot, expanded) // 相对路径相对 ZCode 根解释
     if (key === 'roles_dir') resolved.rolesDir = absolute
     else if (key === 'teams_dir') resolved.teamsDir = absolute
     else if (key === 'skills_dir') resolved.skillsDir = absolute
@@ -173,7 +171,7 @@ export function resolveDirs(
 /** 便捷组合：读 `<home>/prism.yaml` 并解析（CLI/server 共用入口）。 */
 export function resolveDirsFromHome(
   home?: string,
-  opts: { zcodeDir?: string; zcodeDirExplicit?: boolean } = {},
+  opts: { harnessRoot?: string; rootExplicit?: boolean } = {},
 ): ResolvedDirs {
   return resolveDirs(loadPrismConfig(home), opts)
 }

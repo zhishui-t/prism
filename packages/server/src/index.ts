@@ -207,8 +207,8 @@ export {
   teamMarker,
   hasPrismMarker,
   hasTeamMarker,
-  zcodePaths,
-  defaultZcodeDir,
+  harnessPaths,
+  defaultHarnessRoot,
   CORE_DEV_TEAM_MD,
 } from './roles/index.js'
 

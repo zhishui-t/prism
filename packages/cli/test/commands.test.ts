@@ -83,20 +83,20 @@ describe('CLI 命令（注入真实知识服务 / 假 graphify）', () => {
     return async () => service
   }
 
-  it('init：建骨架 + 幂等 + --force（--zcode-dir 指临时目录，绝不写真实 ~/.zcode）', async () => {
-    const zcodeDir = await tempDir('prism-cli-zcode-')
-    cleanup.push(zcodeDir)
-    expect(await runCommand(ctx, ['init', '--zcode-dir', zcodeDir])).toBe(0)
+  it('init：建骨架 + 幂等 + --force（--harness-root 指临时目录，绝不写真实 ~/.zcode）', async () => {
+    const harnessRoot = await tempDir('prism-cli-zcode-')
+    cleanup.push(harnessRoot)
+    expect(await runCommand(ctx, ['init', '--harness-root', harnessRoot])).toBe(0)
     expect(existsSync(join(home, 'state'))).toBe(true)
     expect(existsSync(join(home, 'knowledge'))).toBe(true)
     expect(existsSync(join(home, 'config.json'))).toBe(true)
 
     lines = []
-    expect(await runCommand(ctx, ['init', '--zcode-dir', zcodeDir])).toBe(0)
+    expect(await runCommand(ctx, ['init', '--harness-root', harnessRoot])).toBe(0)
     expect(lines.join('\n')).toContain('幂等跳过')
 
     lines = []
-    expect(await runCommand(ctx, ['init', '--zcode-dir', zcodeDir, '--force'])).toBe(0)
+    expect(await runCommand(ctx, ['init', '--harness-root', harnessRoot, '--force'])).toBe(0)
     expect(lines.join('\n')).toContain('已写配置')
   })
 

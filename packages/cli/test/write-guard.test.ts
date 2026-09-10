@@ -8,10 +8,10 @@ import type { CommandContext } from '../src/argv.js'
 import { defaultContext, runCommand } from '../src/argv.js'
 
 /**
- * B6 写守卫（回归测试）：默认链（无 --zcode-dir、无 prism.yaml）落"宿主默认目录"时，
- * 写操作必须被阻止，直到 --yes 确认或显式 --zcode-dir。
+ * B6 写守卫（回归测试）：默认链（无 --harness-root、无 prism.yaml）落"宿主默认目录"时，
+ * 写操作必须被阻止，直到 --yes 确认或显式 --harness-root。
  *
- * **安全口径**：守卫按「来源」判定（env `ZCODE_DIR` 注入的临时目录同样触发守卫），
+ * **安全口径**：守卫按「来源」判定（env `PRISM_HARNESS_ROOT` 注入的临时目录同样触发守卫），
  * 因此本组测试把默认链重定向到临时目录——**任何断言都不触碰真实 ~/.zcode**。
  */
 describe('B6 写守卫：默认宿主目录写入需确认', () => {
@@ -26,8 +26,8 @@ describe('B6 写守卫：默认宿主目录写入需确认', () => {
     fakeDefaultZcode = mkdtempSync(join(tmpdir(), 'prism-guard-default-'))
     bareHome = mkdtempSync(join(tmpdir(), 'prism-guard-home-')) // 无 prism.yaml → 默认链
     directZcode = mkdtempSync(join(tmpdir(), 'prism-guard-direct-'))
-    prevEnv = process.env['ZCODE_DIR']
-    process.env['ZCODE_DIR'] = fakeDefaultZcode // 默认链重定向到临时目录（守卫仍触发：env 不算显式）
+    prevEnv = process.env['PRISM_HARNESS_ROOT']
+    process.env['PRISM_HARNESS_ROOT'] = fakeDefaultZcode // 默认链重定向到临时目录（守卫仍触发：env 不算显式）
     lines = []
     bareCtx = {
       ...defaultContext({
@@ -39,17 +39,17 @@ describe('B6 写守卫：默认宿主目录写入需确认', () => {
   })
 
   afterEach(() => {
-    if (prevEnv === undefined) delete process.env['ZCODE_DIR']
-    else process.env['ZCODE_DIR'] = prevEnv
+    if (prevEnv === undefined) delete process.env['PRISM_HARNESS_ROOT']
+    else process.env['PRISM_HARNESS_ROOT'] = prevEnv
   })
 
-  it('role init：默认链 + 无确认 → rc 1 + 提示 + 不写；--yes → 写临时默认链；显式 --zcode-dir → 直接写', async () => {
+  it('role init：默认链 + 无确认 → rc 1 + 提示 + 不写；--yes → 写临时默认链；显式 --harness-root → 直接写', async () => {
     // 1) 默认链，无确认 → 阻止
     lines = []
     expect(await runCommand(bareCtx, ['role', 'init', 'guard-blocked'])).toBe(1)
     const blocked = lines.join('\n')
     expect(blocked).toContain('已阻止写入')
-    expect(blocked).toContain('--zcode-dir')
+    expect(blocked).toContain('--harness-root')
     expect(blocked).toContain('--yes')
     expect(existsSync(join(fakeDefaultZcode, 'agents', 'guard-blocked.md'))).toBe(false)
 
@@ -59,20 +59,20 @@ describe('B6 写守卫：默认宿主目录写入需确认', () => {
     expect(lines.join('\n')).toContain('--yes：确认写入')
     expect(existsSync(join(fakeDefaultZcode, 'agents', 'guard-blocked.md'))).toBe(true)
 
-    // 3) 显式 --zcode-dir → 直接写，无需 --yes
+    // 3) 显式 --harness-root → 直接写，无需 --yes
     lines = []
-    expect(await runCommand(bareCtx, ['role', 'init', 'guard-direct', '--zcode-dir', directZcode])).toBe(0)
+    expect(await runCommand(bareCtx, ['role', 'init', 'guard-direct', '--harness-root', directZcode])).toBe(0)
     expect(existsSync(join(directZcode, 'agents', 'guard-direct.md'))).toBe(true)
   })
 
-  it('skill install：默认链 + 无确认 → 阻止且不写；--zcode-dir → 直接写', async () => {
+  it('skill install：默认链 + 无确认 → 阻止且不写；--harness-root → 直接写', async () => {
     lines = []
     expect(await runCommand(bareCtx, ['skill', 'install', 'prism'])).toBe(1)
     expect(lines.join('\n')).toContain('已阻止写入')
     expect(existsSync(join(fakeDefaultZcode, 'skills', 'prism', 'SKILL.md'))).toBe(false)
 
     lines = []
-    expect(await runCommand(bareCtx, ['skill', 'install', 'prism', '--zcode-dir', directZcode])).toBe(0)
+    expect(await runCommand(bareCtx, ['skill', 'install', 'prism', '--harness-root', directZcode])).toBe(0)
     expect(existsSync(join(directZcode, 'skills', 'prism', 'SKILL.md'))).toBe(true)
   })
 

@@ -10,14 +10,14 @@
  * | 目标目录不存在 | 自动创建（mkdir -p） |
  * | 目录不可写/创建失败 | 抛 InstallError（code='install_failed'，可读信息） |
  *
- * 安全：目标目录全部由参数传入，**绝不硬编码 ~/.zcode**；测试必须用临时目录。
+ * **渲染格式由适配器决定**（`adapter.renderRole` / `adapter.renderTeamDefinition`）——
+ * 不再硬编码 ZCode 渲染器，换 harness 时产物自动跟随其原生格式。
+ * 安全：目标目录全部由参数传入，**绝不硬编码宿主根**；测试必须用临时目录。
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { renderZcodeRole } from './role/render.js'
-import { renderZcodeTeam } from './team/render.js'
 import { createTeamRegistry } from './registry.js'
 import { ROLE_TEMPLATE_NAME_PLACEHOLDER, ROLE_TEMPLATE_MD } from './templates.js'
 import type { InstallOptions, InstallResult, TeamDefinition } from './types.js'
@@ -36,14 +36,15 @@ export class InstallError extends Error {
   }
 }
 
-/** 装配角色到目标目录（`<targetDir>/<name>.md`）。 */
+/** 装配角色到目标目录（`<targetDir>/<name>.md`）；内容由激活适配器的 renderRole 产出。 */
 export async function installRoles(opts: InstallOptions): Promise<InstallResult> {
   const written: string[] = []
   const skipped: InstallResult['skipped'] = []
   ensureTargetDir(opts.targetDir)
+  const adapter = opts.adapter ?? (await defaultAdapter())
   for (const role of opts.roles) {
     const path = join(opts.targetDir, `${role.name}.md`)
-    const content = renderZcodeRole(role, opts.env)
+    const content = adapter.renderRole(role, opts.env ?? {}).content
     const outcome = resolveWrite(path, content, opts.force === true)
     if (outcome.action === 'written') written.push(path)
     else if (outcome.action === 'skipped') skipped.push({ path: outcome.path, reason: outcome.reason })
@@ -51,25 +52,39 @@ export async function installRoles(opts: InstallOptions): Promise<InstallResult>
   return { written, skipped }
 }
 
+/** 惰性取激活适配器（避免 install ↔ harness 的静态循环导入）。 */
+async function defaultAdapter(): Promise<import('@prism/core').HarnessAdapter<import('./types.js').RoleDefinition, TeamDefinition>> {
+  const { resolveHarness } = await import('./harness.js')
+  return resolveHarness().adapter as unknown as import('@prism/core').HarnessAdapter<
+    import('./types.js').RoleDefinition,
+    TeamDefinition
+  >
+}
+
 export interface InstallTeamsOptions {
-  /** ZCode agents 目录；团队定义写至 `<targetDir>/teams/<team_id>.md`。 */
+  /** 宿主 agents 目录（未提供 teamsDir 时的回落基准）。 */
   targetDir: string
-  /** 显式团队受管目录（resolveDirs().teamsDir；提供时优先于 `<targetDir>/teams` 推导）。 */
+  /** 显式团队受管目录（resolveDirs().teamsDir；提供时优先）。 */
   teamsDir?: string
   teams: TeamDefinition[]
   force?: boolean
+  /** 渲染用适配器；缺省取激活适配器（测试可注入）。 */
+  adapter?: import('@prism/core').HarnessAdapter<import('./types.js').RoleDefinition, TeamDefinition>
 }
 
 /** 装配团队定义文件（供 `prism team install` / F13 端到端使用）。 */
 export async function installTeamDefinitions(opts: InstallTeamsOptions): Promise<InstallResult> {
-  const teamsDir = opts.teamsDir ?? join(opts.targetDir, 'teams')
   const written: string[] = []
   const skipped: InstallResult['skipped'] = []
+  const adapter = opts.adapter ?? (await defaultAdapter())
+  // 落点：显式 teamsDir > <targetDir>/teams（适配器只决定**内容**格式，不决定目标目录）
+  const teamsDir = opts.teamsDir ?? join(opts.targetDir, 'teams')
   ensureTargetDir(teamsDir)
   for (const team of opts.teams) {
+    const rendered = adapter.renderTeamDefinition?.(team) ?? null
+    if (rendered === null) continue
     const path = join(teamsDir, `${team.team_id}.md`)
-    const content = renderZcodeTeam(team)
-    const outcome = resolveWrite(path, content, opts.force === true)
+    const outcome = resolveWrite(path, rendered.content, opts.force === true)
     if (outcome.action === 'written') written.push(path)
     else if (outcome.action === 'skipped') skipped.push({ path: outcome.path, reason: outcome.reason })
   }
@@ -159,11 +174,12 @@ export async function migrateTeams(opts: MigrateTeamsOptions): Promise<InstallRe
   const { teams } = await createTeamRegistry().loadFromDirDetailed(opts.fromDir)
   const selected = opts.teamId === undefined ? teams : teams.filter((t) => t.team_id === opts.teamId)
   ensureTargetDir(opts.teamsDir)
+  const adapter = await defaultAdapter()
   const written: string[] = []
   const skipped: InstallResult['skipped'] = []
   for (const team of selected) {
     const path = join(opts.teamsDir, `${team.team_id}.md`)
-    const content = renderZcodeTeam(team)
+    const content = adapter.renderTeamDefinition?.(team)?.content ?? ''
     const outcome = resolveWrite(path, content, opts.force === true)
     if (outcome.action === 'written') written.push(path)
     else if (outcome.action === 'skipped') skipped.push({ path: outcome.path, reason: outcome.reason })

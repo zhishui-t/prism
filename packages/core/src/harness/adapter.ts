@@ -86,6 +86,14 @@ export type SkillProvisionResult =
   | { mode: 'installed'; path: string }
   | { mode: 'none'; fallback: 'mcp' | 'context-pack' }
 
+/** 渲染可选覆盖（调用方注入的环境值；harness 不支持则忽略）。 */
+export interface HarnessRenderOptions {
+  /** 环境注入的模型（覆盖角色自带值）。 */
+  model?: string
+  /** 环境注入的思考档位。 */
+  thoughtLevel?: string
+}
+
 /**
  * 宿主适配器：描述某个 harness 的原生约定（只读描述 + 渲染/解析行为）。
  *
@@ -110,7 +118,7 @@ export interface HarnessAdapter<TRole = unknown, TTeam = unknown, TSkill = unkno
   /** agent 定义约定。 */
   readonly agent: AgentConvention
 
-  /** 子 agent 派发约定；宿主无子 agent 机制则 null。 */
+  /** 子 agent 派发约定（只读描述，Prism 不实现派发）。 */
   readonly dispatch: DispatchConvention | null
 
   /** 模型声明约定；宿主不可声明模型则 null。 */
@@ -122,8 +130,11 @@ export interface HarnessAdapter<TRole = unknown, TTeam = unknown, TSkill = unkno
   /** 指令文件约定。 */
   readonly instructions: InstructionsConvention
 
-  /** 把 Prism 角色定义渲染成该 harness 的原生文件内容。 */
-  renderRole(role: TRole): RenderedFile
+  /** 把 Prism 角色定义渲染成该 harness 的**原生角色文件**（装配产物）。 */
+  renderRole(role: TRole, options?: HarnessRenderOptions): RenderedFile
+
+  /** 把 Prism 团队定义渲染成该 harness 的**原生团队文件**（装配产物；无约定则 null）。 */
+  renderTeamDefinition?(team: TTeam): RenderedFile | null
 
   /** 把该 harness 的原生文件解析回 Prism 角色定义（导入）。 */
   parseRole(content: string, filename: string): TRole

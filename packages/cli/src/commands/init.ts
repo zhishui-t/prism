@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 
 import { listBuiltinSkills, installSkills } from '@prism/skills'
 import { prismHome, prismPaths, PrismError } from '@prism/core'
-import { CORE_DEV_TEAM_MD, zcodePaths, defaultZcodeDir, resolveDirsFromHome } from '@prism/server'
+import { CORE_DEV_TEAM_MD, harnessPaths, defaultHarnessRoot, resolveDirsFromHome } from '@prism/server'
 
 import type { ArgValues, CommandContext } from '../argv.js'
 import { expandHome } from '../argv.js'
@@ -19,8 +19,8 @@ export const DEFAULT_CONFIG = (home: string): Record<string, unknown> => ({
 
 export interface InitReport {
   home: string
-  zcodeDir: string
-  zcodeDetected: boolean
+  harnessRoot: string
+  harnessDetected: boolean
   dirs: string[]
   seededTeam?: string
   homeConfig: string
@@ -29,12 +29,12 @@ export interface InitReport {
 }
 
 /**
- * `prism init [--home] [--zcode-dir] [--force]`（design-v3 §3.6 五步）：
+ * `prism init [--home] [--harness-root] [--force]`（design-v3 §3.6 五步）：
  * ① 探测 ZCode 目录（默认 ~/.zcode，不存在则警告但继续）
  * ② 建 <PRISM_HOME> 骨架：roles/ teams/ skills/ knowledge/ state/ catalog/ audit/
  *    （teams/ 为空时另落一份出厂团队模板，供 team 命令开箱可用）
- * ③ 安装内置 Skill 到 <zcodeDir>/skills/（目标目录来自 --zcode-dir 推导，不硬编码）
- * ④ 写 MCP 注册到 <zcodeDir>/cli/config.json（合并、写前备份；已有 prism 项指向
+ * ③ 安装内置 Skill 到 <harnessRoot>/skills/（目标目录来自 --harness-root 推导，不硬编码）
+ * ④ 写 MCP 注册到 <harnessRoot>/cli/config.json（合并、写前备份；已有 prism 项指向
  *    不同路径时不覆盖，提示 --force）
  * ⑤ 输出报告 + 提示「重启会话生效」
  * 幂等：重复执行结果一致。
@@ -42,27 +42,27 @@ export interface InitReport {
 export async function runInit(ctx: CommandContext, _args: string[], values: ArgValues): Promise<number> {
   const home = ctx.home ?? prismHome()
   const paths = prismPaths(home)
-  const zcodeDirExplicit = (values['harness-root'] ?? values['zcode-dir']) !== undefined
-  const zcodeDir = expandHome((values['harness-root'] ?? values['zcode-dir']) ?? defaultZcodeDir())
-  // B6 写守卫：init 会写 <zcodeDir>/skills 与 <zcodeDir>/cli/config.json——
-  // 默认链（未显式 --zcode-dir）落真实 ~/.zcode，需 --yes 确认
-  if (!zcodeDirExplicit && values.yes !== true) {
+  const rootExplicit = (values['harness-root'] ?? values['harness-root']) !== undefined
+  const harnessRoot = expandHome((values['harness-root'] ?? values['harness-root']) ?? defaultHarnessRoot())
+  // B6 写守卫：init 会写 <harnessRoot>/skills 与 <harnessRoot>/cli/config.json——
+  // 默认链（未显式 --harness-root）落真实 ~/.zcode，需 --yes 确认
+  if (!rootExplicit && values.yes !== true) {
     ctx.stderr(
-      `已阻止写入 [guard_required]: 检测到目标为默认宿主目录 ${zcodeDir}（未经 --zcode-dir 显式指定），` +
-        `prism init 将写入 Skill 与 MCP 注册配置；加 --zcode-dir 指定其他位置，或加 --yes 确认。`,
+      `已阻止写入 [guard_required]: 检测到目标为默认宿主目录 ${harnessRoot}（未经 --harness-root 显式指定），` +
+        `prism init 将写入 Skill 与 MCP 注册配置；加 --harness-root 指定其他位置，或加 --yes 确认。`,
     )
     return 1
   }
-  const zcode = zcodePaths(zcodeDir)
+  const zcode = harnessPaths(harnessRoot)
   const force = values.force === true
 
   // ① 探测 ZCode（不存在 → 警告但继续）
-  const zcodeDetected = existsSync(zcodeDir)
+  const harnessDetected = existsSync(harnessRoot)
 
   // ② <PRISM_HOME> 骨架（roles/catalog 由本命令补齐——core prismPaths 暂无此二键，见报告遗留项）
-  //    出厂团队模板落**受管 teams_dir**（resolveDirs：prism.yaml 覆盖 → 默认 <zcodeDir>/teams），
+  //    出厂团队模板落**受管 teams_dir**（resolveDirs：prism.yaml 覆盖 → 默认 <harnessRoot>/teams），
   //    而非固定 <PRISM_HOME>/teams——否则 team list 读不到（B9）。
-  const resolved = resolveDirsFromHome(home, { zcodeDir, zcodeDirExplicit })
+  const resolved = resolveDirsFromHome(home, { harnessRoot, rootExplicit })
   const dirs = [
     paths.home,
     paths.stateDir,
@@ -86,10 +86,10 @@ export async function runInit(ctx: CommandContext, _args: string[], values: ArgV
     writeFileSync(configPath, `${JSON.stringify(DEFAULT_CONFIG(home), null, 2)}\n`, 'utf-8')
   }
 
-  // ③ 内置 Skill → <zcodeDir>/skills/（§5 冲突策略：人写不覆盖，.prism-new 供对比）
+  // ③ 内置 Skill → <harnessRoot>/skills/（§5 冲突策略：人写不覆盖，.prism-new 供对比）
   const skills = await installSkills({ targetDir: zcode.skillsDir, skills: listBuiltinSkills(), force })
 
-  // ④ MCP 注册 → <zcodeDir>/cli/config.json（合并 + 备份；冲突不覆盖，P16）
+  // ④ MCP 注册 → <harnessRoot>/cli/config.json（合并 + 备份；冲突不覆盖，P16）
   const mcp = await registerMcp({
     configFile: zcode.configFile,
     home,
@@ -99,8 +99,8 @@ export async function runInit(ctx: CommandContext, _args: string[], values: ArgV
 
   const report: InitReport = {
     home,
-    zcodeDir,
-    zcodeDetected,
+    harnessRoot,
+    harnessDetected,
     dirs,
     ...(seededTeam !== undefined ? { seededTeam } : {}),
     homeConfig: configPath,
@@ -113,7 +113,7 @@ export async function runInit(ctx: CommandContext, _args: string[], values: ArgV
   } else {
     const display = (dir: string): string => (dir === home ? '.' : dir)
     ctx.stdout(`PRISM_HOME: ${home}`)
-    ctx.stdout(`① ZCode 目录: ${zcodeDir}${zcodeDetected ? '' : '（未探测到——将继续，可用 --zcode-dir 指定）'}`)
+    ctx.stdout(`① ZCode 目录: ${harnessRoot}${harnessDetected ? '' : '（未探测到——将继续，可用 --harness-root 指定）'}`)
     ctx.stdout(`② 已建目录: ${dirs.map(display).join(' ')}`)
     if (!homeConfigExisted || force) {
       ctx.stdout(`  已写配置: ${configPath}${homeConfigExisted ? '（--force 重建）' : ''}`)

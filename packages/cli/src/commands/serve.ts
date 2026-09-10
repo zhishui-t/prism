@@ -16,7 +16,7 @@ export async function runServe(ctx: CommandContext, _args: string[], values: Arg
   const host = values.host
   const { root } = harnessRootOverride(values)
   try {
-    const app = await startServer({ home: ctx.home, port, host, ...(root !== undefined ? { zcodeDir: root } : {}) })
+    const app = await startServer({ home: ctx.home, port, host, ...(root !== undefined ? { harnessRoot: root } : {}) })
     ctx.stdout(`Prism serve 监听 http://${app.host}:${app.port}（home=${app.home}）`)
     ctx.stdout('按 Ctrl+C 停止')
     const untilSignal = new Promise<void>((resolve) => {

@@ -192,6 +192,38 @@ describe('installTeamDefinitions（团队定义落盘 <targetDir>/teams/）', ()
     expect(result.skipped).toHaveLength(1)
     expect(existsSync(`${humanTeam}.prism-new`)).toBe(true)
   })
+
+  it('渲染格式由适配器决定（注入非 zcode 适配器 → 产物用其格式）', async () => {
+    // 关键回归：install 曾硬编码 renderZcodeRole/renderZcodeTeam，换 harness 产物格式不变
+    const targetDir = makeTmp()
+    const fakeAdapter = {
+      id: 'fake',
+      renderRole: () => ({
+        path: '',
+        content: '# FAKE-FORMAT-ROLE\n',
+        format: 'markdown' as const,
+        writePolicy: 'overwrite' as const,
+        marker: '',
+      }),
+      renderTeamDefinition: () => ({
+        path: '',
+        content: '# FAKE-FORMAT-TEAM\n',
+        format: 'markdown' as const,
+        writePolicy: 'overwrite' as const,
+        marker: '',
+      }),
+    }
+    const role = parseRoleMarkdown(ROLE_RAW)
+    const r = await installRoles({ targetDir, roles: [role], adapter: fakeAdapter as never })
+    expect(readFileSync(r.written[0]!, 'utf8')).toContain('FAKE-FORMAT-ROLE')
+
+    const t = await installTeamDefinitions({
+      targetDir,
+      teams: [parseTeamMarkdown(TEAM_RAW)],
+      adapter: fakeAdapter as never,
+    })
+    expect(readFileSync(t.written[0]!, 'utf8')).toContain('FAKE-FORMAT-TEAM')
+  })
 })
 
 describe('activateTeam（装配语义简化：installed = roles_dir 中存在角色文件）', () => {

@@ -10,14 +10,14 @@ import {
   loadTeam,
   loadTeams,
   resolveDirsFromHome,
-  zcodePaths,
+  harnessPaths,
 } from '../../roles/index.js'
 
 export interface PeopleDeps {
   /** PRISM_HOME（prism.yaml 配置源：<home>/prism.yaml 的 roles_dir/teams_dir/skills_dir） */
   home: string
-  /** ZCode 根目录（默认推导基准；AppOptions.zcodeDir → env → ~/.zcode） */
-  zcodeDir: string
+  /** ZCode 根目录（默认推导基准；AppOptions.harnessRoot → env → ~/.zcode） */
+  harnessRoot: string
 }
 
 /**
@@ -39,12 +39,12 @@ export function peopleRoutes(deps: PeopleDeps): {
   skills: (ctx: RouteContext) => Promise<Envelope>
   skillUsage: (ctx: RouteContext) => Promise<Envelope>
 } {
-  const dirs = resolveDirsFromHome(deps.home, { zcodeDir: deps.zcodeDir, zcodeDirExplicit: true })
+  const dirs = resolveDirsFromHome(deps.home, { harnessRoot: deps.harnessRoot, rootExplicit: true })
   const rolesDir = dirs.rolesDir
   const teamsDir = dirs.teamsDir
 
-  /** 已装 skill 名单（`<zcodeDir>/skills/*`，只读）；目录不存在 → undefined（跳过引用校验）。 */
-  const knownSkills = (): Promise<string[] | undefined> => installedSkillNames(deps.zcodeDir)
+  /** 已装 skill 名单（`<harnessRoot>/skills/*`，只读）；目录不存在 → undefined（跳过引用校验）。 */
+  const knownSkills = (): Promise<string[] | undefined> => installedSkillNames(deps.harnessRoot)
 
   const roles = async (): Promise<Envelope> => ok(await loadRoles(rolesDir, { knownSkills: await knownSkills() }))
 
@@ -69,7 +69,7 @@ export function peopleRoutes(deps: PeopleDeps): {
     if (found === null) {
       return fail('not_found', `团队不存在: ${id}（数据源 ${teamsDir}/<id>/AGENTS.md）`)
     }
-    return ok(await activateTeam(found, { rolesDir, targetDir: zcodePaths(deps.zcodeDir).agentsDir }))
+    return ok(await activateTeam(found, { rolesDir, targetDir: harnessPaths(deps.harnessRoot).agentsDir }))
   }
 
   const skills = async (): Promise<Envelope> => ok(listBuiltinSkills())

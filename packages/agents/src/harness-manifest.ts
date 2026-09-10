@@ -28,7 +28,7 @@ export interface HarnessFactoryOptions {
   /** 项目根（注入项目级指令文件用，如 <repo>/AGENTS.md）。 */
   repoDir?: string
   /** @deprecated 用 `root`（兼容旧调用）。 */
-  zcodeDir?: string
+  harnessRoot?: string
 }
 
 /** 适配器类型（Role/Team 具体化）。 */

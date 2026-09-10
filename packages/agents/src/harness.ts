@@ -28,7 +28,7 @@ export interface BuildHarnessRegistryOptions {
   /** harness 根目录（如 ZCode 的 ~/.zcode）；缺省用适配器 `defaultRoot`。 */
   root?: string
   /** @deprecated 用 `root`（保留兼容旧调用）。 */
-  zcodeDir?: string
+  harnessRoot?: string
   /** 项目根（renderTeamInstructions 注入 <repo>/AGENTS.md 用）。 */
   repoDir?: string
   /** 清单覆盖（测试用；缺省 HARNESS_MANIFEST）。 */
@@ -44,7 +44,7 @@ export function buildHarnessRegistry(
   options: BuildHarnessRegistryOptions = {},
 ): ReturnType<typeof createHarnessRegistry> {
   const registry = createHarnessRegistry()
-  const root = options.root ?? options.zcodeDir
+  const root = options.root ?? options.harnessRoot
   const createOptions: HarnessFactoryOptions = {}
   if (root !== undefined) createOptions.root = root
   if (options.repoDir !== undefined) createOptions.repoDir = options.repoDir

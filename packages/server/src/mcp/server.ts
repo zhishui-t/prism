@@ -15,7 +15,7 @@ import {
   loadTeam,
   renderZcodeRole,
   resolveDirsFromHome,
-  zcodePaths,
+  harnessPaths,
 } from '../roles/index.js'
 import {
   runGraphify,
@@ -59,8 +59,8 @@ const ERR_INVALID_PARAMS = -32602
 
 export interface McpDeps {
   home: string
-  /** ZCode 宿主根目录（role_render 目标提示、team_activate 判装配状态）；默认 PRISM_ZCODE_DIR → ~/.zcode */
-  zcodeDir?: string
+  /** ZCode 宿主根目录（role_render 目标提示、team_activate 判装配状态）；默认 PRISM_HARNESS_ROOT → ~/.zcode */
+  harnessRoot?: string
   kb?: KnowledgeService
   kbFactory?: () => Promise<KnowledgeService>
   graphifyEnv?: NodeJS.ProcessEnv
@@ -205,19 +205,19 @@ export function createMcpTools(deps: McpDeps): McpTool[] {
 
   // ---- 角色 / 团队（design-v3 §3.4 P6：宿主拉配置主链路；数据源与 CLI 同源 resolveDirs，B8）----
   // 根目录：显式 deps > 通用 env `PRISM_HARNESS_ROOT` > **激活适配器默认根**。
-  // 不用 `PRISM_ZCODE_DIR`/`~/.zcode` 兜底——那是 zcode 专属，会泄漏到插件 harness
+  // 不用 `ZCODE_DIR`/`~/.zcode` 兜底——那是 zcode 专属旧变量，会泄漏到插件 harness
   // （zcode 适配器自己会消费 ZCODE_DIR/PRISM_ZCODE_DIR）。未显式指定时不传 root，
   // 让 `resolveDirs` 走适配器 defaultRoot。
-  const rootOverride = deps.zcodeDir ?? process.env['PRISM_HARNESS_ROOT']
+  const rootOverride = deps.harnessRoot ?? process.env['PRISM_HARNESS_ROOT']
   const dirs = resolveDirsFromHome(deps.home, {
     ...(rootOverride !== undefined && rootOverride !== ''
-      ? { zcodeDir: rootOverride, zcodeDirExplicit: true }
+      ? { harnessRoot: rootOverride, rootExplicit: true }
       : {}),
   })
-  const zcodeDir = dirs.zcodeDir
+  const harnessRoot = dirs.harnessRoot
   const rolesDir = dirs.rolesDir
   const teamsDir = dirs.teamsDir
-  const zcode = zcodePaths(zcodeDir)
+  const zcode = harnessPaths(harnessRoot)
 
   const requireTeam = async (teamId: unknown) => {
     const id = asString(teamId)
@@ -264,7 +264,7 @@ export function createMcpTools(deps: McpDeps): McpTool[] {
     if (name === undefined) {
       throw new Error('prism_role_get 需要 { name }')
     }
-    const role = await loadRole(rolesDir, name, { knownSkills: await installedSkillNames(zcodeDir) })
+    const role = await loadRole(rolesDir, name, { knownSkills: await installedSkillNames(harnessRoot) })
     if (role === null) {
       throw new Error(`角色不存在: ${name}（数据源 ${rolesDir}/<name>/AGENTS.md）`)
     }
@@ -1007,7 +1007,7 @@ function asString(value: unknown): string | undefined {
  * **先加载 harness 插件再建工具**：适配器（含插件提供的）要在 `createMcpTools` 里被
  * `resolveDirs`/`resolveHarness` 解析，故加载完成前不开始读 stdin（加载很快）。
  */
-export function runMcpStdio(options: { home?: string; zcodeDir?: string } = {}): void {
+export function runMcpStdio(options: { home?: string; harnessRoot?: string } = {}): void {
   const home = options.home ?? prismHome()
   void ensureHarnessPluginsLoaded(home)
     .catch(() => {
@@ -1017,8 +1017,8 @@ export function runMcpStdio(options: { home?: string; zcodeDir?: string } = {}):
 }
 
 /** 建立工具并开始服务（插件已加载后调用）。 */
-function serveMcpStdio(home: string, options: { zcodeDir?: string }): void {
-  const tools = createMcpTools({ home, zcodeDir: options.zcodeDir })
+function serveMcpStdio(home: string, options: { harnessRoot?: string }): void {
+  const tools = createMcpTools({ home, harnessRoot: options.harnessRoot })
   const input = createInterface({ input: process.stdin })
   const write = (response: JsonRpcResponse | null): void => {
     if (response !== null) {

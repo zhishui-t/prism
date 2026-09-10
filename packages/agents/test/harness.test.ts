@@ -65,7 +65,7 @@ describe('prism.yaml 的 harness 键（解析与目录集透传）', () => {
   })
 
   it('resolveDirs 透传 harness；缺省回落默认', () => {
-    expect(resolveDirs({ harness: 'zcode' }, { zcodeDir: 'K:/z' }).harness).toBe('zcode')
-    expect(resolveDirs(null, { zcodeDir: 'K:/z' }).harness).toBe(DEFAULT_HARNESS_ID)
+    expect(resolveDirs({ harness: 'zcode' }, { harnessRoot: 'K:/z' }).harness).toBe('zcode')
+    expect(resolveDirs(null, { harnessRoot: 'K:/z' }).harness).toBe(DEFAULT_HARNESS_ID)
   })
 })

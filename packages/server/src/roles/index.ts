@@ -110,9 +110,9 @@ export {
   installTeam,
   parseRoleFile,
   renderPrismRole,
-  zcodePaths,
-  defaultZcodeDir,
-  type ZcodePaths,
+  harnessPaths,
+  defaultHarnessRoot,
+  type HarnessPaths,
   type InstallTeamOptions,
   type ParseRoleOptions,
 } from './wiring.js'

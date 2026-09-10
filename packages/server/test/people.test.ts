@@ -9,7 +9,7 @@ import { parseRoleMarkdown, parseTeamMarkdown, renderZcodeRole } from '@prism/ag
 import { installTeam } from '../src/roles/wiring.js'
 import {
   CORE_DEV_TEAM_MD,
-  defaultZcodeDir,
+  defaultHarnessRoot,
   installRoles,
   loadRole,
   loadRoles,
@@ -19,7 +19,7 @@ import {
   renderPrismRole,
   validateRole,
   validateTeam,
-  zcodePaths,
+  harnessPaths,
 } from '../src/roles/index.js'
 import type { RoleDefinition } from '../src/roles/index.js'
 
@@ -233,7 +233,7 @@ describe('glue：installTeam（成员装配 + 团队定义装配组合）', () =
   })
 })
 
-describe('glue：renderPrismRole / parseRoleFile shim / renderZcodeRole / zcodePaths', () => {
+describe('glue：renderPrismRole / parseRoleFile shim / renderZcodeRole / harnessPaths', () => {
   let tmp: string
   beforeEach(async () => {
     tmp = await mkdtemp(join(tmpdir(), 'prism-glue-misc-'))
@@ -272,12 +272,12 @@ describe('glue：renderPrismRole / parseRoleFile shim / renderZcodeRole / zcodeP
     expect(content.trimEnd().endsWith('-->')).toBe(true)
   })
 
-  it('zcodePaths：路径约定取自 agents 适配器 + config 附加；defaultZcodeDir 可被 ZCODE_DIR 覆盖', () => {
-    const zcode = zcodePaths(join(tmp, 'zcode'))
+  it('harnessPaths：路径约定取自 agents 适配器 + config 附加；defaultHarnessRoot 可被 PRISM_HARNESS_ROOT 覆盖', () => {
+    const zcode = harnessPaths(join(tmp, 'zcode'))
     expect(zcode.agentsDir).toBe(join(tmp, 'zcode', 'agents'))
     expect(zcode.teamDir).toBe(join(tmp, 'zcode', 'teams'))
     expect(zcode.skillsDir).toBe(join(tmp, 'zcode', 'skills'))
     expect(zcode.configFile).toBe(join(tmp, 'zcode', 'cli', 'config.json'))
-    expect(typeof defaultZcodeDir()).toBe('string')
+    expect(typeof defaultHarnessRoot()).toBe('string')
   })
 })

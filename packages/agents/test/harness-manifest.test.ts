@@ -76,7 +76,7 @@ describe('新增 harness 只改清单一处', () => {
 
   it('resolveDirs 消费激活适配器（假 harness 的目录名生效）', () => {
     // 用 prism.yaml 的 harness 键切到 fake；目录应来自 fake 适配器
-    const dirs = resolveDirs({ harness: 'zcode' }, { zcodeDir: join('K:', 'z'), zcodeDirExplicit: true })
+    const dirs = resolveDirs({ harness: 'zcode' }, { harnessRoot: join('K:', 'z'), rootExplicit: true })
     expect(dirs.rolesDir).toBe(join('K:', 'z', 'agents'))
     // 未知 harness 时 resolveDirs 抛 harness_not_found（说明它确实按 id 解析适配器）
     expect(() => resolveDirs({ harness: 'nope' })).toThrowError(/nope/)
