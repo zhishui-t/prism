@@ -116,7 +116,9 @@ pnpm test:e2e      # 5. 端到端（涉及 CLI/HTTP/Web 时）
 | **bare sleep 测异步** | 负载下 flake | 用轮询 API（如 `waitFor(jobId, timeout)`） |
 | **架构图产物失联** | 产物不知属于哪本书 | 渲染时写 sidecar `<name>.meta.json`（`--book/--module`）；界面按作用域过滤 |
 | **专属 env 泄漏到别的 harness** | 插件 harness 的 `defaultRoot` 被 `ZCODE_DIR` 覆盖 | 通用覆盖只认 `PRISM_HARNESS_ROOT`；专属变量由对应适配器内部消费 |
-| **软删被重扫静默撤销** | 引用型条目改源文件后 `status` 回到 active | 索引更新**保留 status**；恢复须显式 `restore`（不是靠重扫） |
+| **软删被重扫静默撤销**（已修复，`packages/knowledge/test/restore.test.ts` 锁定） | 引用型条目改源文件后 `status` 回到 active | 索引更新**保留 status**；恢复须显式 `restore`（不是靠重扫） |
+| **版次文件的 status 被压平成 active** | 文件写 `candidate`/`superseded`，`reindex` 后一律变 `active` | 解析按 `EntryStatus` **全量往返**；越界值 warning + 回落 `active`，绝不静默改写（R7 文件为真相） |
+| **凭记忆猜符号/路径/flag/env** | 设计或代码引用了不存在的类型名、状态名、文件名、CLI flag、env（本轮设计稿一轮被抓 6 处） | 动手前先 grep/`fast_locate` 核对存在性；设计评审把「引用不存在的名字」列为专项检查项 |
 | **SQL `LIMIT` 截断向量召回** | 库一大，插入靠后的相关条目永远召不回 | 向量相关性算完余弦才知道，SQL 层不能按 rowid 截断（需全扫） |
 
 ---
@@ -142,6 +144,12 @@ pnpm test:e2e      # 5. 端到端（涉及 CLI/HTTP/Web 时）
 # 开发
 pnpm typecheck / test / lint / build
 pnpm test:e2e
+
+# 单包测试：⚠️ core / server / cli 三个包没有 test 脚本，
+# `pnpm --filter @prism/<pkg> test` 是「空操作假绿」（exit 0 且零输出），别用它判定通过。
+pnpm exec vitest run packages/<pkg>/test     # 在仓库根执行；knowledge/agents/skills 亦可用 --filter
+# 改过 packages/core 后，跑 knowledge 测试前必须先 `pnpm --filter @prism/core build`
+# （knowledge 测试经 node_modules 解析 @prism/core/dist，否则验的是旧产物）
 
 # 3rd 子模块（submodule）
 pnpm run 3rd:init      # git submodule update --init --recursive（克隆后一次）

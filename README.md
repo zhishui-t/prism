@@ -106,7 +106,7 @@ prism/
 │   ├── knowledge/     # 层→书→模块→条目 · FTS5(bigram)+向量混合检索 · 版次制 · 知识图谱边表 · reindex
 │   ├── agents/        # 角色/团队定义解析校验渲染 · harness 适配器 + 运行期插件 · 目录解析
 │   ├── skills/        # Prism 内置 Skill · 校验 · 安装到宿主 Skill 目录
-│   ├── server/        # HTTP API · MCP(31 工具) · Graphify/Archify/embedding 封装 · 控制台静态服务
+│   ├── server/        # HTTP API · MCP(35 工具) · Graphify/Archify/embedding 封装 · 控制台静态服务
 │   └── cli/           # prism 命令行（init/serve/doctor/kb/graph/arch/role/team/skill/task/harness/embedding/project/inject/audit）
 ├── apps/web/          # React 控制台（7 页）
 ├── 3rd/               # git submodule（锁定上游发布 tag，见 3rd/README.md）
@@ -130,7 +130,9 @@ prism/
 
 **检索**：FTS5 **bigram 切分 + unicode61**（实测 trigram 检索不了两字中文词如「性能」，bigram 可以）+ **本地向量余弦**，两路经 RRF 融合。换 embedding 档位后旧向量自动失效，跑 `prism embedding reindex` 重算。
 
-**版次制**：更新产生新版次（`version+1`），检索默认只返回最新版；内容哈希相同则不产生新版次（重复导入不堆叠）。软删（`deprecated`）保留审计，可 `restore` 恢复。
+**版次制**：更新产生新版次（`version+1`），检索默认只返回最新版；内容哈希相同则不产生新版次（重复导入不堆叠）。软删（`deprecated`）保留审计，可 `restore` 恢复；**版次历史可查**（`prism kb versions <id>`，条目详情的「版本」标签）。
+
+**书结构**：`_modules.yaml`（模块清单，可 `freeze` 固化、支持 `inherits` 跨书继承）+ `_summary.md`（书级与模块级总纲），由条目与边表**零 LLM 推导**（`prism kb structure show|generate|freeze`），表 `book_structures` 只做索引。
 
 **文件为真相，数据库为索引**：手工改过文件后跑 `prism kb reindex` 重建索引。
 
@@ -140,6 +142,10 @@ prism kb search 性能 --layer global
 prism kb sync myproj                 # 扫项目文档建「引用型」索引（不改原件）
 prism kb convert report.docx --out report.md   # 任意文档转 Markdown（anydoc，零 LLM）
 prism kb tree --layer project
+prism kb structure generate --layer global --book java-standards   # 生成 _modules.yaml + _summary.md
+prism kb structure freeze --layer global --book java-standards --modules exception,logging
+prism kb versions JAVA-01-002        # 条目版次历史
+prism kb deposit 说明.md --title 禁止吞异常 --type rule --team core-dev --note 来源说明
 prism kb reindex
 prism kb remove KB-1                 # 软删；prism kb restore KB-1 恢复
 ```
@@ -211,6 +217,7 @@ IR 是源、HTML 是派生，两者都可作为 `type: diagram` 条目沉淀。
 prism role import --from ~/.zcode/agents
 prism role validate dev-1
 prism role render dev-1                # 渲染为当前 harness 原生格式
+prism team init my-team --members dev-1,tester   # 新建团队：脚手架 + 自动校验 + 写守卫
 prism team validate core-dev
 prism team activate core-dev           # 返回运行时配置（含每个角色的装配状态）
 ```
@@ -267,11 +274,11 @@ prism
 ├── embedding  install | status | start | stop | models | use | reindex
 ├── harness    list | show                              宿主适配器（内置 + 运行期插件）
 ├── role       list | show | init | import | validate | render | install
-├── team       list | show | validate | install | activate
-├── skill      list | install | update | uninstall | validate
+├── team       init | list | show | validate | install | activate
+├── skill      list | install | update | uninstall | validate | effective
 ├── kb         import | sync | search | get | tree | stats | graph | path
 │              | export | remove | restore | conflicts | resolve | history | reindex
-│              | convert | enrich
+│              | convert | enrich | structure | versions | deposit
 ├── graph      build | query | path | explain | affected | god-nodes | summary | status | export
 ├── arch       types | validate | render
 ├── project    add | list | show | remove
@@ -280,7 +287,7 @@ prism
 └── task       list | show | graph | register | report | stats
 ```
 
-**MCP 工具 31 个**：知识库 15 · 代码图谱 7 · 角色团队 6 · 任务台账 3。
+**MCP 工具 35 个**：知识库 17 · 代码图谱 7 · 角色/团队/技能 7 · 任务台账 3 · 上下文包 1（`tools/list` 实测）。
 
 ---
 
@@ -318,8 +325,8 @@ embedding_model: small      # 向量模型档位：small | default | large
 
 ```bash
 pnpm typecheck     # 7 包类型检查
-pnpm test          # 535 单测
-pnpm test:e2e      # 66 项端到端
+pnpm test          # 738 单测（76 文件）
+pnpm test:e2e      # 133 项端到端
 pnpm lint          # ESLint
 pnpm build         # 构建全部包 + web
 pnpm run 3rd:init  # 初始化子模块（首次）
