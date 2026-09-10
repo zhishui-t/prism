@@ -164,6 +164,8 @@ const PRISM_SKILL_ASSETS: SkillAsset[] = [
    - 坑 → \`type: pitfall\`（"Windows 下 tar 路径会被当远程主机"）
    - 模式 → \`type: pattern\`（"写守卫：默认目录前必须确认"）
    - 指南 → \`type: guide\`（"如何发布版本"）
+   - **单条正文建议 ≤ 1500 字**：本地 embedding 是 CPU 推理，超长会拖慢且被截断；
+     长文档请**拆成多条**（本就符合"提取而非拷贝"）
 3. **判断归属**：
    - 公司级规范 → \`layer: global\`
    - 本项目知识 → \`layer: project\` + \`owner: <项目名>\`

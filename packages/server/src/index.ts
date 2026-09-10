@@ -37,6 +37,7 @@ export {
 export { probeConverter } from '@prism/knowledge'
 // 本地向量化（变更 2）：BGE-M3 via llama.cpp，Prism 自理不依赖宿主
 export {
+  EMBEDDING_CTX,
   EMBEDDING_DIM,
   EMBEDDING_PORT,
   embeddingInstalled,

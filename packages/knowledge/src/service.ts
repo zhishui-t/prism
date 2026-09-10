@@ -823,6 +823,13 @@ export class PrismKnowledgeService implements KnowledgeService {
       const cur = latestByid.get(row.id)
       if (cur === undefined || row.version > cur) latestByid.set(row.id, row.version)
     }
+    // 每个 id 的最新版（边表与向量都只对最新版重建）
+    const latestRows = parsedRows.filter((r) => latestByid.get(r.id) === r.version)
+
+    // 向量随文重算：reindex 以文件为真相，向量也必须跟着文件走——否则用户改了
+    // 知识文件后，旧内容的向量会残留并被检索到（entry_id/version 不变，JOIN 照中）。
+    // **仅在装配了 embedding 时才清+重算**：没装配就无法重算，删了等于永久丢向量。
+    const rebuildVectors = this.#embed !== undefined
 
     await this.persistence.knowledge.run((raw) => {
       raw.exec('BEGIN IMMEDIATE')
@@ -833,6 +840,10 @@ export class PrismKnowledgeService implements KnowledgeService {
           `DELETE FROM kb_fts WHERE rowid IN (SELECT rowid FROM knowledge_entries WHERE origin = 'owned')`,
         )
         raw.exec(`DELETE FROM knowledge_edges WHERE from_id IN (SELECT id FROM knowledge_entries WHERE origin = 'owned')`)
+        if (rebuildVectors) {
+          // 先清自有型向量（删除 entries 前，子查询才取得到 id）；下方按新文重算
+          raw.exec(`DELETE FROM kb_vectors WHERE entry_id IN (SELECT id FROM knowledge_entries WHERE origin = 'owned')`)
+        }
         raw.exec(`DELETE FROM knowledge_entries WHERE origin = 'owned'`)
         const insert = raw.prepare(
           `INSERT INTO knowledge_entries
@@ -875,7 +886,6 @@ export class PrismKnowledgeService implements KnowledgeService {
           indexed++
         }
         // 边表同源重建（双链 + overrides；文件为真相）
-        const latestRows = parsedRows.filter((r) => latestByid.get(r.id) === r.version)
         for (const r of latestRows) {
           this.#writeEdges(raw, r.id, { content: r.body, overrides: r.overrides, nowIso: r.updatedAt })
         }
@@ -889,6 +899,13 @@ export class PrismKnowledgeService implements KnowledgeService {
         throw error
       }
     })
+
+    // 向量按新文重算（事务外，逐条异步；失败静默——增强不阻断 reindex 主流程）
+    if (rebuildVectors) {
+      for (const r of latestRows) {
+        await this.#writeVector(r.id, r.version, `${r.title}\n${r.body}`)
+      }
+    }
 
     return { scanned: files.length, indexed, skipped: errors.length, errors }
   }
@@ -1041,14 +1058,9 @@ export class PrismKnowledgeService implements KnowledgeService {
     if (this.#embed !== undefined && query.hybrid !== false) {
       const qVec = await this.#embed(query.q)
       if (qVec !== null && qVec.length > 0) {
-        // 向量召回的候选面 = 同一过滤条件 + limit 放大（RRF 需要比最终 limit 更宽的池）
+        // 向量召回全量扫描（见 #vectorHits 注释：SQL LIMIT 会任意截断丢失相关条目）
         const pool = Math.max(limit, HYBRID_CANDIDATES)
-        const vectorRowids = await this.#vectorHits(
-          raw,
-          this.#candidateRowids(raw, clauses, params, pool),
-          qVec,
-          pool,
-        )
+        const vectorRowids = await this.#vectorHits(raw, clauses, params, qVec, pool)
         if (vectorRowids.length > 0) {
           return this.#hybridResults(raw, { match, clauses, params, limit, q: query.q, vectorRowids })
         }
@@ -1069,15 +1081,6 @@ export class PrismKnowledgeService implements KnowledgeService {
       if (row) results.push(this.#toSearchResult(raw, row, hit.score, query.q))
     }
     return results
-  }
-
-  /** 向量召回候选集：按现有过滤条件取最新版条目 rowid（不受 BM25 是否能命中左右）。 */
-  #candidateRowids(raw: DatabaseSync, clauses: string[], params: string[], limit: number): number[] {
-    const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : ''
-    const rows = raw
-      .prepare(`SELECT e.rowid FROM knowledge_entries e ${where} LIMIT ?`)
-      .all(...params, limit) as unknown as Array<{ rowid: number }>
-    return rows.map((r) => r.rowid)
   }
 
   /**
@@ -1849,35 +1852,44 @@ export class PrismKnowledgeService implements KnowledgeService {
   }
 
   /**
-   * 向量召回：对候选集现存最新版向量算余弦，按相似度降序返回 rowid。
+   * 向量召回：**全量扫描**符合条件的条目（JOIN kb_vectors 拿当前版向量），
+   * 按余弦降序返回 rowid。
+   *
+   * 为什么不用 SQL `LIMIT` 取候选：向量相关性只有算完余弦才知道，SQL 层任何
+   * `LIMIT` 都只能按 rowid 顺序任意截断——库一大，插入靠后的相关条目永远召不回
+   * （QA 复现：61 条库里插入最后的目标条目漏召回）。条目量数千级，JS 算余弦足够快；
+   * 更大规模再换 sqlite-vec，接口不变。
+   *
    * 过滤：`cos < VECTOR_FLOOR` 视为不相关丢弃；再保留 `>= top * VECTOR_RELATIVE`
-   * 的同量级候选（防弱相关经 RRF 混入结果）。无 query 向量或无候选 → 空。
+   * 的同量级候选（防弱相关经 RRF 混入结果）。无 query 向量或无命中 → 空。
    */
   async #vectorHits(
     raw: DatabaseSync,
-    rowids: number[],
+    clauses: string[],
+    params: string[],
     qVec: Float32Array,
     limit: number,
   ): Promise<number[]> {
-    if (rowids.length === 0) return []
-    const entryIds = raw
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : ''
+    // 只取「当前版次确有向量」的行；dim 不匹配的跳过（换模型后旧向量作废）
+    const rows = raw
       .prepare(
-        `SELECT rowid, id, version FROM knowledge_entries
-         WHERE rowid IN (${rowids.map(() => '?').join(', ')})`,
+        `SELECT e.rowid AS rowid, v.vec AS vec, v.dim AS dim
+         FROM knowledge_entries e
+         JOIN kb_vectors v ON v.entry_id = e.id AND v.version = e.version
+         ${where}`,
       )
-      .all(...rowids) as unknown as Array<{ rowid: number; id: string; version: number }>
+      .all(...params) as unknown as Array<{ rowid: number; vec: Buffer; dim: number }>
     const scored: Array<{ rowid: number; cos: number }> = []
-    for (const e of entryIds) {
-      const row = raw
-        .prepare('SELECT dim, vec FROM kb_vectors WHERE entry_id = ? AND version = ?')
-        .get(e.id, e.version) as { dim: number; vec: Buffer } | undefined
-      if (row === undefined) continue
+    for (const row of rows) {
+      if (row.dim !== qVec.length) continue
       const vec = blobToVector(row.vec)
       if (vec.length !== qVec.length) continue
-      scored.push({ rowid: e.rowid, cos: cosine(qVec, vec) })
+      scored.push({ rowid: row.rowid, cos: cosine(qVec, vec) })
     }
+    if (scored.length === 0) return []
     scored.sort((a, b) => b.cos - a.cos)
-    const top = scored[0]?.cos ?? 0
+    const top = scored[0]!.cos
     const floor = Math.max(VECTOR_FLOOR, top * VECTOR_RELATIVE)
     return scored
       .filter((s) => s.cos >= floor)

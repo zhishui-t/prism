@@ -482,6 +482,23 @@ async function main() {
       // 向量落库：kb_vectors 应有行
       const vecCount = await cli(['embedding', 'reindex', '--json'], hEnv)
       check('17.3 embedding reindex 幂等（无失败）', JSON.parse(vecCount.stdout).value.failed === 0)
+
+      // 超长文档必须能嵌入（回归：客户端曾按 8000 字符发，撞 physical batch 上限直接 500）
+      // 该句约 30 字，repeat(300) → 约 9000 字，确保超过旧的 8000 截断阈值
+      const longBody = '这是一段足够长的中文知识正文，用于验证超长输入不会导致嵌入失败。'.repeat(300)
+      await writeFile(
+        join(workRoot, 'long.md'),
+        `---\nid: V-LONG\ntitle: 长文档健壮性\ntype: doc\nlayer: global\nbook: vec\nmodule: big\n---\n\n${longBody}\n`,
+        'utf-8',
+      )
+      await cli(['kb', 'import', join(workRoot, 'long.md'), '--json'], hEnv)
+      const longReindex = await cli(['embedding', 'reindex', '--json'], hEnv)
+      const longStats = JSON.parse(longReindex.stdout).value
+      check(
+        '17.4 超长文档（>8000 字）嵌入不失败',
+        longStats.failed === 0,
+        `failed=${longStats.failed} total=${longStats.total}`,
+      )
       await cli(['embedding', 'stop', '--json'], hEnv)
     }
 

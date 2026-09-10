@@ -4,13 +4,16 @@
  * 关键场景：BM25 命中不了的**同义/跨语言**条目，靠向量召回补上（真实场景 =
  * 用户问「苹果」能找回「iPhone 手机壳」）；反向也验证 `hybrid: false` 可强制纯关键词。
  */
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { afterAll, describe, expect, it } from 'vitest'
 
+import { openPersistence } from '@prism/core'
+
 import { PrismKnowledgeService } from '../src/service.js'
+import { blobToVector, cosine } from '../src/vector.js'
 
 /**
  * 假 embedding：按「语义桶」返回归一化 one-hot 向量。
@@ -107,6 +110,72 @@ describe('混合检索（BM25 + 向量 RRF）', () => {
     })
     expect((await svc.search({ q: '订单' })).length).toBe(1)
     expect((await svc.search({ q: '订单', hybrid: true })).length).toBe(1) // 无 embed，等价降级
+    svc.close()
+  })
+
+  it('召回不受插入顺序影响：语义相关但插入靠后的条目也必须召回（候选池不限行）', async () => {
+    // 回归：旧实现用 SQL `LIMIT 50` 取候选，库一大就任意截断，插入靠后的相关条目永远
+    // 召不回。这里 60 条无关填充 + 目标条目最后插入，目标仍须被向量召回。
+    const home = mkdtempSync(join(tmpdir(), 'prism-kb-pool-'))
+    const svc = new PrismKnowledgeService({ home, embed: fakeEmbed })
+    for (let i = 0; i < 60; i++) {
+      await svc.deposit({
+        id: `FILL-${i}`,
+        title: `填充文档 ${i}`,
+        type: 'doc',
+        layer: 'global',
+        book: 'b',
+        module: 'm',
+        content: `无关内容第 ${i} 篇。`,
+      })
+    }
+    await svc.deposit({
+      id: 'TARGET',
+      title: 'iPhone 手机壳',
+      type: 'doc',
+      layer: 'global',
+      book: 'b',
+      module: 'm',
+      content: '防摔磁吸外壳。',
+    })
+    // 「苹果」与填充、目标都无词面重叠 → BM25 零命中
+    expect((await svc.search({ q: '苹果', hybrid: false })).map((r) => r.id)).not.toContain('TARGET')
+    // 向量把「苹果」映射到手机桶 → 必须召回 TARGET
+    expect((await svc.search({ q: '苹果' })).map((r) => r.id)).toContain('TARGET')
+    svc.close()
+  })
+
+  it('reindex 重算向量：手改知识文件后，向量跟文件走而非残留旧值', async () => {
+    // 回归：旧 reindex 只重建 entries/fts/edges，不碰 kb_vectors——改了文件内容，
+    // 旧向量仍残留并参与检索（entry_id/version 不变）。这里改「电脑桶→手机桶」，
+    // 断言库里的向量从 [0,1] 变成 [1,0]。
+    const home = mkdtempSync(join(tmpdir(), 'prism-kb-reidx-vec-'))
+    const svc = new PrismKnowledgeService({ home, embed: fakeEmbed })
+    const r = await svc.deposit({
+      id: 'MUT',
+      title: '笔记本电脑',
+      type: 'doc',
+      layer: 'global',
+      book: 'b',
+      module: 'm',
+      content: '一台笔记本。',
+    })
+    const readVec = (): Float32Array => {
+      const p = openPersistence({ home })
+      const row = p.knowledge.raw
+        .prepare('SELECT vec FROM kb_vectors WHERE entry_id = ? AND version = ?')
+        .get('MUT', 1) as { vec: Buffer } | undefined
+      p.close()
+      return blobToVector(row!.vec)
+    }
+    expect(cosine(readVec(), Float32Array.from([0, 1]))).toBeCloseTo(1, 6) // 电脑桶
+
+    // 手改版次文件正文（保留 frontmatter），把语义改成手机桶
+    const raw = readFileSync(r.path, 'utf-8')
+    writeFileSync(r.path, raw.replace('一台笔记本。', '一部 iPhone。'), 'utf-8')
+    await svc.reindex()
+
+    expect(cosine(readVec(), Float32Array.from([1, 0]))).toBeCloseTo(1, 6) // 手机桶
     svc.close()
   })
 })
