@@ -198,6 +198,7 @@ export async function runTeam(ctx: CommandContext, args: string[], values: ArgVa
         }
         ctx.stdout(`工作流 ${activation.workflow.length} 阶段；仲裁链: ${activation.arbitration.join(' > ') || '（空）'}；返工上限 ${activation.rework_limit} 轮`)
         ctx.stdout('dispatch 判定仅由 installed 推导；native 派发需重启会话后扫描生效')
+        ctx.stdout(`提示: prism inject <项目根> 可把 Prism 指引写进项目 AGENTS.md（标记块，不动手写内容）`)
       }
       return 0
     }

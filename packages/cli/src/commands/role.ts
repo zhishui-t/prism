@@ -3,18 +3,22 @@ import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 
 import {
+  checkPrincipleConsistency,
   defaultZcodeDir,
   initRole,
   installedSkillNames,
   installRoles,
   loadRole,
   loadRoles,
+  loadTeams,
   parseRoleFile,
   renderPrismRole,
   renderZcodeRole,
+  resolveDirsFromHome,
   zcodePaths,
 } from '@prism/server'
 import type { RoleDefinition } from '@prism/server'
+import { prismHome } from '@prism/core'
 
 import type { ArgValues, CommandContext } from '../argv.js'
 import { expandHome, guardWriteTarget, resolveTargetDirs } from '../argv.js'
@@ -128,12 +132,28 @@ export async function runRole(ctx: CommandContext, args: string[], values: ArgVa
 
     case 'validate': {
       const roles = await loadRoles(rolesDir, { knownSkills: await installedSkillNames(zcodeDir) })
+      // 原则一致性（role-definition.md §2.1）：跨角色 + 团队仲裁链的组合校验
+      const teams = await loadTeams(resolveDirsFromHome(ctx.home ?? prismHome(), { zcodeDir, zcodeDirExplicit: true }).teamsDir)
+      const consistency = checkPrincipleConsistency({ roles, teams })
+      const consistencyIssues: Array<{ role: string; level: string; code: string; message: string }> = []
+      for (const [name, issues] of consistency.entries()) {
+        for (const issue of issues) {
+          consistencyIssues.push({ role: name, level: issue.level, code: issue.code, message: issue.message })
+        }
+      }
       const invalid = roles.filter((r) => (r.issues ?? []).some((i) => i.level === 'error'))
       if (ctx.json) {
         ctx.stdout(
           JSON.stringify({
             ok: invalid.length === 0,
-            value: roles.map((r) => ({ name: r.name, ok: (r.issues ?? []).every((i) => i.level !== 'error'), issues: r.issues ?? [] })),
+            value: {
+              roles: roles.map((r) => ({
+                name: r.name,
+                ok: (r.issues ?? []).every((i) => i.level !== 'error'),
+                issues: [...(r.issues ?? []), ...(consistency.get(r.name) ?? [])],
+              })),
+              consistency: consistencyIssues,
+            },
           }),
         )
       } else {
@@ -146,7 +166,13 @@ export async function runRole(ctx: CommandContext, args: string[], values: ArgVa
             ctx.stdout(`${role.name}: ${issue.level === 'error' ? 'ERROR' : 'WARN'} [${issue.code}] ${issue.message}`)
           }
         }
-        ctx.stdout(`校验 ${roles.length} 个角色: ${invalid.length === 0 ? '全部通过' : `${invalid.length} 个存在 error`}`)
+        for (const issue of consistencyIssues) {
+          ctx.stdout(`${issue.role}: WARN [${issue.code}] ${issue.message}`)
+        }
+        ctx.stdout(
+          `校验 ${roles.length} 个角色: ${invalid.length === 0 ? '全部通过' : `${invalid.length} 个存在 error`}` +
+            (consistencyIssues.length > 0 ? `（另 ${consistencyIssues.length} 条原则一致性提示）` : ''),
+        )
       }
       return invalid.length === 0 ? 0 : 1
     }

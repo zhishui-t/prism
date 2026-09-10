@@ -412,6 +412,30 @@ async function main() {
         typeof packRes.body.value.truncated === 'boolean',
     )
 
+    // ===== 16. AGENTS.md 注入块（模式 C） =====
+    const injRoot = join(workRoot, 'inj-project')
+    await mkdir(injRoot, { recursive: true })
+    await writeFile(join(injRoot, 'AGENTS.md'), '# 手写项目\n\n不许动的段落。\n', 'utf-8')
+    const inj = await cli(['inject', injRoot, '--team', 'core-dev', '--json'], env)
+    const injResult = JSON.parse(inj.stdout).value
+    check('16.1 inject 追加标记块', inj.code === 0 && injResult.action === 'appended')
+
+    const injText = await readFile(join(injRoot, 'AGENTS.md'), 'utf-8')
+    check(
+      '16.2 手写内容不动、块含工具指引',
+      injText.includes('不许动的段落。') && injText.includes('prism:begin') && injText.includes('prism_kb_search'),
+    )
+
+    const injAgain = await cli(['inject', injRoot, '--json'], env)
+    check('16.3 重复注入幂等（updated）', JSON.parse(injAgain.stdout).value.action === 'updated')
+
+    const uninj = await cli(['inject', injRoot, '--remove', '--json'], env)
+    const afterText = await readFile(join(injRoot, 'AGENTS.md'), 'utf-8')
+    check(
+      '16.4 --remove 只删块、手写内容保留',
+      JSON.parse(uninj.stdout).value.removed === true && afterText.includes('不许动的段落。') && !afterText.includes('prism:begin'),
+    )
+
     // ===== 9. 真实宿主零污染 =====
     const realAfter = await listDir(REAL_ZCODE)
     check(

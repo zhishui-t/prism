@@ -39,7 +39,8 @@ Prism 是本机的**研发效能控制面**：知识库、知识图谱、代码�
 | 用户意图 | 用什么 | 细节 |
 | :--- | :--- | :--- |
 | 查规范 / 安全红线 / 架构决策 | \`prism_kb_search\` → \`prism_kb_get\` | [references/knowledge.md](references/knowledge.md) |
-| 用户说「记住 / 沉淀 / 落库」 | \`prism_kb_deposit\`（必带来源） | [references/knowledge.md](references/knowledge.md) |
+| 用户说「记住 / 沉淀 / 落库」 | \`prism_kb_deposit\`（必带来源） |
+| 派发子代理前组装上下文 | \`prism_context_pack\`（按角色知识绑定 + 预算） | [references/knowledge.md](references/knowledge.md) |
 | 知识之间的引用关系 / 找关联条目 | \`prism_kb_graph\` | [references/knowledge.md](references/knowledge.md) |
 | 谁调用谁 / 影响面 / 最短路径 | \`prism_graph_query/path/affected/explain/god-nodes\` | [references/graph.md](references/graph.md) |
 | 画架构图 / 时序图 / 数据流图 | \`prism arch render\`（CLI） | [references/arch.md](references/arch.md) |
@@ -123,6 +124,7 @@ prism doctor                                   # 环境自检
 prism harness list | show                      # 运行时宿主适配器
 prism kb     import/sync/search/get/tree/stats/graph/path/remove/conflicts/resolve/export/reindex
 prism graph  build/query/path/explain/affected/god-nodes/summary/export/status
+prism inject <项目根> [--team <id>] [--remove]  把 Prism 指引写进项目 AGENTS.md 标记块
 prism project add/list/show/remove          项目台账（登记后 kb sync 可扫）
 prism arch   types/validate/render             # 架构图谱（五类图）
 prism role   list/show/init/import/validate/render/install

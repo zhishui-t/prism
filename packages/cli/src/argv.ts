@@ -16,6 +16,7 @@ import { runArch } from './commands/arch.js'
 import { runHarness } from './commands/harness.js'
 import { runGraph } from './commands/graph.js'
 import { runProject } from './commands/project.js'
+import { runInject } from './commands/inject.js'
 import { runRole } from './commands/role.js'
 import { runTeam } from './commands/team.js'
 import { runSkill } from './commands/skill.js'
@@ -96,6 +97,7 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
   prism graph summary --project <项目名>                     图谱规模统计
   prism graph export <格式> --project <项目名>               导出（obsidian/wiki/svg/graphml/…）
   prism graph status <项目名>
+  prism inject <项目根> [--team <团队id>] [--remove]  把 Prism 指引写进项目 AGENTS.md 标记块
   prism project add <项目根目录> [--name <项目名>]   登记项目台账（不建图、不扫描）
   prism project list | show <名> | remove <名> [--yes]
 
@@ -151,6 +153,7 @@ const CLI_OPTIONS = {
   top: { type: 'string' },
   format: { type: 'string' },
   'dry-run': { type: 'boolean' },
+  remove: { type: 'boolean' },
   enqueue: { type: 'boolean' },
   hard: { type: 'boolean' },
   visibility: { type: 'string' },
@@ -210,6 +213,7 @@ export type ArgValues = {
   top?: string
   format?: string
   'dry-run'?: boolean
+  remove?: boolean
   enqueue?: boolean
   hard?: boolean
   visibility?: string
@@ -330,6 +334,8 @@ export async function runCommand(ctx: CommandContext, argv: string[]): Promise<n
         return await runGraph(effective, rest, values)
       case 'project':
         return await runProject(effective, rest, values)
+      case 'inject':
+        return await runInject(effective, rest, values)
       case 'role':
         return await runRole(effective, rest, values)
       case 'team':

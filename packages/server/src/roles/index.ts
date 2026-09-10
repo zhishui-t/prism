@@ -50,6 +50,10 @@ export {
   // 团队沉淀策略机械执行（team-definition.md §5）
   applyDepositPolicy,
   priorityScore,
+  // 原则一致性检查（role-definition.md §2.1）
+  checkPrincipleConsistency,
+  claimsFinalSay,
+  positionInChain,
   // frontmatter / 标记
   splitFrontmatter,
   parseFrontmatter,

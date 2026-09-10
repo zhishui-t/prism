@@ -145,6 +145,12 @@ export {
   migrateTeams,
   installTeam,
   activateTeam,
+  // 沉淀策略执行 + 原则一致性
+  applyDepositPolicy,
+  priorityScore,
+  checkPrincipleConsistency,
+  claimsFinalSay,
+  positionInChain,
   loadRoles,
   loadRole,
   loadTeams,
@@ -170,6 +176,14 @@ export {
   defaultZcodeDir,
   CORE_DEV_TEAM_MD,
 } from './roles/index.js'
+
+// AGENTS.md 注入块（knowledge-injection.md §5 模式 C）
+export {
+  injectAgentsBlock,
+  removeAgentsBlock,
+  hasPrismBlock,
+  findPrismBlock,
+} from '@prism/agents'
 
 // MCP stdio
 export { createMcpTools, handleRpcRequest, runMcpStdio, type McpTool, type McpDeps } from './mcp/server.js'

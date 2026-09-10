@@ -38,7 +38,22 @@ export type { FrontmatterData, FrontmatterValue } from './frontmatter.js'
 
 // 角色
 export { RoleParseError, parseRoleMarkdown, extractPrinciple, extractSection, toRoleParseError } from './role/parse.js'
+export {
+  injectAgentsBlock,
+  removeAgentsBlock,
+  hasPrismBlock,
+  findPrismBlock,
+  PRISM_BLOCK_BEGIN,
+  PRISM_BLOCK_END,
+  type InjectResult,
+} from './agents-md.js'
 export type { ParseRoleOptions } from './role/parse.js'
+export {
+  checkPrincipleConsistency,
+  claimsFinalSay,
+  positionInChain,
+  type ConsistencyOptions,
+} from './role/consistency.js'
 export { validateRole, validateRoleUniqueness, ROLE_COLORS, THOUGHT_LEVELS, DESCRIPTION_MAX } from './role/validate.js'
 export type { ValidateRoleOptions } from './role/validate.js'
 export { renderZcodeRole, roleMarker, hasPrismMarker } from './role/render.js'
