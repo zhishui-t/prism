@@ -34,6 +34,7 @@ describe('变更 3：目录布局由适配器推导（新增 harness 不动上�
       model: null,
       skill: { nativeDir: `${root}/skills`, ecosystemDir: null, format: 'SKILL.md', supported: true },
       instructions: { file: 'AGENTS.md', projectFile: '<repo>/AGENTS.md' },
+      mcp: null,
       renderRole: () => ({ path: '', content: '', format: 'markdown', writePolicy: 'overwrite', marker: '' }),
       parseRole: () => ({}) as never,
       renderTeamInstructions: () => null,

@@ -25,7 +25,12 @@ export interface InitReport {
   seededTeam?: string
   homeConfig: string
   skills: { written: string[]; skipped: Array<{ path: string; reason: string }> }
-  mcp: { status: 'written' | 'unchanged' | 'conflict' | 'forced'; configFile: string; entry?: unknown; backup?: string }
+  mcp: {
+    status: 'written' | 'unchanged' | 'conflict' | 'forced' | 'unsupported'
+    configFile: string | null
+    entry?: unknown
+    backup?: string
+  }
 }
 
 /**
@@ -113,7 +118,7 @@ export async function runInit(ctx: CommandContext, _args: string[], values: ArgV
   } else {
     const display = (dir: string): string => (dir === home ? '.' : dir)
     ctx.stdout(`PRISM_HOME: ${home}`)
-    ctx.stdout(`① ZCode 目录: ${harnessRoot}${harnessDetected ? '' : '（未探测到——将继续，可用 --harness-root 指定）'}`)
+    ctx.stdout(`① 宿主目录: ${harnessRoot}${harnessDetected ? '' : '（未探测到——将继续，可用 --harness-root 指定）'}`)
     ctx.stdout(`② 已建目录: ${dirs.map(display).join(' ')}`)
     if (!homeConfigExisted || force) {
       ctx.stdout(`  已写配置: ${configPath}${homeConfigExisted ? '（--force 重建）' : ''}`)
@@ -133,9 +138,10 @@ export async function runInit(ctx: CommandContext, _args: string[], values: ArgV
       unchanged: `MCP 注册未变化（幂等）: ${mcp.configFile}`,
       conflict: `MCP 注册冲突：mcp.servers.prism 已存在且指向不同路径，未覆盖；确认后加 --force 覆盖（${mcp.configFile}）`,
       forced: `MCP 注册已按 --force 覆盖: ${mcp.configFile}`,
+      unsupported: '当前 harness 无 MCP 注册机制（跳过；Skill 仍已安装）',
     }
     ctx.stdout(`④ ${mcpLine[mcp.status]}${mcp.backup !== undefined ? `（备份: ${mcp.backup}）` : ''}`)
-    ctx.stdout('⑤ 完成。请重启 ZCode 会话使 MCP 与 Skill 生效')
+    ctx.stdout('⑤ 完成。请重启宿主会话使 MCP 与 Skill 生效')
   }
   return 0
 }
@@ -162,12 +168,16 @@ function seedFactoryTeam(teamsDir: string): string | undefined {
  * 已存在且指向不同 → 不覆盖并提示 --force（status='conflict'）。
  */
 async function registerMcp(opts: {
-  configFile: string
+  configFile: string | null
   home: string
   force: boolean
   mcpEntry: string
 }): Promise<InitReport['mcp']> {
   const { configFile, home, force, mcpEntry } = opts
+  // 该 harness 无 MCP 注册机制（适配器 mcp.configFile 为 null）→ 跳过，不报错
+  if (configFile === null) {
+    return { status: 'unsupported', configFile: null }
+  }
   const entry = {
     type: 'stdio',
     command: 'node',

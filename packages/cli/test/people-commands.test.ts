@@ -93,7 +93,7 @@ describe('prism init（F09 五步；全部写临时目录）', () => {
   it('首次 init：① 探测 ② 骨架 ③ 装 skill ④ 写 MCP ⑤ 报告 + 重启提示', async () => {
     expect(await runCommand(ctx, ['init', '--harness-root', harnessRoot])).toBe(0)
     const output = lines.join('\n')
-    expect(output).toContain('① ZCode 目录')
+    expect(output).toContain('① 宿主目录')
     expect(output).toContain('catalog')
     expect(output).toContain('roles')
     expect(output).toContain('③ Skill 安装: 写 9 个') // SKILL.md + 8 个 references/（渐进披露）
@@ -107,7 +107,7 @@ describe('prism init（F09 五步；全部写临时目录）', () => {
     expect(config.mcp.servers.prism.env.PRISM_HOME).toBe(home)
     // 出厂团队模板落受管 teams_dir（--harness-root 显式 → <harnessRoot>/teams；B9 修正后与 team list 同源）
     expect(existsSync(join(harnessRoot, 'teams', 'core-dev', 'AGENTS.md'))).toBe(true)
-    expect(output).toContain('⑤ 完成。请重启 ZCode 会话使 MCP 与 Skill 生效')
+    expect(output).toContain('⑤ 完成。请重启宿主会话使 MCP 与 Skill 生效')
   })
 
   it('幂等：重跑不产生新备份、MCP 状态 unchanged', async () => {

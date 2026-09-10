@@ -38,6 +38,7 @@ function fakeAdapter(root: string, rolesSub: string): HarnessAdapter {
     model: null,
     skill: { nativeDir: join(root, 'capabilities'), ecosystemDir: null, format: 'SKILL.md', supported: true },
     instructions: { file: 'AGENTS.md', projectFile: '<repo>/AGENTS.md' },
+    mcp: null,
     renderRole: () => ({ path: '', content: '', format: 'markdown', writePolicy: 'overwrite', marker: '' }),
     parseRole: () => ({}) as never,
     renderTeamInstructions: () => null,

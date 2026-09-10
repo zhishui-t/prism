@@ -50,6 +50,7 @@ function writePlugin(root: string, name: string, id: string): string {
     model: null,
     skill: { nativeDir: root + '/skills', ecosystemDir: null, format: 'SKILL.md', supported: true },
     instructions: { file: 'AGENTS.md', projectFile: '<repo>/AGENTS.md' },
+    mcp: null,
     renderRole: () => ({ path: '', content: '', format: 'markdown', writePolicy: 'overwrite', marker: '' }),
     parseRole: () => ({}),
     renderTeamInstructions: () => null,

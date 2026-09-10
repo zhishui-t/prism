@@ -252,6 +252,13 @@ function assertAdapterShape(a: unknown, expectedId: string): void {
   }
   const skill = a['skill']
   if (!isRecord(skill) || typeof skill['format'] !== 'string') throw new Error('适配器缺 skill.format')
+  // mcp 允许 null（该 harness 无 MCP 注册机制）；非 null 时须有 configFile 字符串
+  const mcp = a['mcp']
+  if (mcp !== null && mcp !== undefined) {
+    if (!isRecord(mcp) || typeof mcp['configFile'] !== 'string') {
+      throw new Error('适配器 mcp 非法（应为 null 或 { configFile: string, format }）')
+    }
+  }
   if (typeof a['detect'] !== 'function') throw new Error('适配器缺 detect()')
   if (typeof a['renderRole'] !== 'function') throw new Error('适配器缺 renderRole()')
   if (typeof a['parseRole'] !== 'function') throw new Error('适配器缺 parseRole()')

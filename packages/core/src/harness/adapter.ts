@@ -63,6 +63,25 @@ export interface InstructionsConvention {
   projectFile: string
 }
 
+/**
+ * MCP 注册约定（`prism init` 把 Prism 的 stdio MCP 写进宿主配置）。
+ * 注册文件的位置与 JSON 形态都是**宿主专属**约定，故由适配器自述。
+ */
+export interface McpConvention {
+  /**
+   * MCP 注册配置文件的绝对路径；null = 该 harness 无 MCP 注册机制
+   * （`init` 会跳过注册并给出提示，不报错）。
+   */
+  configFile: string | null
+  /**
+   * 注册写入形态：决定条目放在 JSON 的哪一层。
+   * - `mcp-servers-json`：`{ mcp: { servers: { <name>: { type, command, args, env } } } }`（ZCode 形态）
+   */
+  format: 'mcp-servers-json'
+  /** 该 harness 下 MCP 服务条目名（缺省 `prism`）。 */
+  serverName?: string
+}
+
 /** 宿主在位探测结果（只读：查配置目录，不调宿主）。 */
 export type HarnessPresence =
   | { installed: true; configDir: string; version?: string }
@@ -129,6 +148,9 @@ export interface HarnessAdapter<TRole = unknown, TTeam = unknown, TSkill = unkno
 
   /** 指令文件约定。 */
   readonly instructions: InstructionsConvention
+
+  /** MCP 注册约定（文件位置/形态由宿主决定）；无 MCP 机制则 null。 */
+  readonly mcp: McpConvention | null
 
   /** 把 Prism 角色定义渲染成该 harness 的**原生角色文件**（装配产物）。 */
   renderRole(role: TRole, options?: HarnessRenderOptions): RenderedFile

@@ -42,20 +42,23 @@ import { PrismError } from '@prism/core'
 
 export interface HarnessPaths {
   root: string
-  /** `~/.zcode/agents`（角色产物目录 = adapter.agent.globalDir） */
+  /** `<root>/agents`（角色产物目录 = adapter.agent.globalDir） */
   agentsDir: string
-  /** `~/.zcode/teams`（团队定义产物目录 = adapter.agent.teamDir；不在 agents/ 内，避开宿主递归扫描 B7） */
+  /** 团队定义产物目录 = adapter.agent.teamDir；未约定则 <root>/teams（不在 agents/ 内，避开宿主递归扫描 B7） */
   teamDir: string
-  /** `~/.zcode/skills`（Skill 安装目录 = adapter.skill.nativeDir） */
+  /** Skill 安装目录 = adapter.skill.nativeDir；不支持则 <root>/skills */
   skillsDir: string
-  /** `~/.zcode/cli/config.json`（MCP 注册；init-and-registration §2，适配器约定之外） */
-  configFile: string
+  /**
+   * MCP 注册配置文件（= adapter.mcp.configFile）；
+   * **null = 该 harness 无 MCP 注册机制**（init 跳过注册并提示）。
+   */
+  configFile: string | null
 }
 
 /**
  * 适配器路径约定。经 `resolveHarness` 激活当前配置的适配器
- * （prism.yaml `harness` 键 / `PRISM_HARNESS` 环境变量；默认 zcode）——
- * 未来接入其他 harness 时，此处自动跟随，调用方无需改动。
+ * （prism.yaml `harness` 键 / `PRISM_HARNESS` 环境变量；默认项由清单决定）——
+ * 路径全部由适配器自述，接入其他 harness 时自动跟随，调用方无需改动。
  */
 export function harnessPaths(harnessRoot: string): HarnessPaths {
   const adapter = resolveHarness({ harnessRoot }).adapter
@@ -64,7 +67,7 @@ export function harnessPaths(harnessRoot: string): HarnessPaths {
     agentsDir: adapter.agent.globalDir,
     teamDir: adapter.agent.teamDir ?? join(harnessRoot, 'teams'),
     skillsDir: adapter.skill.nativeDir ?? join(harnessRoot, 'skills'),
-    configFile: join(harnessRoot, 'cli', 'config.json'),
+    configFile: adapter.mcp?.configFile ?? null,
   }
 }
 
