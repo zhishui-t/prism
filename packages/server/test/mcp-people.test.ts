@@ -87,6 +87,7 @@ describe('MCP 角色/团队工具（design-v3 §3.4 P6；stdio JSON-RPC 手写�
       'prism_graph_affected',
       'prism_graph_summary',
       'prism_graph_god_nodes',
+      'prism_graph_merge',
       'prism_role_list',
       'prism_role_get',
       'prism_context_pack',

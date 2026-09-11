@@ -130,8 +130,19 @@ export {
   type GraphQueryOptions,
   formatCommand,
   DEFAULT_GRAPHIFY_TIMEOUT_MS,
+  // v5 F-C2：多项目合并（低层命令封装；CLI 经公共面调用，避免复刻 argv 造成契约漂移）
+  mergeGraphArgs,
+  mergeGraphs,
+  type MergeGraphsResult,
 } from './graph/graphify.js'
 export { BuildJobManager, type BuildJob, type BuildRunner, type JobStatus } from './graph/jobs.js'
+export {
+  mergedGraphDir,
+  mergeProjectGraphs,
+  type MergeProjectInput,
+  type MergeProjectGraphsOptions,
+  type MergeProjectGraphsResult,
+} from './graph/merge.js'
 export { ProjectRegistry, inspectGraphStatus, type ProjectInfo, type GraphStatusDetail } from './graph/registry.js'
 
 // 架构图谱（Archify 封装，knowledge-base.md §4.4 / D10）

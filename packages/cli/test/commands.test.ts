@@ -35,6 +35,17 @@ if (args[0] === 'extract') {
   fs.writeFileSync(path.join(dir, 'studio', 'index.html'), '<html><body>FAKE STUDIO</body></html>')
 } else if (args[0] === 'query') {
   process.stdout.write('QUERY-HIT: node a')
+} else if (args[0] === 'merge-graphs') {
+  const out = args[args.indexOf('--out') + 1]
+  fs.mkdirSync(path.dirname(out), { recursive: true })
+  fs.writeFileSync(out, JSON.stringify({ nodes: [{ id: 'a' }], links: [] }))
+  process.stdout.write('Merged 2 graphs -> 4 nodes, 2 edges\\n')
+} else if (args[0] === 'cluster-only') {
+  const dir = args[1]
+  const od = path.join(dir, 'graphify-out')
+  fs.mkdirSync(od, { recursive: true })
+  fs.writeFileSync(path.join(od, 'graph.html'), '<html>merged</html>')
+  process.stdout.write('Done - 2 communities.\\n')
 }
 async function hash(file) {
   return (await import('node:crypto')).createHash('sha256').update(fs.readFileSync(file)).digest('hex')
@@ -333,6 +344,99 @@ describe('CLI 命令（注入真实知识服务 / 假 graphify）', () => {
     lines = []
     expect(await runCommand(ctx, ['graph', 'query', 'a', '--project', 'demo'])).toBe(1)
     expect(lines.join('\n')).toContain('graph_not_found')
+  })
+
+  it('graph merge：<2 名字 / 未注册项目报错；合并产物落 --out-dir 且不污染项目根', async () => {
+    const projA = await tempDir('prism-cli-mA-')
+    const projB = await tempDir('prism-cli-mB-')
+    cleanup.push(projA, projB)
+    for (const root of [projA, projB]) {
+      await mkdir(join(root, 'graphify-out'), { recursive: true })
+      await writeFile(
+        join(root, 'graphify-out', 'graph.json'),
+        JSON.stringify({ nodes: [], links: [] }),
+        'utf-8',
+      )
+    }
+    // 注册表（<home>/graph/projects.json，registry.ts 的落盘结构）
+    await mkdir(join(home, 'graph'), { recursive: true })
+    await writeFile(
+      join(home, 'graph', 'projects.json'),
+      JSON.stringify({
+        version: 1,
+        projects: {
+          A: { root: projA, built_at: null },
+          B: { root: projB, built_at: null },
+        },
+      }),
+      'utf-8',
+    )
+    const fakeBin = await writeFakeGraphify(await tempDir('prism-cli-fakeg-'))
+    const mergeCtx: CommandContext = { ...ctx, graphifyEnv: { GRAPHIFY_BIN: fakeBin } }
+
+    lines = []
+    expect(await runCommand(mergeCtx, ['graph', 'merge', 'A'])).toBe(1)
+    expect(lines.join('\n')).toContain('至少 2 个已建图项目')
+
+    lines = []
+    expect(await runCommand(mergeCtx, ['graph', 'merge', 'A', 'nope'])).toBe(1)
+    expect(lines.join('\n')).toContain('项目未注册: nope')
+
+    const outDir = await tempDir('prism-cli-mout-')
+    cleanup.push(outDir)
+    lines = []
+    expect(await runCommand(mergeCtx, ['graph', 'merge', 'A', 'B', '--out-dir', outDir])).toBe(0)
+    expect(lines.join('\n')).toContain('已合并 2 个项目图谱: A + B')
+    expect(lines.join('\n')).toContain('4 节点 / 2 边')
+    // 产物落 outDir，项目根零污染
+    expect(existsSync(join(outDir, 'graphify-out', 'graph.html'))).toBe(true)
+    expect(existsSync(join(projA, 'merged-graph.json'))).toBe(false)
+    expect(existsSync(join(projA, 'prism-merged'))).toBe(false)
+    expect(existsSync(join(projB, 'graphify-out', 'graph.html'))).toBe(false)
+  })
+
+  it('graph merge 不带 --out-dir → 产物落注入的 home（<home>/graphify-merged），绝不回落真实宿主目录', async () => {
+    const projA = await tempDir('prism-cli-nhA-')
+    const projB = await tempDir('prism-cli-nhB-')
+    cleanup.push(projA, projB)
+    for (const root of [projA, projB]) {
+      await mkdir(join(root, 'graphify-out'), { recursive: true })
+      await writeFile(
+        join(root, 'graphify-out', 'graph.json'),
+        JSON.stringify({ nodes: [], links: [] }),
+        'utf-8',
+      )
+    }
+    await mkdir(join(home, 'graph'), { recursive: true })
+    await writeFile(
+      join(home, 'graph', 'projects.json'),
+      JSON.stringify({
+        version: 1,
+        projects: {
+          A: { root: projA, built_at: null },
+          B: { root: projB, built_at: null },
+        },
+      }),
+      'utf-8',
+    )
+    const fakeBin = await writeFakeGraphify(await tempDir('prism-cli-fakeg2-'))
+    const mergeCtx: CommandContext = { ...ctx, graphifyEnv: { GRAPHIFY_BIN: fakeBin } }
+
+    lines = []
+    expect(await runCommand(mergeCtx, ['graph', 'merge', 'A', 'B'])).toBe(0)
+
+    // 缺省落点 = 注入 home 之下（home 必填，Q-4：不存在「缺参 → ~/.prism」的路径）
+    const expectedOut = join(home, 'graphify-merged')
+    expect(lines.join('\n')).toContain(expectedOut)
+    expect(existsSync(join(expectedOut, 'merged-graph.json'))).toBe(true)
+    expect(existsSync(join(expectedOut, 'graphify-out', 'graph.html'))).toBe(true)
+
+    // A/B 项目根零新文件（既无合并产物目录，也无渲染出的 graph.html）
+    for (const root of [projA, projB]) {
+      expect(existsSync(join(root, 'graphify-merged'))).toBe(false)
+      expect(existsSync(join(root, 'merged-graph.json'))).toBe(false)
+      expect(existsSync(join(root, 'graphify-out', 'graph.html'))).toBe(false)
+    }
   })
 
   it('--version 输出版本；未知命令退出 1', async () => {

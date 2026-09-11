@@ -96,12 +96,26 @@ describe('runGraphify（错误映射 + 参数钉死）', () => {
     await rm(dir, { recursive: true, force: true })
   })
 
-  it('buildGraphArgs 钉死零 token 参数（Python 版两步，禁 LLM 富化）', () => {
+  it('buildGraphArgs 钉死零 LLM 参数：全量必带 --code-only（红线 R2 / 裁决 D1）', () => {
     const args = buildGraphArgs('K:/proj')
     expect(args).toEqual([
-      ['K:/proj'],
+      ['K:/proj', '--code-only'],
       ['cluster-only', 'K:/proj', '--no-label'],
     ])
+    // 显式护栏：全量路径缺 --code-only 时，树内有 doc/paper/image 会让 graphify 调 LLM
+    // （无 key 则直接 exit 1）——见 3rd/graphify/graphify/cli.py:3550-3563 / 3642。
+    expect(args.flat()).toContain('--code-only')
+    // 旧 npm fork 的 flag 不得出现在任何一步（Python 版无 --no-description）
+    expect(args.flat()).not.toContain('--no-description')
+  })
+
+  it('buildGraphArgs 增量：`update` 不带 --code-only（它只认 --force/--no-cluster），本就零 LLM', () => {
+    const args = buildGraphArgs('K:/proj', 'incremental')
+    expect(args).toEqual([
+      ['update', 'K:/proj'],
+      ['cluster-only', 'K:/proj', '--no-label'],
+    ])
+    expect(args.flat()).not.toContain('--code-only')
   })
 
   it('formatCommand 对含空格参数加引号', () => {

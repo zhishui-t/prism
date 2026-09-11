@@ -7,6 +7,7 @@ import {
   formatCommand,
   ProjectRegistry,
   inspectGraphStatus,
+  mergeProjectGraphs,
   resolveGraphifyCommand,
   runGraphify,
   graphPath as queryPath,
@@ -30,6 +31,8 @@ export async function runGraph(ctx: CommandContext, args: string[], values: ArgV
   switch (sub) {
     case 'build':
       return await graphBuild(ctx, rest, values)
+    case 'merge':
+      return await graphMergeCmd(ctx, rest, values)
     case 'query':
       return await graphQuery(ctx, rest, values)
     case 'path':
@@ -48,15 +51,76 @@ export async function runGraph(ctx: CommandContext, args: string[], values: ArgV
       return await graphStatus(ctx, rest)
     default:
       ctx.stderr(
-        '用法: prism graph <build|query|path|explain|affected|god-nodes|summary|export|status> ...',
+        '用法: prism graph <build|merge|query|path|explain|affected|god-nodes|summary|export|status> ...',
       )
       return 1
   }
 }
 
 /**
+ * `prism graph merge <项目名...> [--out-dir <目录>] [--timeout <秒>]`
+ * 把多个**已建图**项目合并成一张图（`graphify merge-graphs` + `cluster-only` 渲染）。
+ * 产物缺省落 `<PRISM_HOME>/graphify-merged/`（裁决 D2：绝不落任何项目根；显式 --out-dir
+ * 落在任一项目根内会被拒绝）。全程零 LLM：只调 merge-graphs / cluster-only --no-label。
+ */
+async function graphMergeCmd(ctx: CommandContext, args: string[], values: ArgValues): Promise<number> {
+  const names = args.filter((name) => name !== '')
+  if (names.length < 2) {
+    ctx.stderr(
+      '用法: prism graph merge <项目名> <项目名> [...] [--out-dir <目录>]（至少 2 个已建图项目）',
+    )
+    return 1
+  }
+  const registry = new ProjectRegistry(ctx.home ?? prismHome())
+  const targets: Array<{ project: string; root: string }> = []
+  for (const name of names) {
+    try {
+      const info = await registry.get(name)
+      targets.push({ project: info.project, root: info.root })
+    } catch {
+      ctx.stderr(`错误 [not_found] 项目未注册: ${name}（先 prism graph build <目录> --name ${name}）`)
+      return 1
+    }
+  }
+
+  const outDir = values['out-dir']
+  try {
+    const result = await mergeProjectGraphs(targets, {
+      // 无条件注入 home（**不做条件展开**）：条件展开正是「缺参 → 静默默认宿主目录」的事故形态
+      // （本轮同形事故已两次：HTTP 合并回落真实 ~/.prism、CLI 条件展开）。home 必填见 merge.ts。
+      home: ctx.home ?? prismHome(),
+      ...(outDir !== undefined ? { outDir: String(outDir) } : {}),
+      ...(values.timeout !== undefined ? { timeoutMs: Number(values.timeout) * 1000 } : {}),
+      ...(ctx.graphifyEnv !== undefined ? { env: ctx.graphifyEnv } : {}),
+    })
+    if (ctx.json) {
+      ctx.stdout(JSON.stringify({ ok: true, value: result }))
+      return 0
+    }
+    ctx.stdout(`已合并 ${result.projects.length} 个项目图谱: ${result.projects.join(' + ')}`)
+    ctx.stdout(`  产物目录: ${result.outDir}`)
+    ctx.stdout(`  合并图:   ${result.graphPath}`)
+    if (result.htmlPath !== null) {
+      ctx.stdout(`  预览:     ${result.htmlPath}${result.htmlExists ? '' : '（渲染产物未落盘）'}`)
+    }
+    ctx.stdout(`  规模:     ${result.nodes ?? '?'} 节点 / ${result.edges ?? '?'} 边`)
+    ctx.stdout('  提示: 合并图节点带 repo 前缀（同名符号不会互相覆盖）')
+    return 0
+  } catch (error) {
+    if (error instanceof PrismError) {
+      ctx.stderr(`错误 [${error.code}] ${error.message}`)
+      return 1
+    }
+    throw error
+  }
+}
+
+/**
  * `prism graph build <项目根目录> [--name <项目名>] [--timeout <秒>]`
- * 同步执行（CLI 场景），参数与 server 一致：extract --no-description --no-label + flows build（禁 LLM 富化）。
+ * 同步执行（CLI 场景），参数与 server 完全一致（同一个 `buildGraphArgs`）：
+ * 全量 `graphify <root> --code-only` + `cluster-only <root> --no-label`；增量走 `graphify update`（本就零 LLM）。
+ * `--code-only` 是红线 R2 的护栏（否则 graphify 会对 doc/paper/image 调 LLM，或缺 key 直接失败）；
+ * 参数口径与理由见 `packages/server/src/graph/graphify.ts` 的 `buildGraphArgs`。
  */
 async function graphBuild(ctx: CommandContext, args: string[], values: ArgValues): Promise<number> {
   const existsGraph = async (root: string): Promise<boolean> => {

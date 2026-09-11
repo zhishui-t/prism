@@ -29,6 +29,7 @@ import {
   graphSummary as queryGraphSummary,
 } from '../graph/graphify.js'
 import { inspectGraphStatus, ProjectRegistry } from '../graph/registry.js'
+import { mergeProjectGraphs, type MergeProjectInput } from '../graph/merge.js'
 import { convertFileToMarkdown } from '../kb/convert-file.js'
 import { makeDryRunKb, scanProject } from '../kb/scan.js'
 import type { GraphQuery, KnowledgeService, Layer, SearchQuery } from '../kb/port.js'
@@ -206,6 +207,43 @@ export function createMcpTools(deps: McpDeps): McpTool[] {
       ...(deps.graphifyTimeoutMs !== undefined ? { timeoutMs: deps.graphifyTimeoutMs } : {}),
     })
     return { project, ...result }
+  }
+
+  /**
+   * 多项目图谱合并（v5 F-C2 / 裁决 D2 + D8）。
+   * 只读/生成型：**不触发建图**（无 prism_graph_build 工具），输入项目必须已建图；
+   * 产物落 `<PRISM_HOME>/graphify-merged/`；返回**摘要**（不带 graphify 原始 stdout，守 R4）。
+   */
+  const graphMerge = async (args: Record<string, unknown>): Promise<unknown> => {
+    const names = Array.isArray(args.projects)
+      ? args.projects
+          .filter((item): item is string => typeof item === 'string')
+          .map((item) => item.trim())
+          .filter((item) => item !== '')
+      : []
+    if (names.length < 2) {
+      throw new Error('prism_graph_merge 需要 { projects }（至少 2 个已建图的项目名）')
+    }
+    const targets: MergeProjectInput[] = []
+    for (const name of names) {
+      targets.push(await requireProjectRoot(name))
+    }
+    const outDir = typeof args.out_dir === 'string' && args.out_dir.trim() !== '' ? args.out_dir.trim() : undefined
+    const result = await mergeProjectGraphs(targets, {
+      home: deps.home,
+      ...(outDir !== undefined ? { outDir } : {}),
+      ...(deps.graphifyEnv !== undefined ? { env: deps.graphifyEnv } : {}),
+      ...(deps.graphifyTimeoutMs !== undefined ? { timeoutMs: deps.graphifyTimeoutMs } : {}),
+    })
+    return {
+      projects: result.projects,
+      outDir: result.outDir,
+      graphPath: result.graphPath,
+      htmlPath: result.htmlPath,
+      htmlExists: result.htmlExists,
+      nodes: result.nodes,
+      edges: result.edges,
+    }
   }
 
   // ---- 角色 / 团队（design-v3 §3.4 P6：宿主拉配置主链路；数据源与 CLI 同源 resolveDirs，B8）----
@@ -938,6 +976,25 @@ export function createMcpTools(deps: McpDeps): McpTool[] {
         required: ['project'],
       },
       call: graphGodNodes,
+    },
+    {
+      name: 'prism_graph_merge',
+      description:
+        '把多个已建图项目的代码图谱合并成一张（graphify merge-graphs + cluster-only 渲染）。产物落 <PRISM_HOME>/graphify-merged/，绝不落任何项目根。只读/生成型：不触发建图（未建图请先自行 prism graph build）。返回摘要（不含 graphify 原始 stdout）',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          projects: {
+            type: 'array',
+            items: { type: 'string' },
+            minItems: 2,
+            description: '至少 2 个已注册且已建图的项目名',
+          },
+          out_dir: { type: 'string', description: '可选：覆盖产物目录（落在任一项目根内会被拒绝）' },
+        },
+        required: ['projects'],
+      },
+      call: graphMerge,
     },
     {
       name: 'prism_role_list',

@@ -247,13 +247,22 @@ export async function runGraphify(
 
 /**
  * 建图两步（Python 版 graphify，code-graph.md：零 token、零 LLM）：
- * ① `graphify <root>` 全量提取（tree-sitter AST → graphify-out/graph.json + manifest.json）；
+ * ① `graphify <root> --code-only` 全量提取（tree-sitter AST → graphify-out/graph.json + manifest.json）；
  * ② `graphify cluster-only <root> --no-label` 聚类 + GRAPH_REPORT.md + graph.html（跳过 LLM 社区命名）。
- * 产物落 `<root>/graphify-out/`。
+ * 产物落 `<root>/graphify-out/`（graph.json / manifest.json / graph.html / GRAPH_REPORT.md）。
+ *
+ * **`--code-only` 是红线 R2 的护栏**（裁决 D1）：裸路径就是 `graphify extract <root>`
+ * （cli.py:4725-4731）。不加它时，只要扫描树内有 doc/paper/image，`needs_llm` 即为真
+ * （cli.py:3642）：无 LLM key → 直接 exit 1（Prism 侧表现为 `graphify_failed`）；
+ * 环境里恰好有 key → **真的调 LLM 抽文档语义**。`--code-only` 跳过整个语义层
+ * （cli.py:3550-3563）。故全量固定钉死该 flag，**不提供「含文档」开关**；
+ * 需要文档语义的宿主请自行跑 graphify，Prism 不做。
  */
 export function buildGraphArgs(projectRoot: string, mode: 'full' | 'incremental' = 'full'): string[][] {
   // 增量（code-graph.md §3.2）：已有图谱时只重提取变化文件（graphify update，零 LLM），
   // 再聚类。首次建图仍走全量。
+  // `update` **只接受** --force/--no-cluster，其他 `-` 开头参数一律 exit 2（cli.py:2400-2414），
+  // 且它本就只重建代码（cli.py:2438）——故增量路径**不加** `--code-only`。
   if (mode === 'incremental') {
     return [
       ['update', projectRoot],
@@ -261,7 +270,7 @@ export function buildGraphArgs(projectRoot: string, mode: 'full' | 'incremental'
     ]
   }
   return [
-    [projectRoot],
+    [projectRoot, '--code-only'],
     ['cluster-only', projectRoot, '--no-label'],
   ]
 }
@@ -642,4 +651,58 @@ export async function exportExternalGraph(
     files = match !== null ? [match[1]!] : []
   }
   return { format, output, files, raw: stdout }
+}
+
+// ===== 多项目图谱合并（v5 F-C2；Python 版 `graphify merge-graphs`） =====
+
+/**
+ * 合并命令参数：`graphify merge-graphs <g1> <g2> [...] --out <outPath>`。
+ *
+ * **`--out` 必须显式传**：省略时 graphify 默认写 `<cwd>/graphify-out/merged-graph.json`
+ * （cli.py:2607），会污染某个项目根（裁决 D2 明令禁止）。
+ * 输入 <2：graphify 自己也会 exit 1（cli.py:2616-2621），这里提前给出 `bad_request`，
+ * 免得把参数错误伪装成 `graphify_failed`。
+ */
+export function mergeGraphArgs(graphPaths: string[], outPath: string): string[] {
+  if (graphPaths.length < 2) {
+    throw new PrismError('bad_request', `合并至少需要 2 个项目图谱，收到 ${graphPaths.length} 个`, {
+      graphPaths,
+    })
+  }
+  return ['merge-graphs', ...graphPaths, '--out', outPath]
+}
+
+export interface MergeGraphsResult {
+  /** 合并产出的 graph.json 绝对路径（此时尚未聚类，无 community 字段） */
+  graphPath: string
+  /** graphify 打印的汇总节点数（解析不到 → null，不猜） */
+  nodes: number | null
+  /** graphify 打印的汇总边数（解析不到 → null） */
+  edges: number | null
+  raw: string
+}
+
+/**
+ * 执行合并，产出合并后的 graph.json（**只合并**，不渲染）。
+ * 渲染（cluster-only → graph.html）见 `renderExternalGraph` / `mergeProjectGraphs`。
+ *
+ * 实测（2026-09-11，vendored graphify）：`graphify merge-graphs A/graph.json B/graph.json --out M/merged-graph.json`
+ * 打印 `Merged 2 graphs -> 4 nodes, 2 edges`；**节点 id 会带 repo 前缀**（cli.py:2686-2712），
+ * 故合并图上按原名 `explain/path` 可能查不到，需用带前缀的 id。
+ */
+export async function mergeGraphs(
+  graphPaths: string[],
+  outPath: string,
+  options: GraphQueryOptions = {},
+): Promise<MergeGraphsResult> {
+  // 参数校验先于任何 IO：<2 输入直接 bad_request，不启动子进程
+  const args = mergeGraphArgs(graphPaths, outPath)
+  const { stdout } = await runGraphQuery(args, options)
+  const summary = stdout.match(/Merged\s+\d+\s+graphs?\s*->\s*(\d+)\s+nodes?,\s*(\d+)\s+edges?/i)
+  return {
+    graphPath: outPath,
+    nodes: summary !== null ? Number(summary[1]) : null,
+    edges: summary !== null ? Number(summary[2]) : null,
+    raw: stdout,
+  }
 }

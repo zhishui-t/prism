@@ -18,6 +18,7 @@ import {
   GRAPHIFY_EXPORT_FORMATS,
 } from '../../graph/graphify.js'
 import { BuildJobManager, type BuildRunner } from '../../graph/jobs.js'
+import { mergeProjectGraphs, type MergeProjectInput } from '../../graph/merge.js'
 import { inspectGraphStatus, ProjectRegistry, type ProjectInfo } from '../../graph/registry.js'
 import type { RouteContext } from '../router.js'
 
@@ -26,6 +27,11 @@ export interface GraphDeps {
   jobs: BuildJobManager
   /** 真实建图执行体；测试注入假执行体 */
   runner: BuildRunner
+  /**
+   * PRISM_HOME：多项目合并产物落 `<home>/graphify-merged`（裁决 D2）。
+   * 必须显式传入——缺省会回落 `prismPaths()` 默认宿主目录（R5/R6 事故点，已有回归测试锁定）。
+   */
+  home: string
   /** graphify 环境覆盖（测试注入） */
   graphifyEnv?: NodeJS.ProcessEnv
   graphifyTimeoutMs?: number
@@ -46,11 +52,12 @@ export function defaultGraphifyRunner(deps: { env?: NodeJS.ProcessEnv; timeoutMs
   }
 }
 
-/** graph 路由工厂（design.md §4：projects/build/job/query/path/explain/affected/god-nodes/summary/status）。 */
+/** graph 路由工厂（design.md §4：projects/build/job/query/path/explain/affected/god-nodes/summary/status；v5 增 merge）。 */
 export function graphRoutes(deps: GraphDeps): {
   projects: (ctx: RouteContext) => Promise<Envelope>
   build: (ctx: RouteContext) => Promise<Envelope>
   jobStatus: (ctx: RouteContext) => Promise<Envelope>
+  merge: (ctx: RouteContext) => Promise<Envelope>
   query: (ctx: RouteContext) => Promise<Envelope>
   path: (ctx: RouteContext) => Promise<Envelope>
   explain: (ctx: RouteContext) => Promise<Envelope>
@@ -106,6 +113,39 @@ export function graphRoutes(deps: GraphDeps): {
       started_at: job.started_at,
       ended_at: job.ended_at,
     })
+  }
+
+  /**
+   * 多项目图谱合并（v5 F-C2 / 裁决 D2）：
+   * `POST /api/graph/merge { projects: string[], out_dir? }`。
+   * - 项目名必须在注册表（否则 not_found），且各自已有 `graphify-out/graph.json`；
+   * - 产物缺省落 `<PRISM_HOME>/graphify-merged/`；显式 `out_dir` 落在任一项目根内 → bad_request（D2 护栏）；
+   * - 合并后顺带 `cluster-only` 渲染自包含 `graph.html`（只读/生成型，不触发建图）。
+   */
+  const merge = async (ctx: RouteContext): Promise<Envelope> => {
+    const body = (await ctx.body()) as { projects?: unknown; out_dir?: unknown }
+    const names = Array.isArray(body.projects)
+      ? body.projects
+          .filter((item): item is string => typeof item === 'string')
+          .map((item) => item.trim())
+          .filter((item) => item !== '')
+      : []
+    if (names.length < 2) {
+      throw new PrismError('bad_request', `缺少 projects（至少 2 个项目名，用 prism graph build 建图后再合并）`)
+    }
+    const targets: MergeProjectInput[] = []
+    for (const name of names) {
+      const info = await deps.registry.get(name)
+      targets.push({ project: info.project, root: info.root })
+    }
+    const outDirRaw = typeof body.out_dir === 'string' ? body.out_dir.trim() : ''
+    const result = await mergeProjectGraphs(targets, {
+      home: deps.home,
+      ...(outDirRaw !== '' ? { outDir: outDirRaw } : {}),
+      ...(deps.graphifyEnv !== undefined ? { env: deps.graphifyEnv } : {}),
+      ...(deps.graphifyTimeoutMs !== undefined ? { timeoutMs: deps.graphifyTimeoutMs } : {}),
+    })
+    return ok(result)
   }
 
   const query = async (ctx: RouteContext): Promise<Envelope> => {
@@ -222,7 +262,7 @@ export function graphRoutes(deps: GraphDeps): {
     return await deps.registry.get(name)
   }
 
-  return { projects, build, jobStatus, query, path, explain, affected, godNodes, summary, exportGraph, status }
+  return { projects, build, jobStatus, merge, query, path, explain, affected, godNodes, summary, exportGraph, status }
 }
 
 /** 查询命令共用选项（cwd=项目根、超时与 env 透传）。 */

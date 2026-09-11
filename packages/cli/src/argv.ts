@@ -103,6 +103,7 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
   prism audit query [--type ...] [--task/--request/--knowledge/--session <id>] [--limit N]
   prism harness list | show               运行时宿主适配器（prism.yaml: harness 键）
   prism graph build <项目根目录> [--name <项目名>] [--incremental] [--timeout <秒>]
+  prism graph merge <项目名> <项目名> [...] [--out-dir <目录>]   多项目合并（缺省落 <PRISM_HOME>/graphify-merged/）
   prism graph query <q> --project <项目名>                  BFS 遍历查询
   prism graph path <from> <to> --project <项目名>            最短路径
   prism graph explain <node> --project <项目名>              节点解释
@@ -116,7 +117,7 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
   prism project list | show <名> | remove <名> [--yes]
   prism embedding status | install | start | stop | reindex   本地向量化（BGE-M3，Prism 自理）
 
-全局：--home <path>  --json  --harness-root <path>（role/team/skill/install 类统一收宿主根，~ 自动展开；--harness-root 为兼容旧名）
+全局：--home <path>  --json  --harness-root <path>（role/team/skill/install 类统一收宿主根，~ 自动展开；--zcode-dir 为兼容旧名）
       --yes   确认写入默认宿主目录（写守卫；默认链写入无 --yes 会被阻止，B6）`
 
 /** 全部子命令接受的选项（并集；strict:false 容忍未知项）。 */
@@ -167,6 +168,8 @@ const CLI_OPTIONS = {
   'error-type': { type: 'string' },
   status: { type: 'string' },
   out: { type: 'string' },
+  /** `graph merge --out-dir <目录>`（多项目合并产物目录；缺省 <PRISM_HOME>/graphify-merged/） */
+  'out-dir': { type: 'string' },
   top: { type: 'string' },
   format: { type: 'string' },
   'dry-run': { type: 'boolean' },
@@ -262,6 +265,8 @@ export type ArgValues = {
   'error-type'?: string
   status?: string
   out?: string
+  /** `graph merge --out-dir <目录>` */
+  'out-dir'?: string
   top?: string
   format?: string
   'dry-run'?: boolean
@@ -326,8 +331,8 @@ export function harnessRootOverride(values: ArgValues): { root?: string; explici
  * `<PRISM_HOME>/prism.yaml`（可选）覆盖适配器默认；`--harness-root` 只作为默认推导基准。
  * 优先级：prism.yaml 显式键 > 显式根覆盖 > **激活适配器的默认根**。
  *
- * 显式性口径（B6 守卫）：只有 **--harness-root（或旧名 --harness-root）** / prism.yaml 键
- * 算「用户显式指定」；env `PRISM_HARNESS_ROOT`/`PRISM_HARNESS_ROOT` 不算（保持守卫生效）。
+ * 显式性口径（B6 守卫）：只有 **--harness-root（或旧名 `--zcode-dir`）** / prism.yaml 键
+ * 算「用户显式指定」；env `PRISM_HARNESS_ROOT` 不算（保持守卫生效）。
  */
 export function resolveTargetDirs(ctx: CommandContext, values: ArgValues): ResolvedDirs {
   const { root, explicit } = harnessRootOverride(values)

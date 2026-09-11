@@ -31,7 +31,7 @@ describe('MCP stdio（手写 JSON-RPC，design.md §4 最小 5 工具 + design-v
     })
   })
 
-  it('tools/list → 固定 35 个工具（kb 17 + graph 7 + role/team 8 + task 3；design-v4 增 versions/skill_effective/team_create/book_structure）', async () => {
+  it('tools/list → 固定 36 个工具（kb 17 + graph 8 + role/team 8 + task 3；design-v4 增 versions/skill_effective/team_create/book_structure；v5 增 graph_merge）', async () => {
     const tools = createMcpTools({ home: await makeTempDir('prism-mcp-') })
     const res = await handleRpcRequest(rpc('tools/list'), tools)
     const names = ((res?.result as { tools: Array<{ name: string }> }).tools).map((t) => t.name)
@@ -60,6 +60,7 @@ describe('MCP stdio（手写 JSON-RPC，design.md §4 最小 5 工具 + design-v
       'prism_graph_affected',
       'prism_graph_summary',
       'prism_graph_god_nodes',
+      'prism_graph_merge',
       'prism_role_list',
       'prism_role_get',
       'prism_context_pack',

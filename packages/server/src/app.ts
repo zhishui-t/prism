@@ -121,12 +121,14 @@ export async function createApp(options: AppOptions = {}): Promise<{
     registry,
     jobs,
     runner,
+    home,
     graphifyEnv: options.graphifyEnv,
     graphifyTimeoutMs: options.graphifyTimeoutMs,
   })
   router.add('GET', '/api/graph/projects', graph.projects)
   router.add('POST', '/api/graph/build', graph.build)
   router.add('GET', '/api/graph/build/:job_id', graph.jobStatus)
+  router.add('POST', '/api/graph/merge', graph.merge)
   router.add('GET', '/api/graph/query', graph.query)
   router.add('GET', '/api/graph/path', graph.path)
   router.add('GET', '/api/graph/explain', graph.explain)
