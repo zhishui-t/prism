@@ -111,7 +111,6 @@ describe('PrismPersistence', () => {
     expect(knowledgeTables).toContain('knowledge_entries')
     expect(knowledgeTables).toContain('knowledge_edges')
     expect(knowledgeTables).toContain('book_structures')
-    expect(knowledgeTables).toContain('import_jobs')
     expect(p.tasks.tables()).toContain('tasks')
     expect(p.core.tables()).toContain('team_bindings')
     p.close()

@@ -273,27 +273,6 @@ export const BOOK_STRUCTURES_TABLE_DDL = `CREATE TABLE IF NOT EXISTS book_struct
     PRIMARY KEY (layer, book)
 )`
 
-/** 导入任务（控制台/agent 导入管线）。 */
-export const IMPORT_JOBS_TABLE_DDL = `CREATE TABLE IF NOT EXISTS import_jobs (
-    id TEXT PRIMARY KEY,
-    original_filename TEXT NOT NULL,
-    file_type TEXT NOT NULL,
-    file_path TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'uploaded',
-    markdown_path TEXT,
-    converted_title TEXT,
-    converted_body TEXT,
-    target_layer TEXT NOT NULL,
-    target_book TEXT NOT NULL,
-    target_module TEXT NOT NULL DEFAULT '',
-    visibility TEXT NOT NULL,
-    candidate_id TEXT,
-    error_message TEXT,
-    created_by TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-)`
-
 /** 冲突检测结果（层间冲突：就近覆盖 + 显式 overrides）。 */
 export const KNOWLEDGE_CONFLICTS_TABLE_DDL = `CREATE TABLE IF NOT EXISTS knowledge_conflicts (
     id TEXT PRIMARY KEY,
@@ -317,7 +296,6 @@ export const CORE_TABLE_DDL: Record<string, string> = {
   knowledge_entries: KNOWLEDGE_ENTRIES_TABLE_DDL,
   knowledge_edges: KNOWLEDGE_EDGES_TABLE_DDL,
   book_structures: BOOK_STRUCTURES_TABLE_DDL,
-  import_jobs: IMPORT_JOBS_TABLE_DDL,
   knowledge_conflicts: KNOWLEDGE_CONFLICTS_TABLE_DDL,
 }
 
@@ -353,7 +331,6 @@ export const DEFAULT_SCHEMAS: Record<'tasks' | 'core' | 'knowledge', DatabaseSch
       KNOWLEDGE_ENTRIES_TABLE_DDL,
       KNOWLEDGE_EDGES_TABLE_DDL,
       BOOK_STRUCTURES_TABLE_DDL,
-      IMPORT_JOBS_TABLE_DDL,
       KNOWLEDGE_CONFLICTS_TABLE_DDL,
       KNOWLEDGE_V2_ADD_OWNER,
       KNOWLEDGE_V3_ADD_ORIGIN,
