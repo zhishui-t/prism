@@ -37,7 +37,8 @@ export interface GraphDeps {
   graphifyTimeoutMs?: number
 }
 
-/** 默认建图执行体：graphify extract（钉死参数，禁 LLM 富化）+ flows build。 */
+/** 默认建图执行体：graphify extract/cluster-only（钉死参数 `--code-only`/`--no-label`，禁 LLM 富化）。
+ *  注意：Python 版 graphify **没有 `flows` 子命令**，也没有 `flows build` 这一步。 */
 export function defaultGraphifyRunner(deps: { env?: NodeJS.ProcessEnv; timeoutMs?: number } = {}): BuildRunner {
   return async (_project, root, appendLog, opts) => {
     const resolved = await resolveGraphifyCommand(deps.env ?? process.env)

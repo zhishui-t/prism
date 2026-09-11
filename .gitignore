@@ -42,3 +42,6 @@ Thumbs.db
 
 # 团队黑板：保留设计/评审/交付等 .md 文档，排除 e2e 运行痕迹（截图、临时 home、清单）
 .agent-team/e2e/
+
+# WorkBuddy 会话与项目记忆（日志/长期笔记，本地 agent 状态，不入库）
+.workbuddy/

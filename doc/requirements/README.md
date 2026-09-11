@@ -95,7 +95,7 @@
 | :--- | :--- |
 | 30 | 能力用 **Graphify 工具**；显示用 **Graphify Studio 页面** |
 | 31 | 产物放 **`<项目根>/graphify-out/`**（Python 版 graphify） |
-| 32 | 默认零 token 建图（`--no-description --no-label`） |
+| 32 | 默认零 token 建图（全量 `--code-only`；`--no-description` 在 Python 版不存在，见 `code-graph.md` 裁决 D1） |
 
 ### 2.7 工作队列与台账
 
