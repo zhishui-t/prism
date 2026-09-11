@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
+import { CORE_DEV_TEAM_MD, fillTeamTemplate } from '@prism/agents'
+
 import { defaultContext, expandHome, runCommand, type CommandContext } from '../src/argv.js'
 import { parseArgv } from '../src/argv.js'
 
@@ -105,8 +107,10 @@ describe('prism init（F09 五步；全部写临时目录）', () => {
     }
     expect(config.mcp.servers.prism.type).toBe('stdio')
     expect(config.mcp.servers.prism.env.PRISM_HOME).toBe(home)
-    // 出厂团队模板落受管 teams_dir（--harness-root 显式 → <harnessRoot>/teams；B9 修正后与 team list 同源）
-    expect(existsSync(join(harnessRoot, 'teams', 'core-dev', 'AGENTS.md'))).toBe(true)
+    // **不播种任何团队**：只建 <home>/teams 空目录作骨架；是否建团队由使用者决定
+    expect(existsSync(join(harnessRoot, 'teams'))).toBe(false)
+    expect(existsSync(join(home, 'teams'))).toBe(true)
+    expect(output).toContain('团队: 未创建')
     expect(output).toContain('⑤ 完成。请重启宿主会话使 MCP 与 Skill 生效')
   })
 
@@ -283,9 +287,26 @@ describe('prism role/team/skill（F10 端到端；临时目录）', () => {
     expect(skills.value.map((s) => s.name)).toContain('prism')
   })
 
-  it('team list/validate/install/activate（出厂模板 + 导入角色）', async () => {
-    // init 落出厂模板 + 导入成员角色
+  it('team list/validate/install/activate（使用者自建团队 + 导入角色）', async () => {
+    // init 只建骨架、**不代建团队**；受管位置由 <home>/prism.yaml 指定（roles_dir/teams_dir → <home>）
     expect(await runCommand(ctx, ['init', '--harness-root', harnessRoot, '--json'])).toBe(0)
+    lines = []
+    expect(await runCommand(ctx, ['team', 'list', '--json'])).toBe(0)
+    expect((JSON.parse(lines[lines.length - 1]) as { value: unknown[] }).value).toEqual([])
+
+    // 使用者自建团队：写进受管 teams_dir
+    const teamsDir = join(home, 'teams')
+    await mkdir(join(teamsDir, 'core-dev'), { recursive: true })
+    await writeFile(
+      join(teamsDir, 'core-dev', 'AGENTS.md'),
+      fillTeamTemplate(CORE_DEV_TEAM_MD, {
+        teamId: 'core-dev',
+        name: '核心研发团队',
+        description: '使用者自建（测试用）。',
+      }),
+      'utf-8',
+    )
+
     lines = []
     expect(await runCommand(ctx, ['role', 'import', '--from', fromDir])).toBe(0)
 
@@ -302,8 +323,8 @@ describe('prism role/team/skill（F10 端到端；临时目录）', () => {
     expect(lines.join('\n')).toContain('member_role_unknown')
 
     // 单成员团队（手工写一份）→ validate 通过
-    const single = join(home, 'teams', 'mini', 'AGENTS.md')
-    await mkdir(join(home, 'teams', 'mini'), { recursive: true })
+    const single = join(teamsDir, 'mini', 'AGENTS.md')
+    await mkdir(join(teamsDir, 'mini'), { recursive: true })
     await writeFile(
       single,
       `---
@@ -346,7 +367,7 @@ rework_limit: 1
     expect(lines.join('\n')).toContain('无需装配复制')
     expect(lines.join('\n')).toContain('已在受管位置')
     expect(existsSync(join(harnessRoot, 'agents'))).toBe(false) // 新语义：不写角色到 zcode 目录
-    expect(existsSync(join(home, 'teams', 'mini', 'AGENTS.md'))).toBe(true) // 受管位置 = prism.yaml teams_dir
+    expect(existsSync(join(teamsDir, 'mini', 'AGENTS.md'))).toBe(true) // 受管位置 = prism.yaml teams_dir
 
     // activate：角色已住在 roles_dir → native
     lines = []

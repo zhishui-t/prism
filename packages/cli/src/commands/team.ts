@@ -48,7 +48,7 @@ export async function runTeam(ctx: CommandContext, args: string[], values: ArgVa
         return 0
       }
       if (teams.length === 0) {
-        ctx.stdout(`团队库为空: ${teamsDir}（prism init 会落出厂模板 core-dev）`)
+        ctx.stdout(`团队库为空: ${teamsDir}（用 prism team init 创建你的团队）`)
         return 0
       }
       for (const team of teams) {

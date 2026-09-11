@@ -55,6 +55,10 @@
 
 团队定义的受管位置直接就是宿主目录 `teams_dir`（默认 `~/.zcode/teams`，roles_dir 同级——**不在 agents/ 内**，因 ZCode 递归扫描 agents/ 下全部 .md 会把团队文件误注册成 agent，R3 实测 B7），`<PRISM_HOME>/prism.yaml` 的 `teams_dir` 键可覆盖（无配置文件时用适配器默认）。出厂模板仍在 Prism 包内；`prism team install` 语义变更为：① 校验团队与成员 ② 若团队定义尚在旧 Prism 源目录（`<PRISM_HOME>/teams/`）则一次性迁移复制到 teams_dir 并提示源目录废弃 ③ 输出激活指引。成员角色不再被复制装配——它们直接住在 `roles_dir`（默认宿主 agents 目录）。上文"宿主目录就是唯一受管位置"与本节同口径。
 
+> **`prism init` 不建团队（2026-09-11 定）**：初始化只创建空的 `teams_dir`，不播种任何团队定义——
+> 是否建团队、建几个、用什么编制，由使用者自己决定。需要出厂那套编排时运行
+> `prism team init <id> --template core-dev`（脚手架渲染 + 自动校验，error 不落盘）。
+
 ### 2.1 frontmatter
 
 ```yaml
@@ -66,7 +70,9 @@ default: false                     # 是否为默认团队
 extends: null                      # 可选：继承另一个团队定义
 members:
   - role: dev-1
-    count: 2                       # 该角色几个实例
+    count: 1                       # 该角色几个实例
+  - role: dev-2
+    count: 1
   - role: super-dev
     count: 1
   - role: tester
@@ -102,10 +108,10 @@ rework_limit: 2                    # 返工上限（轮）
 
 | # | 阶段 | 负责角色 | 串/并行 | 输入 | 输出 | 完成判定 | 回流路径 |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| 1 | 探索 | dev-1/2 | 并行 | 任务书 | exploration.md | 结论落盘 | 缺资料 → 补调研 |
+| 1 | 探索 | dev-1 + dev-2 | 并行 | 任务书 | exploration.md | 结论落盘 | 缺资料 → 补调研 |
 | 2 | 设计 | 队长 | 串行 | exploration.md | design.md | 需求全覆盖 | — |
 | 3 | 设计审核 | qa-checker | 串行 | design.md | design-review.md + .design_ok | 门禁落盘 | 架构级 → 队长 |
-| 4 | 开发 | dev-1/2 + super-dev | 并行 | design.md | stream-N.md | 自验通过 | 卡死 2 次 → super-dev |
+| 4 | 开发 | dev-1 + dev-2 + super-dev | 并行 | design.md | stream-N.md | 自验通过 | 卡死 2 次 → super-dev |
 | 5 | 测试 | tester | 串行 | 任务书 + 各流报告 | test-report.md | 全项有运行证据 | bug → 对应流 → 回归 |
 | 6 | 总审 | qa-checker | 串行 | 全部 | qa-report.md + .qa_ok | 门禁落盘 | 超范围 → 返工（≤2 轮） |
 | 7 | 交付 | 队长 | — | 全部 | DELIVERY.md | 用户验收 | — |
@@ -145,6 +151,7 @@ rework_limit: 2                    # 返工上限（轮）
 | 角色 `skills` 白名单与团队 `skills` 兼容 | 警告 |
 | 成员角色数量 ≥ 1 | 报错 |
 | 工作流引用的角色都在成员里 | 报错（防止工作流派给不存在的成员） |
+| 成员角色**至少出现在一个工作流阶段** | 警告 `unused_member`（防止编制挂空转角色；有意预留的机动位可保留此警告） |
 
 ---
 
@@ -155,7 +162,7 @@ rework_limit: 2                    # 返工上限（轮）
 | 字段 | 说明 |
 | :--- | :--- |
 | 阶段名 | 阶段标识 |
-| 负责角色 | 必须来自 `members` |
+| 负责角色 | 必须来自 `members`；多角色用 ` + ` 分隔；`role/N` 是**实例记号**（展开为 `role#1`…`role#N`），**不是** `role` 与 `N` 两个角色 |
 | 串/并行 | 决定同阶段内是否可同时进行 |
 | 输入 / 输出 | 文件路径（黑板交接） |
 | 完成判定 | 可检验的条件 |
@@ -308,7 +315,9 @@ description: 负责本项目的设计、开发、测试与质量收口；内置�
 default: true
 members:
   - role: dev-1
-    count: 2
+    count: 1
+  - role: dev-2
+    count: 1
   - role: super-dev
     count: 1
   - role: tester

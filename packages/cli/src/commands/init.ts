@@ -1,11 +1,11 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { listBuiltinSkills, installSkills } from '@prism/skills'
 import { prismHome, prismPaths, PrismError, type McpConvention } from '@prism/core'
-import { CORE_DEV_TEAM_MD, harnessPaths, defaultHarnessRoot, resolveDirsFromHome } from '@prism/server'
+import { harnessPaths, defaultHarnessRoot } from '@prism/server'
 
 import type { ArgValues, CommandContext } from '../argv.js'
 import { expandHome } from '../argv.js'
@@ -22,7 +22,6 @@ export interface InitReport {
   harnessRoot: string
   harnessDetected: boolean
   dirs: string[]
-  seededTeam?: string
   homeConfig: string
   skills: { written: string[]; skipped: Array<{ path: string; reason: string }> }
   mcp: {
@@ -37,7 +36,8 @@ export interface InitReport {
  * `prism init [--home] [--harness-root] [--force]`（design-v3 §3.6 五步）：
  * ① 探测 ZCode 目录（默认 ~/.zcode，不存在则警告但继续）
  * ② 建 <PRISM_HOME> 骨架：roles/ teams/ skills/ knowledge/ state/ catalog/ audit/
- *    （teams/ 为空时另落一份出厂团队模板，供 team 命令开箱可用）
+ *    （只建**空目录，不落任何团队**——是否建团队、建几个、用什么编制，是使用者的事，
+ *      不替使用者做决定；需要时由使用者运行 `prism team init`）
  * ③ 安装内置 Skill 到 <harnessRoot>/skills/（目标目录来自 --harness-root 推导，不硬编码）
  * ④ 写 MCP 注册到 <harnessRoot>/cli/config.json（合并、写前备份；已有 prism 项指向
  *    不同路径时不覆盖，提示 --force）
@@ -65,9 +65,7 @@ export async function runInit(ctx: CommandContext, _args: string[], values: ArgV
   const harnessDetected = existsSync(harnessRoot)
 
   // ② <PRISM_HOME> 骨架（roles/catalog 由本命令补齐——core prismPaths 暂无此二键，见报告遗留项）
-  //    出厂团队模板落**受管 teams_dir**（resolveDirs：prism.yaml 覆盖 → 默认 <harnessRoot>/teams），
-  //    而非固定 <PRISM_HOME>/teams——否则 team list 读不到（B9）。
-  const resolved = resolveDirsFromHome(home, { harnessRoot, rootExplicit })
+  //    teams/ 只建**空目录**：不播种任何团队。编制属于使用者的决定权（见头部注释 ②）。
   const dirs = [
     paths.home,
     paths.stateDir,
@@ -82,7 +80,6 @@ export async function runInit(ctx: CommandContext, _args: string[], values: ArgV
   for (const dir of dirs) {
     mkdirSync(dir, { recursive: true })
   }
-  const seededTeam = seedFactoryTeam(resolved.teamsDir)
 
   // <PRISM_HOME>/config.json 默认配置（保持既有行为：已存在且无 --force → 幂等跳过）
   const configPath = join(paths.home, 'config.json')
@@ -109,7 +106,6 @@ export async function runInit(ctx: CommandContext, _args: string[], values: ArgV
     harnessRoot,
     harnessDetected,
     dirs,
-    ...(seededTeam !== undefined ? { seededTeam } : {}),
     homeConfig: configPath,
     skills,
     mcp,
@@ -127,9 +123,7 @@ export async function runInit(ctx: CommandContext, _args: string[], values: ArgV
     } else {
       ctx.stdout(`  已初始化（幂等跳过）: ${configPath}；使用 --force 重建`)
     }
-    if (seededTeam !== undefined) {
-      ctx.stdout(`  出厂团队模板: ${seededTeam}`)
-    }
+    ctx.stdout('  团队: 未创建（是否建团队由你决定；需要时运行 prism team init）')
     ctx.stdout(
       `③ Skill 安装: 写 ${skills.written.length} 个${
         skills.skipped.length > 0 ? `，跳过 ${skills.skipped.length} 个（${skills.skipped.map((s) => s.path).join('；')}）` : ''
@@ -146,22 +140,6 @@ export async function runInit(ctx: CommandContext, _args: string[], values: ArgV
     ctx.stdout('⑤ 完成。请重启宿主会话使 MCP 与 Skill 生效')
   }
   return 0
-}
-
-/** teams/ 为空（无 <id>/AGENTS.md）时落出厂模板；幂等。 */
-function seedFactoryTeam(teamsDir: string): string | undefined {
-  if (existsSync(teamsDir)) {
-    const hasTeam = readdirSync(teamsDir, { withFileTypes: true }).some(
-      (e) => e.isDirectory() && existsSync(join(teamsDir, e.name, 'AGENTS.md')),
-    )
-    if (hasTeam) {
-      return undefined
-    }
-  }
-  const target = join(teamsDir, 'core-dev', 'AGENTS.md')
-  mkdirSync(join(teamsDir, 'core-dev'), { recursive: true })
-  writeFileSync(target, CORE_DEV_TEAM_MD, 'utf-8')
-  return target
 }
 
 /**
