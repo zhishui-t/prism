@@ -70,6 +70,7 @@ import type {
   RestoreResult,
   SearchQuery,
   SearchResult,
+  EntryProvenance,
 } from './types.js'
 
 const LAYERS: readonly Layer[] = ['global', 'project', 'role']
@@ -561,6 +562,9 @@ export class PrismKnowledgeService implements KnowledgeService {
       module: input.module,
       content: input.content,
       tags: input.tags,
+      // T-3（v5）：显式传入优先；缺省由 `#validateAndNormalize` 回落 `layer`
+      // （`rawInput.visibility ?? layer`）——引用型不再硬编码 'project'。
+      visibility: input.visibility,
     })
     const nowIso = this.#now().toISOString()
     const seg = bigram(`${address.title}\n${input.content}`)
@@ -607,10 +611,15 @@ export class PrismKnowledgeService implements KnowledgeService {
           // **保留 status**：软删是用户的治理动作，源文件内容变化不该让它静默复活
           // （否则 `remove` 对引用型就失去意义——下次 kb sync 就撤销了）。
           // 要恢复须显式 `restore()`。
+          //
+          // T-3（v5）：**同步写 visibility**。layer 不会变（上方 :591 的 id_conflict
+          // 守卫生效时才走到这里），但 visibility 必须**重新计算并落库**，否则修复前
+          // 写坏的旧行（layer=global 却存 'project'）永远收敛不回来——下一次
+          // `kb sync` 走本分支即自愈（裁决：不做存量 DB 迁移，靠写路径收敛）。
           raw
             .prepare(
               `UPDATE knowledge_entries SET
-                 is_latest = 1, title = ?, type = ?, module = ?, status = ?,
+                 is_latest = 1, title = ?, type = ?, module = ?, status = ?, visibility = ?,
                  tags = ?, path = ?, content_hash = ?, source_hash = ?, origin = 'indexed',
                  source = ?, updated_at = ?
                WHERE id = ? AND version = ?`,
@@ -620,6 +629,7 @@ export class PrismKnowledgeService implements KnowledgeService {
               input.type ?? 'doc',
               address.module,
               prev.status === 'deprecated' ? 'deprecated' : 'active',
+              address.visibility,
               JSON.stringify(address.tags),
               input.path,
               createHash('sha256').update(input.content, 'utf-8').digest('hex'),
@@ -650,7 +660,7 @@ export class PrismKnowledgeService implements KnowledgeService {
              (id, version, is_latest, title, type, layer, owner, book, module, status, risk, confidence,
               freshness, visibility, tags, path, content_hash, source_hash, origin, overrides, supersedes,
               source, created_at, updated_at)
-             VALUES (?, 1, 1, ?, ?, ?, ?, ?, ?, 'active', 'low', 0.5, 1.0, 'project', ?, ?, ?, ?, 'indexed',
+             VALUES (?, 1, 1, ?, ?, ?, ?, ?, ?, 'active', 'low', 0.5, 1.0, ?, ?, ?, ?, ?, 'indexed',
                      '[]', NULL, ?, ?, ?)`,
           )
           .run(
@@ -661,6 +671,8 @@ export class PrismKnowledgeService implements KnowledgeService {
             address.owner ?? null,
             address.book,
             address.module,
+            // T-3（v5）：visibility 缺省跟随 layer 或取显式值（不再硬编码 'project'）
+            address.visibility,
             JSON.stringify(address.tags),
             input.path,
             createHash('sha256').update(input.content, 'utf-8').digest('hex'),
@@ -2587,6 +2599,9 @@ export class PrismKnowledgeService implements KnowledgeService {
     // F-E2：`deposited_by` 列（v7）读出；老库 NULL → 不设该字段（向后兼容）。
     const depositedBy = parseJsonObject<NonNullable<KnowledgeEntry['deposited_by']>>(row.deposited_by)
     if (depositedBy !== undefined) entry.deposited_by = depositedBy
+    // v5 / A-1：`source` + `deposited_by` 两列合并为读面 `provenance`（两列空 → 不设）。
+    const provenance = parseProvenance(row.source, row.deposited_by)
+    if (provenance !== undefined) entry.provenance = provenance
     if (row.status === 'superseded') {
       entry.superseded_by = `${row.id}@v${row.version + 1}`
     }
@@ -2613,6 +2628,7 @@ export class PrismKnowledgeService implements KnowledgeService {
     ].join('/')
     // F-E2：`deposited_by` 列（v7）读出；老库 NULL → 不设该字段（向后兼容）。
     const depositedBy = parseJsonObject<NonNullable<SearchResult['deposited_by']>>(row.deposited_by)
+    const provenance = parseProvenance(row.source, row.deposited_by)
     return {
       id: row.id,
       version: row.version,
@@ -2628,6 +2644,8 @@ export class PrismKnowledgeService implements KnowledgeService {
       // F-B1：新鲜度（DB 列读出，供 context-pack 排序；缺省视为 1.0）。
       ...(typeof row.freshness === 'number' ? { freshness: row.freshness } : {}),
       ...(depositedBy !== undefined ? { deposited_by: depositedBy } : {}),
+      // v5 / A-1：来源合并视图（注意与上方 `source`（地址串）区分）
+      ...(provenance !== undefined ? { provenance } : {}),
     }
   }
 
@@ -2977,6 +2995,33 @@ function buildSourcePayload(input: DepositInput): DepositSourcePayload | undefin
   }
   if (input.origin_task !== undefined) payload.origin_task = { ...input.origin_task }
   return payload
+}
+
+/**
+ * v5 / A-1：DB 两列 → 读面 `provenance`（`{kind, ref, task_id, subject, team, at}`）。
+ *
+ * - `kind` / `ref` 取 `source` 列；`subject` / `team` / `at` 取 `deposited_by` 列；
+ * - `task_id` 优先 `source.origin_task.task_id`（任务来源更权威），回落 `deposited_by.task_id`；
+ * - 两列都为空（老库 NULL / 未提供来源）→ `undefined`：读侧**不设该字段**，与
+ *   `deposited_by` 的向后兼容口径一致；
+ * - 只认值类型正确的成员（损坏/异形载荷不抛错，缺项即省略）。
+ */
+function parseProvenance(
+  sourceJson: string | null,
+  depositedByJson: string | null,
+): EntryProvenance | undefined {
+  const source = parseJsonObject<DepositSourcePayload>(sourceJson)
+  const depositedBy = parseJsonObject<NonNullable<KnowledgeEntry['deposited_by']>>(depositedByJson)
+  if (source === undefined && depositedBy === undefined) return undefined
+  const provenance: EntryProvenance = {}
+  if (typeof source?.kind === 'string') provenance.kind = source.kind
+  if (typeof source?.ref === 'string') provenance.ref = source.ref
+  const taskId = source?.origin_task?.task_id ?? depositedBy?.task_id
+  if (typeof taskId === 'string' && taskId !== '') provenance.task_id = taskId
+  if (typeof depositedBy?.subject === 'string') provenance.subject = depositedBy.subject
+  if (typeof depositedBy?.team === 'string') provenance.team = depositedBy.team
+  if (typeof depositedBy?.at === 'string') provenance.at = depositedBy.at
+  return Object.keys(provenance).length === 0 ? undefined : provenance
 }
 
 /**

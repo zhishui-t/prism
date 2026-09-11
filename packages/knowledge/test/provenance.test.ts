@@ -192,4 +192,108 @@ describe('沉淀来源落库（F-E2：v7 source / deposited_by 两列）', () =>
       kb.close()
     }
   })
+
+  /**
+   * v5 / A-1：读面 `provenance`（两列合并视图，**不叫 source**——`SearchResult.source`
+   * 已是「来源地址」字符串）。裁决见 `.agent-team/debts-v5.md` A-1。
+   */
+  it('A-1：provenance 合并 source+deposited_by；task_id 取 origin_task 优先', async () => {
+    const kb = makeService()
+    try {
+      await kb.deposit({
+        id: 'PROV-6',
+        title: '读面来源',
+        type: 'rule',
+        layer: 'global',
+        book: 'b',
+        module: 'm',
+        content: '读面来源正文。',
+        source: { kind: 'task', ref: 'T-9' },
+        origin_task: { task_id: 'T-1', dag_id: 'D-1' },
+        deposited_by: { subject: 'dev-1', team: 'ds-liangzi', task_id: 'T-9' },
+      })
+
+      const entry = await kb.get('PROV-6')
+      expect(entry?.provenance).toEqual({
+        kind: 'task',
+        ref: 'T-9',
+        task_id: 'T-1', // origin_task 更权威 → 覆盖 deposited_by.task_id(T-9)
+        subject: 'dev-1',
+        team: 'ds-liangzi',
+        at: expect.any(String),
+      })
+      // 既有读面字段不回归
+      expect(entry?.deposited_by?.subject).toBe('dev-1')
+
+      const [hit] = await kb.search({ q: '读面来源' })
+      expect(hit?.provenance).toEqual(entry?.provenance)
+      // 地址串仍是 `source`（两条语义并存、互不覆盖）
+      expect(typeof hit?.source).toBe('string')
+      expect(hit?.source).toContain('global/b/m/PROV-6@v')
+    } finally {
+      kb.close()
+    }
+  })
+
+  it('A-1：index（引用型）→ provenance.kind=import；无来源 → 不设 provenance', async () => {
+    const kb = makeService()
+    try {
+      await kb.index({
+        id: 'PROV-7',
+        title: '引用文档',
+        layer: 'project',
+        owner: 'p1',
+        book: 'b',
+        path: 'D:/proj/readme.md',
+        source_hash: 'h1',
+        content: '引用文档正文。',
+      })
+      expect((await kb.get('PROV-7'))?.provenance).toEqual({ kind: 'import' })
+
+      await kb.deposit({
+        id: 'PROV-8',
+        title: '无来源读面',
+        type: 'doc',
+        layer: 'global',
+        book: 'b',
+        content: '无来源读面正文。',
+      })
+      const bare = await kb.get('PROV-8')
+      expect(bare?.provenance).toBeUndefined()
+      expect((await kb.search({ q: '无来源读面' }))[0]?.provenance).toBeUndefined()
+    } finally {
+      kb.close()
+    }
+  })
+
+  it('A-1：reindex 后 provenance 仍在（两列为真相，DB 清空亦重建）', async () => {
+    const kb = makeService()
+    try {
+      await kb.deposit({
+        id: 'PROV-9',
+        title: '重扫读面',
+        type: 'rule',
+        layer: 'global',
+        book: 'b',
+        module: 'm',
+        content: '重扫读面正文。',
+        source: { kind: 'manual', ref: '人手写的' },
+        deposited_by: { subject: 'dev-2', team: 't1' },
+      })
+      const before = (await kb.get('PROV-9'))?.provenance
+
+      // 模拟「reindex 不解析两列」会造成的后果
+      kb.persistence.knowledge.raw
+        .prepare('UPDATE knowledge_entries SET source = NULL, deposited_by = NULL WHERE id = ?')
+        .run('PROV-9')
+      expect((await kb.get('PROV-9'))?.provenance).toBeUndefined()
+
+      const report = await kb.reindex()
+      expect(report.indexed).toBe(1)
+      expect((await kb.get('PROV-9'))?.provenance).toEqual(before)
+      expect((await kb.get('PROV-9'))?.provenance).toMatchObject({ kind: 'manual', ref: '人手写的', subject: 'dev-2', team: 't1' })
+    } finally {
+      kb.close()
+    }
+  })
 })

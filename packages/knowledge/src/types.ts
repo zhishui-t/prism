@@ -84,6 +84,15 @@ export interface IndexInput {
   /** 从文档抽取的正文（用于 FTS 检索；原件为二进制时是转换结果） */
   content: string
   tags?: string[]
+  /**
+   * 可见性（v5 / T-3）：**缺省跟随 `layer`**（global→`global`、project→`project`、
+   * role→`role`），显式传入优先。
+   *
+   * 修复前该列在 `index()` 里硬编码 `'project'`——layer=global/role 的引用型条目
+   * 会得到与层矛盾的 visibility，导致 `search/catalog({visibilities:[...]})` 过滤错漏
+   * （证据与裁决见 `.agent-team/debts-v5.md` T-3）。
+   */
+  visibility?: 'global' | 'project' | 'role'
 }
 
 /**
@@ -144,6 +153,31 @@ export interface KnowledgeConflict {
   detected_at: string
 }
 
+/**
+ * 沉淀来源追溯（v5 / A-1）：把 DB 两列合并成**读面**的单对象——
+ * `source` 列（`{kind, ref?, origin_task?}`）+ `deposited_by` 列（`{subject?, team?, task_id?, at?}`）。
+ *
+ * 为什么不叫 `source`：`SearchResult.source` 已占用于**来源地址**字符串
+ * （`层[/owner]/书/模块/ID@v版次`，见下）——同名会在读面制造歧义（v5 裁决 2）。
+ *
+ * 老库两列均为 NULL → 该字段**不出现**（向后兼容，与 `deposited_by` 同规矩）；
+ * `deposited_by` 字段保留不动（既有消费方不受影响）。
+ */
+export interface EntryProvenance {
+  /** 来源类别（`source.kind`）：import / agent / manual / task */
+  kind?: string
+  /** 来源引用（`source.ref`，如 `阿里Java规范.pdf#p12` / 任务说明） */
+  ref?: string
+  /** 任务来源（`source.origin_task.task_id` 优先，回落 `deposited_by.task_id`） */
+  task_id?: string
+  /** 落库主体（`deposited_by.subject`） */
+  subject?: string
+  /** 落库团队（`deposited_by.team`） */
+  team?: string
+  /** 落库时间（`deposited_by.at`，ISO 8601） */
+  at?: string
+}
+
 /** 知识条目（design.md §3.2 KnowledgeEntry）。 */
 export interface KnowledgeEntry {
   id: string
@@ -178,6 +212,11 @@ export interface KnowledgeEntry {
   freshness?: number
   /** 沉淀留痕（F-E2；`source`/`deposited_by` 两列 v7 起落 DB）。 */
   deposited_by?: { subject?: string; team?: string; at?: string; task_id?: string }
+  /**
+   * 沉淀来源（v5 / A-1）：`source` + `deposited_by` 两列的**读面合并视图**。
+   * 两列均 NULL（老库/无来源）→ 不设该字段。
+   */
+  provenance?: EntryProvenance
 }
 
 /**
@@ -290,6 +329,8 @@ export interface SearchResult {
   graph_hits?: string[]
   /** 沉淀留痕（F-E2）。 */
   deposited_by?: { subject?: string; team?: string; at?: string; task_id?: string }
+  /** 沉淀来源（v5 / A-1；两列均 NULL → 不设该字段）。 */
+  provenance?: EntryProvenance
 }
 
 /** 书节点（design.md §3.2 BookNode）。 */

@@ -1,5 +1,7 @@
 import { listBuiltinSkills } from '@prism/skills'
 import { PrismError } from '@prism/core'
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 
 import { fail, ok, type Envelope } from '../envelope.js'
 import type { RouteContext } from '../router.js'
@@ -54,7 +56,21 @@ export function peopleRoutes(deps: PeopleDeps): {
   /** 已装 skill 名单（`<harnessRoot>/skills/*`，只读）；目录不存在 → undefined（跳过引用校验）。 */
   const knownSkills = (): Promise<string[] | undefined> => installedSkillNames(deps.harnessRoot)
 
-  const roles = async (): Promise<Envelope> => ok(await loadRoles(rolesDir, { knownSkills: await knownSkills() }))
+  /**
+   * 角色库（v5 / S5）：每个角色补**只读** `installed`——宿主 agents 目录里有没有该角色
+   * 定义（控制台据此标「已装 / 未装」，ui-spec-v4 §2.1）。
+   *
+   * - 判定与 `packages/agents/src/team/activate.ts:62-70` 的 `isInstalled` **同源**
+   *   （该函数未导出，故按同一规则在此重写；两处不一致会与「团队启用」显示打架）；
+   * - **只在 server 侧包装**——不改 `packages/agents` 的冻结类型（v5 裁决 3）；
+   * - 返回体仍是**数组**（既有消费方 `apps/web/src/api-team.ts` 的 `teamApi.roles()`
+   *   依赖数组形态；只加字段、不改容器）。
+   */
+  const roles = async (): Promise<Envelope> => {
+    const agentsDir = harnessPaths(deps.harnessRoot).agentsDir
+    const list = await loadRoles(rolesDir, { knownSkills: await knownSkills() })
+    return ok(list.map((role) => ({ ...role, installed: isInstalledInHost(agentsDir, rolesDir, role.name) })))
+  }
 
   const role = async (ctx: RouteContext): Promise<Envelope> => {
     const name = ctx.params.name ?? ''
@@ -143,6 +159,20 @@ export function peopleRoutes(deps: PeopleDeps): {
   const createTeam = async (ctx: RouteContext): Promise<Envelope> => await createTeamRoute(ctx, rolesDir)
 
   return { roles, role, teams, team, teamActivate, skills, skillUsage, skillsEffective, createTeam }
+}
+
+/**
+ * 角色是否已装到**宿主**（v5 / S5）。
+ *
+ * 与 `packages/agents/src/team/activate.ts:62-70` 的 `isInstalled` 同规则（该函数私有未导出）：
+ * - `agentsDir !== rolesDir`（`prism.yaml` 把 `roles_dir` 指到受管目录）→ 只看宿主的扁平产物
+ *   `<agentsDir>/<role>.md`（旧「复制装配」语义的落点）；
+ * - 两者重合（默认：roles_dir 即宿主 agents 目录）→ 扁平 `<role>.md` 与目录式
+ *   `<role>/AGENTS.md` 双形态都认。
+ */
+function isInstalledInHost(agentsDir: string, rolesDir: string, name: string): boolean {
+  if (agentsDir !== rolesDir) return existsSync(join(agentsDir, `${name}.md`))
+  return existsSync(join(agentsDir, `${name}.md`)) || existsSync(join(agentsDir, name, 'AGENTS.md'))
 }
 
 /**

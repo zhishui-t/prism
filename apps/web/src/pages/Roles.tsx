@@ -54,43 +54,51 @@ export function RolesPage({
           empty={!roles.loading && !roles.error && (roles.data?.length ?? 0) === 0}
           emptyText="还没有角色。用 `prism role import` 从宿主 agents 目录导入。"
         >
-          <table>
-            <thead>
-              <tr>
-                <th style={{ width: 170 }}>角色</th>
-                <th>描述</th>
-                <th style={{ width: 160 }}>能力（Skill 白名单）</th>
-                <th style={{ width: 130 }}>知识绑定</th>
-                <th style={{ width: 110 }}>校验</th>
-              </tr>
-            </thead>
-            <tbody>
-              {roles.data?.map((r) => (
-                <tr key={r.name}>
-                  <td>
-                    <button
-                      className="nav-item"
-                      style={{ padding: 0, color: COLOR_MAP[r.color ?? ''] ?? 'var(--accent)' }}
-                      onClick={() => setSelected(r.name)}
-                    >
-                      {r.name}
-                    </button>
-                  </td>
-                  <td className="small">{r.description}</td>
-                  <td className="mono small muted">
-                    {r.skills.length ? r.skills.join(', ') : '—'}
-                  </td>
-                  <td className="small muted">
-                    {(r.knowledge?.layers ?? []).join('/') || '—'}
-                    {r.knowledge?.books?.length ? ` (${r.knowledge.books.join(', ')})` : ''}
-                  </td>
-                  <td>
-                    <IssueBadge issues={r.issues} />
-                  </td>
+          {/* v5 / T-5：角色库 5 列表在小屏（375px，内容区 351px）会挤压溢出——
+              套上既有 `.table-scroll`（styles.css:270-272）横向滚动兜底。
+              另给「描述」列一个 minWidth：固定列宽合计 570px 已超过 `.table-scroll table`
+              的 min-width:560px，若不给描述列下限，浏览器会把描述压到「一字一行」
+              （375px 实测截图 v5-375-roles.png 复现过）。给下限后表格内在宽 ~790px，
+              由容器横向滚动承载，描述保持可读。 */}
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th style={{ width: 170 }}>角色</th>
+                  <th style={{ minWidth: 220 }}>描述</th>
+                  <th style={{ width: 160 }}>能力（Skill 白名单）</th>
+                  <th style={{ width: 130 }}>知识绑定</th>
+                  <th style={{ width: 110 }}>校验</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {roles.data?.map((r) => (
+                  <tr key={r.name}>
+                    <td>
+                      <button
+                        className="nav-item"
+                        style={{ padding: 0, color: COLOR_MAP[r.color ?? ''] ?? 'var(--accent)' }}
+                        onClick={() => setSelected(r.name)}
+                      >
+                        {r.name}
+                      </button>
+                    </td>
+                    <td className="small">{r.description}</td>
+                    <td className="mono small muted">
+                      {r.skills.length ? r.skills.join(', ') : '—'}
+                    </td>
+                    <td className="small muted">
+                      {(r.knowledge?.layers ?? []).join('/') || '—'}
+                      {r.knowledge?.books?.length ? ` (${r.knowledge.books.join(', ')})` : ''}
+                    </td>
+                    <td>
+                      <IssueBadge issues={r.issues} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </State>
       </div>
 

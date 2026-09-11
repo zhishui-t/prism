@@ -198,15 +198,20 @@ Graphify 社区发现 → 模块建议
 ```
 knowledge/<layer>/<book-slug>/
 ├── _summary.md              # 总纲报告
-├── _graph.json              # book 级图谱视图（由边表导出）
 ├── _modules.yaml            # 模块清单（D2 固化）
 ├── _inbox/                  # 待归类暂存区（§12.1）
 └── <module-slug>/
     ├── _summary.md
-    ├── _graph.json          # module 级视图
     ├── <rule-id>.md
     └── <doc-slug>.md
 ```
+
+> **实现进度（2026-09-11，v5 取值）**：上文的书级 / 模块级 `_graph.json` **未实现**
+> （技术债 T-1，证据：`grep -n "_graph\.json" packages/` → 0 命中；书结构生成只产
+> `_modules.yaml` + `_summary.md`，见 `packages/knowledge/src/service.ts:95-97`、`:1307`）。
+> 知识图谱按需读 **DB 边表**（`prism_kb_graph` 邻域/概览）；需要 Graphify 社区发现与 HTML
+> 渲染时，导出到 **`<PRISM_HOME>/graphify-kb/graph.json`**
+> （`packages/server/src/kb/graph-export.ts:57-80`），**不落书目录**。
 
 ### 3.4 frontmatter 字段
 
@@ -568,7 +573,20 @@ prism_work_complete  回填结果
 ### 12.7 读写权限
 
 - `visibility` 只管"读"；
+- **引用型条目（`origin='indexed'`）的 `visibility` 缺省跟随 `layer`**
+  （global→`global`、project→`project`、role→`role`），显式传入优先——v5 / T-3 修复前
+  `index()` 把该列**硬编码为 `project`**，layer=global/role 的引用型条目会被
+  `search/catalog({visibilities:[...]})` 过滤错漏（`packages/knowledge/src/service.ts:663` 一带）；
+  自有型 `deposit()` 的缺省行为不变（同样跟随 `layer`，`service.ts:2524`）；
+- **不做存量 DB 迁移**（R7 文件/索引可重建）：老行保留旧值，下一次 `kb sync` / `reindex`
+  走 `index()` 的更新分支时**同步改写** `visibility` 从而收敛（`service.ts:621` 一带）；
 - 写/删的授权由**团队定义**声明，Prism 按声明校验；未声明则默认允许（库房管理员语义）。
+
+> **读面来源（v5 / A-1）**：`KnowledgeEntry` / `SearchResult` 增只读 `provenance`
+> `{kind?, ref?, task_id?, subject?, team?, at?}`——由 DB 两列 `source`（`{kind, ref?, origin_task?}`）
+> 与 `deposited_by`（`{subject?, team?, task_id?, at?}`）合并而来；两列皆空（老库/未提供来源）时
+> **不设该字段**。注意它与 `SearchResult.source`（**来源地址**字符串 `层[/owner]/书/模块/ID@版次`）
+> **不同名不同义**，故意不叫 `source` 以免读面歧义。
 
 ### 11.8 增量更新的一致性
 
