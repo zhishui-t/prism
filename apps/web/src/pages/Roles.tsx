@@ -52,7 +52,7 @@ export function RolesPage({
           loading={roles.loading}
           error={roles.error}
           empty={!roles.loading && !roles.error && (roles.data?.length ?? 0) === 0}
-          emptyText="还没有角色。用 `prism role import` 从宿主 agents 目录导入。"
+          emptyText="还没有角色。用 prism role init <name> 生成骨架，或直接在该目录写 <name>.md。"
         >
           {/* v5 / T-5：角色库 5 列表在小屏（375px，内容区 351px）会挤压溢出——
               套上既有 `.table-scroll`（styles.css:270-272）横向滚动兜底。

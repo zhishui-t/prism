@@ -24,7 +24,7 @@ pnpm test:e2e      # 全链路：CLI → 服务 → HTTP API → 控制台
 | :--- | :--- |
 | 1 | `prism init`：装 Skill、写 MCP 注册（**不代建团队**：建不建团队由使用者决定） |
 | 2 | 知识库：import（frontmatter 生效）→ 两字中文词检索 → 知识图谱双链建边 |
-| 3 | 角色：import → list；团队：使用者自建（`team init --template core-dev`）→ validate → activate |
+| 3 | 角色：手写进 roles_dir → list；团队：使用者自建（`team init --template core-dev`）→ validate → activate |
 | 4 | 工作队列：enqueue → claim（签发 token）→ complete（校验通过） |
 | 5 | 任务台账：register DAG → report（合法/非法转移） |
 | 6 | harness：默认激活、env 覆盖、未知 harness 报错 |

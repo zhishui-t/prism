@@ -127,7 +127,7 @@ describe('MCP 角色/团队工具（design-v3 §3.4 P6；stdio JSON-RPC 手写�
     const response = await handleRpcRequest(rpc(4, 'tools/call', { name: 'prism_role_render', arguments: { name: 'ghost' } }), tools)
     expect(response?.result).toMatchObject({ isError: true })
     expect(textOf(response)).toContain('角色不存在: ghost')
-    // 角色侧落点就是目录式（role import 写 <roles_dir>/<name>/AGENTS.md）——本文案**正确**，勿随团队一起改
+    // 角色侧错误文案给出的是目录式落点形态（双形态探测均支持）——勿随团队一起改
     expect(textOf(response)).toContain('<name>/AGENTS.md')
   })
 

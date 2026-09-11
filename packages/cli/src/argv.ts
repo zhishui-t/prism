@@ -55,15 +55,12 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
   prism doctor [--port 7777]               环境自检
   prism role list [--source <dir>]         列出角色（默认 roles_dir，见下）
   prism role show <name>                   查看角色定义
-  prism role init <name> [--force]         从模板创建角色到 roles_dir（新命令）
-  prism role import [--from <dir>] [--to <dir>]   从宿主 agents 目录导入（默认 --from <harness 根>/agents，--to roles_dir）
+  prism role init <name> [--force]         从模板新建角色文件到 roles_dir（角色直接住宿主目录，无导入/装配）
   prism role validate [--source <dir>]     校验角色定义
   prism role render <name> [--model --thought-level]   渲染为当前 harness 原生格式（预览，不写盘）
-  prism role install <name...> [--source <dir>] [--force]   角色（源≠roles_dir 时）初始化/迁移到 roles_dir
   prism team list | show <id> | validate <id>
   prism team init <id> [--from <team>|--members <role[:n],...>] [--name <名>] [--description <述>] [--template minimal|core-dev] [--harness-root <dir>|--yes]
                                            从模板/既有团队脚手架建新团队（自动校验，error 不落盘）
-  prism team install <id> [--force]        校验团队与成员；确保团队定义在 teams_dir（旧源目录一次性迁移）
   prism team activate <id>
   prism skill list | install | update | uninstall | validate [name...] [--force]
   prism skill effective --role <r> [--team <t>] [--json]

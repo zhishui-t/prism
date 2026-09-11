@@ -148,7 +148,7 @@ describe('people 路由（design-v3 §3.4 F11：信封 + issues + activate）', 
     expect(body.value.team_id).toBe('core-dev')
     expect(body.value.members[0]).toMatchObject({ role: 'dev-1', installed: false, dispatch: 'fallback' })
     expect(body.value.members[0].definition?.name).toBe('dev-1')
-    expect(body.value.members[0].hint).toContain('prism role install')
+    expect(body.value.members[0].hint).toContain('prism role init')
 
     // 装配后 → native
     await mkdir(join(harnessRoot, 'agents'), { recursive: true })

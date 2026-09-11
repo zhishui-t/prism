@@ -19,13 +19,6 @@ export interface PrismPaths {
   stateDir: string
   auditDir: string
   knowledgeDir: string
-  /**
-   * **旧版 Prism 的团队源目录**（`<home>/teams`），**不是**受管团队位置。
-   * 受管位置由激活适配器/prism.yaml 决定（默认 `<harnessRoot>/teams`）。
-   * 本键只为 `team install` 的**一次性迁移回落**而保留：团队若仍住此处则搬到受管位置。
-   * `prism init` **不建**该目录（新装用户无需它，预建只会与受管位置同名异位）。
-   */
-  teamsDir: string
   skillsDir: string
   graphDir: string
   /**
@@ -42,7 +35,6 @@ export function prismPaths(home: string = prismHome()): PrismPaths {
     stateDir: join(home, 'state'),
     auditDir: join(home, 'audit'),
     knowledgeDir: join(home, 'knowledge'),
-    teamsDir: join(home, 'teams'),
     skillsDir: join(home, 'skills'),
     graphDir: join(home, 'graph'),
     harnessesDir: join(home, 'harnesses'),

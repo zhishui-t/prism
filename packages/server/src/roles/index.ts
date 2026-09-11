@@ -44,11 +44,8 @@ export {
   // 渲染（ZCode 产物）
   renderZcodeRole,
   renderZcodeTeam,
-  // 装配（§5 冲突策略）+ 模板初始化/迁移（装配语义简化）
-  installRoles,
-  installTeamDefinitions,
+  // 模板初始化（装配/导入语义已于 2026-09-11 移除）
   initRole,
-  migrateTeams,
   // 团队脚手架渲染（F-C1/F-C3 同一实现；只渲染不落盘）+ Skill 有效集纯函数（F-D1）
   renderTeamScaffold,
   parseMembersSpec,
@@ -108,23 +105,18 @@ export {
   type ResolvedDirs,
 } from '@prism/agents'
 
-// server 侧 glue（目录加载 + issues、装配组合、兼容 shim、路径约定、有效集装配）
+// server 侧 glue（目录加载 + issues、路径约定、有效集装配；装配/导入 shim 已于 2026-09-11 移除）
 export {
   loadRoles,
   loadRole,
   loadTeams,
   loadTeam,
   installedSkillNames,
-  installTeam,
-  parseRoleFile,
-  renderPrismRole,
   harnessPaths,
   defaultHarnessRoot,
   loadEffectiveSkills,
   teamNotFoundMessage,
   type HarnessPaths,
-  type InstallTeamOptions,
-  type ParseRoleOptions,
   type LoadEffectiveSkillsInput,
 } from './wiring.js'
 

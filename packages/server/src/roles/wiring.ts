@@ -1,15 +1,15 @@
 /**
- * 角色/团队 wiring（返工单 B4）：server 侧**只保留装配点与信封适配**，
- * 解析/校验/渲染/装配/启用一律委托 `@prism/agents`（消除契约镜像漂移）。
+ * 角色/团队 wiring（返工单 B4）：server 侧**只保留加载与信封适配**，
+ * 解析/校验/渲染/启用一律委托 `@prism/agents`（消除契约镜像漂移）。
  *
  * glue 职责（均为对 agents API 的组合，不含重复实现）：
  * - loadRoles/loadRole/loadTeams/loadTeam：目录式数据源加载 + issues 挂载（P9；
  *   角色走 agents RoleRegistry（含重名检查），团队在 agents validateTeam 上补 issues）
- * - installTeam：成员角色装配 + 团队定义装配的组合（前置成员存在性校验）
- * - parseRoleFile：agents parseRoleMarkdown 的签名兼容 shim（filename 回落）
- * - renderPrismRole：Prism 原生角色序列化（agents renderMarkdownFile 组合；agents 无等价物，CLI 导入落盘用）
  * - harnessPaths/defaultHarnessRoot：路径约定取自 agents ZCode 适配器（configFile 是 init 域约定，适配器没有）
  * - installedSkillNames：已装 skill 名单（knownSkills 校验输入）
+ *
+ * 2026-09-11：`installTeam` / `parseRoleFile` / `renderPrismRole` 已随「装配/导入」语义一并移除
+ * （角色/团队就直接住在宿主目录，没有第二份副本可搬运；建角色走 `role init` 或直接写文件）。
  */
 
 import { existsSync } from 'node:fs'
@@ -22,18 +22,13 @@ import {
   computeEffectiveSkills,
   createRoleRegistry,
   createTeamRegistry,
-  installRoles as installAgentsRoles,
-  installTeamDefinitions,
   loadPrismConfig,
   parseRoleMarkdown,
   parseTeamMarkdown,
-  renderMarkdownFile,
   resolveTeamExtends,
   validateRole,
   validateTeam,
   type EffectiveSkillSet,
-  type FrontmatterData,
-  type InstallResult,
   type RoleDefinition,
   type TeamDefinition,
 } from '@prism/agents'
@@ -174,7 +169,7 @@ export async function loadTeams(
     .sort((a, b) => a.team_id.localeCompare(b.team_id))
 }
 
-/** 加载单个团队：双形态探测 `<teamsDir>/<id>/AGENTS.md` 与 `<teamsDir>/<id>.md`（agents installTeamDefinitions 的产物形态）；不存在 → null。 */
+/** 加载单个团队：双形态探测 `<teamsDir>/<id>/AGENTS.md` 与 `<teamsDir>/<id>.md`（目录式 / 扁平均识别）；不存在 → null。 */
 export async function loadTeam(
   teamsDir: string,
   teamId: string,
@@ -199,8 +194,8 @@ export async function loadTeam(
 /**
  * 「团队不存在」文案单点（ui-spec-v4 §8-D5）。
  *
- * **真实落点在前**：`<teamsDir>/<id>.md` 是 agents `installTeamDefinitions`
- * 的产物形态（`packages/agents/src/install.ts`：`join(teamsDir, `${team.team_id}.md`)`）；
+ * **真实落点在前**：`<teamsDir>/<id>.md` 是 `team init` / MCP `prism_team_create`
+ * 的落盘形态；
  * 目录式 `<id>/AGENTS.md` 仍可被 `loadTeam` 双形态探测到，故只作**兼容形态**附带说明。
  * HTTP / MCP / KB 三面共用本函数——文案曾是三个变体（显式镜像漂移），收敛到此处。
  */
@@ -217,51 +212,6 @@ async function loadTeamRaw(teamsDir: string, teamId: string): Promise<TeamDefini
   const parsed = parseTeamMarkdown(await readFile(file, 'utf-8'), { sourcePath: file, declaredKeys: declared })
   if (parsed.extends === null || parsed.extends === '') return parsed
   return await resolveTeamExtends({ team: parsed, declared }, async (id) => await loadTeamRaw(teamsDir, id))
-}
-
-// ---------------------------------------------------------------------------
-// 装配组合
-// ---------------------------------------------------------------------------
-
-export interface InstallTeamOptions {
-  /** 成员角色全量（已从角色库加载） */
-  roles: RoleDefinition[]
-  /** 团队定义（agents TeamDefinition） */
-  team: TeamDefinition
-  /** ZCode agents 目录（成员角色落点） */
-  agentsDir: string
-  /** 团队定义落点（默认 `<harnessRoot>/teams`；B7：绝不再写 `<agentsDir>/teams`，会被宿主误注册为 agent） */
-  teamDir?: string
-  env?: { model?: string; thoughtLevel?: string }
-  force?: boolean
-}
-
-/**
- * 装配团队（design-v3 §3.3 P3）：成员角色 → `<agentsDir>/<role>.md`，
- * 团队定义 → `<teamDir ?? <agentsDir>/../teams>/<team_id>.md`（agents 冲突策略 §5）。装配后
- * 「下一会话生效」提示由调用方负责。
- */
-export async function installTeam(opts: InstallTeamOptions): Promise<InstallResult> {
-  const memberNames = new Set(opts.team.members.map((m) => m.role))
-  // 大小写不敏感匹配（队长裁决 2026-09-09 口径；与 agents validateTeam 的成员解析一致，如 QA-checker/qa-checker 等价）
-  const missing = [...memberNames].filter(
-    (name) => !opts.roles.some((r) => r.name.toLowerCase() === name.toLowerCase()),
-  )
-  if (missing.length > 0) {
-    throw new PrismError('bad_request', `团队成员角色缺失，无法装配: ${missing.join(', ')}；先 prism role import / 补齐角色定义`)
-  }
-  const rolesResult = await installAgentsRoles({
-    targetDir: opts.agentsDir,
-    roles: opts.roles,
-    env: opts.env,
-    force: opts.force,
-  })
-  const teamsDir = opts.teamDir ?? join(opts.agentsDir, '..', 'teams')
-  const teamResult = await installTeamDefinitions({ targetDir: opts.agentsDir, teamsDir, teams: [opts.team], force: opts.force })
-  return {
-    written: [...rolesResult.written, ...teamResult.written],
-    skipped: [...rolesResult.skipped, ...teamResult.skipped],
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -321,55 +271,6 @@ export async function loadEffectiveSkills(input: LoadEffectiveSkillsInput): Prom
 }
 
 // ---------------------------------------------------------------------------
-// 兼容 shim / Prism 原生序列化（agents 无等价导出）
+// 2026-09-11：`parseRoleFile` / `renderPrismRole` 兼容 shim 已移除
+// —— 二者的唯二消费者是 `prism role import`（已删）与测试；导入语义废弃后无生产用途。
 // ---------------------------------------------------------------------------
-
-export interface ParseRoleOptions {
-  /** 兼容参数：校验基准由 loadRole/loadRoles 的 validateRole({dirname}) 承担 */
-  dirname?: string
-  /** frontmatter 缺 name 时的回落名（ZCode 硬约束下仅防御性使用） */
-  filename?: string
-  sourcePath?: string
-  /** 兼容参数：agents parseRoleMarkdown 内建双形态（导入缺省补 skills/knowledge） */
-  mode?: 'prism' | 'zcode'
-}
-
-/** agents parseRoleMarkdown 的签名兼容 shim（filename 回落；导入缺省由 agents 内建）。 */
-export function parseRoleFile(raw: string, opts: ParseRoleOptions = {}): RoleDefinition {
-  const role = parseRoleMarkdown(raw, { sourcePath: opts.sourcePath })
-  if (role.name === '' && opts.filename !== undefined) {
-    role.name = opts.filename.replace(/\.md$/i, '')
-  }
-  return role
-}
-
-/**
- * 序列化为 Prism 原生角色定义（`<roles>/<id>/AGENTS.md`；role-definition §3.2 + §5 导入补全）：
- * frontmatter 含 skills 白名单与 knowledge 绑定（ZCode 格式放不下的 Prism 扩展都在这里）。
- * 基于 agents renderMarkdownFile/serializeFrontmatter 组合。
- */
-export function renderPrismRole(role: RoleDefinition): string {
-  const knowledge: FrontmatterData = { layers: [...role.knowledge.layers] }
-  if (role.knowledge.books !== undefined) {
-    knowledge['books'] = [...role.knowledge.books]
-  }
-  const fm: FrontmatterData = {
-    name: role.name,
-    description: role.description,
-    skills: [...role.skills],
-    knowledge,
-  }
-  if (role.color !== undefined) {
-    fm['color'] = role.color
-  }
-  if (role.model !== undefined) {
-    fm['model'] = role.model
-  }
-  if (role.thoughtLevel !== undefined) {
-    fm['thoughtLevel'] = role.thoughtLevel
-  }
-  if (role.injectAgentsMd !== undefined) {
-    fm['injectAgentsMd'] = role.injectAgentsMd
-  }
-  return renderMarkdownFile(fm, `${role.body.trim()}\n`)
-}

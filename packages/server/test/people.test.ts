@@ -1,31 +1,26 @@
-import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { parseRoleMarkdown, parseTeamMarkdown, renderZcodeRole } from '@prism/agents'
 
-import { installTeam } from '../src/roles/wiring.js'
 import {
   CORE_DEV_TEAM_MD,
   defaultHarnessRoot,
-  installRoles,
   loadRole,
   loadRoles,
   loadTeam,
   loadTeams,
-  parseRoleFile,
-  renderPrismRole,
   validateRole,
   validateTeam,
   harnessPaths,
 } from '../src/roles/index.js'
-import type { RoleDefinition } from '../src/roles/index.js'
 
 /**
  * 返工单 B4 后本文件只测 server 侧 glue（wiring）：
- * 解析/校验/渲染/装配/启用的行为细节由 @prism/agents 自己的测试覆盖。
+ * 解析/校验/渲染/启用的行为细节由 @prism/agents 自己的测试覆盖。
+ * 2026-09-11：装配/导入相关 glue（installTeam / installRoles / renderPrismRole / parseRoleFile）已随命令一并移除。
  */
 
 const ZCODE_ROLE_MD = `---
@@ -176,89 +171,13 @@ describe('glue：loadTeams/loadTeam（agents 解析 + validateTeam 补 issues）
   })
 })
 
-describe('glue：installTeam（成员装配 + 团队定义装配组合）', () => {
-  let tmp: string
-  let agentsDir: string
-  beforeEach(async () => {
-    tmp = await mkdtemp(join(tmpdir(), 'prism-glue-install-'))
-    agentsDir = join(tmp, 'zcode', 'agents')
-  })
-  afterEach(async () => {
-    await rm(tmp, { recursive: true, force: true }).catch(() => {})
-  })
-
-  function singleMemberTeam(): ReturnType<typeof parseTeamMarkdown> {
-    return { ...parseTeamMarkdown(CORE_DEV_TEAM_MD), members: [{ role: 'dev-1', count: 1 }] }
-  }
-
-  it('成员角色缺失 → PrismError（前置校验保留）', async () => {
-    const team = parseTeamMarkdown(CORE_DEV_TEAM_MD) // 5 成员，角色库只有 dev-1
-    await expect(
-      installTeam({ roles: [parseRoleMarkdown(ZCODE_ROLE_MD)], team, agentsDir }),
-    ).rejects.toMatchObject({ name: 'PrismError', code: 'bad_request' })
-  })
-
-  it('正常装配：角色文件 + <agentsDir>/../teams/<id>.md（team marker，B7 移出 agents/）；人写角色文件 → skipped + .prism-new（agents §5 策略）', async () => {
-    const role = parseRoleMarkdown(ZCODE_ROLE_MD)
-    // 先放一个"人写的" dev-1.md
-    await mkdir(agentsDir, { recursive: true })
-    await writeFile(join(agentsDir, 'dev-1.md'), '---\nname: dev-1\ndescription: "人写"\n---\n\n手写\n', 'utf-8')
-
-    const result = await installTeam({ roles: [role], team: singleMemberTeam(), agentsDir })
-    // agents §5：人写文件不覆盖，.prism-new 落盘（记在 skipped 的 reason 里，不计入 written）
-    const skippedEntry = result.skipped.find((s) => s.path === join(agentsDir, 'dev-1.md'))
-    expect(skippedEntry?.reason).toContain('.prism-new')
-    expect(existsSync(join(agentsDir, 'dev-1.md.prism-new'))).toBe(true)
-    const teamsDir = join(agentsDir, '..', 'teams')
-    expect(result.written).toContain(join(teamsDir, 'core-dev.md'))
-    const teamFile = await readFile(join(teamsDir, 'core-dev.md'), 'utf-8')
-    expect(teamFile).toContain('team_id: core-dev')
-    expect(teamFile.trimEnd().endsWith('-->')).toBe(true)
-
-    // --force 覆盖人写文件（team 文件内容一致 → skipped"内容一致"，不重复写）
-    const forced = await installTeam({ roles: [role], team: singleMemberTeam(), agentsDir, force: true })
-    expect(forced.skipped.find((s) => s.path === join(agentsDir, 'dev-1.md'))).toBeUndefined()
-    expect(forced.written).toContain(join(agentsDir, 'dev-1.md'))
-    expect((await readFile(join(agentsDir, 'dev-1.md'), 'utf-8'))).not.toContain('人写')
-  })
-
-  it('installRoles 直连（agents 冲突策略冒烟：新写 + 幂等不重复写）', async () => {
-    const role = parseRoleMarkdown(ZCODE_ROLE_MD)
-    const first = await installRoles({ targetDir: agentsDir, roles: [role] })
-    expect(first.written).toEqual([join(agentsDir, 'dev-1.md')])
-    const second = await installRoles({ targetDir: agentsDir, roles: [role] })
-    expect(second.written).toHaveLength(0)
-    expect(second.skipped[0]?.reason).toContain('内容一致')
-    expect(existsSync(join(agentsDir, 'dev-1.md'))).toBe(true)
-  })
-})
-
-describe('glue：renderPrismRole / parseRoleFile shim / renderZcodeRole / harnessPaths', () => {
+describe('glue：renderZcodeRole / harnessPaths', () => {
   let tmp: string
   beforeEach(async () => {
     tmp = await mkdtemp(join(tmpdir(), 'prism-glue-misc-'))
   })
   afterEach(async () => {
     await rm(tmp, { recursive: true, force: true }).catch(() => {})
-  })
-
-  it('renderPrismRole → parseRoleMarkdown 往返：skills/knowledge/环境属性保持', () => {
-    const parsed = parseRoleMarkdown(ZCODE_ROLE_MD)
-    const withSkills: RoleDefinition = { ...parsed, skills: ['taint_trace'], knowledge: { layers: ['global', 'role'], books: ['redline'] } }
-    const raw = renderPrismRole(withSkills)
-    expect(raw.startsWith('---\n')).toBe(true)
-    const back = parseRoleMarkdown(raw)
-    expect(back.name).toBe('dev-1')
-    expect(back.description).toBe(withSkills.description)
-    expect(back.principle).toBe(withSkills.principle)
-    expect(back.skills).toEqual(['taint_trace'])
-    expect(back.knowledge).toEqual({ layers: ['global', 'role'], books: ['redline'] })
-    expect(back.thoughtLevel).toBe('max')
-  })
-
-  it('parseRoleFile shim：frontmatter 缺 name → filename 回落', () => {
-    const role = parseRoleFile('---\ndescription: "无名"\n---\n\n正文\n', { filename: 'fallback.md' })
-    expect(role.name).toBe('fallback')
   })
 
   it('renderZcodeRole（agents）：引号约束 + 末尾 marker + 叠加节', () => {

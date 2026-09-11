@@ -206,12 +206,7 @@ export {
   validateTeam,
   renderZcodeRole,
   renderZcodeTeam,
-  renderPrismRole,
-  installRoles,
-  installTeamDefinitions,
   initRole,
-  migrateTeams,
-  installTeam,
   activateTeam,
   // 沉淀策略执行 + 原则一致性
   applyDepositPolicy,
@@ -224,7 +219,6 @@ export {
   loadTeams,
   loadTeam,
   installedSkillNames,
-  parseRoleFile,
   // 团队脚手架渲染（F-C1/F-C3 同一实现）+ Skill 有效集（F-D1 纯函数 / F-D2 装配）
   renderTeamScaffold,
   parseMembersSpec,

@@ -653,7 +653,7 @@ function NewTeamForm({
         </div>
       ) : roles.length === 0 ? (
         <div className="empty">
-          角色库是空的，无法建队。先执行 <span className="mono">prism role import</span> 导入角色。
+          角色库是空的，无法建队。先执行 <span className="mono">prism role init dev-1</span> 生成角色骨架（或直接写角色文件）。
           <div className="row" style={{ justifyContent: 'center', marginTop: 8 }}>
             <button onClick={onReloadRoles}>重试</button>
           </div>

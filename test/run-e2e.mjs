@@ -208,18 +208,19 @@ async function main() {
       `edges=${graphView.edges.length}`,
     )
 
-    // ===== 3. 角色与团队：import → 使用者自建团队 → validate → activate =====
+    // ===== 3. 角色与团队：手写角色 → 使用者自建团队 → validate → activate =====
     // init 只建骨架、**不代建团队**：角色库先备齐，再由使用者自己编队
+    // 角色**直接写进宿主角色目录**（roles_dir = <harnessRoot>/agents）——没有"导入/装配"这一步
+    await mkdir(join(harnessRoot, 'agents'), { recursive: true })
     for (const role of ['dev-1', 'dev-2', 'super-dev', 'tester', 'qa-checker']) {
       await writeFile(
-        join(workRoot, `${role}.md`),
+        join(harnessRoot, 'agents', `${role}.md`),
         `---\nname: ${role}\ndescription: "E2E 角色 ${role}"\ncolor: blue\n---\n\n## 核心契约\n**交付可运行增量。**\n`,
         'utf-8',
       )
     }
-    const roleImport = await cli(['role', 'import', '--from', workRoot, '--harness-root', harnessRoot, '--json'], env)
-    check('3.1 role import 成功', roleImport.code === 0)
     const roles = await cli(['role', 'list', '--json'], env)
+    check('3.1 role list 含 5 个角色（直接手写在 roles_dir）', JSON.parse(roles.stdout).value.length >= 5)
     check('3.2 role list 含 dev-1', JSON.parse(roles.stdout).value.some((r) => r.name === 'dev-1'))
 
     // 3.3 使用者显式编队：建不建团队、建什么编制，是使用者自己的事

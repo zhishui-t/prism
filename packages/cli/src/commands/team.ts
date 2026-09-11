@@ -4,12 +4,10 @@ import { join } from 'node:path'
 import { parseMembersSpec, renderTeamScaffold, type ResolvedDirs } from '@prism/agents'
 import {
   activateTeam,
-  installTeamDefinitions,
   inspectGraphStatus,
   loadRoles,
   loadTeam,
   loadTeams,
-  migrateTeams,
   parseTeamMarkdown,
   ProjectRegistry,
   validateTeam,
@@ -21,12 +19,14 @@ import { guardWriteTarget, resolveTargetDirs } from '../argv.js'
 import { graphBuild } from './graph.js'
 
 /**
- * `prism team list/show/validate/install/activate`（design-v3 §3.5 F10 + 装配语义简化）。
- * 团队受管目录 = resolveDirs().teamsDir（默认宿主 ~/.zcode/teams，prism.yaml 可覆盖）；
+ * `prism team list/show/validate/init/activate`（design-v3 §3.5 F10）。
+ * 团队受管目录 = resolveDirs().teamsDir（默认宿主根下 teams/，prism.yaml 可覆盖）；
  * 落点在 roles_dir 的**同级**而非 agents/ 内——ZCode 递归扫描 agents/ 下全部 .md，
  * 团队文件含 name+description 会被误注册成 agent（R3 实测 / B7）。
- * 旧 Prism 源目录 `<PRISM_HOME>/teams/` 中的团队在 install 时**一次性迁移**过去（源目录废弃）。
- * `team install` 不再复制成员角色——成员已直接住在 roles_dir，只做 ①校验 ②确保团队文件 ③激活指引。
+ *
+ * 2026-09-11：原 `team install` 已移除——它的两项职责（复制成员角色、把团队文件搬进受管目录）
+ * 在「角色直接住 roles_dir」+「team init 直接写受管位置」之后已全部失效，只剩一段
+ * 零测试覆盖的旧源目录迁移。建团队 = `team init`（或 web `POST /api/teams` / MCP `prism_team_create`）。
  */
 export async function runTeam(ctx: CommandContext, args: string[], values: ArgValues): Promise<number> {
   const [sub, ...rest] = args
@@ -34,7 +34,6 @@ export async function runTeam(ctx: CommandContext, args: string[], values: ArgVa
   const dirs = resolveTargetDirs(ctx, values)
   const teamsDir = dirs.teamsDir
   const rolesDir = dirs.rolesDir
-  const legacyTeamsDir = join(home, 'teams')
 
   switch (sub) {
     case 'init': {
@@ -119,72 +118,6 @@ export async function runTeam(ctx: CommandContext, args: string[], values: ArgVa
       return result.ok ? 0 : 1
     }
 
-    case 'install': {
-      const id = rest[0]
-      if (id === undefined) {
-        ctx.stderr('用法: prism team install <id> [--force]')
-        return 1
-      }
-      // ① 定位团队定义：受管 teams_dir 优先；不在则回落旧 Prism 源目录（<home>/teams），
-      //    标记**待迁移**——实际迁移动作在写守卫之后（B6）。
-      let team = await loadTeam(teamsDir, id, { rolesDir })
-      let pendingMigration = false
-      if (team === null && existsSync(legacyTeamsDir)) {
-        team = await loadTeam(legacyTeamsDir, id, { rolesDir })
-        pendingMigration = team !== null
-      }
-      if (team === null) {
-        ctx.stderr(`错误 [not_found] 团队不存在: ${id}（受管 ${teamsDir}；旧源 ${legacyTeamsDir}）`)
-        return 1
-      }
-      // ② 校验团队与成员：成员角色必须已住在 roles_dir（大小写不敏感，2026-09-09 裁决口径）。
-      //    缺失时**不产生任何写入**（B5 类"装配范围"缺陷随复制语义一并消失）。
-      const library = await loadRoles(rolesDir)
-      const missing = [...new Set(team.members.map((m) => m.role))].filter(
-        (name) => !library.some((r) => r.name.toLowerCase() === name.toLowerCase()),
-      )
-      if (missing.length > 0) {
-        ctx.stderr(
-          `错误 [bad_request] 成员角色不在 roles_dir（${rolesDir}）: ${missing.join(', ')}；先 prism role import --from <宿主agents目录> / prism role init <name>`,
-        )
-        return 1
-      }
-      // ③ 确保团队文件存在于 teams_dir（迁移或补写）；写守卫在动作之前（B6）
-      let migratedFrom: string | null = null
-      let teamWritten = 0
-      const alreadyManaged = existsSync(join(teamsDir, `${id}.md`)) || existsSync(join(teamsDir, id, 'AGENTS.md'))
-      if (pendingMigration) {
-        if (!guardWriteTarget(ctx, values, dirs, 'teams', 1)) return 1
-        const migration = await migrateTeams({ fromDir: legacyTeamsDir, teamsDir, teamId: id, force: values.force })
-        migratedFrom = legacyTeamsDir
-        teamWritten = migration.written.length
-      } else if (!alreadyManaged) {
-        if (!guardWriteTarget(ctx, values, dirs, 'teams', 1)) return 1
-        const result = await installTeamDefinitions({ targetDir: dirs.harnessRoot, teamsDir, teams: [team], force: values.force })
-        teamWritten = result.written.length + result.skipped.length
-      }
-      if (ctx.json) {
-        ctx.stdout(
-          JSON.stringify({
-            ok: true,
-            value: { teamsDir, rolesDir, team_id: team.team_id, members: team.members.length, migratedFrom, teamWritten },
-          }),
-        )
-      } else {
-        if (migratedFrom !== null) {
-          ctx.stdout(`  团队定义已从 ${migratedFrom} 迁移到 ${teamsDir}（旧源目录已废弃，可自行删除）`)
-        } else if (teamWritten > 0) {
-          ctx.stdout(`  团队定义已写入 ${teamsDir}`)
-        } else {
-          ctx.stdout(`  团队定义已在受管位置 ${teamsDir}`)
-        }
-        ctx.stdout(`  成员角色已直接住在 roles_dir（${rolesDir}），共 ${team.members.length} 个成员——无需装配复制`)
-        ctx.stdout('激活: prism team activate ' + team.team_id)
-        ctx.stdout('注意: 下一会话生效')
-      }
-      return 0
-    }
-
     case 'activate': {
       const id = rest[0]
       if (id === undefined) {
@@ -249,7 +182,7 @@ export async function runTeam(ctx: CommandContext, args: string[], values: ArgVa
     }
 
     default:
-      ctx.stderr(`未知子命令: team ${sub ?? ''}\n用法: prism team list|show|validate|init|install|activate`)
+      ctx.stderr(`未知子命令: team ${sub ?? ''}\n用法: prism team list|show|validate|init|activate`)
       return 1
   }
 }
@@ -363,7 +296,7 @@ async function teamInit(
   }
   if (!validation.ok) {
     ctx.stderr(
-      `错误 [team_invalid] 团队 ${id} 校验存在 error，未落盘（成员角色需先在 roles_dir：prism role import / prism role init）`,
+      `错误 [team_invalid] 团队 ${id} 校验存在 error，未落盘（成员角色需先在 roles_dir：prism role init <name>）`,
     )
     return 1
   }
@@ -374,7 +307,7 @@ async function teamInit(
     mkdirSync(teamsDir, { recursive: true })
     writeFileSync(flatPath, scaffold.markdown, 'utf-8')
   } catch (error) {
-    ctx.stderr(`错误 [install_failed] 团队定义写入失败：${error instanceof Error ? error.message : String(error)}`)
+    ctx.stderr(`错误 [team_write_failed] 团队定义写入失败：${error instanceof Error ? error.message : String(error)}`)
     return 1
   }
 

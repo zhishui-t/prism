@@ -108,9 +108,9 @@ export {
 export { createRoleRegistry, createTeamRegistry } from './registry.js'
 export type { ImportFailures } from './registry.js'
 
-// 装配
-export { installRoles, installTeamDefinitions, initRole, migrateTeams, InstallError } from './install.js'
-export type { InstallTeamsOptions, InitRoleOptions, MigrateTeamsOptions } from './install.js'
+// 角色模板初始化（「装配」语义已随「角色直接住宿主目录」移除：无 installRoles / installTeamDefinitions / migrateTeams）
+export { initRole, InstallError } from './install.js'
+export type { InitRoleOptions } from './install.js'
 
 // 宿主适配器注册表（deployment-model §1：编译期多适配器，运行期只激活一个）
 // **新增 harness 只改 `harness-manifest.ts`（加一行），本文件无需改动**——
