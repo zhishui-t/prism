@@ -190,11 +190,12 @@ describe('renderTeamScaffold（F-C1）', () => {
     const team = roundTrip(markdown)
     expect(team.workflow).toHaveLength(7)
     expect(team.members.map((m) => m.role)).toEqual(['dev-1', 'dev-2', 'super-dev', 'tester', 'qa-checker'])
-    // `dev-1/2` 实例记号展开
-    expect(team.workflow[0]?.roles).toEqual(['dev-1#1', 'dev-1#2'])
-    expect(
-      validateTeam(team, { roles: ['dev-1', 'dev-2', 'super-dev', 'tester', 'qa-checker'].map(role) }).ok,
-    ).toBe(true)
+    // 阶段 1 由两个**不同角色**承担 → 用 ` + ` 分隔（`/` 是实例记号，不是角色枚举）
+    expect(team.workflow[0]?.roles).toEqual(['dev-1', 'dev-2'])
+    const result = validateTeam(team, { roles: ['dev-1', 'dev-2', 'super-dev', 'tester', 'qa-checker'].map(role) })
+    expect(result.ok).toBe(true)
+    // 出厂模板必须无闲置角色：5 个成员全部出现在工作流里（回归 `unused_member`）
+    expect(result.issues.filter((i) => i.code === 'unused_member')).toEqual([])
   })
 
   it('渲染是纯函数（同输入两次调用逐字节一致，且不触盘）', () => {

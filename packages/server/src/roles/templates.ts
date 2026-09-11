@@ -1,7 +1,12 @@
 /**
- * 出厂团队模板（design-v3 §3.3 P3：团队源在 `<PRISM_HOME>/teams/`；
- * `prism init` 在 teams/ 为空时落一份出厂模板，供 `prism team validate/install/activate`
- * 与 F13 端到端开箱可用。成员引用本机角色库角色名，`队长` 为编排角色（校验豁免）。
+ * server 侧出厂团队模板（design-v3 §3.3 P3）。
+ *
+ * **`prism init` 不再使用它**：初始化只建空 `teams/`，是否建团队、建几个、用什么编制
+ * 一律由使用者决定（2026-09-11 定：不替使用者做决定）。需要这套编排时走
+ * `prism team init --template core-dev`（模板源在 `@prism/agents` 的 `TEAM_TEMPLATES['core-dev']`）。
+ *
+ * 仍保留导出：作为 server 入口可取到的 core-dev 完整样本（测试 fixture 亦依赖）。
+ * 成员引用本机角色库角色名，`队长` 为编排角色（校验豁免）。
  */
 export const CORE_DEV_TEAM_MD = `---
 team_id: core-dev
@@ -11,7 +16,7 @@ default: true
 extends: null
 members:
   - role: dev-1
-    count: 2
+    count: 1
   - role: dev-2
     count: 1
   - role: super-dev
@@ -46,10 +51,10 @@ rework_limit: 2
 
 | # | 阶段 | 负责角色 | 串/并行 | 输入 | 输出 | 完成判定 | 回流路径 |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| 1 | 探索 | dev-1/2 | 并行 | 任务书 | exploration.md | 结论落盘 | 缺资料 → 补调研 |
+| 1 | 探索 | dev-1 + dev-2 | 并行 | 任务书 | exploration.md | 结论落盘 | 缺资料 → 补调研 |
 | 2 | 设计 | 队长 | 串行 | exploration.md | design.md | 需求全覆盖 | — |
 | 3 | 设计审核 | qa-checker | 串行 | design.md | design-review.md + .design_ok | 门禁落盘 | 架构级 → 队长 |
-| 4 | 开发 | dev-1/2 + super-dev | 并行 | design.md | stream-N.md | 自验通过 | 卡死 2 次 → super-dev |
+| 4 | 开发 | dev-1 + dev-2 + super-dev | 并行 | design.md | stream-N.md | 自验通过 | 卡死 2 次 → super-dev |
 | 5 | 测试 | tester | 串行 | 任务书 + 各流报告 | test-report.md | 全项有运行证据 | bug → 对应流 → 回归 |
 | 6 | 总审 | qa-checker | 串行 | 全部 | qa-report.md + .qa_ok | 门禁落盘 | 超范围 → 返工（≤2 轮） |
 | 7 | 交付 | 队长 | 串行 | 全部 | DELIVERY.md | 用户验收 | — |

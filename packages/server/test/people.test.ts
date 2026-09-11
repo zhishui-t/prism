@@ -142,8 +142,8 @@ describe('glue：loadTeams/loadTeam（agents 解析 + validateTeam 补 issues）
     const teams = await loadTeams(teamsDir, { rolesDir })
     expect(teams.map((t) => t.team_id)).toEqual(['core-dev'])
     expect(teams[0].issues?.some((i) => i.code === 'member_role_unknown' && i.level === 'error')).toBe(true)
-    // agents parseRoleCell：dev-1/2 → 实例记号；队长 豁免
-    expect(teams[0].workflow[0].roles).toEqual(['dev-1#1', 'dev-1#2'])
+    // agents parseRoleCell：` + ` 分隔多角色（`/` 才是实例记号）；队长 豁免
+    expect(teams[0].workflow[0].roles).toEqual(['dev-1', 'dev-2'])
     expect(teams[0].workflow[1].roles).toEqual(['队长'])
     expect(teams[0].workflow[3].mode).toBe('parallel')
     expect(teams[0].deposit.rules).toEqual([

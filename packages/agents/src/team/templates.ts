@@ -1,9 +1,10 @@
 /**
  * `team init` 的内置团队骨架模板（design-v4 §F-C1 / §3.3）。
  *
- * 与 `packages/server/src/roles/templates.ts` 的出厂模板 `CORE_DEV_TEAM_MD` **互为独立资产**：
- * 后者只服务 `prism init` 的种子落盘，本文件服务 `prism team init` 的脚手架渲染，
- * **不做合并**（design-v4 §F-C1 明确：避免跨包搬运；agents 不依赖 server）。
+ * 与 `packages/server/src/roles/templates.ts` 的 `CORE_DEV_TEAM_MD` **互为独立资产**：
+ * 后者是 server 侧导出的完整样本（`prism init` 自 2026-09-11 起**不再播种团队**），
+ * 本文件服务 `prism team init` 的脚手架渲染，**不做合并**
+ * （design-v4 §F-C1 明确：避免跨包搬运；agents 不依赖 server）。
  *
  * 占位符在渲染前替换（`{{team_id}}` / `{{name}}` / `{{description}}`），
  * 替换值一律用 JSON 双引号标量（与 `emitScalar` 口径一致），避免描述里的冒号/引号破坏 YAML。
@@ -72,7 +73,7 @@ description: {{description}}
 default: false
 members:
   - role: dev-1
-    count: 2
+    count: 1
   - role: dev-2
     count: 1
   - role: super-dev
@@ -105,10 +106,10 @@ rework_limit: 2
 
 | # | 阶段 | 负责角色 | 串/并行 | 输入 | 输出 | 完成判定 | 回流路径 |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| 1 | 探索 | dev-1/2 | 并行 | 任务书 | exploration.md | 结论落盘 | 缺资料 → 补调研 |
+| 1 | 探索 | dev-1 + dev-2 | 并行 | 任务书 | exploration.md | 结论落盘 | 缺资料 → 补调研 |
 | 2 | 设计 | 队长 | 串行 | exploration.md | design.md | 需求全覆盖 | — |
 | 3 | 设计审核 | qa-checker | 串行 | design.md | design-review.md | 门禁落盘 | 架构级 → 队长 |
-| 4 | 开发 | dev-1/2 + super-dev | 并行 | design.md | stream-N.md | 自验通过 | 卡死 2 次 → super-dev |
+| 4 | 开发 | dev-1 + dev-2 + super-dev | 并行 | design.md | stream-N.md | 自验通过 | 卡死 2 次 → super-dev |
 | 5 | 测试 | tester | 串行 | 任务书 + 各流报告 | test-report.md | 全项有运行证据 | bug → 对应流 → 回归 |
 | 6 | 总审 | qa-checker | 串行 | 全部 | qa-report.md | 门禁落盘 | 超范围 → 返工（≤2 轮） |
 | 7 | 交付 | 队长 | 串行 | 全部 | DELIVERY.md | 用户验收 | — |

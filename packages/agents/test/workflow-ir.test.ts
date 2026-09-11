@@ -271,7 +271,7 @@ describe('buildTeamWorkflowIr：内置模板（真实团队）', () => {
   it('core-dev 模板（7 阶段）产出合法 IR，col 不超上限', () => {
     const team = fillTeamTemplate(CORE_DEV_TEAM_MD, { teamId: 'core-1', name: '核心研发团队', description: 'x' })
     const ir = buildTeamWorkflowIr(parseTeamMarkdown(team))
-    // 7 个阶段 = 7 个节点「列」；并行阶段（`dev-1/2`、`+ super-dev`）每个角色各一节点 → 共 10
+    // 7 个阶段 = 7 个节点「列」；并行阶段（`dev-1 + dev-2`、`+ super-dev`）每个角色各一节点 → 共 10
     expect(ir.mainPath).toHaveLength(7)
     expect(ir.nodes).toHaveLength(10)
     expect(Math.max(...ir.nodes.map((n) => n.col))).toBeLessThanOrEqual(5)
