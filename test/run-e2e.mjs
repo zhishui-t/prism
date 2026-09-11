@@ -57,6 +57,61 @@ async function listDir(dir) {
   }
 }
 
+/** 列出系统临时目录下既有的 `prism-e2e-*`（残留基线/收尾比对用）。 */
+async function listE2eTempDirs() {
+  const entries = await readdir(tmpdir(), { withFileTypes: true }).catch(() => [])
+  return entries
+    .filter((entry) => entry.isDirectory() && entry.name.startsWith('prism-e2e-'))
+    .map((entry) => join(tmpdir(), entry.name))
+    .sort()
+}
+
+/** 递归列目录内容（残留清单用；`max` 截断，避免大目录刷屏）。 */
+async function listTree(root, max = 200) {
+  const out = []
+  const walk = async (dir) => {
+    if (out.length >= max) return
+    const entries = await readdir(dir, { withFileTypes: true }).catch(() => [])
+    for (const entry of entries) {
+      if (out.length >= max) return
+      const full = join(dir, entry.name)
+      out.push(full)
+      if (entry.isDirectory()) await walk(full)
+    }
+  }
+  await walk(root)
+  return out
+}
+
+/**
+ * 清理临时目录（F-T1）：**删不掉不静默**——打 warning + 残留清单。
+ *
+ * 为什么不能 `.catch(() => {})`：Windows 上被占用的句柄会让 `rm` 半途失败，
+ * 静默吞掉之后「临时目录在悄悄堆积」这件事没有任何人看得见。
+ * 返回是否删干净（收尾的残留比对会据此判红）。
+ */
+async function cleanupTempDir(dir) {
+  let error
+  // 退避重试：Windows 上句柄释放与杀软/索引器扫描都有延迟，「刚关掉就删」常失败而
+  // 稍等即可成功。重试 6 次（合计约 1.9s）后仍失败才算真残留。
+  for (let attempt = 0; attempt < 6; attempt++) {
+    try {
+      await rm(dir, { recursive: true, force: true })
+      return true
+    } catch (caught) {
+      error = caught
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 100 * (attempt + 1)))
+    }
+  }
+  const reason = error instanceof Error ? error.message : String(error)
+  process.stdout.write(`\nWARN 临时目录未能删除: ${dir}\n  原因: ${reason}\n`)
+  const leftovers = await listTree(dir).catch(() => [])
+  process.stdout.write(`  残留清单（${leftovers.length} 项${leftovers.length >= 200 ? '+，已截断' : ''}）:\n`)
+  for (const item of leftovers.slice(0, 50)) process.stdout.write(`    ${item}\n`)
+  if (leftovers.length > 50) process.stdout.write(`    … 另有 ${leftovers.length - 50} 项\n`)
+  return false
+}
+
 async function fetchJson(url) {
   const res = await fetch(url)
   return { status: res.status, body: await res.json() }
@@ -77,6 +132,10 @@ async function main() {
   const realBefore = await listDir(REAL_ZCODE)
   process.stdout.write(`真实宿主目录基线: ${realBefore === null ? '(不存在)' : `${realBefore.length} 个文件`}\n\n`)
 
+  // F-T1：临时目录残留基线——收尾比对「本轮有没有新增残留」（残留不增长即达标）
+  const tempBefore = await listE2eTempDirs()
+  process.stdout.write(`临时目录基线: ${tempBefore.length} 个既有 prism-e2e-* 残留\n\n`)
+
   const workRoot = await mkdtemp(join(tmpdir(), 'prism-e2e-'))
   const home = join(workRoot, 'home')
   const harnessRoot = join(workRoot, 'zcode')
@@ -86,6 +145,8 @@ async function main() {
   const env = { PRISM_HOME: home, PRISM_HARNESS_ROOT: harnessRoot, PRISM_EMBEDDING: 'off' }
 
   let server
+  // F-T1：MCP 工具集会惰性打开知识库/台账 SQLite，需在清理临时目录前显式释放。
+  let mcpTools
   try {
     await mkdir(join(projectDir, 'src'), { recursive: true })
     await mkdir(home, { recursive: true })
@@ -1041,7 +1102,7 @@ async function main() {
       )
 
       // ---------- F-D2 四处一致（CLI ≡ HTTP ≡ MCP） ----------
-      const mcpTools = serverModule.createMcpTools({ home, harnessRoot })
+      mcpTools = serverModule.createMcpTools({ home, harnessRoot })
       const effCli = await cli(['skill', 'effective', '--role', 'dev-1', '--team', 'core-dev', '--json'], env)
       const effCliV = jparse(effCli).value ?? {}
       const effHttp = await httpJson('GET', '/api/skills/effective?role=dev-1&team=core-dev')
@@ -1435,6 +1496,183 @@ async function main() {
       )
     }
 
+    // ===== 20. design-v5 §2 验收补充（F-C2 合并入口 / F-C3 团队激活图谱状态 / F-C4 团队工作流图） =====
+    {
+      const jparse = (res) => {
+        try {
+          return JSON.parse(res.stdout)
+        } catch {
+          return {}
+        }
+      }
+      const fileExists = async (p) => {
+        try {
+          await readFile(p)
+          return true
+        } catch {
+          return false
+        }
+      }
+      const httpJson = async (method, apiPath, body) => {
+        const res = await fetch(`${base}${apiPath}`, {
+          method,
+          ...(body !== undefined
+            ? { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }
+            : {}),
+        })
+        let parsed = null
+        try {
+          parsed = await res.json()
+        } catch {
+          parsed = null
+        }
+        return { status: res.status, body: parsed }
+      }
+
+      // ---------- F-C2 多项目合并：入口守卫（happy path 需 2 张已建图，argv 断言见 graph-merge.test.ts）----------
+      // 再登记一个空项目（不建图）：用来触发 graph_not_found 分支，顺带证明失败路径不启子进程、不落产物。
+      const demo2Root = join(workRoot, 'demo2-project')
+      await mkdir(demo2Root, { recursive: true })
+      await cli(['project', 'add', demo2Root, '--name', 'demo2', '--json'], env)
+      const mergeOne = await cli(['graph', 'merge', 'demo', '--json'], env)
+      check(
+        '20.1 F-C2 合并 <2 个项目 → 退出码 1（用法提示，不启子进程）',
+        mergeOne.code === 1 && mergeOne.stderr.includes('至少 2 个'),
+        `code=${mergeOne.code}`,
+      )
+      const mergeUnknown = await cli(['graph', 'merge', 'demo', 'nope', '--json'], env)
+      check(
+        '20.2 F-C2 项目未注册 → not_found（不静默回落）',
+        mergeUnknown.code === 1 && mergeUnknown.stderr.includes('not_found'),
+        mergeUnknown.stderr.trim().slice(0, 120),
+      )
+      const mergeNoGraph = await cli(['graph', 'merge', 'demo', 'demo2', '--json'], env)
+      check(
+        '20.3 F-C2 未建图 → graph_not_found + 可执行提示（不启动 graphify）',
+        mergeNoGraph.code === 1 &&
+          mergeNoGraph.stderr.includes('graph_not_found') &&
+          mergeNoGraph.stderr.includes('graph build'),
+        mergeNoGraph.stderr.trim().slice(0, 160),
+      )
+      check(
+        '20.4 F-C2 失败不落产物：<PRISM_HOME>/graphify-merged 未创建（裁决 D2 铁律）',
+        !(await fileExists(join(home, 'graphify-merged'))),
+      )
+      const mergeHttp = await httpJson('POST', '/api/graph/merge', { projects: ['demo'] })
+      check(
+        '20.5 F-C2 HTTP 合并 <2 个项目 → 400 bad_request（CLI ≡ HTTP 同口径）',
+        mergeHttp.status === 400 && String(mergeHttp.body?.error?.code ?? '') === 'bad_request',
+        `status=${mergeHttp.status}`,
+      )
+
+      // ---------- F-C3 团队激活的图谱状态（只读默认 / --project 只读 / 互斥 / 未注册）----------
+      const actDefault = await cli(['team', 'activate', 'core-dev', '--json'], env)
+      const actDefaultV = jparse(actDefault).value ?? {}
+      check(
+        '20.6 F-C3 CLI 激活缺省不指定项目 → graph_status=null（守 R1：默认只提示不动手）',
+        actDefault.code === 0 && actDefaultV.graph_status === null,
+        `graph_status=${JSON.stringify(actDefaultV.graph_status)}`,
+      )
+      const actRead = await cli(['team', 'activate', 'core-dev', '--project', 'demo', '--json'], env)
+      const gs = (jparse(actRead).value ?? {}).graph_status ?? {}
+      check(
+        '20.7 F-C3 CLI --project 只读回图状态（字段齐备；demo 未建图 → exists=false/stale=true/note 齐）',
+        actRead.code === 0 &&
+          gs.project === 'demo' &&
+          gs.graph_exists === false &&
+          gs.stale === true &&
+          typeof gs.changed_files === 'number' &&
+          typeof gs.total_files === 'number' &&
+          typeof gs.note === 'string',
+        JSON.stringify(gs).slice(0, 160),
+      )
+      const actMutual = await cli(
+        ['team', 'activate', 'core-dev', '--project', 'demo', '--build-project', 'demo', '--json'],
+        env,
+      )
+      check(
+        '20.8 F-C3 --project 与 --build-project 互斥 → 退出码 1（不静默二选一）',
+        actMutual.code === 1 && actMutual.stderr.includes('互斥'),
+        actMutual.stderr.trim().slice(0, 120),
+      )
+      const actUnknown = await cli(['team', 'activate', 'core-dev', '--project', 'nope', '--json'], env)
+      check(
+        '20.9 F-C3 CLI 未注册项目 → not_found（不猜项目）',
+        actUnknown.code === 1 && actUnknown.stderr.includes('未注册的图谱项目'),
+        actUnknown.stderr.trim().slice(0, 120),
+      )
+      const actHttpDefault = await httpJson('GET', '/api/teams/core-dev/activate')
+      check(
+        '20.10 F-C3 HTTP 激活缺省 graph_status=null（与 CLI 同源）',
+        actHttpDefault.status === 200 && actHttpDefault.body?.value?.graph_status === null,
+        `status=${actHttpDefault.status}`,
+      )
+      const actHttpRead = await httpJson('GET', '/api/teams/core-dev/activate?project=demo')
+      check(
+        '20.11 F-C3 HTTP ?project 只读回图状态（不建图）',
+        actHttpRead.status === 200 && actHttpRead.body?.value?.graph_status?.project === 'demo',
+        JSON.stringify(actHttpRead.body?.value?.graph_status ?? {}).slice(0, 120),
+      )
+      const actHttpBuildNoProject = await httpJson('GET', '/api/teams/core-dev/activate?build=1')
+      check(
+        '20.12 F-C3 HTTP ?build=1 缺 project → 400（Prism 不猜项目）',
+        actHttpBuildNoProject.status === 400,
+        `status=${actHttpBuildNoProject.status}`,
+      )
+
+      // ---------- F-C4 团队工作流 → 工作流图（CLI 落 --out；HTTP 落 <HOME>/archify/workflow）----------
+      const archOut = join(workRoot, 'arch-out')
+      await mkdir(archOut, { recursive: true })
+      const archArgs = ['arch', 'from-team', 'core-dev', '--out', join(archOut, 'core-dev.html'), '--json']
+      const archCli = await cli(archArgs, env)
+      const archCliV = jparse(archCli).value ?? {}
+      check(
+        '20.13 F-C4 CLI arch from-team → HTML + IR 源 + meta 齐备',
+        archCli.code === 0 &&
+          archCliV.type === 'workflow' &&
+          archCliV.team_id === 'core-dev' &&
+          (await fileExists(join(archOut, 'core-dev.html'))) &&
+          (await fileExists(join(archOut, 'core-dev.ir.json'))) &&
+          (await fileExists(join(archOut, 'core-dev.meta.json'))),
+        `code=${archCli.code}`,
+      )
+      const irFirst = await readFile(join(archOut, 'core-dev.ir.json'), 'utf-8')
+      await cli(archArgs, env)
+      const irSecond = await readFile(join(archOut, 'core-dev.ir.json'), 'utf-8')
+      check(
+        '20.14 F-C4 IR 是纯函数派生物：两次生成逐字节一致且无时钟字段（幂等）',
+        irFirst === irSecond && !/created_at|updated_at/.test(irFirst),
+        `bytes=${irFirst.length}`,
+      )
+      const archHtml = await readFile(join(archOut, 'core-dev.html'), 'utf-8')
+      check(
+        '20.15 F-C4 渲染出自包含 HTML（非空壳）',
+        archHtml.includes('<html') && archHtml.length > 2000,
+        `bytes=${archHtml.length}`,
+      )
+      const archHttp = await httpJson('POST', '/api/arch/from-team', { team_id: 'core-dev' })
+      check(
+        '20.16 F-C4 HTTP from-team 落 <HOME>/archify/workflow + preview 路径可指',
+        archHttp.status === 200 &&
+          archHttp.body?.value?.type === 'workflow' &&
+          archHttp.body?.value?.preview === '/api/arch/preview/workflow/core-dev.html' &&
+          (await fileExists(join(home, 'archify', 'workflow', 'core-dev.html'))),
+        `status=${archHttp.status}`,
+      )
+      const previewRes = await fetch(`${base}/api/arch/preview/workflow/core-dev.html`)
+      check(
+        '20.17 F-C4 preview 可取渲染产物（content-type text/html）',
+        previewRes.status === 200 && String(previewRes.headers.get('content-type')).includes('text/html'),
+        `status=${previewRes.status}`,
+      )
+      const archHttpBad = await httpJson('POST', '/api/arch/from-team', { team_id: 'no-such-team' })
+      check(
+        '20.18 F-C4 HTTP 未知团队 → 404 not_found（不静默产出空图）',
+        archHttpBad.status === 404 && String(archHttpBad.body?.error?.code ?? '') === 'not_found',
+        `status=${archHttpBad.status}`,
+      )
+    }
+
     // ===== 9. 真实宿主零污染 =====
     const realAfter = await listDir(REAL_ZCODE)
     check(
@@ -1444,11 +1682,30 @@ async function main() {
     )
   } finally {
     if (server !== undefined) await server.close()
+    // F-T1：释放 MCP 工具的惰性句柄（kb + 任务台账），否则临时目录的 *.db/-wal/-shm 删不掉
+    mcpTools?.close?.()
     if (KEEP) {
-      process.stdout.write(`\n临时目录保留: ${workRoot}\n`)
+      process.stdout.write(`\n临时目录保留（--keep）: ${workRoot}\n`)
     } else {
-      await rm(workRoot, { recursive: true, force: true }).catch(() => {})
+      // F-T1：删不掉不静默（warning + 残留清单；`--keep` 时不清）
+      await cleanupTempDir(workRoot)
     }
+  }
+
+  // F-T1：收尾比对——本轮若有新增残留（含「清理失败」与「进程内偷偷另建」两种），判红。
+  if (!KEEP) {
+    const tempAfter = await listE2eTempDirs()
+    const newResidue = tempAfter.filter((dir) => !tempBefore.includes(dir))
+    process.stdout.write(`\n临时目录残留: 基线 ${tempBefore.length} → 本轮结束 ${tempAfter.length}\n`)
+    if (newResidue.length > 0) {
+      process.stdout.write(`WARN 本轮新增残留 ${newResidue.length} 个:\n`)
+      for (const dir of newResidue.slice(0, 20)) process.stdout.write(`    ${dir}\n`)
+    }
+    check(
+      '10.1 临时目录已清理（本轮无新增 prism-e2e-* 残留）',
+      newResidue.length === 0,
+      newResidue.slice(0, 3).join(', '),
+    )
   }
 
   const passed = results.length - failures

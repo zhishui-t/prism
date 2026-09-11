@@ -3,7 +3,15 @@ import { createInterface } from 'node:readline'
 import { access } from 'node:fs/promises'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { AuditLog, prismHome, openPersistence, prismPaths, PrismError, TaskLedger } from '@prism/core'
+import {
+  AuditLog,
+  prismHome,
+  openPersistence,
+  prismPaths,
+  PrismError,
+  TaskLedger,
+  type PrismPersistence,
+} from '@prism/core'
 import { ensureHarnessPluginsLoaded } from '@prism/agents'
 
 import {
@@ -80,9 +88,19 @@ export interface McpTool {
   call: (args: Record<string, unknown>) => Promise<unknown>
 }
 
+/**
+ * MCP 工具集：`McpTool[]` + 一个**释放钩子**。
+ *
+ * 为什么要 close：`kb()` / `ledger()` 是**惰性**打开 SQLite 的（知识库 + 任务台账），
+ * 若调用方不释放，句柄会挂到进程结束——Windows 上表现为「临时目录里的
+ * `*.db/-wal/-shm` 删不掉」，e2e 长期静默堆积（F-T1 实测：修前 `D:\tmp` 积压 97 个）。
+ * 类型是数组的交叉，既有消费方（`for (const t of tools)` / `tools.length`）不受影响。
+ */
+export type McpToolSet = McpTool[] & { close: () => void }
+
 /** 组装 MCP 工具集（依赖注入便于测试）。 */
-export function createMcpTools(deps: McpDeps): McpTool[] {
-  let kbCache: KnowledgeService | undefined
+export function createMcpTools(deps: McpDeps): McpToolSet {
+  let kbCache: (KnowledgeService & { close?: () => void }) | undefined
   const kb = async (): Promise<KnowledgeService> => {
     if (deps.kb !== undefined) {
       return deps.kb
@@ -97,12 +115,14 @@ export function createMcpTools(deps: McpDeps): McpTool[] {
 
   // 任务台账（被动台账，task-center.md）：宿主登记 DAG / 回报状态；Prism 只记录
   let taskLedger: TaskLedger | undefined
+  /** 惰性打开的持久化句柄（`close()` 时释放；未打开过则为 undefined）。 */
+  let taskPersistence: PrismPersistence | undefined
   const ledger = async (): Promise<TaskLedger> => {
     if (taskLedger === undefined) {
-      const persistence = openPersistence({ home: deps.home })
+      taskPersistence = openPersistence({ home: deps.home })
       taskLedger = new TaskLedger({
-        persistence,
-        audit: new AuditLog({ dir: prismPaths(deps.home).auditDir, queue: persistence.queue }),
+        persistence: taskPersistence,
+        audit: new AuditLog({ dir: prismPaths(deps.home).auditDir, queue: taskPersistence.queue }),
       })
     }
     return taskLedger
@@ -449,7 +469,7 @@ export function createMcpTools(deps: McpDeps): McpTool[] {
     return await activateTeam(team, { rolesDir, targetDir: zcode.agentsDir })
   }
 
-  return [
+  const tools: McpTool[] = [
     {
       name: 'prism_kb_search',
       description: '检索 Prism 知识库（bigram 中文检索；支持 layer/owner/book/module 过滤，默认只返回最新版次）',
@@ -1227,6 +1247,18 @@ export function createMcpTools(deps: McpDeps): McpTool[] {
       },
     },
   ]
+
+  // 释放惰性打开的句柄（幂等）。见 `McpToolSet` 注释：不释放会导致 Windows 上
+  // 临时目录的 `*.db/-wal/-shm` 删不掉（F-T1）。
+  return Object.assign(tools, {
+    close: (): void => {
+      kbCache?.close?.()
+      kbCache = undefined
+      taskPersistence?.close()
+      taskPersistence = undefined
+      taskLedger = undefined
+    },
+  })
 }
 
 /** 处理单条 JSON-RPC 请求（纯函数式，便于测试）。 */
