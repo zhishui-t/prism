@@ -108,11 +108,45 @@ describe('validateTeam（design-v3 §4.2 逐条）', () => {
 
   it('leader 豁免：队长不在 members 也合法（P1 修订；出厂模板可过校验）', () => {
     const team = makeTeam({
-      workflow: [stage(1, ['dev-1#1', 'dev-1#2']), stage(2, ['队长']), stage(3, ['leader'])],
+      // 引用 tester 的阶段仅为满足「成员都参与流程」——否则会触发 unused_member（见下组用例）
+      workflow: [stage(1, ['dev-1#1', 'dev-1#2']), stage(2, ['队长']), stage(3, ['leader']), stage(4, ['tester'])],
     })
     const result = validateTeam(team, { roles: ROLES })
     expect(result.ok).toBe(true)
     expect(result.issues).toEqual([])
+  })
+
+  it('成员未出现在任何工作流阶段 → warning（不影响 ok；让「编制悬空」显式可见）', () => {
+    const team = makeTeam({
+      members: [
+        { role: 'dev-1', count: 2 },
+        { role: 'tester', count: 1 },
+      ],
+      workflow: [stage(1, ['dev-1#1', 'dev-1#2'])], // 只用了 dev-1，tester 未参与
+    })
+    const result = validateTeam(team, { roles: ROLES })
+    expect(result.ok).toBe(true) // warning 不影响放行（可能是有意预留的机动位）
+    const issue = result.issues.find((i) => i.code === 'unused_member')
+    expect(issue?.level).toBe('warning')
+    expect(issue?.message).toContain('tester')
+  })
+
+  it('unused_member 大小写不敏感；工作流为空时不报（那是另一个问题，不该放大成 N 条告警）', () => {
+    const library = [makeRole('QA-checker'), ...ROLES]
+    const cased = validateTeam(
+      makeTeam({
+        members: [
+          { role: 'qa-checker', count: 1 },
+          { role: 'dev-1', count: 1 },
+        ],
+        workflow: [stage(1, ['QA-checker', 'dev-1'])],
+      }),
+      { roles: library },
+    )
+    expect(codes(cased.issues)).not.toContain('unused_member')
+
+    const noWorkflow = validateTeam(makeTeam(), { roles: ROLES })
+    expect(codes(noWorkflow.issues)).not.toContain('unused_member')
   })
 
   it('deposit 枚举校验：default_layer / default_type（EntryType）/ priority（error）', () => {

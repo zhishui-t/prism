@@ -71,9 +71,11 @@ export function validateTeam(team: TeamDefinition, opts: ValidateTeamOptions): V
 
   // 工作流每阶段 roles[] 的每个元素（去掉 #N 记号）必须在 members 里；leader/队长 豁免
   const memberRoles = new Set(team.members.map((m) => m.role))
+  const referencedRoles = new Set<string>()
   team.workflow.forEach((stage) => {
     for (const roleRef of stage.roles) {
       const base = stripInstanceMarker(roleRef)
+      referencedRoles.add(base)
       if (ORCHESTRATOR_ROLES.includes(base)) continue
       if (!memberRoles.has(base)) {
         issues.push({
@@ -85,6 +87,24 @@ export function validateTeam(team: TeamDefinition, opts: ValidateTeamOptions): V
       }
     }
   })
+
+  // 反向校验（warning，不影响 ok）：声明了成员却未出现在**任何**工作流阶段。
+  // 上面的校验只查「工作流引用的 ∈ members」，反方向不查 —— 于是「编制里挂了个不干活的
+  // 角色」会静默通过。不判 error 是因为它可能是**有意预留的机动位**；但必须显式可见，
+  // 不能靠沉默掩盖（如为预留，保留即可；若是笔误，删掉该成员）。
+  // 工作流为空时不报（那是「没有流程定义」这个另一个问题，不该放大成 N 条成员告警）。
+  const referencedLower = new Set([...referencedRoles].map((r) => r.toLowerCase()))
+  if (team.workflow.length > 0) {
+    for (const member of team.members) {
+      if (member.role.trim() === '') continue
+      if (referencedLower.has(member.role.toLowerCase())) continue
+      issues.push({
+        level: 'warning',
+        code: 'unused_member',
+        message: `成员 ${member.role} 未出现在任何工作流阶段：编制悬空（有意预留可忽略；若非有意请补阶段或移出 members）`,
+      })
+    }
+  }
 
   // deposit：default_layer / default_type / priority 枚举；rules[].match/.set 为对象
   const deposit = team.deposit
