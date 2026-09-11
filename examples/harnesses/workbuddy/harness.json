@@ -1,0 +1,5 @@
+{
+  "id": "workbuddy",
+  "displayName": "WorkBuddy",
+  "entry": "./index.mjs"
+}

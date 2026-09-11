@@ -76,8 +76,13 @@ export interface McpConvention {
   /**
    * 注册写入形态：决定条目放在 JSON 的哪一层。
    * - `mcp-servers-json`：`{ mcp: { servers: { <name>: { type, command, args, env } } } }`（ZCode 形态）
+   * - `mcpServers-json`：`{ mcpServers: { <name>: { command, args, env } } }`（平铺形态；
+   *   WorkBuddy / VS Code / Claude Desktop 等主流宿主）
+   *
+   * 两者条目字段略异：嵌套形态带 `type`/`timeoutMs`（ZCode 认），平铺形态只写
+   * `command`/`args`/`env`——多写未知键在部分宿主会被判为配置非法，故按形态裁剪。
    */
-  format: 'mcp-servers-json'
+  format: 'mcp-servers-json' | 'mcpServers-json'
   /** 该 harness 下 MCP 服务条目名（缺省 `prism`）。 */
   serverName?: string
 }

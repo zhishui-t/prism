@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { listBuiltinSkills, installSkills } from '@prism/skills'
-import { prismHome, prismPaths, PrismError } from '@prism/core'
+import { prismHome, prismPaths, PrismError, type McpConvention } from '@prism/core'
 import { CORE_DEV_TEAM_MD, harnessPaths, defaultHarnessRoot, resolveDirsFromHome } from '@prism/server'
 
 import type { ArgValues, CommandContext } from '../argv.js'
@@ -58,7 +58,7 @@ export async function runInit(ctx: CommandContext, _args: string[], values: ArgV
     )
     return 1
   }
-  const zcode = harnessPaths(harnessRoot)
+  const zcode = harnessPaths(harnessRoot, home)
   const force = values.force === true
 
   // ① 探测 ZCode（不存在 → 警告但继续）
@@ -97,6 +97,8 @@ export async function runInit(ctx: CommandContext, _args: string[], values: ArgV
   // ④ MCP 注册 → <harnessRoot>/cli/config.json（合并 + 备份；冲突不覆盖，P16）
   const mcp = await registerMcp({
     configFile: zcode.configFile,
+    format: zcode.mcpFormat,
+    serverName: zcode.mcpServerName,
     home,
     force,
     mcpEntry: resolveMcpEntry(),
@@ -163,28 +165,35 @@ function seedFactoryTeam(teamsDir: string): string | undefined {
 }
 
 /**
- * 合并写入 `mcp.servers.prism`（init-and-registration §4）：
- * 只增/改该键，其余键原样保留；改动既有文件前备份（`config.json.bak-prism-init-<ts>`）；
- * 已存在且指向不同 → 不覆盖并提示 --force（status='conflict'）。
+ * 合并写入 MCP 注册（init-and-registration §4）：
+ * 只增/改目标服务条目，**同文件其它键一律原样保留**；改动既有文件前备份
+ * （`<configFile>.bak-prism-init-<ts>`）；已存在且指向不同 → 不覆盖并提示 `--force`
+ * （status='conflict'）。
+ *
+ * 写入形态由适配器自述（`McpConvention.format`），两种：
+ * - `mcp-servers-json` → `{ mcp: { servers: { <name>: { type, command, args, env, timeoutMs } } } }`（ZCode）
+ * - `mcpServers-json`  → `{ mcpServers: { <name>: { command, args, env } } }`（平铺；WorkBuddy / VS Code）
+ *
+ * 早期实现把 ZCode 形态写死在此——接入 WorkBuddy 时会**静默写错层级**（宿主读不到、
+ * 且往人家配置里塞了无意义的 `mcp.servers` 键），故改为按形态分派。
  */
 async function registerMcp(opts: {
   configFile: string | null
+  format: McpConvention['format']
+  serverName: string
   home: string
   force: boolean
   mcpEntry: string
 }): Promise<InitReport['mcp']> {
-  const { configFile, home, force, mcpEntry } = opts
+  const { configFile, format, serverName, home, force, mcpEntry } = opts
   // 该 harness 无 MCP 注册机制（适配器 mcp.configFile 为 null）→ 跳过，不报错
   if (configFile === null) {
     return { status: 'unsupported', configFile: null }
   }
-  const entry = {
-    type: 'stdio',
-    command: 'node',
-    args: [mcpEntry],
-    env: { PRISM_HOME: home },
-    timeoutMs: 60_000,
-  }
+  const entry =
+    format === 'mcpServers-json'
+      ? { command: 'node', args: [mcpEntry], env: { PRISM_HOME: home } }
+      : { type: 'stdio', command: 'node', args: [mcpEntry], env: { PRISM_HOME: home }, timeoutMs: 60_000 }
 
   let cfg: Record<string, unknown> = {}
   let existed = false
@@ -200,9 +209,8 @@ async function registerMcp(opts: {
     }
   }
 
-  const mcp = (cfg['mcp'] ?? {}) as Record<string, unknown>
-  const servers = (mcp['servers'] ?? {}) as Record<string, unknown>
-  const existing = servers['prism']
+  const servers = readMcpServers(cfg, format)
+  const existing = servers[serverName]
 
   if (existing !== undefined) {
     if (JSON.stringify(existing) === JSON.stringify(entry)) {
@@ -218,9 +226,8 @@ async function registerMcp(opts: {
     await writeFile(backup, await readFile(configFile, 'utf-8'), 'utf-8')
   }
 
-  servers['prism'] = entry
-  mcp['servers'] = servers
-  cfg['mcp'] = mcp
+  servers[serverName] = entry
+  writeMcpServers(cfg, format, servers)
   await mkdir(join(configFile, '..'), { recursive: true })
   await writeFile(configFile, `${JSON.stringify(cfg, null, 2)}\n`, 'utf-8')
   return {
@@ -230,6 +237,35 @@ async function registerMcp(opts: {
     ...(backup !== undefined ? { backup } : {}),
   }
 }
+
+/** 按形态从既有配置里**浅拷**出服务表（避免污染原对象；缺则空表）。 */
+function readMcpServers(cfg: Record<string, unknown>, format: McpConvention['format']): Record<string, unknown> {
+  if (format === 'mcpServers-json') {
+    const flat = cfg['mcpServers']
+    return isRecord(flat) ? { ...flat } : {}
+  }
+  const mcp = isRecord(cfg['mcp']) ? cfg['mcp'] : {}
+  const servers = mcp['servers']
+  return isRecord(servers) ? { ...servers } : {}
+}
+
+/** 按形态把服务表写回配置对象（**只动目标层，其余键不碰**）。 */
+function writeMcpServers(
+  cfg: Record<string, unknown>,
+  format: McpConvention['format'],
+  servers: Record<string, unknown>,
+): void {
+  if (format === 'mcpServers-json') {
+    cfg['mcpServers'] = servers
+    return
+  }
+  const mcp = isRecord(cfg['mcp']) ? { ...cfg['mcp'] } : {}
+  mcp['servers'] = servers
+  cfg['mcp'] = mcp
+}
+
+const isRecord = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v)
 
 /** MCP stdio 入口（packages/server/dist/mcp/server.js）；可用 PRISM_MCP_ENTRY 覆盖。 */
 function resolveMcpEntry(): string {

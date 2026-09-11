@@ -16,6 +16,7 @@
  *   ├── 3rd/archify/               # submodule 源码（自包含 CLI）
  *   ├── 3rd/graphify/              # submodule 源码（Python，需本机装依赖）
  *   ├── 3rd/anydoc/                # submodule 源码（Rust；运行时由目标机下载）
+ *   ├── examples/harnesses/        # 宿主适配器插件（复制到 <PRISM_HOME>/harnesses/ 即用）
  *   ├── scripts/setup-*.mjs        # 运行时安装脚本（embedding / anydoc）
  *   ├── README.md / AGENTS.md / LICENSE
  *   └── package.json
@@ -222,6 +223,14 @@ async function main() {
   // 8) 文档与许可
   for (const file of ['README.md', 'AGENTS.md', 'LICENSE']) {
     if (await exists(join(ROOT, file))) await cp(join(ROOT, file), join(stageDir, file))
+  }
+
+  // 8b) 宿主适配器示例（运行期插件，随包分发：目标机复制到 <PRISM_HOME>/harnesses/ 即用）
+  if (await exists(join(ROOT, 'examples'))) {
+    await cp(join(ROOT, 'examples'), join(stageDir, 'examples'), {
+      recursive: true,
+      filter: (src) => !src.includes('node_modules'),
+    })
   }
 
   // 9) 一键启动入口 + 包清单
