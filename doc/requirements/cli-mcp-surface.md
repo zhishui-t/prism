@@ -9,7 +9,7 @@
 > 本文下方仍是 2026-09-09 的讨论稿；以下为**当前实现增量**，与下方冲突时以本节与 `README.md` 为准：
 >
 > **新增 CLI**：`team init <id>`（建队脚手架 + 自动校验 + 写守卫）、`kb structure show|generate|freeze`（书结构：总纲/模块清单/固化/继承）、`kb versions <id>`（条目版次历史）、`kb deposit`（按团队沉淀策略落库）、`skill effective --role [--team]`（Skill 有效集）、`task report --deposit`（终态沉淀建议 + 一步落库）。
-> **新增 MCP 工具**（4）：`prism_kb_versions`、`prism_kb_book_structure`、`prism_skill_effective`、`prism_team_create`——**工具总数以 `tools/list` 实测为准**（本轮由 31 增至 35）。
+> **新增 MCP 工具**（4）：`prism_kb_versions`、`prism_kb_book_structure`、`prism_skill_effective`、`prism_team_create`——**工具总数以 `tools/list` 实测为准**（v4 由 31 增至 35；v5 多项目图谱合并（F-C2）再增至 **36**）。
 > **新增/变更 HTTP**：`GET /api/kb/versions/:id`、`GET|POST /api/kb/book-structure`、`GET /api/skills/effective?role=&team=`、`POST /api/teams`（`teams_dir` 必填、无 env 回落）、`GET /api/teams` 增只读 `teamsDir`、`GET /api/kb/context-pack` 增 `layers/books/symbols/max_excerpt_chars`。
 > **已废弃**：工作队列（`prism_work_*` 工具、`work` 命令、`/api/work/*`）——见 `work-queue.md` 顶部；下方 §1 的 `work` 分组与 §2.5 已失效。同理 `uninit` / `harness detect` / `skill sync` 均未实现。
 
@@ -120,10 +120,15 @@ prism
 
 ## 2. MCP 工具清单
 
-> **v5 取齐说明**（2026-09-11）：工具总数 = **35**（`packages/server/src/mcp/server.ts` 内
+> **v5 取齐说明**（2026-09-11）：工具总数 = **36**（`packages/server/src/mcp/server.ts` 内
 > `name: 'prism_*'` 逐条计数；v4 由 31 增至 35，新增 `prism_kb_versions`、`prism_kb_book_structure`、
-> `prism_skill_effective`、`prism_team_create`）。下文原文缺漏的工具已在各节补齐；
+> `prism_skill_effective`、`prism_team_create`；v5 多项目图谱合并（F-C2）新增 `prism_graph_merge`，
+> 代码图谱 7 → 8）。下文原文缺漏的工具已在各节补齐；
 > `❌ 未实现` = 全仓 grep 0 命中、**从未存在**的工具。
+>
+> **口径已入守卫**：本文件与 `README.md` 的「总数 + 分组小计」由
+> `packages/server/test/tool-surface-drift.test.ts` 对着 `createMcpTools` 实测锁定——
+> 改工具集时两处会红，不再静默漂移。
 
 ### 2.1 知识库（17）
 
@@ -147,7 +152,7 @@ prism
 | `prism_kb_versions` | 条目版次历史（v4 新增） |
 | `prism_kb_book_structure` | 书结构（总纲/模块清单/固化/继承；v4 新增） |
 
-### 2.2 代码图谱（7）
+### 2.2 代码图谱（8）
 
 | 工具 | 作用 |
 | :--- | :--- |
@@ -158,6 +163,7 @@ prism
 | `prism_graph_summary` | 图谱统计（节点/边/社区） |
 | `prism_graph_god_nodes` | 枢纽节点排行 |
 | `prism_graph_status` | 陈旧状态（原文漏列） |
+| `prism_graph_merge` | 多项目图谱合并（v5 / F-C2 新增） |
 
 ### 2.3 团队与角色（6）
 

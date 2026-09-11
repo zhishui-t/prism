@@ -287,7 +287,7 @@ prism
 └── task       list | show | graph | register | report | stats
 ```
 
-**MCP 工具 35 个**：知识库 17 · 代码图谱 7 · 角色/团队/技能 7 · 任务台账 3 · 上下文包 1（`tools/list` 实测）。
+**MCP 工具 36 个**：知识库 17 · 代码图谱 8 · 角色/团队/技能 7 · 任务台账 3 · 上下文包 1（`tools/list` 实测）。
 
 ---
 
