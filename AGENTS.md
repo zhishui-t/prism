@@ -80,13 +80,20 @@ interface HarnessAdapter { defaultRoot, agent, dispatch, model, skill, instructi
 
 ```bash
 pnpm typecheck     # 1. 类型
-pnpm test          # 2. 单测（535）
+pnpm test          # 2. 单测（759）
 pnpm lint          # 3. 风格
 pnpm build         # 4. 构建
 pnpm test:e2e      # 5. 端到端（涉及 CLI/HTTP/Web 时）
+pnpm test:package  # 6. 发行冒烟（打包→解压→在解压环境验证；改路径解析/打包/三方件时必跑）
 ```
 
 **顺序不能跳**：类型错误会让单测跑不起来，构建失败会让 e2e 跑旧产物。
+
+**为什么第 6 步不可省**：`test`/`test:e2e` 全程跑在仓库内（`packages/<pkg>/dist/`），
+而打包物化后是 `node_modules/@prism/<pkg>/dist/`（**多一层**）——任何写死相对层级的
+路径解析都只在发行版暴露（2026-09-11 实际踩中：tarball 内 anydoc 不可用、graphify
+静默回落 PATH 上的无关版本）。该脚本同时会**先删旧产物再打包**，避免拿上一轮 tarball
+验证出误导性 PASS。
 
 ### 4.2 改代码前
 
@@ -120,6 +127,7 @@ pnpm test:e2e      # 5. 端到端（涉及 CLI/HTTP/Web 时）
 | **版次文件的 status 被压平成 active** | 文件写 `candidate`/`superseded`，`reindex` 后一律变 `active` | 解析按 `EntryStatus` **全量往返**；越界值 warning + 回落 `active`，绝不静默改写（R7 文件为真相） |
 | **凭记忆猜符号/路径/flag/env** | 设计或代码引用了不存在的类型名、状态名、文件名、CLI flag、env（本轮设计稿一轮被抓 6 处） | 动手前先 grep/`fast_locate` 核对存在性；设计评审把「引用不存在的名字」列为专项检查项 |
 | **SQL `LIMIT` 截断向量召回** | 库一大，插入靠后的相关条目永远召不回 | 向量相关性算完余弦才知道，SQL 层不能按 rowid 截断（需全扫） |
+| **写死相对层级解析三方件路径**（已修复，`packages/core/test/repo-root.test.ts` 锁定） | 开发态全绿、**发行版全废**：打包物化后 `node_modules/@prism/<pkg>/` 比 `packages/<pkg>/` 多一层，`../../../../3rd` 落到 `node_modules/3rd` | 一律用 `core.repoRoot(import.meta.url)` **向上查找**发行根；改路径/打包后必跑 `pnpm test:package` |
 
 ---
 

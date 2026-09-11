@@ -21,7 +21,8 @@
     "3rd:init": "git submodule update --init --recursive",
     "3rd:setup": "node scripts/setup-anydoc.mjs && node scripts/setup-embedding.mjs",
     "package": "node scripts/package.mjs",
-    "test:e2e": "node test/run-e2e.mjs"
+    "test:e2e": "node test/run-e2e.mjs",
+    "test:package": "node scripts/smoke-package.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",
