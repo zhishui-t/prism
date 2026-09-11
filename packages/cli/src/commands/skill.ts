@@ -185,6 +185,7 @@ async function skillEffective(ctx: CommandContext, values: ArgValues, dirs: Retu
       teamsDir: dirs.teamsDir,
       rolesDir: dirs.rolesDir,
       harnessRoot: dirs.harnessRoot,
+      home: ctx.home,
     })
     if (ctx.json) {
       ctx.stdout(JSON.stringify({ ok: true, value: effective }))

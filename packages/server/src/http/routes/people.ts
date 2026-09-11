@@ -65,7 +65,7 @@ export function peopleRoutes(deps: PeopleDeps): {
   const teamsDir = dirs.teamsDir
 
   /** 已装 skill 名单（`<harnessRoot>/skills/*`，只读）；目录不存在 → undefined（跳过引用校验）。 */
-  const knownSkills = (): Promise<string[] | undefined> => installedSkillNames(deps.harnessRoot)
+  const knownSkills = (): Promise<string[] | undefined> => installedSkillNames(deps.harnessRoot, deps.home)
 
   /**
    * 角色库（v5 / S5）：每个角色补**只读** `installed`——宿主 agents 目录里有没有该角色
@@ -78,7 +78,7 @@ export function peopleRoutes(deps: PeopleDeps): {
    *   依赖数组形态；只加字段、不改容器）。
    */
   const roles = async (): Promise<Envelope> => {
-    const agentsDir = harnessPaths(deps.harnessRoot).agentsDir
+    const agentsDir = harnessPaths(deps.harnessRoot, deps.home).agentsDir
     const list = await loadRoles(rolesDir, { knownSkills: await knownSkills() })
     return ok(list.map((role) => ({ ...role, installed: isInstalledInHost(agentsDir, rolesDir, role.name) })))
   }
@@ -128,7 +128,7 @@ export function peopleRoutes(deps: PeopleDeps): {
     }
     const activation = await activateTeam(found, {
       rolesDir,
-      targetDir: harnessPaths(deps.harnessRoot).agentsDir,
+      targetDir: harnessPaths(deps.harnessRoot, deps.home).agentsDir,
     })
 
     const project = (ctx.query.get('project') ?? '').trim()
@@ -250,6 +250,7 @@ async function skillsEffectiveRoute(
       teamsDir: dirs.teamsDir,
       rolesDir: dirs.rolesDir,
       harnessRoot: deps.harnessRoot,
+      home: deps.home,
       ...(teamId !== '' ? { teamId } : {}),
     }),
   )

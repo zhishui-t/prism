@@ -280,7 +280,7 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
   const harnessRoot = dirs.harnessRoot
   const rolesDir = dirs.rolesDir
   const teamsDir = dirs.teamsDir
-  const zcode = harnessPaths(harnessRoot)
+  const zcode = harnessPaths(harnessRoot, deps.home)
 
   const requireTeam = async (teamId: unknown) => {
     const id = asString(teamId)
@@ -421,6 +421,7 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
       teamsDir,
       rolesDir,
       harnessRoot,
+      home: deps.home,
       ...(teamId !== undefined ? { teamId } : {}),
     })
   }
@@ -431,7 +432,7 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
     if (name === undefined) {
       throw new Error('prism_role_get 需要 { name }')
     }
-    const role = await loadRole(rolesDir, name, { knownSkills: await installedSkillNames(harnessRoot) })
+    const role = await loadRole(rolesDir, name, { knownSkills: await installedSkillNames(harnessRoot, deps.home) })
     if (role === null) {
       throw new Error(`角色不存在: ${name}（数据源 ${rolesDir}/<name>/AGENTS.md）`)
     }

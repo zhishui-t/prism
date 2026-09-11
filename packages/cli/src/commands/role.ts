@@ -32,11 +32,11 @@ export async function runRole(ctx: CommandContext, args: string[], values: ArgVa
   const rolesDir = values.source !== undefined ? expandHome(values.source) : dirs.rolesDir
   // 根目录取自解析结果（未显式指定时 = 激活适配器的默认根，不再是硬编码 ~/.zcode）
   const harnessRoot = dirs.harnessRoot
-  const zcode = harnessPaths(harnessRoot)
+  const zcode = harnessPaths(harnessRoot, ctx.home)
 
   switch (sub) {
     case 'list': {
-      const roles = await loadRoles(rolesDir, { knownSkills: await installedSkillNames(harnessRoot) })
+      const roles = await loadRoles(rolesDir, { knownSkills: await installedSkillNames(harnessRoot, ctx.home) })
       if (ctx.json) {
         ctx.stdout(JSON.stringify({ ok: true, value: roles }))
         return 0
@@ -61,7 +61,7 @@ export async function runRole(ctx: CommandContext, args: string[], values: ArgVa
         ctx.stderr('用法: prism role show <name> [--source <dir>]')
         return 1
       }
-      const role = await loadRole(rolesDir, name, { knownSkills: await installedSkillNames(harnessRoot) })
+      const role = await loadRole(rolesDir, name, { knownSkills: await installedSkillNames(harnessRoot, ctx.home) })
       if (role === null) {
         ctx.stderr(`错误 [not_found] 角色不存在: ${name}（数据源 ${rolesDir}/<name>/AGENTS.md）`)
         return 1
@@ -129,7 +129,7 @@ export async function runRole(ctx: CommandContext, args: string[], values: ArgVa
     }
 
     case 'validate': {
-      const roles = await loadRoles(rolesDir, { knownSkills: await installedSkillNames(harnessRoot) })
+      const roles = await loadRoles(rolesDir, { knownSkills: await installedSkillNames(harnessRoot, ctx.home) })
       // 原则一致性（role-definition.md §2.1）：跨角色 + 团队仲裁链的组合校验
       const teams = await loadTeams(dirs.teamsDir)
       const consistency = checkPrincipleConsistency({ roles, teams })

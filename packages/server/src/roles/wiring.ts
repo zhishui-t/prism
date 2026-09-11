@@ -24,6 +24,7 @@ import {
   createTeamRegistry,
   installRoles as installAgentsRoles,
   installTeamDefinitions,
+  loadPrismConfig,
   parseRoleMarkdown,
   parseTeamMarkdown,
   renderMarkdownFile,
@@ -36,12 +37,17 @@ import {
   type RoleDefinition,
   type TeamDefinition,
 } from '@prism/agents'
-import { PrismError } from '@prism/core'
+import { PrismError, type McpConvention } from '@prism/core'
 import { listBuiltinSkills } from '@prism/skills'
 
 // ---------------------------------------------------------------------------
 // 路径约定（agents ZCode 适配器推导；P14：子路径只在此处出现）
 // ---------------------------------------------------------------------------
+
+/** MCP 注册形态缺省：适配器未声明 `mcp` 时按 ZCode 嵌套形态处理（历史行为）。 */
+const DEFAULT_MCP_FORMAT: McpConvention['format'] = 'mcp-servers-json'
+/** MCP 服务条目名缺省。 */
+const DEFAULT_MCP_SERVER_NAME = 'prism'
 
 export interface HarnessPaths {
   root: string
@@ -56,21 +62,43 @@ export interface HarnessPaths {
    * **null = 该 harness 无 MCP 注册机制**（init 跳过注册并提示）。
    */
   configFile: string | null
+  /**
+   * MCP 注册写入形态（= adapter.mcp.format）——决定条目放 JSON 的哪一层。
+   * configFile 为 null 时无意义。
+   */
+  mcpFormat: McpConvention['format']
+  /** MCP 服务条目名（= adapter.mcp.serverName；缺省 `prism`）。 */
+  mcpServerName: string
 }
 
 /**
  * 适配器路径约定。经 `resolveHarness` 激活当前配置的适配器
- * （prism.yaml `harness` 键 / `PRISM_HARNESS` 环境变量；默认项由清单决定）——
+ * （优先级：`PRISM_HARNESS` 环境变量 > `prism.yaml: harness` > 默认项）——
  * 路径全部由适配器自述，接入其他 harness 时自动跟随，调用方无需改动。
+ *
+ * **`home` 必须由调用方显式传入**才能读到 `prism.yaml` 的 `harness` 键——这是刻意的：
+ * 早期实现只传 harnessRoot，`resolveHarness` 看不到 prism.yaml，若 prism.yaml 声明了插件
+ * 适配器会**静默回落到内置 zcode**（MCP 注册写错位置）；但不传 home 时若反过来去读
+ * 标准 PRISM_HOME，单测就会被**运行机器的真实配置**左右（这类"环境泄漏"正是历史上
+ * 间歇假红的来源）。故取「显式传入才生效」——生产调用方（init/role/people/mcp）都传。
+ *
+ * @param harnessRoot harness 根目录（显式指定或由适配器 defaultRoot 推导）
+ * @param home        PRISM_HOME（prism.yaml 所在目录）；缺省 → 不读 prism.yaml（仅 env 决定）
  */
-export function harnessPaths(harnessRoot: string): HarnessPaths {
-  const adapter = resolveHarness({ harnessRoot }).adapter
+export function harnessPaths(harnessRoot: string, home?: string): HarnessPaths {
+  const configuredId = home !== undefined && home !== '' ? loadPrismConfig(home)?.harness : undefined
+  const adapter = resolveHarness({
+    harnessRoot,
+    ...(configuredId !== undefined && configuredId !== '' ? { configuredId } : {}),
+  }).adapter
   return {
     root: harnessRoot,
     agentsDir: adapter.agent.globalDir,
     teamDir: adapter.agent.teamDir ?? join(harnessRoot, 'teams'),
     skillsDir: adapter.skill.nativeDir ?? join(harnessRoot, 'skills'),
     configFile: adapter.mcp?.configFile ?? null,
+    mcpFormat: adapter.mcp?.format ?? DEFAULT_MCP_FORMAT,
+    mcpServerName: adapter.mcp?.serverName ?? DEFAULT_MCP_SERVER_NAME,
   }
 }
 
@@ -86,8 +114,8 @@ export function defaultHarnessRoot(): string {
 }
 
 /** 已安装 skill 名单（读 `<harnessRoot>/skills/*` 目录名，只读）；目录不存在 → undefined（跳过引用校验）。 */
-export async function installedSkillNames(harnessRoot: string): Promise<string[] | undefined> {
-  const dir = harnessPaths(harnessRoot).skillsDir
+export async function installedSkillNames(harnessRoot: string, home?: string): Promise<string[] | undefined> {
+  const dir = harnessPaths(harnessRoot, home).skillsDir
   if (!existsSync(dir)) {
     return undefined
   }
@@ -248,6 +276,8 @@ export interface LoadEffectiveSkillsInput {
   teamsDir: string
   rolesDir: string
   harnessRoot: string
+  /** PRISM_HOME（读 prism.yaml 的 harness 键，决定 skills 目录归属）；缺省 → 标准 PRISM_HOME。 */
+  home?: string
 }
 
 /**
@@ -259,7 +289,7 @@ export interface LoadEffectiveSkillsInput {
  * `installedSkillNames()` 语义一致；`known` = 内置清单 ∪ 已装（判 `skill_unknown`）。
  */
 export async function loadEffectiveSkills(input: LoadEffectiveSkillsInput): Promise<EffectiveSkillSet> {
-  const installed = await installedSkillNames(input.harnessRoot)
+  const installed = await installedSkillNames(input.harnessRoot, input.home)
   const known = [...listBuiltinSkills().map((skill) => skill.name), ...(installed ?? [])]
 
   const role = await loadRole(input.rolesDir, input.roleId)
