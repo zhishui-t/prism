@@ -136,6 +136,8 @@ const CLI_OPTIONS = {
   limit: { type: 'string' },
   name: { type: 'string' },
   project: { type: 'string' },
+  /** `team activate --build-project <项目名>`（F-C3：显式建图；缺省绝不建图，守 R1） */
+  'build-project': { type: 'string' },
   timeout: { type: 'string' },
   // design-v3 §3.5 F10 / §5 P14：role/team/skill 命令面
   /** harness 根目录（通用名；`--zcode-dir` 为兼容旧名，见 harnessRootOverride） */
@@ -267,6 +269,8 @@ export type ArgValues = {
   out?: string
   /** `graph merge --out-dir <目录>` */
   'out-dir'?: string
+  /** `team activate --build-project <项目名>`（F-C3：显式建图；缺省绝不建图） */
+  'build-project'?: string
   top?: string
   format?: string
   'dry-run'?: boolean

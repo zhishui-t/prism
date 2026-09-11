@@ -71,6 +71,16 @@ export {
   type PolicyDepositInput,
 } from './team/deposit-policy.js'
 export { resolveTeamExtends, MAX_EXTENDS_DEPTH, type TeamResolver, type MergeTeamInput } from './team/extends.js'
+// 团队工作流 → archify workflow IR（F-C4；纯函数，零 IO 零时钟）
+export { buildTeamWorkflowIr } from './team/workflow-ir.js'
+export type {
+  WorkflowIr,
+  WorkflowIrLane,
+  WorkflowIrNode,
+  WorkflowIrEdge,
+  WorkflowIrPhase,
+  WorkflowNodeType,
+} from './team/workflow-ir.js'
 export { activateTeam } from './team/activate.js'
 export type { ActivateTeamOptions } from './team/activate.js'
 export { renderZcodeTeam, teamMarker, hasTeamMarker } from './team/render.js'

@@ -17,7 +17,7 @@ import { peopleRoutes } from './http/routes/people.js'
 import { resolveDirsFromHome } from './roles/index.js'
 import { archRoutes } from './http/routes/arch.js'
 import { BuildJobManager } from './graph/jobs.js'
-import { ProjectRegistry } from './graph/registry.js'
+import { ProjectRegistry, inspectGraphStatus } from './graph/registry.js'
 import type { KbFactory, KnowledgeService } from './kb/port.js'
 import { loadKnowledgeService } from './kb/wiring.js'
 
@@ -72,7 +72,9 @@ export async function createApp(options: AppOptions = {}): Promise<{
   const home = options.home ?? prismHome()
   const meta: ServerMeta = { version: await readVersion(), startedAt: Date.now(), home }
 
-  let kbCache: KnowledgeService | undefined
+  // 真实知识服务（`createKnowledgeService`）带 `close()`；契约 `KnowledgeService` 未声明，
+  // 故在本地就地扩一个可选方法——不改冻结契约。
+  let kbCache: (KnowledgeService & { close?: () => void }) | undefined
   const loadKb = async (): Promise<KnowledgeService> => {
     if (options.kb !== undefined) {
       return options.kb
@@ -142,11 +144,12 @@ export async function createApp(options: AppOptions = {}): Promise<{
   router.add('GET', '/studio/:project', studioRoute(registry))
 
   // 架构图谱（Archify 封装，knowledge-base.md §4.4 / D10）
-  const arch = archRoutes({ home })
+  const arch = archRoutes({ home, teamsDir: dirs.teamsDir, rolesDir: dirs.rolesDir })
   router.add('GET', '/api/arch/types', arch.types)
   router.add('GET', '/api/arch/diagrams', arch.diagrams)
   router.add('POST', '/api/arch/validate', arch.validate)
   router.add('POST', '/api/arch/render', arch.render)
+  router.add('POST', '/api/arch/from-team', arch.fromTeam)
   router.add('GET', '/api/arch/ir/:type/:file', arch.ir)
   router.add('GET', '/api/arch/preview/:type/:file', arch.preview)
 
@@ -160,7 +163,23 @@ export async function createApp(options: AppOptions = {}): Promise<{
 
   // 角色 / 团队 / 技能（design-v3 §3.4 F11：数据源由激活适配器推导）
   // 只读 GET + 唯一的写路由 POST /api/teams（F-C3：只写 body 显式 teams_dir）
-  const people = peopleRoutes({ home, harnessRoot: dirs.harnessRoot })
+  const people = peopleRoutes({
+    home,
+    harnessRoot: dirs.harnessRoot,
+    // F-C3：团队启用带的图谱状态——**只读、快分支**（不全量哈希），缺省绝不建图（R1）
+    graphStatus: async (project) => {
+      const projects = await registry.list()
+      const found = projects.find((p) => p.project === project)
+      if (found === undefined) return null
+      return await inspectGraphStatus(found.project, found.root, found.built_at, { quick: true })
+    },
+    // F-C3：只有显式 ?build=1 才走到这里
+    requestGraphBuild: async (project) => {
+      const target = await registry.get(project)
+      const job = jobs.submit(project, target.root, target.root, runner, {})
+      return { job_id: job.job_id }
+    },
+  })
   router.add('GET', '/api/roles', people.roles)
   router.add('GET', '/api/roles/:name', people.role)
   router.add('GET', '/api/teams', people.teams)
@@ -190,6 +209,11 @@ export async function createApp(options: AppOptions = {}): Promise<{
   })
   server.on('close', () => {
     tasks.close()
+    // F-T1：知识服务持有的 SQLite 句柄必须随服务释放——否则 Windows 上
+    // `<home>/state/*.db(-wal|-shm)` 仍被占用，临时目录删不掉、e2e 残留静默堆积
+    // （实测：修前 `D:\tmp\prism-e2e-*` 已积累 97 个）。只关自己创建的那个实例，
+    // 注入的 `options.kb`（测试内存桩）归调用方，不越权。
+    kbCache?.close?.()
   })
 
   return { server, loadKb, home }

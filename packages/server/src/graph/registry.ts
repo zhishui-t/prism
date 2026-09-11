@@ -219,6 +219,16 @@ export interface GraphStatusDetail {
   note?: string
 }
 
+export interface InspectGraphStatusOptions {
+  /**
+   * **快分支**（F-C3）：只比 mtime，**不读文件内容做哈希**。
+   *
+   * 团队激活这类「只提示、不动手」的场景用（大项目上不该为了显示一行状态就全量读盘）；
+   * manifest 里没有 mtime 的条目直接计入 `skipped`，在 `note` 里说明「未参与比对」。
+   */
+  quick?: boolean
+}
+
 /**
  * 陈旧检测（尽力而为）：读 `graphify-out/manifest.json`（Graphify 产物）。
  * 实测结构为「顶层 文件路径 → { mtime, hash }」映射（兼容 files/hashes 包裹形态）。
@@ -227,7 +237,12 @@ export interface GraphStatusDetail {
  * **不读 git**（用户裁决 2026-09-10）：Prism 只判断文件内容是否变化，
  * 提交/更新由宿主完成，宿主做完任务后自行触发重新建图/扫描。
  */
-export async function inspectGraphStatus(project: string, root: string, builtAt: string | null): Promise<GraphStatusDetail> {
+export async function inspectGraphStatus(
+  project: string,
+  root: string,
+  builtAt: string | null,
+  options: InspectGraphStatusOptions = {},
+): Promise<GraphStatusDetail> {
   const graphPath = join(root, 'graphify-out', 'graph.json')
   const manifestPath = join(root, 'graphify-out', 'manifest.json')
   const graphExistsFlag = await isFile(graphPath)
@@ -260,12 +275,15 @@ export async function inspectGraphStatus(project: string, root: string, builtAt:
     return detail
   }
 
-  const [changed, skipped] = await countChanged(root, entries)
+  const quick = options.quick === true
+  const [changed, skipped] = await countChanged(root, entries, quick)
   detail.total_files = entries.length
   detail.changed_files = changed
   detail.stale = changed > 0
   if (skipped > 0) {
-    detail.note = `${skipped} 个文件哈希算法不可识别，未参与比对`
+    detail.note = quick
+      ? `快分支：${skipped} 个文件无 mtime，未参与比对（不读文件内容）`
+      : `${skipped} 个文件哈希算法不可识别，未参与比对`
   }
   return detail
 }
@@ -308,13 +326,32 @@ function extractManifestEntries(manifest: unknown): ManifestEntry[] | null {
   return entries.length > 0 ? entries : null
 }
 
-async function countChanged(root: string, entries: ManifestEntry[]): Promise<[changed: number, skipped: number]> {
+async function countChanged(
+  root: string,
+  entries: ManifestEntry[],
+  quick = false,
+): Promise<[changed: number, skipped: number]> {
   const { stat } = await import('node:fs/promises')
   let changed = 0
   let skipped = 0
   for (const entry of entries) {
     // manifest 里的路径可能是绝对路径（graphify 实测如此），也可能是相对项目根
     const abs = /^([a-zA-Z]:)?[\\/]/.test(entry.path) ? entry.path.replace(/\//g, '\\') : join(root, entry.path)
+    // 快分支：只 stat 比 mtime，不读文件内容（无 mtime 的条目无法判 → 计 skipped）
+    if (quick) {
+      if (entry.mtime === undefined) {
+        skipped++
+        continue
+      }
+      try {
+        const fileStat = await stat(abs)
+        const recorded = entry.mtime < 1e11 ? entry.mtime * 1000 : entry.mtime
+        if (Math.abs(fileStat.mtimeMs - recorded) > 1000) changed++
+      } catch {
+        changed++ // 文件被删/不可读 → 视为变更
+      }
+      continue
+    }
     try {
       const [content, fileStat] = await Promise.all([readFile(abs), stat(abs)])
       if (entry.mtime !== undefined) {

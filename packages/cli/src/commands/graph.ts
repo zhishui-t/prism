@@ -122,7 +122,7 @@ async function graphMergeCmd(ctx: CommandContext, args: string[], values: ArgVal
  * `--code-only` 是红线 R2 的护栏（否则 graphify 会对 doc/paper/image 调 LLM，或缺 key 直接失败）；
  * 参数口径与理由见 `packages/server/src/graph/graphify.ts` 的 `buildGraphArgs`。
  */
-async function graphBuild(ctx: CommandContext, args: string[], values: ArgValues): Promise<number> {
+export async function graphBuild(ctx: CommandContext, args: string[], values: ArgValues): Promise<number> {
   const existsGraph = async (root: string): Promise<boolean> => {
     const { access } = await import('node:fs/promises')
     const { join } = await import('node:path')

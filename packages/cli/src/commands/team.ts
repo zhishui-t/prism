@@ -5,17 +5,20 @@ import { parseMembersSpec, renderTeamScaffold, type ResolvedDirs } from '@prism/
 import {
   activateTeam,
   installTeamDefinitions,
+  inspectGraphStatus,
   loadRoles,
   loadTeam,
   loadTeams,
   migrateTeams,
   parseTeamMarkdown,
+  ProjectRegistry,
   validateTeam,
 } from '@prism/server'
-import type { TeamDefinition, TeamMember } from '@prism/server'
+import type { GraphStatusDetail, TeamDefinition, TeamMember } from '@prism/server'
 
 import type { ArgValues, CommandContext } from '../argv.js'
 import { guardWriteTarget, resolveTargetDirs } from '../argv.js'
+import { graphBuild } from './graph.js'
 
 /**
  * `prism team list/show/validate/install/activate`（design-v3 §3.5 F10 + 装配语义简化）。
@@ -185,7 +188,7 @@ export async function runTeam(ctx: CommandContext, args: string[], values: ArgVa
     case 'activate': {
       const id = rest[0]
       if (id === undefined) {
-        ctx.stderr('用法: prism team activate <id>')
+        ctx.stderr('用法: prism team activate <id> [--project <名>|--build-project <名>]')
         return 1
       }
       const team = await loadTeam(teamsDir, id, { rolesDir })
@@ -195,8 +198,34 @@ export async function runTeam(ctx: CommandContext, args: string[], values: ArgVa
       }
       // 装配语义简化：installed = roles_dir（即宿主目录）中存在该角色文件；不再区分"源/目标"两个目录
       const activation = await activateTeam(team, { rolesDir })
+
+      // F-C3：只读图谱状态 + 显式建图（守 R1「不抢调度」——缺省两件事都不做）
+      const project = values.project !== undefined ? String(values.project) : ''
+      const buildProject = values['build-project'] !== undefined ? String(values['build-project']) : ''
+      if (project !== '' && buildProject !== '') {
+        ctx.stderr('错误 [bad_request] --project（只读）与 --build-project（显式建图）互斥')
+        return 1
+      }
+      const target = buildProject !== '' ? buildProject : project
+      let graphStatus: GraphStatusDetail | null = null
+      if (target !== '') {
+        const registry = new ProjectRegistry(home)
+        let info = (await registry.list()).find((p) => p.project === target)
+        if (info === undefined) {
+          ctx.stderr(`错误 [not_found] 未注册的图谱项目: ${target}（可经 prism graph build <根> 登记）`)
+          return 1
+        }
+        if (buildProject !== '') {
+          const code = await graphBuild(ctx, [info.root], { ...values, name: buildProject })
+          if (code !== 0) return code
+          info = (await registry.list()).find((p) => p.project === target) ?? info
+        }
+        // 快分支：只比 mtime，不全量哈希（大项目不卡）
+        graphStatus = await inspectGraphStatus(info.project, info.root, info.built_at, { quick: true })
+      }
+
       if (ctx.json) {
-        ctx.stdout(JSON.stringify({ ok: true, value: activation }))
+        ctx.stdout(JSON.stringify({ ok: true, value: { ...activation, graph_status: graphStatus } }))
       } else {
         ctx.stdout(`团队已启用: ${activation.team_id}（${activation.team_name}）`)
         for (const m of activation.members) {
@@ -205,6 +234,15 @@ export async function runTeam(ctx: CommandContext, args: string[], values: ArgVa
         }
         ctx.stdout(`工作流 ${activation.workflow.length} 阶段；仲裁链: ${activation.arbitration.join(' > ') || '（空）'}；返工上限 ${activation.rework_limit} 轮`)
         ctx.stdout('dispatch 判定仅由 installed 推导；native 派发需重启会话后扫描生效')
+        if (graphStatus !== null) {
+          const state = graphStatus.graph_exists ? (graphStatus.stale ? '已陈旧' : '可用') : '未建图'
+          ctx.stdout(
+            `图谱（${graphStatus.project}）: ${state}；变更 ${graphStatus.changed_files}/${graphStatus.total_files} 个文件；build 于 ${graphStatus.built_at ?? '—'}`,
+          )
+          if (graphStatus.note !== undefined) ctx.stdout(`  ${graphStatus.note}`)
+        } else {
+          ctx.stdout('图谱: 未指定项目（加 --project <名> 只读查看；--build-project <名> 显式建图；缺省不动手）')
+        }
         ctx.stdout(`提示: prism inject <项目根> 可把 Prism 指引写进项目 AGENTS.md（标记块，不动手写内容）`)
       }
       return 0

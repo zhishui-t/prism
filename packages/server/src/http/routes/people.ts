@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { fail, ok, type Envelope } from '../envelope.js'
+import type { GraphStatusDetail } from '../../graph/registry.js'
 import type { RouteContext } from '../router.js'
 import {
   activateTeam,
@@ -25,6 +26,16 @@ export interface PeopleDeps {
   home: string
   /** ZCode 根目录（默认推导基准；AppOptions.harnessRoot → env → ~/.zcode） */
   harnessRoot: string
+  /**
+   * F-C3：**只读**图谱状态查询（项目名 → 状态；未注册项目 → null）。
+   * 缺省不注入 → `activate` 的 `graph_status` 恒为 `null`（不伪造）。
+   */
+  graphStatus?: (project: string) => Promise<GraphStatusDetail | null>
+  /**
+   * F-C3：**显式**建图（仅 `?build=1` 时调用）。
+   * 守 R1「不抢调度」：缺省绝不建图；不注入则 `?build=1` 报错而非静默跳过。
+   */
+  requestGraphBuild?: (project: string) => Promise<{ job_id: string }>
 }
 
 /**
@@ -99,13 +110,56 @@ export function peopleRoutes(deps: PeopleDeps): {
     return found === null ? fail('not_found', teamNotFoundMessage(teamsDir, id)) : ok(found)
   }
 
+  /**
+   * 团队启用（F-C3 增量）：返回体额外带**只读** `graph_status`（可空）。
+   *
+   * - `?project=<名>` 给出时查该项目图谱状态（**快分支**：只比 mtime，不全量哈希）；
+   *   未注册 → `not_found`（不静默给个假状态）。
+   * - `graph_status` 字段**恒存在**（无项目时为 `null`），消费方不必判 `in`。
+   * - `?build=1` 才建图，且**必须**同时给 `project`——不猜项目（守 R1「不抢调度」）。
+   * - 包装在 server 侧完成，**不改** `packages/agents` 的 `TeamActivation` 冻结契约
+   *   （与 S5 的 `/api/roles` 补 `installed` 同一口径）。
+   */
   const teamActivate = async (ctx: RouteContext): Promise<Envelope> => {
     const id = ctx.params.id ?? ''
     const found = await loadTeam(teamsDir, id, { rolesDir, knownSkills: await knownSkills() })
     if (found === null) {
       return fail('not_found', teamNotFoundMessage(teamsDir, id))
     }
-    return ok(await activateTeam(found, { rolesDir, targetDir: harnessPaths(deps.harnessRoot).agentsDir }))
+    const activation = await activateTeam(found, {
+      rolesDir,
+      targetDir: harnessPaths(deps.harnessRoot).agentsDir,
+    })
+
+    const project = (ctx.query.get('project') ?? '').trim()
+    const build = ctx.query.get('build') === '1'
+
+    if (build && project === '') {
+      throw new PrismError('bad_request', '?build=1 需同时指定 ?project=<名>（Prism 不猜项目，守 R1）')
+    }
+
+    let graphStatus: GraphStatusDetail | null = null
+    if (project !== '') {
+      const status = (await deps.graphStatus?.(project)) ?? null
+      if (status === null) {
+        return fail('not_found', `未注册的图谱项目: ${project}（可经 prism project add / prism graph build 登记）`)
+      }
+      graphStatus = status
+    }
+
+    let graphBuild: { job_id: string } | undefined
+    if (build) {
+      if (deps.requestGraphBuild === undefined) {
+        throw new PrismError('bad_request', '当前服务未启用建图（无建图 runner）')
+      }
+      graphBuild = await deps.requestGraphBuild(project)
+    }
+
+    return ok({
+      ...activation,
+      graph_status: graphStatus,
+      ...(graphBuild !== undefined ? { graph_build: graphBuild } : {}),
+    })
   }
 
   const skills = async (): Promise<Envelope> => ok(listBuiltinSkills())

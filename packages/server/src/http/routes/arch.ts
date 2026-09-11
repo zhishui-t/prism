@@ -2,9 +2,11 @@ import { readFile, stat, writeFile, mkdir } from 'node:fs/promises'
 import { createReadStream } from 'node:fs'
 import { join, resolve } from 'node:path'
 
+import { buildTeamWorkflowIr } from '@prism/agents'
 import { PrismError } from '@prism/core'
 import { prismPaths } from '@prism/core'
 
+import { loadTeam, teamNotFoundMessage } from '../../roles/index.js'
 import { ok, type Envelope } from '../envelope.js'
 import {
   ARCHIFY_DIAGRAM_TYPES,
@@ -22,6 +24,10 @@ import type { RouteContext } from '../router.js'
 export interface ArchDeps {
   /** PRISM_HOME（产物落 <home>/archify/<type>/） */
   home: string
+  /** 团队受管目录（F-C4 `from-team` 读团队定义；与 CLI 同源） */
+  teamsDir: string
+  /** 角色受管目录（团队成员的引用校验用） */
+  rolesDir: string
 }
 
 /** 产物列表项（带作用域，供界面按书/模块过滤）。 */
@@ -55,6 +61,7 @@ function assertType(raw: string): asserts raw is (typeof ARCHIFY_DIAGRAM_TYPES)[
  * - GET  /api/arch/diagrams           已渲染产物列表（<home>/archify/<type>/*.html）
  * - POST /api/arch/validate           校验 IR（body: { type, ir }）
  * - POST /api/arch/render             渲染并落盘（body: { type, ir, name? }）
+ * - POST /api/arch/from-team          由**团队工作流**生成并渲染（body: { team_id, name? }，F-C4）
  * - GET  /api/arch/preview/:type/:file  取渲染产物 HTML（iframe 预览；防穿越）
  * 渲染器为 vendored 子工程 3rd/archify（MIT v2.16.0），Prism 只编排。
  */
@@ -63,6 +70,7 @@ export function archRoutes(deps: ArchDeps): {
   diagrams: (ctx: RouteContext) => Promise<Envelope>
   validate: (ctx: RouteContext) => Promise<Envelope>
   render: (ctx: RouteContext) => Promise<Envelope>
+  fromTeam: (ctx: RouteContext) => Promise<Envelope>
   ir: (ctx: RouteContext) => Promise<Envelope>
   preview: (ctx: RouteContext) => Promise<void>
 } {
@@ -159,6 +167,59 @@ export function archRoutes(deps: ArchDeps): {
     })
   }
 
+  /**
+   * 由团队工作流生成工作流图（F-C4）：`buildTeamWorkflowIr`（agents 包纯函数）→ archify 渲染。
+   *
+   * 只落 `<home>/archify/workflow/`（同 `render`），**不接任意输出路径**；
+   * `team_id` 未注册 → `not_found`（不静默产出空图）。
+   * 注：按 D8 修正，本轮**不提供** MCP 入口。
+   */
+  const fromTeam = async (ctx: RouteContext): Promise<Envelope> => {
+    const body = (await ctx.body()) as Record<string, unknown>
+    const teamId = typeof body['team_id'] === 'string' ? body['team_id'].trim() : ''
+    if (teamId === '') {
+      throw new PrismError('bad_request', '缺少 team_id（团队 ID）')
+    }
+    const team = await loadTeam(deps.teamsDir, teamId, { rolesDir: deps.rolesDir })
+    if (team === null) {
+      throw new PrismError('not_found', teamNotFoundMessage(deps.teamsDir, teamId))
+    }
+
+    let ir: unknown
+    try {
+      ir = buildTeamWorkflowIr(team)
+    } catch (error) {
+      throw new PrismError('bad_request', error instanceof Error ? error.message : String(error))
+    }
+
+    const type = 'workflow' as const
+    const rawName = typeof body['name'] === 'string' ? body['name'].trim() : ''
+    const name = rawName === '' ? teamId : rawName.replace(/[^A-Za-z0-9_.-]/g, '_')
+    const dir = join(baseDir(), type)
+    await mkdir(dir, { recursive: true })
+    const htmlPath = join(dir, `${name}.html`)
+    await renderDiagram(type, ir, htmlPath)
+    const irCopy = join(dir, `${name}.ir.json`)
+    await writeFile(irCopy, `${JSON.stringify(ir, null, 2)}\n`, 'utf-8')
+    const scope = {
+      ...(typeof body['layer'] === 'string' ? { layer: body['layer'] } : {}),
+      ...(typeof body['owner'] === 'string' ? { owner: body['owner'] } : {}),
+      ...(typeof body['book'] === 'string' ? { book: body['book'] } : {}),
+      ...(typeof body['module'] === 'string' ? { module: body['module'] } : {}),
+    }
+    const meta = await writeArtifactMeta(htmlPath, ir, scope)
+    const info = await stat(htmlPath)
+    return ok({
+      type,
+      team_id: teamId,
+      name: `${name}.html`,
+      bytes: info.size,
+      preview: `/api/arch/preview/${type}/${name}.html`,
+      ir: irCopy,
+      meta,
+    })
+  }
+
   /** 取产物 IR 源（`<name>.ir.json`）与 sidecar 元数据，供界面「IR / 元数据」子标签展示。 */
   const ir = async (ctx: RouteContext): Promise<Envelope> => {
     const type = ctx.params.type ?? ''
@@ -207,7 +268,7 @@ export function archRoutes(deps: ArchDeps): {
     createReadStream(target).pipe(res)
   }
 
-  return { types, diagrams, validate, render, ir, preview }
+  return { types, diagrams, validate, render, fromTeam, ir, preview }
 }
 
 /** 读取本地 IR 文件（供上层测试/脚本复用）。 */

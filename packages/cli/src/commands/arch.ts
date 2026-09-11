@@ -6,22 +6,24 @@
  *   - 调 `archify render` 产出**自包含 HTML**（iframe 可预览，无外部依赖）
  *   - 产物落 `<PRISM_HOME>/archify/<type>/`（IR 与 HTML 可再作为 `type: diagram` 知识条目）
  */
-import { readFile, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 
+import { buildTeamWorkflowIr } from '@prism/agents'
 import { prismPaths, isPrismError } from '@prism/core'
 import {
   ARCHIFY_DIAGRAM_TYPES,
   ARCHIFY_TYPE_LABELS,
+  loadTeam,
   renderDiagram,
   validateDiagram,
   writeArtifactMeta,
   type ArchifyDiagramType,
 } from '@prism/server'
 
-import type { ArgValues, CommandContext } from '../argv.js'
+import { resolveTargetDirs, type ArgValues, type CommandContext } from '../argv.js'
 
-/** `prism arch <types|validate|render> ...`。 */
+/** `prism arch <types|validate|render|from-team> ...`。 */
 export async function runArch(ctx: CommandContext, args: string[], values: ArgValues): Promise<number> {
   const [sub, ...rest] = args
   try {
@@ -32,13 +34,17 @@ export async function runArch(ctx: CommandContext, args: string[], values: ArgVa
         return await archValidate(ctx, rest)
       case 'render':
         return await archRender(ctx, rest, values)
+      case 'from-team':
+        return await archFromTeam(ctx, rest, values)
       default:
         ctx.stderr(
-          `用法: prism arch <types|validate|render> ...\n` +
+          `用法: prism arch <types|validate|render|from-team> ...\n` +
             `  types                                   列出五类图\n` +
             `  validate <type> <ir.json>               校验 IR（schema + 布局）\n` +
             `  render <type> <ir.json> [--out <html>] [--book <书>] [--module <模块>]\n` +
-            `                                          渲染为自包含 HTML；--book/--module 把产物归到书内`,
+            `                                          渲染为自包含 HTML；--book/--module 把产物归到书内\n` +
+            `  from-team <team_id> [--out <html>] [--book <书>] [--module <模块>]\n` +
+            `                                          由团队工作流生成工作流图（IR 是纯函数派生物）`,
         )
         return 1
     }
@@ -138,13 +144,7 @@ async function archRender(ctx: CommandContext, args: string[], values: ArgValues
   await writeFile(irCopy, `${JSON.stringify(ir, null, 2)}\n`, 'utf-8')
 
   // sidecar 元数据：作用域（--book/--module）+ 版本 + IR 哈希，让界面能按书过滤产物
-  const scope = {
-    ...(values.layer !== undefined ? { layer: String(values.layer) } : {}),
-    ...(values.owner !== undefined ? { owner: String(values.owner) } : {}),
-    ...(values.book !== undefined ? { book: String(values.book) } : {}),
-    ...(values.module !== undefined ? { module: String(values.module) } : {}),
-  }
-  const meta = await writeArtifactMeta(outPath, ir, scope)
+  const meta = await writeArtifactMeta(outPath, ir, artifactScope(values))
 
   if (ctx.json) {
     ctx.stdout(JSON.stringify({ ok: true, value: { type, html: result.htmlPath, ir: irCopy, meta } }))
@@ -157,6 +157,72 @@ async function archRender(ctx: CommandContext, args: string[], values: ArgValues
       ctx.stdout('  归属: 未指定（加 --book <书> [--module <模块>] 可归到书内）')
     }
     ctx.stdout('  预览: prism serve 后在「知识库 → 点开书 → 架构图」查看')
+  }
+  return 0
+}
+
+/** 从 `--layer/--owner/--book/--module` 收集产物作用域（`arch render` / `arch from-team` 共用）。 */
+function artifactScope(values: ArgValues): { layer?: string; owner?: string; book?: string; module?: string } {
+  return {
+    ...(values.layer !== undefined ? { layer: String(values.layer) } : {}),
+    ...(values.owner !== undefined ? { owner: String(values.owner) } : {}),
+    ...(values.book !== undefined ? { book: String(values.book) } : {}),
+    ...(values.module !== undefined ? { module: String(values.module) } : {}),
+  }
+}
+
+/**
+ * `prism arch from-team <team_id>`（F-C4）：由**团队工作流**生成工作流图。
+ *
+ * IR 是纯函数派生物（`buildTeamWorkflowIr`，agents 包），本命令只负责
+ * 「读团队 → 生成 IR → 调 archify 渲染 → 落 IR 源 + sidecar」。渲染前 archify 会先校验，
+ * 校验不过直接失败（不产出坏图）。
+ */
+async function archFromTeam(ctx: CommandContext, args: string[], values: ArgValues): Promise<number> {
+  const teamId = args[0]
+  if (teamId === undefined) {
+    ctx.stderr('错误 [bad_request] 缺少团队 ID（用法: prism arch from-team <team_id> [--out <html>]）')
+    return 1
+  }
+
+  const home = ctx.home ?? prismPaths().home
+  const dirs = resolveTargetDirs(ctx, values)
+  const team = await loadTeam(dirs.teamsDir, teamId, { rolesDir: dirs.rolesDir })
+  if (team === null) {
+    ctx.stderr(`错误 [not_found] 团队不存在: ${teamId}（受管 ${dirs.teamsDir}）`)
+    return 1
+  }
+
+  let ir: unknown
+  try {
+    ir = buildTeamWorkflowIr(team)
+  } catch (error) {
+    ctx.stderr(`错误 [bad_request] ${error instanceof Error ? error.message : String(error)}`)
+    return 1
+  }
+
+  const outPath =
+    values.out !== undefined
+      ? String(values.out)
+      : join(prismPaths(home).home, 'archify', 'workflow', `${teamId}.html`)
+  await mkdir(dirname(outPath), { recursive: true })
+
+  const result = await renderDiagram('workflow', ir, outPath, {
+    timeoutMs: values.timeout !== undefined ? Number(values.timeout) * 1000 : undefined,
+  })
+
+  const irCopy = outPath.replace(/\.html$/i, '.ir.json')
+  await writeFile(irCopy, `${JSON.stringify(ir, null, 2)}\n`, 'utf-8')
+  const meta = await writeArtifactMeta(outPath, ir, artifactScope(values))
+
+  if (ctx.json) {
+    ctx.stdout(
+      JSON.stringify({ ok: true, value: { type: 'workflow', team_id: teamId, html: result.htmlPath, ir: irCopy, meta } }),
+    )
+  } else {
+    ctx.stdout(`已由团队 ${teamId} 生成工作流图 → ${result.htmlPath}`)
+    ctx.stdout(`  IR 源: ${irCopy}`)
+    ctx.stdout(`  预览: prism serve 后在「知识库 → 点开书 → 架构图」查看`)
   }
   return 0
 }
