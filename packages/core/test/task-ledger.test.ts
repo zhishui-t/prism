@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { AuditLog } from '../src/index.js'
+import { AuditLog, TaskStateMachine } from '../src/index.js'
 import { openPersistence } from '../src/persistence/persistence.js'
 import { TaskLedger, newTaskId } from '../src/tasks/task-ledger.js'
 
@@ -437,4 +437,63 @@ describe('report 派生规则（失败传播 / SKIPPED 重激活）', () => {
     expect((await ledger.get('B')).status).toBe('FAILED') // 无下游，不影响别人
     close()
   })
+
+  /**
+   * R-3：成功侧此前**一条派生规则都没有**——失败侧有下推（propagateFailure）与回拉
+   * （reactivateSkipped）两条，成功侧零条。于是 reactivateSkipped **自己产出**的
+   * `SKIPPED→BLOCKED` 在上游最终完成时无人清理，任务永久滞留 BLOCKED，
+   * 只能靠宿主手动 `report --to WAITING` 善后。
+   */
+  it('上游最终完成 → 依赖已就绪的 BLOCKED 下游自动解锁为 WAITING', async () => {
+    const { ledger, audit, close } = makeLedger()
+    await ledger.registerDag({
+      ...BASE_DAG,
+      dag_id: 'prop-5',
+      tasks: [
+        { id: 'A', description: 'a', depends_on: [], write_scopes: [] },
+        { id: 'B', description: 'b', depends_on: ['A'], write_scopes: [] },
+        { id: 'C', description: 'c', depends_on: ['B'], write_scopes: [] },
+      ],
+    })
+    // 走完「失败 → 重开」：B/C 先被级联 SKIPPED，再被重激活到 BLOCKED（依赖未就绪）
+    await ledger.report({ task_id: 'A', to_status: 'RUNNING', by: 'x' })
+    await ledger.report({ task_id: 'A', to_status: 'FAILED', by: 'x' })
+    await ledger.report({ task_id: 'A', to_status: 'WAITING', by: 'human' })
+    expect(ledger.get('B').status).toBe('BLOCKED')
+    expect(ledger.get('C').status).toBe('BLOCKED')
+
+    // A 真正做完 → B 的依赖就绪 → 解锁；C 还在等 B，保持 BLOCKED
+    await ledger.report({ task_id: 'A', to_status: 'RUNNING', by: 'x' })
+    await ledger.report({ task_id: 'A', to_status: 'COMPLETED', by: 'x' })
+    expect(ledger.get('B').status).toBe('WAITING')
+    expect(ledger.get('C').status).toBe('BLOCKED')
+
+    // B 完成 → C 解锁（链式，逐级推进）
+    await ledger.report({ task_id: 'B', to_status: 'RUNNING', by: 'x' })
+    await ledger.report({ task_id: 'B', to_status: 'COMPLETED', by: 'x' })
+    expect(ledger.get('C').status).toBe('WAITING')
+
+    // BLOCKED→WAITING 本就在 32 条矩阵内 → 审计天然放行、口径无需放宽
+    expect(TaskStateMachine.canTransition('BLOCKED', 'WAITING')).toBe(true)
+    expect(await auditTransitions(audit, 'B')).toEqual([
+      'B:WAITING→SKIPPED',
+      'B:SKIPPED→BLOCKED',
+      'B:BLOCKED→WAITING',
+      'B:WAITING→RUNNING',
+      'B:RUNNING→COMPLETED',
+    ])
+    expect(await auditTransitions(audit, 'C')).toEqual([
+      'C:WAITING→SKIPPED',
+      'C:SKIPPED→BLOCKED',
+      'C:BLOCKED→WAITING',
+    ])
+    close()
+  })
+
+  /**
+   * 注：`skip_override` 的豁免语义由 state.test.ts 在**纯函数层**覆盖。
+   * 台账层无法覆盖——`skip_override` / `skip_reason` 是**只读死字段**：
+   * 列存在、状态机读它做豁免，但全仓库无写入路径（registerDag 不收、report 不收、
+   * 无 skip 命令/工具），故此处构造不出该局面。已在排修报告中登记为待定夺项。
+   */
 })

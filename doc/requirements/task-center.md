@@ -70,10 +70,21 @@ CREATE TABLE edges (
 
 ## 3. 状态机
 
-复用已移植的 **14 态 32 转移**（`WAITING/BLOCKED/RUNNING/COMPLETED/…/COOLDOWN`），含：
-- 失败传播（`WAITING/BLOCKED → SKIPPED`）；
-- SKIPPED 重激活；
-- 失败终态 → retry/skip/cancel。
+复用已移植的 **14 态 32 转移**（`WAITING/BLOCKED/RUNNING/COMPLETED/…/COOLDOWN`）。
+
+**派生规则**（由状态机计算产生，`report()` 的显式回报不接受；由一次显式回报触发，系统只维护状态一致性，不代替宿主发起工作）：
+
+| 规则 | 转移 | 触发 |
+| :--- | :--- | :--- |
+| 失败传播 | `WAITING/BLOCKED → SKIPPED` | 上游进**失败终态**（`FAILED/BANNED/LOOP_TERMINATED/CANCELLED`），下游不再有意义 |
+| SKIPPED 重激活 | `SKIPPED → WAITING/BLOCKED` | 上游**离开**失败终态（人工重开）；依赖就绪 → `WAITING`，否则 → `BLOCKED` |
+| 上游完成解锁 | `BLOCKED → WAITING` | 上游进**完成终态**（`COMPLETED/CLOSED`），解锁依赖已就绪的 `BLOCKED` 下游 |
+
+另含 **失败终态 → retry/skip/cancel** 的显式转移。
+
+两个口径必须分开（混用会让级联写先落库、再被审计拒绝）：
+- **事前授权**（矩阵）：`report()` 判断「调用方能否请求该转移」。上表第三行的 `BLOCKED → WAITING` 本就在矩阵内，宿主也可直接请求；
+- **事后留痕**（矩阵 ∪ 派生规则）：审计判断「系统能否产生该转移」。
 
 **唯一变化**：状态由**执行方回报**，不是 Prism 推进。
 

@@ -11,7 +11,15 @@ export const FAILURE_TERMINALS: readonly TaskStatus[] = [
 
 const FAILURE_TERMINAL_SET: ReadonlySet<TaskStatus> = new Set(FAILURE_TERMINALS)
 
-/** SKIPPED 重激活 / 失败传播的迭代保护上限。 */
+/**
+ * 完成终态：COMPLETED / CLOSED，触发下游 BLOCKED 解锁。
+ * 与依赖就绪判据（reactivateSkipped 的 allDone）**同源**——两处必须一起改。
+ */
+export const COMPLETION_TERMINALS: readonly TaskStatus[] = ['COMPLETED', 'CLOSED'] as const
+
+const COMPLETION_TERMINAL_SET: ReadonlySet<TaskStatus> = new Set(COMPLETION_TERMINALS)
+
+/** SKIPPED 重激活 / 失败传播 / BLOCKED 解锁的迭代保护上限。 */
 export const MAX_ACTIVATION_ITERATIONS = 100
 
 export interface StatusTransition {
@@ -23,6 +31,8 @@ export interface StatusTransition {
  * 32 条合法转移（权威矩阵）——**显式回报**（`report()`）可用的全集。
  * 失败传播（WAITING/BLOCKED→SKIPPED）与 SKIPPED 重激活为派生规则
  * （propagateFailure / reactivateSkipped），不计入本矩阵，见 DERIVED_TRANSITIONS。
+ * 另有 BLOCKED→WAITING：**既是**矩阵内的显式转移，**也是** unblockDownstream 的派生结果
+ * ——故不入 DERIVED_TRANSITIONS（该表语义为「矩阵之外」），审计口径天然放行。
  */
 export const TASK_TRANSITIONS: readonly StatusTransition[] = [
   // 依赖图调度
@@ -106,8 +116,17 @@ export interface ReactivationResult {
   plan: TaskTransition[]
 }
 
+export interface UnblockResult {
+  iterations: number
+  changed: number
+  unblocked: string[]
+  /** 逐条转移事实（BLOCKED → WAITING），供台账落库与审计。 */
+  plan: TaskTransition[]
+}
+
 /**
- * 任务状态机：唯一权威的转移判定 + 失败传播 / SKIPPED 重激活。
+ * 任务状态机：唯一权威的转移判定 + 三条派生规则
+ * （失败传播 / SKIPPED 重激活 / 上游完成解锁下游 BLOCKED）。
  * 纯函数式实现（不持有任务状态），便于测试与序列化。
  */
 export class TaskStateMachine {
@@ -116,6 +135,11 @@ export class TaskStateMachine {
 
   static isFailureTerminal(status: TaskStatus): boolean {
     return FAILURE_TERMINAL_SET.has(status)
+  }
+
+  /** 是否为依赖就绪口径下的「已完成」态（COMPLETED / CLOSED）。 */
+  static isCompletionTerminal(status: TaskStatus): boolean {
+    return COMPLETION_TERMINAL_SET.has(status)
   }
 
   /** 该转移是否合法（32 条矩阵）。**显式回报**的授权口径。 */
@@ -165,16 +189,11 @@ export class TaskStateMachine {
       const snapshot = new Map(dag.tasks.map((t) => [t.id, t.status]))
       for (const task of dag.tasks) {
         if (task.status !== 'WAITING' && task.status !== 'BLOCKED') continue
-        const dead = task.dependencies.some((d) => {
-          const s = snapshot.get(d)
-          return s === 'SKIPPED' || (s !== undefined && FAILURE_TERMINAL_SET.has(s))
-        })
-        if (dead) {
-          plan.push({ id: task.id, from: task.status, to: 'SKIPPED' })
-          task.status = 'SKIPPED'
-          skipped.push(task.id)
-          changed = true
-        }
+        if (!TaskStateMachine.#hasDeadDependency(task, snapshot)) continue
+        plan.push({ id: task.id, from: task.status, to: 'SKIPPED' })
+        task.status = 'SKIPPED'
+        skipped.push(task.id)
+        changed = true
       }
     }
     return { iterations, changed: skipped.length, skipped, plan }
@@ -205,18 +224,10 @@ export class TaskStateMachine {
       for (const task of dag.tasks) {
         if (task.status !== 'SKIPPED' || task.skip_override) continue
         if (!reachable.has(task.id)) continue
-        const blockedByDead = task.dependencies.some((d) => {
-          const s = snapshot.get(d)
-          return s === 'SKIPPED' || (s !== undefined && FAILURE_TERMINAL_SET.has(s))
-        })
-        if (blockedByDead) continue
-        const allDone =
-          task.dependencies.length === 0 ||
-          task.dependencies.every((d) => {
-            const s = snapshot.get(d)
-            return s === 'COMPLETED' || s === 'CLOSED'
-          })
-        const target: TaskStatus = allDone ? 'WAITING' : 'BLOCKED'
+        if (TaskStateMachine.#hasDeadDependency(task, snapshot)) continue
+        const target: TaskStatus = TaskStateMachine.#allDependenciesDone(task, snapshot)
+          ? 'WAITING'
+          : 'BLOCKED'
         plan.push({ id: task.id, from: 'SKIPPED', to: target })
         task.status = target
         reactivated.push(task.id)
@@ -224,6 +235,72 @@ export class TaskStateMachine {
       }
     }
     return { iterations, changed: reactivated.length, reactivated, plan }
+  }
+
+  /**
+   * 上游**完成**（COMPLETED / CLOSED）后，解锁其下游中「依赖已全部就绪」的 BLOCKED 任务 → WAITING。
+   *
+   * 补的是派生规则的**不对称缺口**：失败侧有 propagateFailure（下推 SKIPPED）与
+   * reactivateSkipped（回拉）两条规则，成功侧一条都没有。于是 reactivateSkipped
+   * **自己产出**的 `SKIPPED→BLOCKED`（依赖尚未就绪）在上游最终完成时无人清理，
+   * 任务永久滞留 BLOCKED，只能靠宿主手动 `report --to WAITING` 善后——
+   * 「被动台账」于是退化成「只留下烂摊子」。
+   *
+   * 边界：
+   * - 只处理 BLOCKED（SKIPPED 归 reactivateSkipped；失败终态不在此规则射程）。
+   * - 只处理**触发任务可达的下游**，不扫描全图。
+   * - 尊重 `skip_override`：宿主显式置为「跳过」的任务不动。
+   * - 依赖判据与 reactivateSkipped 同源（`#allDependenciesDone`）。
+   *
+   * 转移 BLOCKED→WAITING 本就在 32 条矩阵内，故审计口径无需改动（不进 DERIVED_TRANSITIONS）。
+   */
+  static unblockDownstream(dag: TaskDag, completedTaskId: string): UnblockResult {
+    const byId = TaskStateMachine.#index(dag)
+    if (!byId.has(completedTaskId)) {
+      throw new PrismError('task_not_found', `任务不存在: ${completedTaskId}`, {
+        taskId: completedTaskId,
+      })
+    }
+    const reachable = TaskStateMachine.#downstreamFrom(dag, completedTaskId)
+
+    const unblocked: string[] = []
+    const plan: TaskTransition[] = []
+    let changed = true
+    let iterations = 0
+    while (changed && iterations < MAX_ACTIVATION_ITERATIONS) {
+      changed = false
+      iterations++
+      const snapshot = new Map(dag.tasks.map((t) => [t.id, t.status]))
+      for (const task of dag.tasks) {
+        if (task.status !== 'BLOCKED' || task.skip_override) continue
+        if (!reachable.has(task.id)) continue
+        if (!TaskStateMachine.#allDependenciesDone(task, snapshot)) continue
+        plan.push({ id: task.id, from: 'BLOCKED', to: 'WAITING' })
+        task.status = 'WAITING'
+        unblocked.push(task.id)
+        changed = true
+      }
+    }
+    return { iterations, changed: unblocked.length, unblocked, plan }
+  }
+
+  /** 依赖中是否存在失败终态或 SKIPPED（「已死」：该任务不可能再推进）。 */
+  static #hasDeadDependency(task: TaskRecord, snapshot: ReadonlyMap<string, TaskStatus>): boolean {
+    return task.dependencies.some((d) => {
+      const s = snapshot.get(d)
+      return s === 'SKIPPED' || (s !== undefined && FAILURE_TERMINAL_SET.has(s))
+    })
+  }
+
+  /** 依赖是否已全部完成（COMPLETED / CLOSED）；无依赖视为就绪。 */
+  static #allDependenciesDone(task: TaskRecord, snapshot: ReadonlyMap<string, TaskStatus>): boolean {
+    return (
+      task.dependencies.length === 0 ||
+      task.dependencies.every((d) => {
+        const s = snapshot.get(d)
+        return s !== undefined && COMPLETION_TERMINAL_SET.has(s)
+      })
+    )
   }
 
   /** 构建 id → TaskRecord 索引。 */

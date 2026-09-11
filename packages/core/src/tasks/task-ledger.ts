@@ -259,18 +259,29 @@ export class TaskLedger {
     }
     target.status = input.to_status
 
-    // 触发集一律取 FAILURE_TERMINALS 全集（FAILED / BANNED / LOOP_TERMINATED /
-    // CANCELLED）。此前硬编码成 `FAILED | CANCELLED`，导致 report 到 BANNED /
-    // LOOP_TERMINATED 时下游永久停在 WAITING；重激活侧又漏了 LOOP_TERMINATED。
-    const derived = TaskStateMachine.isFailureTerminal(input.to_status)
-      ? TaskStateMachine.propagateFailure(dag, input.task_id)
-      : TaskStateMachine.isFailureTerminal(from)
-        ? TaskStateMachine.reactivateSkipped(dag, input.task_id)
-        : { plan: [] as TaskTransition[] }
+    // 派生规则三分支（互斥，由矩阵合法性天然保证）：
+    //   ① 进失败终态 → 下推 SKIPPED
+    //   ② 离开失败终态（人工重开）→ 回拉 SKIPPED
+    //   ③ 进完成终态 → 解锁「依赖已就绪」的 BLOCKED 下游
+    // 分支③ 补的是成功侧缺口：②自己产出的 SKIPPED→BLOCKED 在①的镜像路径上无人清理。
+    //
+    // 触发集一律取全集常量（FAILURE_TERMINALS / COMPLETION_TERMINALS），不硬编码
+    // ——硬编码 `FAILED | CANCELLED` 曾让 report 到 BANNED / LOOP_TERMINATED 时下游永久停在
+    // WAITING（D-8），同一坑不留第二次。
+    let derivedPlan: TaskTransition[]
+    if (TaskStateMachine.isFailureTerminal(input.to_status)) {
+      derivedPlan = TaskStateMachine.propagateFailure(dag, input.task_id).plan
+    } else if (TaskStateMachine.isFailureTerminal(from)) {
+      derivedPlan = TaskStateMachine.reactivateSkipped(dag, input.task_id).plan
+    } else if (TaskStateMachine.isCompletionTerminal(input.to_status)) {
+      derivedPlan = TaskStateMachine.unblockDownstream(dag, input.task_id).plan
+    } else {
+      derivedPlan = []
+    }
     // 触发任务自身不算「派生」结果：它已经在主转移里，不能既是因又是果。
     const plan: TaskTransition[] = [
       { id: input.task_id, from, to: input.to_status },
-      ...derived.plan.filter((t) => t.id !== input.task_id),
+      ...derivedPlan.filter((t) => t.id !== input.task_id),
     ]
 
     // ---- 2. 全量校验：任一转移非法 → 整体拒绝，**零写入** ----
@@ -329,6 +340,10 @@ export class TaskLedger {
     })
 
     // ---- 4. 批量审计：全量校验后一次 append，不会因口径被拒 ----
+    // 已知边界（R-2，接受）：append 发生在 DB COMMIT 之后。若此处 I/O 失败（磁盘满 /
+    // 权限 / 进程被杀），会出现「库里已变更、审计缺行」。不能简单前移——那会反向制造
+    // 「审计有、库里没有」的**幻影记录**，而审计是给人做因果追溯用的，捏造比缺行更糟。
+    // tasks 表才是事实源，缺行只断追溯链、不影响任何状态计算。
     await this.#audit?.recordMany(
       plan.map((t) => ({
         type: 'task.status_changed' as const,

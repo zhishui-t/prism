@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { DERIVED_TRANSITIONS, PrismError, TaskStateMachine, TASK_TRANSITIONS } from '../src/index.js'
+import {
+  COMPLETION_TERMINALS,
+  DERIVED_TRANSITIONS,
+  PrismError,
+  TaskStateMachine,
+  TASK_TRANSITIONS,
+} from '../src/index.js'
 import type { TaskDag, TaskRecord } from '../src/index.js'
 
 function task(id: string, status: TaskRecord['status'], deps: string[] = []): TaskRecord {
@@ -105,6 +111,50 @@ describe('TaskStateMachine', () => {
     const r = TaskStateMachine.reactivateSkipped(d, 'a')
     expect(r.reactivated).toContain('b')
     expect(d.tasks[1]?.status).toBe('WAITING')
+  })
+
+  it('完成终态判定（COMPLETED / CLOSED）', () => {
+    expect(TaskStateMachine.isCompletionTerminal('COMPLETED')).toBe(true)
+    expect(TaskStateMachine.isCompletionTerminal('CLOSED')).toBe(true)
+    expect(TaskStateMachine.isCompletionTerminal('AWAITING_FEEDBACK')).toBe(false)
+    expect(COMPLETION_TERMINALS).toEqual(['COMPLETED', 'CLOSED'])
+  })
+
+  /**
+   * R-3：成功侧此前**一条派生规则都没有** —— 失败侧有下推（propagateFailure）与回拉
+   * （reactivateSkipped）两条，成功侧零条。于是 reactivateSkipped **自己产出**的
+   * `SKIPPED→BLOCKED` 在上游最终完成时无人清理，任务永久滞留 BLOCKED。
+   */
+  it('上游完成解锁依赖已就绪的 BLOCKED 下游（plan 带真实 from→to）', () => {
+    const d = dag([task('a', 'COMPLETED'), task('b', 'BLOCKED', ['a']), task('c', 'BLOCKED', ['b'])])
+    const r = TaskStateMachine.unblockDownstream(d, 'a')
+    // b 依赖 a（已完成）→ WAITING；c 依赖 b（刚变 WAITING，尚未完成）→ 本轮不动
+    expect(r.plan).toEqual([{ id: 'b', from: 'BLOCKED', to: 'WAITING' }])
+    expect(r.unblocked).toEqual(['b'])
+    expect(d.tasks.map((t) => t.status)).toEqual(['COMPLETED', 'WAITING', 'BLOCKED'])
+  })
+
+  it('依赖未全部就绪的 BLOCKED 下游不解锁', () => {
+    const d = dag([task('a', 'COMPLETED'), task('x', 'RUNNING'), task('b', 'BLOCKED', ['a', 'x'])])
+    const r = TaskStateMachine.unblockDownstream(d, 'a')
+    expect(r.plan).toEqual([])
+    expect(d.tasks[2]?.status).toBe('BLOCKED')
+  })
+
+  it('解锁尊重 skip_override，且不碰 SKIPPED / 不可达任务', () => {
+    const d = dag([
+      task('a', 'COMPLETED'),
+      { ...task('b', 'BLOCKED', ['a']), skip_override: true }, // 宿主显式跳过 → 不动
+      task('c', 'SKIPPED', ['a']), // SKIPPED 归 reactivateSkipped → 不动
+      task('d', 'BLOCKED'), // 与 a 无依赖关系、不可达 → 不动
+    ])
+    const r = TaskStateMachine.unblockDownstream(d, 'a')
+    expect(r.plan).toEqual([])
+    expect(d.tasks.map((t) => t.status)).toEqual(['COMPLETED', 'BLOCKED', 'SKIPPED', 'BLOCKED'])
+  })
+
+  it('解锁未知任务抛 task_not_found', () => {
+    expect(() => TaskStateMachine.unblockDownstream(dag([]), 'nope')).toThrow(PrismError)
   })
 
   it('未知任务抛 task_not_found', () => {

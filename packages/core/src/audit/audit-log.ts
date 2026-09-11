@@ -126,6 +126,11 @@ export class AuditLog {
    *
    * 任一条不合法 → 整批零落盘，避免「半批写入」让审计与事实对不上
    * （级联场景下一次状态回报会产生多条转移，逐条写就会出现写了一半的状态）。
+   *
+   * 已知边界（R-2，接受）：append 与调用方的 DB 提交不在同一事务里——调用方若在
+   * COMMIT 之后、本方法返回之前遭遇 I/O 失败或进程被杀，会出现「状态已变、审计缺行」。
+   * 反向（把审计前移）更糟：会制造「审计有、库里没有」的幻影记录。审计是留痕不是事实源，
+   * 缺行只断追溯链、不影响状态计算。要结构性消除需引入 outbox（同事务落表 + 异步刷 JSONL）。
    */
   async recordMany(events: AuditEventInput[]): Promise<AuditEvent[]> {
     if (events.length === 0) return []
@@ -166,9 +171,10 @@ export class AuditLog {
       if (!TASK_STATUSES.includes(from as never) || !TASK_STATUSES.includes(to as never)) {
         throw new PrismError('invalid_audit_event', `非法状态值: ${from} → ${to}`, { from, to })
       }
-      // 口径是「系统能否产生」= 权威矩阵 ∪ 派生规则（失败传播 / SKIPPED 重激活），
-      // 而非「调用方能否请求」（那是 report 的 canTransition）。两者混用会让级联写
-      // 先落库、再被审计拒绝。
+      // 口径是「系统能否产生」= 权威矩阵 ∪ 派生规则（失败传播 / SKIPPED 重激活 /
+      // 上游完成解锁 BLOCKED），而非「调用方能否请求」（那是 report 的 canTransition）。
+      // 两者混用会让级联写先落库、再被审计拒绝。BLOCKED→WAITING 本就在矩阵内，
+      // 既是显式转移也是派生结果，故两边都放行、无需单列。
       if (!TaskStateMachine.isLegalTransition(from as never, to as never)) {
         throw new PrismError('invalid_status_transition', `审计拒绝非法转移: ${from} → ${to}`, {
           from,
