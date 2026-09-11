@@ -1,5 +1,7 @@
+import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 /**
  * Prism 本地状态根目录。所有持久化数据默认落在 ~/.prism 之下，
@@ -39,4 +41,30 @@ export function prismPaths(home: string = prismHome()): PrismPaths {
     graphDir: join(home, 'graph'),
     harnessesDir: join(home, 'harnesses'),
   }
+}
+
+/**
+ * 定位**发行根目录**（含 `3rd/` 的那一层），供解析 vendored 三方件路径。
+ *
+ * 为什么不能写死相对层级：同一份代码有两种布局——
+ * - 开发态：`packages/<pkg>/src|dist/…`（到根 4 层）
+ * - 打包后：`node_modules/@prism/<pkg>/dist/…`（到根 **5** 层，多一层 `node_modules/@prism`）
+ * 写死 `../../../../3rd` 会让发行版解析到 `node_modules/3rd`（实测：doctor 报
+ * anydoc 缺失、graphify 回落 PATH、embedding 不可用）。
+ *
+ * 故**从模块位置向上查找**第一个含 `3rd/` 或 `packages/` 的目录（发行根特征）。
+ * 找不到时回落调用方给的 fallback（保持可用性，不抛）。
+ *
+ * @param fromMetaUrl 调用方 `import.meta.url`
+ * @param maxDepth    向上查找层数上限（默认 8，足够覆盖两种布局）
+ */
+export function repoRoot(fromMetaUrl: string, maxDepth = 8): string | null {
+  let dir = fileURLToPath(new URL('.', fromMetaUrl))
+  for (let i = 0; i < maxDepth; i++) {
+    if (existsSync(join(dir, '3rd')) || existsSync(join(dir, 'packages'))) return dir
+    const parent = join(dir, '..')
+    if (parent === dir) break
+    dir = parent
+  }
+  return null
 }

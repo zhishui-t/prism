@@ -20,6 +20,8 @@ import { existsSync, readFileSync, writeFileSync, rmSync, statSync } from 'node:
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 
+import { repoRoot } from '@prism/core'
+
 import {
   EMBEDDING_MODELS,
   EMBEDDING_TIERS,
@@ -30,7 +32,8 @@ import {
 
 /** vendored 布局（scripts/setup-embedding.mjs 安装目标）。 */
 /** 源码是 submodule（3rd/llama.cpp）；构建产物与模型在 Prism 自有的 3rd/llama-runtime/。 */
-const RUNTIME_DIR = fileURLToPath(new URL('../../../../3rd/llama-runtime', import.meta.url))
+/** 发行根经 `repoRoot` 向上查找（兼容 packages/ 与 node_modules/@prism/ 两种布局）。 */
+const RUNTIME_DIR = join(repoRoot(import.meta.url, 8) ?? fileURLToPath(new URL('../../../../', import.meta.url)), '3rd', 'llama-runtime')
 const CPU_SERVER_EXE = join(RUNTIME_DIR, 'bin', 'llama-server.exe')
 /** GPU（Vulkan 预编译）二进制；有则优先（CPU 推理慢约 170 倍）。 */
 const GPU_SERVER_EXE = join(RUNTIME_DIR, 'bin-vulkan', 'llama-server.exe')

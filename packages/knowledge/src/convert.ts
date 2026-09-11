@@ -19,9 +19,12 @@ import { existsSync } from 'node:fs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { join } from 'node:path'
 
-/** anydoc 运行时目录（setup-anydoc.mjs 的安装目标）。src 与 dist 同深度 → 上 3 级 = 仓库根。 */
+import { repoRoot } from '@prism/core'
+
+/** anydoc 运行时目录（setup-anydoc.mjs 的安装目标）。发行根向上查找，兼容打包布局。 */
 export function anydocRuntimeDir(): string {
-  return fileURLToPath(new URL('../../../3rd/anydoc-runtime', import.meta.url))
+  const root = repoRoot(import.meta.url, 8) ?? fileURLToPath(new URL('../../../', import.meta.url))
+  return join(root, '3rd', 'anydoc-runtime')
 }
 
 /** anydoc 模块最小接口（只用 toMarkdownBytes）。 */

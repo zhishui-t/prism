@@ -4,7 +4,7 @@ import { access, readFile } from 'node:fs/promises'
 import { delimiter, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { PrismError } from '@prism/core'
+import { PrismError, repoRoot } from '@prism/core'
 
 /** 建图默认超时（design.md §4：300s）。 */
 export const DEFAULT_GRAPHIFY_TIMEOUT_MS = 300_000
@@ -60,11 +60,14 @@ function normalizeExecPath(path: string): string {
 
 /**
  * 仓库内 graphify 子模块目录（`3rd/graphify`，Python 包，PYTHONPATH 直跑免安装）。
- * 源码 `packages/server/src/graph/graphify.ts` 与产物 `packages/server/dist/graph/graphify.js`
- * 到仓库根都是 4 层，故统一 `../../../../3rd/...`。
+ *
+ * 发行根经 `repoRoot` **向上查找**（含 `3rd/` 或 `packages/` 的目录）——不能写死相对
+ * 层级：开发态是 `packages/server/dist/graph/`（4 层到根），打包物化后是
+ * `node_modules/@prism/server/dist/graph/`（**5 层**），写死会解析到 `node_modules/3rd`。
  */
 export function vendoredGraphifyDir(): string {
-  return fileURLToPath(new URL('../../../../3rd/graphify', import.meta.url))
+  const root = repoRoot(import.meta.url, 8) ?? fileURLToPath(new URL('../../../../', import.meta.url))
+  return join(root, '3rd', 'graphify')
 }
 
 /** 读取 vendored 子工程版本（pyproject.toml 的 version；读不到 → null）。 */

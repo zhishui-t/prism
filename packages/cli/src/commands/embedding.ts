@@ -14,7 +14,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { openPersistence, prismPaths } from '@prism/core'
+import { openPersistence, prismPaths, repoRoot } from '@prism/core'
 import {
   EMBEDDING_MODELS,
   EMBEDDING_TIERS,
@@ -31,9 +31,10 @@ import {
 
 import type { ArgValues, CommandContext } from '../argv.js'
 
-/** vendored 模型目录（与 server 的运行时布局一致）。 */
+/** vendored 模型目录（与 server 的运行时布局一致；发行根向上查找，兼容打包布局）。 */
 function modelDir(): string {
-  return fileURLToPath(new URL('../../../../3rd/llama-runtime/models', import.meta.url))
+  const root = repoRoot(import.meta.url, 8) ?? fileURLToPath(new URL('../../../../', import.meta.url))
+  return join(root, '3rd', 'llama-runtime', 'models')
 }
 
 const ACTIONS = ['status', 'install', 'start', 'stop', 'reindex', 'models', 'use'] as const

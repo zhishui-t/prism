@@ -18,7 +18,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { PrismError } from '@prism/core'
+import { PrismError, repoRoot } from '@prism/core'
 
 /** 五类图（archify schema 的 diagram_type 枚举）。 */
 export const ARCHIFY_DIAGRAM_TYPES = [
@@ -96,11 +96,11 @@ function normalizeExecPath(path: string): string {
  *
  * 布局（上游 tt-a1i/archify 仓库结构）：`3rd/archify/archify/bin/archify.mjs`
  * （submodule 根 = 上游 repo 根，CLI 在其 `archify/` 子目录内）。
- * 源码位置 `packages/server/src/graph/archify.ts` 与产物 `packages/server/dist/graph/archify.js`
- * 到仓库根都是 4 层（…/graph → src|dist → server → packages → 根），故前缀 `../../../../`。
+ * 发行根经 `repoRoot` **向上查找**（兼容 `packages/` 与打包后的 `node_modules/@prism/`）。
  */
 export function vendoredArchifyEntry(): string {
-  return fileURLToPath(new URL('../../../../3rd/archify/archify/bin/archify.mjs', import.meta.url))
+  const root = repoRoot(import.meta.url, 8) ?? fileURLToPath(new URL('../../../../', import.meta.url))
+  return join(root, '3rd', 'archify', 'archify', 'bin', 'archify.mjs')
 }
 
 /**
