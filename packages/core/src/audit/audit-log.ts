@@ -117,18 +117,34 @@ export class AuditLog {
 
   /** 写入一条审计事件；返回完整事件（含生成字段）。校验失败抛 PrismError 且不落盘。 */
   async record(event: AuditEventInput): Promise<AuditEvent> {
-    const full: AuditEvent = {
-      ...event,
-      id: (event as Partial<AuditEvent>).id ?? this.#idFactory(),
-      occurred_at: event.occurred_at ?? this.#now().toISOString(),
-    } as unknown as AuditEvent
-    this.#validate(full)
-    const line = `${JSON.stringify(full)}\n`
+    const [written] = await this.recordMany([event])
+    return written as AuditEvent
+  }
+
+  /**
+   * 批量写入：**先全量校验，再一次性 append**。
+   *
+   * 任一条不合法 → 整批零落盘，避免「半批写入」让审计与事实对不上
+   * （级联场景下一次状态回报会产生多条转移，逐条写就会出现写了一半的状态）。
+   */
+  async recordMany(events: AuditEventInput[]): Promise<AuditEvent[]> {
+    if (events.length === 0) return []
+    const occurredAt = this.#now().toISOString()
+    const fulls = events.map(
+      (event) =>
+        ({
+          ...event,
+          id: (event as Partial<AuditEvent>).id ?? this.#idFactory(),
+          occurred_at: event.occurred_at ?? occurredAt,
+        }) as unknown as AuditEvent,
+    )
+    for (const full of fulls) this.#validate(full)
+    const payload = fulls.map((full) => `${JSON.stringify(full)}\n`).join('')
     await this.queue.run(async () => {
       await mkdir(this.dir, { recursive: true })
-      await appendFile(this.#fileFor(this.#now()), line, { encoding: 'utf-8' })
+      await appendFile(this.#fileFor(this.#now()), payload, { encoding: 'utf-8' })
     })
-    return full
+    return fulls
   }
 
   #validate(event: AuditEvent): void {
@@ -150,7 +166,10 @@ export class AuditLog {
       if (!TASK_STATUSES.includes(from as never) || !TASK_STATUSES.includes(to as never)) {
         throw new PrismError('invalid_audit_event', `非法状态值: ${from} → ${to}`, { from, to })
       }
-      if (!TaskStateMachine.canTransition(from as never, to as never)) {
+      // 口径是「系统能否产生」= 权威矩阵 ∪ 派生规则（失败传播 / SKIPPED 重激活），
+      // 而非「调用方能否请求」（那是 report 的 canTransition）。两者混用会让级联写
+      // 先落库、再被审计拒绝。
+      if (!TaskStateMachine.isLegalTransition(from as never, to as never)) {
         throw new PrismError('invalid_status_transition', `审计拒绝非法转移: ${from} → ${to}`, {
           from,
           to,

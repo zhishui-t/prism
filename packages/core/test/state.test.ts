@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { PrismError, TaskStateMachine, TASK_TRANSITIONS } from '../src/index.js'
+import { DERIVED_TRANSITIONS, PrismError, TaskStateMachine, TASK_TRANSITIONS } from '../src/index.js'
 import type { TaskDag, TaskRecord } from '../src/index.js'
 
 function task(id: string, status: TaskRecord['status'], deps: string[] = []): TaskRecord {
@@ -52,6 +52,41 @@ describe('TaskStateMachine', () => {
   it('失败终态判定', () => {
     expect(TaskStateMachine.isFailureTerminal('FAILED')).toBe(true)
     expect(TaskStateMachine.isFailureTerminal('COMPLETED')).toBe(false)
+  })
+
+  it('派生转移不在矩阵内，但属系统可产生的合法转移', () => {
+    expect(DERIVED_TRANSITIONS).toHaveLength(4)
+    for (const t of DERIVED_TRANSITIONS) {
+      // 派生转移绝不与权威矩阵重叠（重叠即意味着矩阵定义被污染）
+      expect(TaskStateMachine.canTransition(t.from, t.to)).toBe(false)
+      expect(TaskStateMachine.isDerivedTransition(t.from, t.to)).toBe(true)
+      // 审计口径（系统能否产生）= 矩阵 ∪ 派生
+      expect(TaskStateMachine.isLegalTransition(t.from, t.to)).toBe(true)
+    }
+    // 矩阵转移当然也是合法转移
+    expect(TaskStateMachine.isLegalTransition('RUNNING', 'FAILED')).toBe(true)
+    expect(TaskStateMachine.isDerivedTransition('RUNNING', 'FAILED')).toBe(false)
+    // 两侧都覆盖不到 → 非法
+    expect(TaskStateMachine.isLegalTransition('COMPLETED', 'WAITING')).toBe(false)
+    expect(TaskStateMachine.isLegalTransition('COMPLETED', 'SKIPPED')).toBe(false)
+  })
+
+  it('派生函数输出真实转移事实（plan）', () => {
+    const d = dag([task('a', 'FAILED'), task('b', 'WAITING', ['a']), task('c', 'BLOCKED', ['b'])])
+    const p = TaskStateMachine.propagateFailure(d, 'a')
+    // from 取真实前态：c 的前态是 BLOCKED，不是 WAITING
+    expect(p.plan).toEqual([
+      { id: 'b', from: 'WAITING', to: 'SKIPPED' },
+      { id: 'c', from: 'BLOCKED', to: 'SKIPPED' },
+    ])
+
+    const r = dag([task('a', 'COMPLETED'), task('b', 'SKIPPED', ['a']), task('c', 'SKIPPED', ['b'])])
+    const re = TaskStateMachine.reactivateSkipped(r, 'a')
+    // b 的依赖已就绪 → WAITING；c 的依赖（b）尚未完成 → BLOCKED
+    expect(re.plan).toEqual([
+      { id: 'b', from: 'SKIPPED', to: 'WAITING' },
+      { id: 'c', from: 'SKIPPED', to: 'BLOCKED' },
+    ])
   })
 
   it('失败向下游传播 SKIPPED', () => {

@@ -9,9 +9,11 @@ export {
 export {
   TaskStateMachine,
   TASK_TRANSITIONS,
+  DERIVED_TRANSITIONS,
   FAILURE_TERMINALS,
   MAX_ACTIVATION_ITERATIONS,
   type StatusTransition,
+  type TaskTransition,
   type PropagationResult,
   type ReactivationResult,
 } from './task-state-machine.js'

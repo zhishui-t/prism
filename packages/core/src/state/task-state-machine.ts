@@ -20,9 +20,9 @@ export interface StatusTransition {
 }
 
 /**
- * 32 条合法转移（权威矩阵）。
+ * 32 条合法转移（权威矩阵）——**显式回报**（`report()`）可用的全集。
  * 失败传播（WAITING/BLOCKED→SKIPPED）与 SKIPPED 重激活为派生规则
- * （propagateFailure / reactivateSkipped），不计入本矩阵。
+ * （propagateFailure / reactivateSkipped），不计入本矩阵，见 DERIVED_TRANSITIONS。
  */
 export const TASK_TRANSITIONS: readonly StatusTransition[] = [
   // 依赖图调度
@@ -65,16 +65,45 @@ export const TASK_TRANSITIONS: readonly StatusTransition[] = [
   { from: 'BLOCKED', to: 'CANCELLED' },
 ]
 
+/**
+ * 4 条派生转移（不计入 32 条权威矩阵）：
+ * 失败传播 WAITING/BLOCKED → SKIPPED；SKIPPED 重激活 → WAITING/BLOCKED。
+ *
+ * 它们**只由状态机的传播/重激活函数产生**，`report()` 的显式回报不接受
+ * （例如人工不能直接把一个 WAITING 任务 `report --to SKIPPED`）。
+ *
+ * 但「事后留痕」的审计必须放行它们：审计校验的是**系统能否产生**该转移，
+ * 而非调用方能否请求该转移。两者混用会导致级联写先落库、再被审计拒绝
+ * ——这正是 D-5 的成因（`report --to FAILED` 在有下游时必然失败）。
+ */
+export const DERIVED_TRANSITIONS: readonly StatusTransition[] = [
+  { from: 'WAITING', to: 'SKIPPED' },
+  { from: 'BLOCKED', to: 'SKIPPED' },
+  { from: 'SKIPPED', to: 'WAITING' },
+  { from: 'SKIPPED', to: 'BLOCKED' },
+] as const
+
+/** 单条带任务归属的转移（派生函数输出，供台账按真实 from→to 落库与审计）。 */
+export interface TaskTransition {
+  id: string
+  from: TaskStatus
+  to: TaskStatus
+}
+
 export interface PropagationResult {
   iterations: number
   changed: number
   skipped: string[]
+  /** 逐条转移事实（真实 from → SKIPPED），供台账落库与审计，避免调用方猜 from。 */
+  plan: TaskTransition[]
 }
 
 export interface ReactivationResult {
   iterations: number
   changed: number
   reactivated: string[]
+  /** 逐条转移事实（SKIPPED → WAITING/BLOCKED），供台账落库与审计。 */
+  plan: TaskTransition[]
 }
 
 /**
@@ -89,9 +118,23 @@ export class TaskStateMachine {
     return FAILURE_TERMINAL_SET.has(status)
   }
 
-  /** 该转移是否合法（32 条矩阵）。 */
+  /** 该转移是否合法（32 条矩阵）。**显式回报**的授权口径。 */
   static canTransition(from: TaskStatus, to: TaskStatus): boolean {
     return TASK_TRANSITIONS.some((t) => t.from === from && t.to === to)
+  }
+
+  /** 该转移是否属于派生规则（不计入 32 条矩阵）。 */
+  static isDerivedTransition(from: TaskStatus, to: TaskStatus): boolean {
+    return DERIVED_TRANSITIONS.some((t) => t.from === from && t.to === to)
+  }
+
+  /**
+   * 系统**可能产生**的全部转移 = 矩阵 ∪ 派生规则。
+   * 「事后留痕」类校验（审计）用此口径；「事前授权」类校验（report）仍用
+   * {@link canTransition}——审计问的是「系统能否产生」，不是「调用方能否请求」。
+   */
+  static isLegalTransition(from: TaskStatus, to: TaskStatus): boolean {
+    return TaskStateMachine.canTransition(from, to) || TaskStateMachine.isDerivedTransition(from, to)
   }
 
   /** 执行转移；非法转移抛 PrismError('invalid_status_transition')。 */
@@ -113,6 +156,7 @@ export class TaskStateMachine {
     }
 
     const skipped: string[] = []
+    const plan: TaskTransition[] = []
     let changed = true
     let iterations = 0
     while (changed && iterations < MAX_ACTIVATION_ITERATIONS) {
@@ -126,13 +170,14 @@ export class TaskStateMachine {
           return s === 'SKIPPED' || (s !== undefined && FAILURE_TERMINAL_SET.has(s))
         })
         if (dead) {
+          plan.push({ id: task.id, from: task.status, to: 'SKIPPED' })
           task.status = 'SKIPPED'
           skipped.push(task.id)
           changed = true
         }
       }
     }
-    return { iterations, changed: skipped.length, skipped }
+    return { iterations, changed: skipped.length, skipped, plan }
   }
 
   /**
@@ -150,6 +195,7 @@ export class TaskStateMachine {
     const reachable = TaskStateMachine.#downstreamFrom(dag, upstreamTaskId)
 
     const reactivated: string[] = []
+    const plan: TaskTransition[] = []
     let changed = true
     let iterations = 0
     while (changed && iterations < MAX_ACTIVATION_ITERATIONS) {
@@ -170,12 +216,14 @@ export class TaskStateMachine {
             const s = snapshot.get(d)
             return s === 'COMPLETED' || s === 'CLOSED'
           })
-        task.status = allDone ? 'WAITING' : 'BLOCKED'
+        const target: TaskStatus = allDone ? 'WAITING' : 'BLOCKED'
+        plan.push({ id: task.id, from: 'SKIPPED', to: target })
+        task.status = target
         reactivated.push(task.id)
         changed = true
       }
     }
-    return { iterations, changed: reactivated.length, reactivated }
+    return { iterations, changed: reactivated.length, reactivated, plan }
   }
 
   /** 构建 id → TaskRecord 索引。 */
