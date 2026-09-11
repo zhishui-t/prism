@@ -4,6 +4,12 @@
 > 日期：2026-09-09
 > 范围：Prism 如何与宿主共存。
 > 结论：**首批且仅支持 ZCode**（用户 2026-09-09 确认"就 zcode 就行"）。
+>
+> **v4 修订（2026-09-11）**：文中以 `prism role install` / `prism team install`
+> 「把角色文件装配进 `~/.zcode/agents/`」为前提的段落**均已作废**。角色/团队直接住在宿主目录
+> （`roles_dir` / `teams_dir` 由适配器声明），不存在装配复制这一步；建角色走 `prism role init`，
+> 建团队走 `team init` / `POST /api/teams` / MCP `prism_team_create`。
+> 正文保留为历史决策记录。
 
 ---
 

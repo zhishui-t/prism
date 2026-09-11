@@ -4,6 +4,13 @@
 > 日期：2026-09-09
 > 范围：团队定义格式、成员编排、固定工作流、沉淀规则、优先级、团队 Skill。
 > 原则：服从控制面定位——**Prism 只定义与校验，不执行调度**。
+>
+> **v4 修订（2026-09-11）：`team install` / `role import` / `role install` 已移除。**
+> 角色与团队**直接住在宿主目录**（`<roles_dir>` / `<teams_dir>`），Prism 不持有第二份副本——
+> 原「装配」（把团队定义 + 成员角色写进宿主目录）默认的「资产在别处、需要搬到这里」前提不再成立
+> （"别处"与"这里"已是同一处）。建团队 = `prism team init` / web `POST /api/teams` /
+> MCP `prism_team_create`；建角色 = `prism role init <name>` 或直接写 `<roles_dir>/<name>.md`。
+> **下文正文中凡涉及 install/import 的步骤均保留为历史决策记录，实现以本注记口径为准。**
 
 ---
 

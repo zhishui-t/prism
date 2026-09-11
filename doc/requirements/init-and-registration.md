@@ -4,6 +4,11 @@
 > 日期：2026-09-09
 > 范围：Prism 首次接入 ZCode 时的一次性初始化动作。
 > 结论：**接入时运行一次初始化，把 MCP server 与 Skill 注册写进 ZCode 配置。**
+>
+> **v4 修订（2026-09-11）**：`init` **不再播种任何团队**（是否建团队由使用者决定），
+> 也不再预建 `<PRISM_HOME>/teams`（那是旧版团队源目录，非受管位置）；
+> `team install` / `role import` / `role install` 已移除——角色/团队直接住在宿主目录。
+> 下文 §1 表格与 §4 流程中的 install/装配步骤均作废，保留为历史记录。
 
 ---
 
@@ -15,7 +20,7 @@ Prism 的 MCP 工具和 Skill 都**不在 ZCode 的默认发现范围内**，必
 | :--- | :--- | :--- |
 | MCP server | 读 `~/.zcode/cli/config.json` 的 `mcp.servers` | 写入 `mcp.servers.prism` |
 | Skill | 扫描 `~/.zcode/skills/` 等固定目录 | **直接安装** Prism Skill 进去 |
-| 角色文件 | 扫描 `~/.zcode/agents/` | 装配时写入（`team install`，**直接管理**） |
+| 角色文件 | 扫描 `~/.zcode/agents/` | **不代写**：由使用者/agent 直接写入（`prism role init` 或手写 `<name>.md`） |
 
 **初始化 = 让 ZCode 知道 Prism 存在。**
 

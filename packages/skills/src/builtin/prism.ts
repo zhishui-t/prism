@@ -75,7 +75,10 @@ prism serve --port 7777            # 起 HTTP 服务 + 控制台
    - \`native\`：角色已装进宿主目录，直接 \`subagent_type: "<角色名>"\` 派发；
    - \`fallback\`：未装——用 \`general-purpose\` 派发，并把它返回的 \`definition\`（核心契约 + 职责）粘进 prompt 开头；交付报告须注明「降级派发」。
 2. 角色文件在**会话启动时扫描一次**：新装/改写的角色要**下一会话**才能 native 派发。
-3. 装配：\`prism role import --from <宿主agents目录> --harness-root <宿主根>\`，或 \`prism role init <name>\`。
+3. 角色与团队**直接住在宿主目录**（\`<roles_dir>/*.md\`、\`<teams_dir>/<id>.md\`）——**没有"导入/装配"这一步**：
+   建角色 = \`prism role init <name>\` 生成骨架（或直接写该目录下的 \`<name>.md\`）；
+   建团队 = \`prism_team_create\`（MCP）／web 控制台／\`prism team init\`。
+   派生要求：\`prism_team_activate\` 报 \`fallback\` 时说明该角色文件不在宿主目录，别去找"装配命令"。
 
 ## 3. 硬约定（违反会被评审打回）
 
@@ -355,7 +358,7 @@ prism graph affected "<节点>" --depth 2 --project <名>
 - **角色 = 决策契约**：核心第一原则（冲突时牺牲什么）+ 职责 + 边界 + 能力白名单（Skill）+ 知识绑定（层/书）；
 - **团队 = 成员引用角色 + 固定工作流 + 沉淀规则 + 优先级 + 仲裁链**。
 
-角色/团队**直接住在宿主目录**（\`<roles_dir>/*.md\`、\`<teams_dir>/<id>/AGENTS.md\`）。
+角色/团队**直接住在宿主目录**（\`<roles_dir>/*.md\`、\`<teams_dir>/<id>.md\`；目录式 \`<id>/AGENTS.md\` 作兼容形态仍可被读到）。
 
 ## 启用链路（照做）
 
@@ -373,14 +376,21 @@ prism graph affected "<节点>" --depth 2 --project <名>
 - \`prism_role_render { name, model?, thought_level? }\`：渲染成宿主格式（含 \`target\` 路径）；
 - \`prism_team_get { team_id }\`：团队定义全文。
 
-## 装配（CLI）
+## 建角色与建团队（没有"装配/导入"）
 
-\`\`\`bash
-prism role import --from ~/.zcode/agents --harness-root ~/.zcode   # 从宿主目录导入
-prism role init my-role                                          # 从模板新建
-prism role validate dev-1                                        # 校验
-prism team install core-dev                                      # 校验成员 + 确保团队文件
-\`\`\`
+角色与团队**直接住在宿主目录**（\`<roles_dir>/*.md\`、\`<teams_dir>/<id>.md\`），
+Prism 不持有第二份副本 —— 因此**不存在"把角色/团队装进宿主"这个动作**：
+
+| 要做什么 | 怎么做 |
+| :--- | :--- |
+| 建团队 | \`prism_team_create { team_id, name, members, teams_dir }\`（等价入口：web 控制台 \`POST /api/teams\`、终端 \`prism team init\`） |
+| 建角色 | \`prism role init <name>\` 生成合法骨架，或直接在该目录写 \`<name>.md\` |
+| 查在不在 | \`prism_role_list\`（角色库）/ \`prism_team_get { team_id }\`（单个团队定义全文） |
+| 校验 | \`prism team validate <id>\` / \`prism role validate\` |
+
+> \`prism_team_create\` 的 \`teams_dir\` **必填**——写路径一律显式参数化，防误写真实宿主目录。
+> \`<roles_dir>\`/\`<teams_dir>\` 由激活的适配器声明（如 WorkBuddy：\`~/.workbuddy/agents\`、\`~/.workbuddy/teams\`），
+> \`prism.yaml\` 可覆盖；用 \`prism harness show\` 看当前适配器。
 
 ## 沉淀规则（团队定义里）
 
