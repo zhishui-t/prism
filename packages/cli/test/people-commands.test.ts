@@ -107,9 +107,10 @@ describe('prism init（F09 五步；全部写临时目录）', () => {
     }
     expect(config.mcp.servers.prism.type).toBe('stdio')
     expect(config.mcp.servers.prism.env.PRISM_HOME).toBe(home)
-    // **不播种任何团队**：只建 <home>/teams 空目录作骨架；是否建团队由使用者决定
+    // **不播种任何团队，也不预建 teams/**：受管位置由适配器/prism.yaml 决定；
+    // <home>/teams 是旧版源目录（仅 team install 迁移回落读它），新装用户无需它
     expect(existsSync(join(harnessRoot, 'teams'))).toBe(false)
-    expect(existsSync(join(home, 'teams'))).toBe(true)
+    expect(existsSync(join(home, 'teams'))).toBe(false)
     expect(output).toContain('团队: 未创建')
     expect(output).toContain('⑤ 完成。请重启宿主会话使 MCP 与 Skill 生效')
   })

@@ -162,10 +162,11 @@ async function main() {
       initReport.value.mcp.status,
     )
     const harnessTeamsExists = await readdir(join(harnessRoot, 'teams')).then(() => true, () => false)
+    const homeTeamsExists = await readdir(join(home, 'teams')).then(() => true, () => false)
     check(
-      '1.4 init 不代建团队（要不要建团队由使用者决定）',
-      initReport.value.seededTeam === undefined && !harnessTeamsExists,
-      `seededTeam=${JSON.stringify(initReport.value.seededTeam)} teamsDirExists=${harnessTeamsExists}`,
+      '1.4 init 不代建团队、不预建 teams/（要不要建团队由使用者决定）',
+      initReport.value.seededTeam === undefined && !harnessTeamsExists && !homeTeamsExists,
+      `seededTeam=${JSON.stringify(initReport.value.seededTeam)} harnessTeams=${harnessTeamsExists} homeTeams=${homeTeamsExists}`,
     )
 
     // 1.5 doctor 自检全绿（含 anydoc 文档转换可用性）

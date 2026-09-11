@@ -35,9 +35,12 @@ export interface InitReport {
 /**
  * `prism init [--home] [--harness-root] [--force]`（design-v3 §3.6 五步）：
  * ① 探测 ZCode 目录（默认 ~/.zcode，不存在则警告但继续）
- * ② 建 <PRISM_HOME> 骨架：roles/ teams/ skills/ knowledge/ state/ catalog/ audit/
- *    （只建**空目录，不落任何团队**——是否建团队、建几个、用什么编制，是使用者的事，
+ * ② 建 <PRISM_HOME> 骨架：roles/ skills/ knowledge/ state/ catalog/ audit/
+ *    （**不落任何团队**——是否建团队、建几个、用什么编制，是使用者的事，
  *      不替使用者做决定；需要时由使用者运行 `prism team init`）
+ *    **不建 teams/**：受管团队位置由适配器/prism.yaml 决定（默认 <harnessRoot>/teams），
+ *    `<PRISM_HOME>/teams` 只是**旧版 Prism 的源目录**（`team install` 的迁移回落对象）；
+ *    新装用户没有它，建出来只会与受管位置同名异位、诱导误判（B9 遗留半边）。
  * ③ 安装内置 Skill 到 <harnessRoot>/skills/（目标目录来自 --harness-root 推导，不硬编码）
  * ④ 写 MCP 注册到 <harnessRoot>/cli/config.json（合并、写前备份；已有 prism 项指向
  *    不同路径时不覆盖，提示 --force）
@@ -65,14 +68,15 @@ export async function runInit(ctx: CommandContext, _args: string[], values: ArgV
   const harnessDetected = existsSync(harnessRoot)
 
   // ② <PRISM_HOME> 骨架（roles/catalog 由本命令补齐——core prismPaths 暂无此二键，见报告遗留项）
-  //    teams/ 只建**空目录**：不播种任何团队。编制属于使用者的决定权（见头部注释 ②）。
+  //    **不含 teams/**：受管位置由适配器/prism.yaml 决定（默认 <harnessRoot>/teams）；
+  //    paths.teamsDir（<home>/teams）是旧版源目录，只由 team install 的迁移回落读取，
+  //    新装无需预建——建出来会与受管位置同名异位，正是"团队到底放哪"的误判来源。
   const dirs = [
     paths.home,
     paths.stateDir,
     paths.auditDir,
     paths.knowledgeDir,
     join(home, 'roles'),
-    paths.teamsDir,
     paths.skillsDir,
     join(home, 'catalog'),
     paths.graphDir,
