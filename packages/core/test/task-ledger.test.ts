@@ -1,11 +1,48 @@
-import { describe, expect, it } from 'vitest'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
+import { AuditLog } from '../src/index.js'
 import { openPersistence } from '../src/persistence/persistence.js'
 import { TaskLedger, newTaskId } from '../src/tasks/task-ledger.js'
 
-function makeLedger(): { ledger: TaskLedger; close: () => void } {
+let auditDir: string
+beforeEach(async () => {
+  auditDir = await mkdtemp(join(tmpdir(), 'prism-ledger-audit-'))
+})
+afterEach(async () => {
+  await rm(auditDir, { recursive: true, force: true })
+})
+
+/**
+ * 台账装配：**注入 AuditLog**，与生产三处装配（cli / http / mcp）保持一致。
+ *
+ * 这里曾经一律不传 audit，`this.#audit?.record()` 短路成空操作——于是
+ * 「级联转移合法、但审计用错口径把它拒掉」这类缺陷在单测里永远不现形，
+ * 只在真机 CLI/MCP 上报错（D-5 的逃逸原因）。默认注入是这张网的根。
+ */
+function makeLedger(): { ledger: TaskLedger; audit: AuditLog; close: () => void } {
   const persistence = openPersistence({ inMemory: true })
-  return { ledger: new TaskLedger({ persistence }), close: () => persistence.close() }
+  const audit = new AuditLog({ dir: auditDir, queue: persistence.queue })
+  return {
+    ledger: new TaskLedger({ persistence, audit }),
+    audit,
+    close: () => persistence.close(),
+  }
+}
+
+/** 把审计事件压成 `from→to` 字符串，便于断言。 */
+async function auditTransitions(audit: AuditLog, taskId?: string): Promise<string[]> {
+  const events = await audit.query({
+    types: ['task.status_changed'],
+    ...(taskId !== undefined ? { taskId } : {}),
+    order: 'asc',
+  })
+  return events.map((e) => {
+    const t = e as { task_id: string; from: string; to: string }
+    return `${t.task_id}:${t.from}→${t.to}`
+  })
 }
 
 const BASE_DAG = {
@@ -234,10 +271,78 @@ describe('TaskLedger 状态回报（状态机校验 + 乐观并发 + 审计）',
   })
 })
 
+/**
+ * 原子性：report 是「先算全量转移计划 → 全量校验 → 单事务落库 → 批量审计」。
+ * 被拒的回报必须**零副作用**——旧实现先改主任务再审计，而审计拒绝级联转移，
+ * 于是「调用方看到失败、状态却已经变了」（revision 被推高、下游被级联）。
+ */
+describe('report 原子性（拒绝 ⇒ 零副作用）', () => {
+  async function seedChain(ledger: TaskLedger, dagId: string): Promise<void> {
+    await ledger.registerDag({
+      ...BASE_DAG,
+      dag_id: dagId,
+      tasks: [
+        { id: 'A', description: 'a', depends_on: [], write_scopes: [] },
+        { id: 'B', description: 'b', depends_on: ['A'], write_scopes: [] },
+      ],
+    })
+  }
+
+  it('非法转移被拒 → 主任务与下游都不动，审计零痕迹', async () => {
+    const { ledger, audit, close } = makeLedger()
+    await seedChain(ledger, 'atomic-1')
+    await ledger.report({ task_id: 'A', to_status: 'RUNNING', by: 'x' })
+
+    // RUNNING → SKIPPED 既不在 32 条矩阵内，也不在派生规则内（派生只从 WAITING/BLOCKED 出发）
+    await expect(
+      ledger.report({ task_id: 'A', to_status: 'SKIPPED', by: 'x' }),
+    ).rejects.toMatchObject({ code: 'invalid_status_transition' })
+
+    expect(ledger.get('A').status).toBe('RUNNING')
+    expect(ledger.get('A').revision).toBe(1)
+    expect(ledger.get('B').status).toBe('WAITING')
+    expect(ledger.get('B').revision).toBe(0)
+    expect(await auditTransitions(audit)).toEqual(['A:WAITING→RUNNING'])
+    close()
+  })
+
+  it('乐观并发冲突被拒 → 不顺手把下游级联掉', async () => {
+    const { ledger, audit, close } = makeLedger()
+    await seedChain(ledger, 'atomic-2')
+    await ledger.report({ task_id: 'A', to_status: 'RUNNING', by: 'x' })
+
+    // expected_revision 过期：这次 FAILED 必须整体不生效（若先写主任务再校验并发，
+    // A 会变成 FAILED、B 会被级联成 SKIPPED，而调用方收到的是「失败」）
+    await expect(
+      ledger.report({ task_id: 'A', to_status: 'FAILED', by: 'x', expected_revision: 0 }),
+    ).rejects.toMatchObject({ code: 'task_stale_revision' })
+
+    expect(ledger.get('A').status).toBe('RUNNING')
+    expect(ledger.get('A').revision).toBe(1)
+    expect(ledger.get('B').status).toBe('WAITING')
+    expect(await auditTransitions(audit)).toEqual(['A:WAITING→RUNNING'])
+    close()
+  })
+
+  it('FAILED → SKIPPED 时触发任务自身不被「重激活」（不能既是因又是果）', async () => {
+    const { ledger, close } = makeLedger()
+    await seedChain(ledger, 'atomic-3')
+    await ledger.report({ task_id: 'A', to_status: 'RUNNING', by: 'x' })
+    await ledger.report({ task_id: 'A', to_status: 'FAILED', by: 'x' })
+    expect(ledger.get('B').status).toBe('SKIPPED')
+
+    // A 从 FAILED 转到 SKIPPED（放弃重试）。若把 A 也算进「重激活候选」，
+    // 它会在同一次回报里被自己翻回 WAITING。
+    await ledger.report({ task_id: 'A', to_status: 'SKIPPED', by: 'human' })
+    expect(ledger.get('A').status).toBe('SKIPPED')
+    close()
+  })
+})
+
 /** 派生规则接线（task-center.md §3，此前 report 不触发、生产断链）。 */
 describe('report 派生规则（失败传播 / SKIPPED 重激活）', () => {
-  it('FAILED → 下游 WAITING 级联 SKIPPED（含间接下游）', async () => {
-    const { ledger, close } = makeLedger()
+  it('FAILED → 下游 WAITING/BLOCKED 级联 SKIPPED（含间接下游），派生转移照常落审计', async () => {
+    const { ledger, audit, close } = makeLedger()
     await ledger.registerDag({
       ...BASE_DAG,
       dag_id: 'prop-1',
@@ -247,15 +352,29 @@ describe('report 派生规则（失败传播 / SKIPPED 重激活）', () => {
         { id: 'C', description: 'c', depends_on: ['B'], write_scopes: [] },
       ],
     })
+    // 让 C 真实处于 BLOCKED（宿主如实登记「依赖未就绪」），否则级联只会产出 WAITING→SKIPPED，
+    // 「级联写伪造 from」这条缺陷就测不出来。
+    await ledger.report({ task_id: 'C', to_status: 'BLOCKED', by: 'x' })
     await ledger.report({ task_id: 'A', to_status: 'RUNNING', by: 'x' })
     await ledger.report({ task_id: 'A', to_status: 'FAILED', by: 'x' })
-    expect((await ledger.get('B')).status).toBe('SKIPPED')
-    expect((await ledger.get('C')).status).toBe('SKIPPED')
+    expect(ledger.get('B').status).toBe('SKIPPED')
+    expect(ledger.get('C').status).toBe('SKIPPED')
+
+    // 审计必须放行派生转移（WAITING/BLOCKED→SKIPPED 不在 32 条矩阵内）：
+    // 这几行是 D-5 的回归网——改用纯矩阵口径校验时，上面的 report(A, FAILED) 会直接抛错。
+    // from 也必须是**真实前态**：C 是 BLOCKED→SKIPPED，不是被硬编码成的 WAITING→SKIPPED。
+    expect(await auditTransitions(audit)).toEqual([
+      'C:WAITING→BLOCKED', // 准备：宿主如实登记 C 被阻塞
+      'A:WAITING→RUNNING',
+      'A:RUNNING→FAILED',
+      'B:WAITING→SKIPPED',
+      'C:BLOCKED→SKIPPED',
+    ])
     close()
   })
 
-  it('上游 FAILED 重开 WAITING → SKIPPED 下游重激活', async () => {
-    const { ledger, close } = makeLedger()
+  it('上游 FAILED 重开 WAITING → 下游按「依赖是否就绪」重激活（就绪才 WAITING）', async () => {
+    const { ledger, audit, close } = makeLedger()
     await ledger.registerDag({
       ...BASE_DAG,
       dag_id: 'prop-2',
@@ -267,8 +386,36 @@ describe('report 派生规则（失败传播 / SKIPPED 重激活）', () => {
     await ledger.report({ task_id: 'A', to_status: 'RUNNING', by: 'x' })
     await ledger.report({ task_id: 'A', to_status: 'FAILED', by: 'x' })
     expect((await ledger.get('B')).status).toBe('SKIPPED')
+    // 重开 A 只是「重新排队」，A 并未完成 → B 的依赖未就绪 → BLOCKED。
+    // （旧实现把状态机算出的 BLOCKED 写死成 WAITING，等于向宿主谎报「B 可执行」。）
     await ledger.report({ task_id: 'A', to_status: 'WAITING', by: 'human' })
-    expect((await ledger.get('B')).status).toBe('WAITING')
+    expect((await ledger.get('A')).status).toBe('WAITING')
+    expect((await ledger.get('B')).status).toBe('BLOCKED')
+    expect(await auditTransitions(audit, 'B')).toEqual(['B:WAITING→SKIPPED', 'B:SKIPPED→BLOCKED'])
+    close()
+  })
+
+  it('BANNED / LOOP_TERMINATED 同样向下游传播（触发集取失败终态全集）', async () => {
+    const { ledger, close } = makeLedger()
+    await ledger.registerDag({
+      ...BASE_DAG,
+      dag_id: 'prop-4',
+      tasks: [
+        { id: 'A', description: 'a', depends_on: [], write_scopes: [] },
+        { id: 'B', description: 'b', depends_on: ['A'], write_scopes: [] },
+        { id: 'C', description: 'c', depends_on: [], write_scopes: [] },
+        { id: 'D', description: 'd', depends_on: ['C'], write_scopes: [] },
+      ],
+    })
+    // BANNED：旧实现只认 FAILED|CANCELLED，B 会永久停在 WAITING
+    await ledger.report({ task_id: 'A', to_status: 'RUNNING', by: 'x' })
+    await ledger.report({ task_id: 'A', to_status: 'BANNED', by: 'x' })
+    expect(ledger.get('B').status).toBe('SKIPPED')
+
+    // LOOP_TERMINATED：同在 FAILURE_TERMINALS 内，同样必须传播
+    await ledger.report({ task_id: 'C', to_status: 'RUNNING', by: 'x' })
+    await ledger.report({ task_id: 'C', to_status: 'LOOP_TERMINATED', by: 'x' })
+    expect(ledger.get('D').status).toBe('SKIPPED')
     close()
   })
 

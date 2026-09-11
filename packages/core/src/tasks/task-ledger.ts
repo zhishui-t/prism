@@ -16,7 +16,7 @@ import { randomUUID } from 'node:crypto'
 import type { AuditLog } from '../audit/audit-log.js'
 import type { PrismPersistence } from '../persistence/persistence.js'
 import { PrismError } from '../state/errors.js'
-import { TaskStateMachine } from '../state/task-state-machine.js'
+import { TaskStateMachine, type TaskTransition } from '../state/task-state-machine.js'
 import { TASK_STATUSES, type TaskStatus } from '../state/types.js'
 
 /** 登记单个任务的输入。 */
@@ -250,44 +250,95 @@ export class TaskLedger {
       )
     }
 
-    const nowIso = this.#now().toISOString()
-    const resultText = input.result === undefined ? row.result : JSON.stringify(input.result)
-    const changes = await this.#persistence.tasks.run((raw) =>
-      Number(
-        raw
-          .prepare(
-            `UPDATE tasks
-             SET status = ?, result = ?, error_type = ?, revision = revision + 1, updated_at = ?
-             WHERE id = ? AND revision = ?`,
-          )
-          .run(input.to_status, resultText, input.error_type ?? row.error_type, nowIso, input.task_id, row.revision)
-          .changes,
-      ),
-    )
-    if (changes === 0) {
-      throw new PrismError('task_stale_revision', `状态回报并发冲突: ${input.task_id}`)
+    // ---- 1. 算出**全量转移计划**（主转移 + 派生级联）：纯计算，不落库 ----
+    // 先把主转移应用到内存快照上——派生规则必须基于「主转移之后」的图来判定。
+    const dag = this.#loadDagSnapshot(row.dag_id) as Parameters<typeof TaskStateMachine.propagateFailure>[0]
+    const target = dag.tasks.find((t) => t.id === input.task_id)
+    if (target === undefined) {
+      throw new PrismError('task_not_found', `任务不存在: ${input.task_id}`, { taskId: input.task_id })
     }
-    await this.#audit?.record({
-      type: 'task.status_changed',
-      task_id: input.task_id,
-      from,
-      to: input.to_status,
-      by: input.by,
-    })
+    target.status = input.to_status
 
-    // 派生规则（task-center.md §3，此前只有测试调用、生产断链）：
-    // FAILED/CANCELLED → 下游 WAITING/BLOCKED 级联 SKIPPED；
-    // SKIPPED 的上游恢复 WAITING（人工重开场景）→ SKIPPED 重激活为 WAITING。
-    if (input.to_status === 'FAILED' || input.to_status === 'CANCELLED') {
-      await this.#propagateFailure(row.dag_id, input.task_id, input.by)
-    } else {
-      // 离开失败终态（如 FAILED → WAITING 人工重开）→ 尝试重激活下游 SKIPPED。
-      // 状态机自行判定「依赖是否已全部就绪」，不满足时无操作。
-      const fromWasTerminalFailure = from === 'FAILED' || from === 'CANCELLED' || from === 'BANNED'
-      if (fromWasTerminalFailure) {
-        await this.#reactivateSkipped(row.dag_id, input.task_id, input.by)
+    // 触发集一律取 FAILURE_TERMINALS 全集（FAILED / BANNED / LOOP_TERMINATED /
+    // CANCELLED）。此前硬编码成 `FAILED | CANCELLED`，导致 report 到 BANNED /
+    // LOOP_TERMINATED 时下游永久停在 WAITING；重激活侧又漏了 LOOP_TERMINATED。
+    const derived = TaskStateMachine.isFailureTerminal(input.to_status)
+      ? TaskStateMachine.propagateFailure(dag, input.task_id)
+      : TaskStateMachine.isFailureTerminal(from)
+        ? TaskStateMachine.reactivateSkipped(dag, input.task_id)
+        : { plan: [] as TaskTransition[] }
+    // 触发任务自身不算「派生」结果：它已经在主转移里，不能既是因又是果。
+    const plan: TaskTransition[] = [
+      { id: input.task_id, from, to: input.to_status },
+      ...derived.plan.filter((t) => t.id !== input.task_id),
+    ]
+
+    // ---- 2. 全量校验：任一转移非法 → 整体拒绝，**零写入** ----
+    // 主转移已由 transition() 按 32 条矩阵严格把关（事前授权口径）；
+    // 这里只校验派生转移，口径是「系统能否产生」（矩阵 ∪ 派生规则）。
+    for (const t of plan.slice(1)) {
+      if (!TaskStateMachine.isLegalTransition(t.from, t.to)) {
+        throw new PrismError('invalid_status_transition', `不允许的任务状态转移: ${t.from} → ${t.to}`, {
+          from: t.from,
+          to: t.to,
+          task_id: t.id,
+        })
       }
     }
+
+    // ---- 3. 单事务落库：主转移与级联一起，要么全成、要么全不成 ----
+    const nowIso = this.#now().toISOString()
+    const resultText = input.result === undefined ? row.result : JSON.stringify(input.result)
+    await this.#persistence.tasks.run((raw) => {
+      raw.exec('BEGIN IMMEDIATE')
+      try {
+        const changes = Number(
+          raw
+            .prepare(
+              `UPDATE tasks
+               SET status = ?, result = ?, error_type = ?, revision = revision + 1, updated_at = ?
+               WHERE id = ? AND revision = ?`,
+            )
+            .run(input.to_status, resultText, input.error_type ?? row.error_type, nowIso, input.task_id, row.revision)
+            .changes,
+        )
+        if (changes === 0) {
+          throw new PrismError('task_stale_revision', `状态回报并发冲突: ${input.task_id}`)
+        }
+        const cascade = raw.prepare(
+          `UPDATE tasks SET status = ?, revision = revision + 1, updated_at = ? WHERE id = ? AND status = ?`,
+        )
+        for (const t of plan.slice(1)) {
+          // 前态守卫：计划基于快照算出，快照若已过期则整笔回滚，绝不留半截状态
+          if (Number(cascade.run(t.to, nowIso, t.id, t.from).changes) === 0) {
+            throw new PrismError('task_stale_revision', `派生级联并发冲突: ${t.id}`, {
+              task_id: t.id,
+              expected: t.from,
+            })
+          }
+        }
+        raw.exec('COMMIT')
+      } catch (error) {
+        try {
+          raw.exec('ROLLBACK')
+        } catch {
+          // 事务已终止时忽略
+        }
+        throw error
+      }
+    })
+
+    // ---- 4. 批量审计：全量校验后一次 append，不会因口径被拒 ----
+    await this.#audit?.recordMany(
+      plan.map((t) => ({
+        type: 'task.status_changed' as const,
+        task_id: t.id,
+        from: t.from,
+        to: t.to,
+        by: input.by,
+      })),
+    )
+
     return this.#requireTask(input.task_id)
   }
 
@@ -319,50 +370,6 @@ export class TaskLedger {
       })),
       edges: edges.map((e) => ({ from: e.from_task_id, to: e.to_task_id })),
     }
-  }
-
-  /** 失败传播：下游 WAITING/BLOCKED → SKIPPED（写库 + 逐条审计）。 */
-  async #propagateFailure(dagId: string, failedTaskId: string, by: string): Promise<string[]> {
-    const dag = this.#loadDagSnapshot(dagId) as Parameters<typeof TaskStateMachine.propagateFailure>[0]
-    const result = TaskStateMachine.propagateFailure(dag, failedTaskId)
-    if (result.skipped.length === 0) return []
-    const raw = this.#persistence.tasks.raw
-    const nowIso = this.#now().toISOString()
-    for (const id of result.skipped) {
-      raw
-        .prepare(`UPDATE tasks SET status = 'SKIPPED', revision = revision + 1, updated_at = ? WHERE id = ? AND status IN ('WAITING','BLOCKED')`)
-        .run(nowIso, id)
-      await this.#audit?.record({
-        type: 'task.status_changed',
-        task_id: id,
-        from: 'WAITING',
-        to: 'SKIPPED',
-        by,
-      })
-    }
-    return result.skipped
-  }
-
-  /** SKIPPED 重激活：恢复为 WAITING（上游被人工重开时）。 */
-  async #reactivateSkipped(dagId: string, upstreamTaskId: string, by: string): Promise<string[]> {
-    const dag = this.#loadDagSnapshot(dagId) as Parameters<typeof TaskStateMachine.reactivateSkipped>[0]
-    const result = TaskStateMachine.reactivateSkipped(dag, upstreamTaskId)
-    if (result.reactivated.length === 0) return []
-    const raw = this.#persistence.tasks.raw
-    const nowIso = this.#now().toISOString()
-    for (const id of result.reactivated) {
-      raw
-        .prepare(`UPDATE tasks SET status = 'WAITING', revision = revision + 1, updated_at = ? WHERE id = ? AND status = 'SKIPPED'`)
-        .run(nowIso, id)
-      await this.#audit?.record({
-        type: 'task.status_changed',
-        task_id: id,
-        from: 'SKIPPED',
-        to: 'WAITING',
-        by,
-      })
-    }
-    return result.reactivated
   }
 
   /** 取单任务；不存在 → not_found。 */
