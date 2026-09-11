@@ -17,5 +17,10 @@ export default defineConfig({
     include: ['test/**/*.test.ts'],
     environment: 'node',
     testTimeout: 20_000,
+    // 与根配置同口径：单测关向量，结果不依赖本机 embedding 安装态。
+    env: { PRISM_EMBEDDING: 'off' },
+    // 包级单跑也回收 tmpdir()/prism-*（各测试 mkdtemp 造 home 但不清理）。
+    // 用 URL 绝对化，避免依赖 cwd；实现见仓库根 test/global-tmp-reaper.ts
+    globalSetup: [fileURLToPath(new URL('../../test/global-tmp-reaper.ts', import.meta.url))],
   },
 })

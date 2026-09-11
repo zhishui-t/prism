@@ -10,9 +10,21 @@ import { makeTempDir, putFile } from './helpers.js'
 import type { AppHandle } from '../src/app.js'
 
 describe('BuildJobManager（异步建图 + build_in_progress）', () => {
+  // 锁目录一律落在**临时目录**：跨进程锁写在 <lockDir>/.prism/build.lock。
+  // 曾用固定真实路径 'K:/p'，一旦后台 job 被 worker 收尾打断，锁就留在磁盘上，
+  // 之后 30 分钟内（LOCK_STALE_MS）每次运行的首用例都误判 build_in_progress → 间歇假红；
+  // 且固定真实路径与 R5「测试绝不写真实宿主目录」相悖。用临时目录即天然隔离。
+  let lockRoot: string
+
+  beforeEach(async () => {
+    lockRoot = await makeTempDir('prism-jobs-lock-')
+  })
+
+  const lockDirOf = (name: string): string => join(lockRoot, name)
+
   it('提交即返回 job_id，完成后 done', async () => {
     const manager = new BuildJobManager()
-    const job = manager.submit('p', 'K:/p', 'K:/p', async (_p, _r, log) => {
+    const job = manager.submit('p', lockDirOf('p'), lockDirOf('p'), async (_p, _r, log) => {
       log('step1')
     })
     expect(job.status).toBe('running')
@@ -23,7 +35,7 @@ describe('BuildJobManager（异步建图 + build_in_progress）', () => {
 
   it('执行体失败 → failed + error', async () => {
     const manager = new BuildJobManager()
-    const job = manager.submit('p', 'K:/p', 'K:/p', async () => {
+    const job = manager.submit('p', lockDirOf('p'), lockDirOf('p'), async () => {
       throw new Error('graphify 爆了')
     })
     const failed = await manager.waitFor(job.job_id)
@@ -33,14 +45,14 @@ describe('BuildJobManager（异步建图 + build_in_progress）', () => {
 
   it('同项目并发提交 → build_in_progress', async () => {
     const manager = new BuildJobManager()
-    manager.submit('p', 'K:/p', 'K:/p', async () => {
+    manager.submit('p', lockDirOf('p'), lockDirOf('p'), async () => {
       await new Promise((r) => setTimeout(r, 50))
     })
-    expect(() => manager.submit('p', 'K:/p', 'K:/p', async () => {})).toThrowError(
+    expect(() => manager.submit('p', lockDirOf('p'), lockDirOf('p'), async () => {})).toThrowError(
       expect.objectContaining({ code: 'build_in_progress' }),
     )
-    // 其他项目不受影响
-    const other = manager.submit('q', 'K:/q', 'K:/q', async () => {})
+    // 其他项目不受影响（各自独立的锁目录）
+    const other = manager.submit('q', lockDirOf('q'), lockDirOf('q'), async () => {})
     expect(other.project).toBe('q')
   })
 
