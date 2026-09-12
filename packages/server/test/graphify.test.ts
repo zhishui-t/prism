@@ -1,4 +1,4 @@
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -15,6 +15,7 @@ import {
   graphPath,
   graphSummary,
   resolveGraphifyCommand,
+  resolvePythonCommand,
   runGraphify,
 } from '../src/graph/graphify.js'
 
@@ -26,7 +27,52 @@ async function tempDir(): Promise<string> {
   return dir
 }
 
-describe('resolveGraphifyCommand（Windows .cmd 处理）', () => {
+/**
+ * 跨平台回归（2026-09-12）：解释器名**不得写死** `python`。
+ * Windows 只有 `python`，macOS/Linux 通常只有 `python3`——写死会让 vendored graphify
+ * 在其中一侧永远起不来（表现为 graphify_missing 或 spawn ENOENT）。
+ */
+describe('resolvePythonCommand（跨平台解释器解析）', () => {
+  it('PRISM_PYTHON 覆盖优先于平台惯例', () => {
+    expect(resolvePythonCommand({ PATH: '', PRISM_PYTHON: '/opt/py/bin/python3.13' })).toBe('/opt/py/bin/python3.13')
+  })
+
+  it('空覆盖值不生效（回落平台惯例）', () => {
+    expect(resolvePythonCommand({ PATH: '', PRISM_PYTHON: '   ' })).toBe(isWin ? 'python' : 'python3')
+  })
+
+  it('PATH 为空 → 平台惯例名（Windows python / POSIX python3）', () => {
+    expect(resolvePythonCommand({ PATH: '' })).toBe(isWin ? 'python' : 'python3')
+  })
+
+  it('PATH 上只有 python3 → 用 python3（本条正是写死 python 时失败的场景）', async () => {
+    const dir = await tempDir()
+    await writeFile(join(dir, 'python3'), isWin ? '@echo off\r\n' : '#!/bin/sh\n', 'utf-8')
+    if (!isWin) await chmod(join(dir, 'python3'), 0o755)
+    expect(resolvePythonCommand({ PATH: dir })).toBe('python3')
+  })
+
+  it('两者都在 PATH 上 → 各平台取各自惯例优先项', async () => {
+    const dir = await tempDir()
+    for (const name of ['python', 'python3']) {
+      await writeFile(join(dir, name), isWin ? '@echo off\r\n' : '#!/bin/sh\n', 'utf-8')
+      if (!isWin) await chmod(join(dir, name), 0o755)
+    }
+    expect(resolvePythonCommand({ PATH: dir })).toBe(isWin ? 'python' : 'python3')
+  })
+
+  it('POSIX 上无执行位的同名文件不算命中（会退回次选，而不是选中普通文件）', async () => {
+    if (isWin) return
+    const dir = await tempDir()
+    // 高优先的 python3 存在但**无执行位** → 必须跳过，落到次选 python
+    await writeFile(join(dir, 'python3'), 'not executable\n', 'utf-8')
+    await writeFile(join(dir, 'python'), '#!/bin/sh\n', 'utf-8')
+    await chmod(join(dir, 'python'), 0o755)
+    expect(resolvePythonCommand({ PATH: dir })).toBe('python')
+  })
+})
+
+describe('resolveGraphifyCommand（跨平台可执行体解析）', () => {
   it('GRAPHIFY_BIN 指向 .js → 经 node 调用', async () => {
     const resolved = await resolveGraphifyCommand({ GRAPHIFY_BIN: 'C:/x/graphify-cli.js' })
     expect(resolved.command).toBe(process.execPath)
@@ -45,10 +91,11 @@ describe('resolveGraphifyCommand（Windows .cmd 处理）', () => {
     ).rejects.toMatchObject({ code: 'graphify_missing' })
   })
 
-  it('默认优先仓库内 vendored Python 子工程（python -m graphify + PYTHONPATH）', async () => {
+  it('默认优先仓库内 vendored Python 子工程（<python> -m graphify + PYTHONPATH）', async () => {
     const resolved = await resolveGraphifyCommand({ PATH: '' })
     expect(resolved.shell).toBe(false)
-    expect(resolved.command).toBe('python')
+    // 解释器名随平台：Windows `python`、POSIX `python3`（见 resolvePythonCommand）
+    expect(resolved.command).toBe(isWin ? 'python' : 'python3')
     expect(resolved.prefixArgs).toEqual(['-m', 'graphify'])
     expect(resolved.env?.['PYTHONPATH']).toContain(join('3rd', 'graphify'))
   })

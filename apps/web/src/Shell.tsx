@@ -77,7 +77,8 @@ export function Shell() {
           />
         )}
         {page === 'skills' && <SkillsPage onOpenEffective={(t) => navigate(t)} />}
-        {page === 'tasks' && <TasksPage />}      </main>
+        {page === 'tasks' && <TasksPage />}
+      </main>
     </div>
   )
 }

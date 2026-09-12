@@ -326,6 +326,34 @@ function extractManifestEntries(manifest: unknown): ManifestEntry[] | null {
   return entries.length > 0 ? entries : null
 }
 
+/** 本机是否 Windows（决定路径分隔符归一方向）。 */
+const IS_WINDOWS = process.platform === 'win32'
+
+/**
+ * 把 manifest 条目里的路径解析成**本机**绝对路径。
+ *
+ * manifest 的路径有两种来源形态：顶层绝对路径（graphify 实测如此）或相对项目根。
+ * 绝对路径还要再分两家：Windows 盘符 / UNC，与 POSIX `/`。
+ *
+ * **坑（2026-09-12，Mac 上暴露）**：早先只判「像不像绝对路径」，然后**无条件**把 `/`
+ * 换成 `\`。于是 macOS/Linux 下 `/repo/src/a.ts` 被改写成 `\repo\src\a.ts`，stat 必然
+ * 失败、一律计入 changed——**陈旧检测在 POSIX 上恒报 stale**。Windows 侧看不出问题，
+ * 因为那里分隔符本来就该是 `\`。
+ *
+ * 故分隔符归一只在**本机是 Windows** 时做；跨平台的另一侧路径原样交给 stat（找不到即
+ * 按「变更/不可读」处理，语义与文件被删一致）。
+ */
+export function resolveManifestPath(root: string, entryPath: string): string {
+  // Windows 盘符（C:\、C:/）或 UNC（\\server\share）
+  const windowsStyle = /^[a-zA-Z]:[\\/]/.test(entryPath) || entryPath.startsWith('\\\\')
+  // POSIX 绝对路径（单个前导 /，排除 // 开头的 UNC）
+  const posixStyle = entryPath.startsWith('/') && !entryPath.startsWith('//')
+  if (windowsStyle || posixStyle) {
+    return IS_WINDOWS ? entryPath.replace(/\//g, '\\') : entryPath
+  }
+  return join(root, entryPath)
+}
+
 async function countChanged(
   root: string,
   entries: ManifestEntry[],
@@ -336,7 +364,7 @@ async function countChanged(
   let skipped = 0
   for (const entry of entries) {
     // manifest 里的路径可能是绝对路径（graphify 实测如此），也可能是相对项目根
-    const abs = /^([a-zA-Z]:)?[\\/]/.test(entry.path) ? entry.path.replace(/\//g, '\\') : join(root, entry.path)
+    const abs = resolveManifestPath(root, entry.path)
     // 快分支：只 stat 比 mtime，不读文件内容（无 mtime 的条目无法判 → 计 skipped）
     if (quick) {
       if (entry.mtime === undefined) {

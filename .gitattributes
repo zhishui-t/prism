@@ -1,0 +1,39 @@
+# 行尾与文本属性（跨平台开发：Windows + macOS/Linux 同为一线平台）
+#
+# 为什么需要：没有本文件时，各人的 `core.autocrlf` 与编辑器默认行为会决定检出行尾，
+# 于是同一份代码在不同机器上 diff 出「整个文件重写」的假改动，blame 也随之失效。
+# 仓库实际历史里已经混进过这种噪声（`apps/web/src/Shell.tsx` 一度是全仓唯一的 CRLF 文件）。
+#
+# 口径：**源码一律 LF**，只在必须 CRLF 的地方开例外（Windows 批处理）。
+# 已有文件的行尾不会因本文件自动改写，需要时用 `git add --renormalize <路径>` 收口。
+
+* text=auto eol=lf
+
+# Windows 批处理：cmd.exe 对 LF 敏感，必须保留 CRLF
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# 二进制：不参与行尾/编码转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.pdf binary
+*.zip binary
+*.tgz binary
+*.gz binary
+*.node binary
+*.so binary
+*.dylib binary
+*.dll binary
+*.exe binary
+*.gguf binary
+
+# 锁文件：结构稳定、无需在 diff 里换行重排
+pnpm-lock.yaml -diff

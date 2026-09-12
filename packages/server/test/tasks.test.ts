@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { startServer } from '../src/app.js'
 import { BuildJobManager } from '../src/graph/jobs.js'
-import { ProjectRegistry, inspectGraphStatus } from '../src/graph/registry.js'
+import { ProjectRegistry, inspectGraphStatus, resolveManifestPath } from '../src/graph/registry.js'
 import { isInside } from '../src/http/routes/studio.js'
 import { makeTempDir, putFile } from './helpers.js'
 import type { AppHandle } from '../src/app.js'
@@ -236,6 +236,33 @@ describe('inspectGraphStatus（陈旧检测）', () => {
     const stale = await inspectGraphStatus('p', dir, null)
     expect(stale.stale).toBe(true)
     expect(stale.changed_files).toBe(1)
+  })
+
+  it('manifest 相对路径形态 → 按项目根解析，未变不陈旧', async () => {
+    const dir = await makeTempDir('prism-status4-')
+    await putFile(`${dir}/src/a.ts`, 'export const a = 1')
+    const { createHash } = await import('node:crypto')
+    const hash = createHash('sha256').update('export const a = 1').digest('hex')
+    await putFile(`${dir}/graphify-out/manifest.json`, JSON.stringify({ 'src/a.ts': hash }))
+    await putFile(`${dir}/graphify-out/graph.json`, '{}')
+    const detail = await inspectGraphStatus('p', dir, null)
+    expect(detail.stale).toBe(false)
+    expect(detail.total_files).toBe(1)
+  })
+
+  // 回归（2026-09-12，Mac 上暴露）：分隔符归一只许朝**本机平台**方向做。
+  // 早先无条件 `replace(/\//g,'\\')` 会把 POSIX 绝对路径改成 `\repo\src\a.ts`，
+  // stat 必然失败 → changed>0 → 陈旧检测在 macOS/Linux 上恒报 stale（Windows 侧看不出来）。
+  it('路径解析按本机平台归一（回归：POSIX 上恒报陈旧）', () => {
+    const win = process.platform === 'win32'
+    // POSIX 绝对路径：非 Windows 时原样保留；Windows 时才是反斜杠
+    expect(resolveManifestPath('/repo', '/repo/src/a.ts')).toBe(win ? '\\repo\\src\\a.ts' : '/repo/src/a.ts')
+    // Windows 盘符：Windows 时归一为反斜杠；POSIX 上原样（stat 失败 → 计为变更，不崩）
+    expect(resolveManifestPath('/repo', 'C:/x/a.ts')).toBe(win ? 'C:\\x\\a.ts' : 'C:/x/a.ts')
+    // UNC 路径原样
+    expect(resolveManifestPath('/repo', '\\\\srv\\share\\a.ts')).toBe('\\\\srv\\share\\a.ts')
+    // 相对路径 → 拼项目根
+    expect(resolveManifestPath('/repo', 'src/a.ts')).toBe(join('/repo', 'src/a.ts'))
   })
 })
 

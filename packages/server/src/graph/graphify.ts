@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { constants as fsConstants } from 'node:fs'
+import { accessSync, constants as fsConstants } from 'node:fs'
 import { access, readFile } from 'node:fs/promises'
 import { delimiter, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -36,6 +36,44 @@ export interface GraphifyRunResult {
 
 const isWindows = process.platform === 'win32'
 const EXECUTABLE_SUFFIXES = isWindows ? ['.cmd', '.exe', ''] : ['']
+
+/**
+ * 依次在 PATH 目录里查候选可执行文件，返回**首个存在且可执行**者的名字
+ * （返回名字而非绝对路径：交给 spawn 再解析一次，避免把 PATH 顺序/符号链接固化进 argv）。
+ */
+function findExecutableOnPath(names: string[], env: NodeJS.ProcessEnv): string | null {
+  const dirs = (env.PATH ?? env.Path ?? '').split(delimiter).filter((d) => d !== '')
+  for (const name of names) {
+    for (const dir of dirs) {
+      try {
+        accessSync(join(dir, name), fsConstants.X_OK)
+        return name
+      } catch {
+        // 不存在或不可执行 → 试下一个候选
+      }
+    }
+  }
+  return null
+}
+
+/**
+ * Python 解释器名（**跨平台**，2026-09-12 双平台支持）：
+ * 1. `PRISM_PYTHON` 显式覆盖（CI、venv、特殊发行版）；
+ * 2. Windows：`python` 优先——官方安装器与 Microsoft Store 版注册的都是它，`python3` 通常**不存在**；
+ * 3. POSIX（macOS / Linux）：`python3` 优先——系统自带与包管理器装的大多只提供 `python3`，
+ *    裸 `python` 在新版 macOS 上已被移除，在部分发行版上还可能指向 Python 2；
+ * 4. 都探不到 → 返回平台惯例名，让 spawn 抛 ENOENT 并由调用方映射成 graphify_missing。
+ *
+ * 早先这里写死 `command: 'python'`，结果 vendored graphify 在 macOS/Linux 上直接起不来。
+ */
+export function resolvePythonCommand(env: NodeJS.ProcessEnv = process.env): string {
+  const override = env.PRISM_PYTHON?.trim()
+  if (override !== undefined && override !== '') return override
+  return (
+    findExecutableOnPath(isWindows ? ['python', 'python3'] : ['python3', 'python'], env) ??
+    (isWindows ? 'python' : 'python3')
+  )
+}
 
 async function assertFile(path: string): Promise<boolean> {
   try {
@@ -82,18 +120,20 @@ export async function vendoredGraphifyVersion(): Promise<string | null> {
 }
 
 /**
- * 解析 graphify 可执行入口（design.md §4 Windows 约束）：
+ * 解析 graphify 可执行入口（design.md §4；2026-09-12 起 Windows / macOS / Linux 同级支持）：
  * 1. `GRAPHIFY_BIN` 环境变量优先（.py 经 python；.js/.mjs/.cjs 经 node；.cmd/.bat shell 执行）；
- * 2. 仓库内 `3rd/graphify`（submodule，经 `python -m graphify` + PYTHONPATH 免安装调用；
+ * 2. 仓库内 `3rd/graphify`（submodule，经 `<python> -m graphify` + PYTHONPATH 免安装调用；
  *    依赖需先 `pnpm run 3rd:build` 安装；设 `PRISM_SKIP_VENDORED=1` 跳过本分支供测试隔离）；
- * 3. 否则在 PATH 上找 `graphify.cmd`/`graphify.exe`/`graphify`（Windows）；
+ * 3. 否则在 PATH 上找 `graphify.cmd`/`graphify.exe`/`graphify`（Windows）或 `graphify`（POSIX）；
  * 4. 找不到 → PrismError('graphify_missing')。
+ *
+ * Python 解释器名**不写死**：Windows 用 `python`、POSIX 用 `python3`，见 `resolvePythonCommand`。
  */
 export async function resolveGraphifyCommand(env: NodeJS.ProcessEnv = process.env): Promise<GraphifyCommand> {
   const override = normalizeExecPath(env.GRAPHIFY_BIN?.trim() ?? '')
   if (override !== '') {
     if (/\.py$/i.test(override)) {
-      return { command: 'python', prefixArgs: [override], shell: false }
+      return { command: resolvePythonCommand(env), prefixArgs: [override], shell: false }
     }
     if (/\.(mjs|cjs|js)$/i.test(override)) {
       return { command: process.execPath, prefixArgs: [override], shell: false }
@@ -108,7 +148,7 @@ export async function resolveGraphifyCommand(env: NodeJS.ProcessEnv = process.en
   const vendored = vendoredGraphifyDir()
   if (env.PRISM_SKIP_VENDORED !== '1' && (await assertFile(join(vendored, 'pyproject.toml')))) {
     return {
-      command: 'python',
+      command: resolvePythonCommand(env),
       prefixArgs: ['-m', 'graphify'],
       shell: false,
       // PYTHONPATH 指向子工程根：graphify 包从源码目录直接导入，不污染 site-packages
