@@ -12,6 +12,7 @@
 > **新增 MCP 工具**（4）：`prism_kb_versions`、`prism_kb_book_structure`、`prism_skill_effective`、`prism_team_create`（v6 更名 `prism_team_new`）——**工具总数以 `tools/list` 实测为准**（v4 由 31 增至 35；v5 多项目图谱合并（F-C2）再增至 36；**v6 角色/团队补齐增删改，36 → 43**；**v6.2 补 MCP Skill 写入口 `skill_list|install|uninstall`，43 → 46**）。
 > **新增/变更 HTTP**：`GET /api/kb/versions/:id`、`GET|POST /api/kb/book-structure`、`GET /api/skills/effective?role=&team=`、`POST /api/teams`（`teams_dir` 必填、无 env 回落）、`GET /api/teams` 增只读目录字段、`GET /api/kb/context-pack` 增 `layers/books/symbols/max_excerpt_chars`。
 > **v6 写路由补齐（2026-09-12）**：`POST /api/roles`、`PATCH|DELETE /api/roles/:name`、`PATCH|DELETE /api/teams/:id`；`GET /api/roles` 返回体由裸数组改为 `{ roles, … }`（与 `/api/teams` **同形**）。写路径的 `roles_dir` / `teams_dir` **必填**。
+> **v6 CLI 命令面统一（2026-09-12）**：role/team 统一为增删改查——`role init` / `team init` 更名 `new`，新增 `edit|rm`（team 另有 `render`）；**移除** `role install|import`、`team install`（装配语义移除，角色/团队直接住宿主目录，见 `harness-adapters.md` 顶部）。§1 树已按 v5 体例标注。
 > **v6.1 参数契约统一（2026-09-12）**：读写两侧的**目录键名一律 snake_case 且同名**——`GET /api/roles` → `{ roles, roles_dir }`、`GET /api/teams` → `{ teams, teams_dir }`（旧 camel `rolesDir`/`teamsDir` 前端仍兼容，但它已不是契约）；`prism_role_list` 的 `agents_dir` 更名为 `roles_dir`（zcode 遗留名，与写参数不同名会让宿主回填失败）。`prism_team_new` / `POST /api/teams` 新增**可选** `roles_dir`（成员角色校验用；缺省才回落默认角色库）。
 > **已废弃**：工作队列（`prism_work_*` 工具、`work` 命令、`/api/work/*`）——见 `work-queue.md` 顶部；下方 §1 的 `work` 分组与 §2.5 已失效。同理 `uninit` / `harness detect` / `skill sync` 均未实现。
 
@@ -22,6 +23,9 @@
 > **v5 取齐说明**（2026-09-11，逐条核对 `packages/cli/src/commands/*`）：下文用
 > `❌ 未实现` 标注**从来不存在**的命令、用 `⚠ 已废弃` 标注被移除的分组——**保留原文以留决策痕迹**，
 > 但不要把它们当可用命令。
+>
+> **v6 取齐说明**（2026-09-12）：role/team 统一为增删改查（`new|edit|rm`），下方 role/team 两棵树
+> 已就地补齐现行命令并标注更名/移除；当前命令面以 `README.md` §5 为准。
 
 ```
 prism
@@ -38,18 +42,25 @@ prism
 ├── role
 │   ├── list                列出角色
 │   ├── show <role>         查看角色定义
-│   ├── render <role>       渲染 ZCode 格式（预览，不写盘）
-│   ├── install <role>      复制到 ~/.zcode/agents/
-│   ├── import              从 ~/.zcode/agents/ 导入
-│   └── validate            校验角色定义
+│   ├── new <name>          新建角色（写守卫；--from 复制既有定义；v6 由 init 更名）
+│   ├── edit <name>         字段补丁（只改点名字段，正文不重排；v6 新增）
+│   ├── rm <name>           删除角色文件本体（不可逆；v6 新增）
+│   ├── validate            校验角色定义
+│   ├── render <role>       渲染当前 harness 原生格式（预览，不写盘；target = 真实落点）
+│   ├── install <role>      复制到 ~/.zcode/agents/  ⚠ 已废弃（v6 装配语义移除）
+│   └── import              从 ~/.zcode/agents/ 导入  ⚠ 已废弃（v6 装配语义移除）
 │
 ├── team
 │   ├── list                列出团队
 │   ├── show <team>         查看团队定义
-│   ├── install <team>      装配：批量复制成员角色
+│   ├── new <id>            建队脚手架（写守卫 + 自动校验；v6 由 init 更名）
+│   ├── edit <id>           修改团队（改 members 时工作流按名册就地收窄；v6 新增）
+│   ├── rm <id>             删除团队文件本体（不可逆；v6 新增）
+│   ├── render <team>       渲染宿主格式团队文件（v6 新增）
+│   ├── validate <team>     校验（角色存在、工作流引用合法）
 │   ├── activate <team>     启用：输出运行时配置（含装配状态）
-│   ├── init <id>           建队脚手架（写守卫 + 自动校验；v4 新增）
-│   └── validate <team>     校验（角色存在、工作流引用合法）
+│   ├── init <id>           建队脚手架（写守卫 + 自动校验；v4 新增）⚠ v6 更名 team new
+│   └── install <team>      装配：批量复制成员角色  ⚠ 已废弃（v6 装配语义移除）
 │
 ├── skill
 │   ├── list                列出 Prism Skill
