@@ -33,7 +33,7 @@ import {
 export interface PeopleDeps {
   /** PRISM_HOME（prism.yaml 配置源：<home>/prism.yaml 的 roles_dir/teams_dir/skills_dir） */
   home: string
-  /** ZCode 根目录（默认推导基准；AppOptions.harnessRoot → env → ~/.zcode） */
+  /** 宿主根目录（默认推导基准；AppOptions.harnessRoot → env → **配置激活适配器的默认根**） */
   harnessRoot: string
   /**
    * F-C3：**只读**图谱状态查询（项目名 → 状态；未注册项目 → null）。
@@ -55,8 +55,9 @@ export interface PeopleDeps {
  * - 角色/团队返回携带 issues（校验结果），供 F12 页面展示
  * - /api/teams/:id/activate 返回 TeamActivation（dispatch 仅由 installed 推导，P8）
  * - /api/skills 返回内置 PrismSkill[]；/api/skills/effective 返回有效集（F-D2）
- * - 读路由一律只读；**唯一写路由**是 `POST /api/teams`（F-C3），它只写 body 显式给出的
- *   `teams_dir`，**绝不复用** `dirs.teamsDir` 的默认宿主目录（写路径不得回落）。
+ * - 读路由一律只读；写路由（`POST|PATCH|DELETE /api/roles[/:name]`、`/api/teams[/:id]`）只写 body
+ *   显式给出的 `roles_dir` / `teams_dir`，**绝不复用** `dirs` 的默认宿主目录（写路径不得回落）。
+ * - v6.1：读返回的目录字段统一为 snake_case（`roles_dir` / `teams_dir`），与写参数同名。
  */
 export function peopleRoutes(deps: PeopleDeps): {
   roles: (ctx: RouteContext) => Promise<Envelope>
@@ -90,16 +91,18 @@ export function peopleRoutes(deps: PeopleDeps): {
    * - **只在 server 侧包装**——不改 `packages/agents` 的冻结类型（v5 裁决 3）；
    * - 返回体仍是**数组**（既有消费方 `apps/web/src/api-team.ts` 的 `teamApi.roles()`
    *   依赖数组形态；只加字段、不改容器）。
-   * 形状（v5 增删改对齐）：`{ roles, rolesDir }`——`rolesDir` 供控制台新建表单预填且可改，
-   * 与 `GET /api/teams` 的 `{ teams, teamsDir }` **同形**。仍只读、不写盘；
-   * 写路径只认 `POST /api/roles` 的显式 `roles_dir`。历史裸数组由前端 `normalizeRoles` 兼容。
+   * 形状（v6.1）：`{ roles, roles_dir }`——`roles_dir` 与写参数同名，控制台新建表单预填且可改，
+   * 与 `GET /api/teams` 的 `{ teams, teams_dir }` **同形**。仍只读、不写盘；
+   * 写路径只认 `POST /api/roles` 的显式 `roles_dir`。历史裸数组与旧 camel `rolesDir`
+   * 均由前端 `normalizeRoles` 兼容。
    */
   const roles = async (): Promise<Envelope> => {
     const agentsDir = harnessPaths(deps.harnessRoot, deps.home).agentsDir
     const list = await loadRoles(rolesDir, { knownSkills: await knownSkills() })
     return ok({
       roles: list.map((role) => ({ ...role, installed: isInstalledInHost(agentsDir, rolesDir, role.name) })),
-      rolesDir,
+      // v6.1：键名统一 snake_case（= 写参数名，读回即可回填；旧 camel `rolesDir` 前端仍兼容）
+      roles_dir: rolesDir,
     })
   }
 
@@ -113,12 +116,13 @@ export function peopleRoutes(deps: PeopleDeps): {
    * 团队列表（F-C3 / ui-spec §8-D1）：返回体增**只读** `teamsDir`（受管目录绝对路径），
    * 供控制台新建表单预填且可改。仍只读、不写盘；写路径只认 `POST /api/teams` 的显式 `teams_dir`。
    *
-   * 形状：`{ teams, teamsDir }`（design-v4 §3.4；`ui-spec` 的 `normalizeTeams` 已兼容旧的裸数组）。
+   * 形状（v6.1）：`{ teams, teams_dir }`——与写参数同名（`ui-spec` 的 `normalizeTeams` 兼容
+   * 旧的裸数组与 camel `teamsDir`）。
    */
   const teams = async (): Promise<Envelope> =>
     ok({
       teams: await loadTeams(teamsDir, { rolesDir, knownSkills: await knownSkills() }),
-      teamsDir,
+      teams_dir: teamsDir,
     })
 
   /**

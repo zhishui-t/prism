@@ -34,7 +34,12 @@ import { dirProvenanceLabel, expandHome, guardWriteTarget, readStdinDefault, res
 export async function runRole(ctx: CommandContext, args: string[], values: ArgValues): Promise<number> {
   const [sub, ...rest] = args
   const dirs = resolveTargetDirs(ctx, values)
-  const rolesDir = values.source !== undefined ? expandHome(values.source) : dirs.rolesDir
+  // v6.1：`--source` 对读写**一律生效**（此前只被 list/show/validate/render 用，写命令静默忽略
+  // → `role rm --source <dir>` 实际删的是默认宿主目录那份，不可逆）。显式给出即视为「用户指定了
+  // 目录」，与 --harness-root 同口径解除写守卫（目标已不是默认宿主目录）。
+  const sourceExplicit = values.source !== undefined
+  const rolesDir = sourceExplicit ? expandHome(values.source!) : dirs.rolesDir
+  const writeDirs = sourceExplicit ? { ...dirs, guard: { ...dirs.guard, roles: false } } : dirs
   // 根目录取自解析结果（未显式指定时 = 激活适配器的默认根，不再是硬编码 ~/.zcode）
   const harnessRoot = dirs.harnessRoot
   /** 宿主原生形态渲染器（`new` 用；`edit` 走外科式补丁，不需要它）。 */
@@ -98,9 +103,9 @@ export async function runRole(ctx: CommandContext, args: string[], values: ArgVa
         return 1
       }
       // B6 写守卫：目标为默认宿主目录（未经显式指定）时需 --yes 确认
-      if (!guardWriteTarget(ctx, values, dirs, 'roles', 1)) return 1
+      if (!guardWriteTarget(ctx, values, writeDirs, 'roles', 1)) return 1
       if (!ctx.json) {
-        ctx.stdout(`目标 roles_dir: ${dirs.rolesDir}（来源：${dirProvenanceLabel(dirs.provenance.roles)}）`)
+        ctx.stdout(`目标 roles_dir: ${rolesDir}（来源：${sourceExplicit ? '--source' : dirProvenanceLabel(dirs.provenance.roles)}）`)
       }
 
       // `--from`：复用既有角色的正文（描述/skills/知识绑定也可作缺省）
@@ -138,7 +143,7 @@ export async function runRole(ctx: CommandContext, args: string[], values: ArgVa
       try {
         const result = await newRole({
           name,
-          rolesDir: dirs.rolesDir,
+          rolesDir,
           ...(description !== undefined ? { description } : {}),
           ...(skills !== undefined ? { skills } : {}),
           ...(knowledge !== undefined ? { knowledge } : {}),
@@ -152,7 +157,7 @@ export async function runRole(ctx: CommandContext, args: string[], values: ArgVa
           renderRole,
         })
         if (ctx.json) {
-          ctx.stdout(JSON.stringify({ ok: true, value: { rolesDir: dirs.rolesDir, name, ...result } }))
+          ctx.stdout(JSON.stringify({ ok: true, value: { rolesDir, name, ...result } }))
           return 0
         }
         for (const p of result.written) ctx.stdout(`  已创建 ${p}`)
@@ -203,11 +208,11 @@ export async function runRole(ctx: CommandContext, args: string[], values: ArgVa
         ctx.stderr(ROLE_EDIT_USAGE)
         return 1
       }
-      if (!guardWriteTarget(ctx, values, dirs, 'roles', 1)) return 1
+      if (!guardWriteTarget(ctx, values, writeDirs, 'roles', 1)) return 1
       try {
-        const result = await editRole({ name, rolesDir: dirs.rolesDir, patch })
+        const result = await editRole({ name, rolesDir, patch })
         if (ctx.json) {
-          ctx.stdout(JSON.stringify({ ok: true, value: { rolesDir: dirs.rolesDir, name, ...result, fields: Object.keys(patch) } }))
+          ctx.stdout(JSON.stringify({ ok: true, value: { rolesDir, name, ...result, fields: Object.keys(patch) } }))
           return 0
         }
         for (const p of result.written) ctx.stdout(`  已更新 ${p}`)
@@ -224,9 +229,9 @@ export async function runRole(ctx: CommandContext, args: string[], values: ArgVa
         ctx.stderr('用法: prism role rm <name> [--source <dir>] [--harness-root <dir>|--yes]')
         return 1
       }
-      if (!guardWriteTarget(ctx, values, dirs, 'roles', 1, 'delete')) return 1
+      if (!guardWriteTarget(ctx, values, writeDirs, 'roles', 1, 'delete')) return 1
       try {
-        const result = await removeRole({ name, rolesDir: dirs.rolesDir })
+        const result = await removeRole({ name, rolesDir: rolesDir })
         if (ctx.json) {
           ctx.stdout(JSON.stringify({ ok: true, value: { name, removed: result.removed } }))
           return 0
@@ -322,10 +327,10 @@ export async function runRole(ctx: CommandContext, args: string[], values: ArgVa
 }
 
 const ROLE_NEW_USAGE =
-  '用法: prism role new <name> [--description <述>] [--skills a,b] [--layers global,project] [--books x,y] [--color <色>] [--model <id>] [--thought-level low|high|max] [--from <角色>] [--body-file <md|->] [--force] [--harness-root <dir>|--yes]'
+  '用法: prism role new <name> [--source <dir>] [--description <述>] [--skills a,b] [--layers global,project] [--books x,y] [--color <色>] [--model <id>] [--thought-level low|high|max] [--from <角色>] [--body-file <md|->] [--force] [--harness-root <dir>|--yes]'
 
 const ROLE_EDIT_USAGE =
-  '用法: prism role edit <name> [--description <述>] [--skills a,b] [--layers global,project] [--books x,y] [--color <色>] [--model <id>] [--thought-level low|high|max] [--body-file <md|->] [--harness-root <dir>|--yes]'
+  '用法: prism role edit <name> [--source <dir>] [--description <述>] [--skills a,b] [--layers global,project] [--books x,y] [--color <色>] [--model <id>] [--thought-level low|high|max] [--body-file <md|->] [--harness-root <dir>|--yes]'
 
 /** `--body-file <md|->`（`-` 读 stdin）；未给 → undefined。 */
 async function readBodyFile(ctx: CommandContext, values: ArgValues): Promise<string | undefined> {

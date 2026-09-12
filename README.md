@@ -215,8 +215,13 @@ IR 是源、HTML 是派生，两者都可作为 `type: diagram` 条目沉淀。
 
 增删改查在三个入口**同名同位**：`new | edit | rm` ↔ MCP `prism_role_new|edit|rm` / `prism_team_new|edit|rm` ↔ HTTP `POST|PATCH|DELETE /api/roles[/:name]`、`/api/teams[/:id]`。
 
+**目录字段怎么取**：读接口返回的键名与写参数**同名**，读回即可回填——`GET /api/roles` → `{ roles, roles_dir }`、`prism_role_list` → `roles_dir`；`GET /api/teams` → `{ teams, teams_dir }`、`prism_team_list` → `teams_dir`。
+
+**三入口并非全等**（取舍，非缺陷）：`render` 只有 CLI/MCP；`validate` 只有 CLI；`--from`（从既有定义复制）只有 CLI；**Skill 的装/卸只有 CLI**（MCP/HTTP 无写工具，属已知缺口）。三入口真正严格对齐的是**动词与落盘语义**。
+
 ```bash
 prism role list
+prism role list --source D:/tmp/roles           # --source 覆盖 roles_dir：role 的读写命令一律生效
 prism role new dev-1 --description "开发角色：交付可运行增量。" --skills kb,graph
 prism role edit dev-1 --skills kb,graph,arch   # 外科式字段补丁：只改点名字段，正文不重排
 prism role rm dev-1 --yes                      # 硬删；默认宿主目录需 --yes

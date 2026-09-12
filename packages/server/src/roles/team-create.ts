@@ -29,6 +29,14 @@ export interface NewTeamBody {
   workflow_template?: unknown
   /** **必填**：写入目录（无 env 回落，绝不回落到默认宿主目录） */
   teams_dir?: unknown
+  /**
+   * 成员角色校验用的角色库（v6.1）。
+   *
+   * 原实现无条件用**默认宿主角色库**，与 `edit`/`PATCH` 强制显式 `roles_dir` 的口径不一致：
+   * 隔离场景（teams_dir 指向别处、角色也在别处）会误报 `member_role_unknown`。
+   * 现在显式优先，缺省才回落到调用方给的默认角色库（CLI 二者同源，行为不变）。
+   */
+  roles_dir?: unknown
 }
 
 export interface CreateTeamResult {
@@ -47,7 +55,10 @@ const KEBAB_CASE_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/
  * `teams_dir_required` / `team_id_invalid` / `members_invalid` / `member_role_unknown` /
  * 校验未通过（不落盘）/ `id_conflict`（已存在不覆盖）。
  */
-export async function createTeamDefinition(body: NewTeamBody, rolesDir: string): Promise<CreateTeamResult> {
+export async function createTeamDefinition(
+  body: NewTeamBody,
+  fallbackRolesDir: string,
+): Promise<CreateTeamResult> {
   // ① `teams_dir` 必填（无 env 回落；绝不复用默认宿主 teams 目录）
   const targetDir = asNonEmptyString(body.teams_dir)
   if (targetDir === undefined) {
@@ -73,7 +84,9 @@ export async function createTeamDefinition(body: NewTeamBody, rolesDir: string):
     throw new PrismError('bad_request', 'members_invalid：至少需要 1 个成员角色（形如 [{role,count}]）')
   }
 
-  // ④ 角色存在（大小写不敏感，与 agents `validateTeam`/`installTeam` 同口径）
+  // ④ 角色存在（大小写不敏感，与 agents `validateTeam` 同口径）
+  // 角色库：显式 `roles_dir` 优先，缺省沿用调用方给的默认库（v6.1，见 `NewTeamBody.roles_dir`）
+  const rolesDir = asNonEmptyString(body.roles_dir) ?? fallbackRolesDir
   const roles = await loadRoles(rolesDir)
   const known = new Set(roles.map((role) => role.name.toLowerCase()))
   const missing = members.filter((member) => !known.has(member.role.toLowerCase())).map((member) => member.role)

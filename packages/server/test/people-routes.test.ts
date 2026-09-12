@@ -58,22 +58,23 @@ describe('people 路由（design-v3 §3.4 F11：信封 + issues + activate）', 
     await rm(join(home, '..'), { recursive: true, force: true }).catch(() => {})
   })
 
-  it('GET /api/roles → 信封 ok:true，{roles, rolesDir} 携带 issues 数组（v6 与 /api/teams 同形）', async () => {
+  it('GET /api/roles → {roles, roles_dir} 携带 issues（v6.1 键名 = 写参数名）', async () => {
     const res = await fetch(`${base}/api/roles`)
     const body = (await res.json()) as {
       ok: boolean
       value: {
         roles: Array<{ name: string; skills: string[]; issues: Array<{ level: string; code: string }> }>
-        rolesDir: string
+        roles_dir: string
       }
     }
     expect(res.status).toBe(200)
     expect(body.ok).toBe(true)
     expect(body.value.roles.map((r) => r.name)).toContain('dev-1')
     expect(Array.isArray(body.value.roles[0]!.issues)).toBe(true)
-    // rolesDir 只读返回，供控制台新建表单预填（写路径仍只认 POST /api/roles 的显式 roles_dir）
+    // roles_dir 只读返回，供控制台新建表单预填（写路径仍只认 POST /api/roles 的显式 roles_dir）
+    // 契约：键名与写参数**同名**（宿主/控制台读回即可回填，不必 camel↔snake 转换）
     // 分隔符按 `/` 归一后比较：prism.yaml 里写的是 `/` 形式，回读保持原样
-    expect(body.value.rolesDir.replaceAll('\\', '/')).toBe(join(home, 'roles').replaceAll('\\', '/'))
+    expect(body.value.roles_dir.replaceAll('\\', '/')).toBe(join(home, 'roles').replaceAll('\\', '/'))
   })
 
   it('GET /api/roles/:name → 单角色；不存在 → not_found 信封', async () => {
@@ -89,19 +90,19 @@ describe('people 路由（design-v3 §3.4 F11：信封 + issues + activate）', 
     expect(missBody).toMatchObject({ ok: false, error: { code: 'not_found' } })
   })
 
-  it('GET /api/teams → { teams, teamsDir }（F-C3 只读目录字段）；GET /api/teams/:id', async () => {
+  it('GET /api/teams → { teams, teams_dir }（v6.1 只读目录字段）；GET /api/teams/:id', async () => {
     const list = await fetch(`${base}/api/teams`)
     const listBody = (await list.json()) as {
       ok: boolean
-      value: { teams: Array<{ team_id: string; issues: unknown[]; workflow: unknown[] }>; teamsDir: string }
+      value: { teams: Array<{ team_id: string; issues: unknown[]; workflow: unknown[] }>; teams_dir: string }
     }
     expect(listBody.ok).toBe(true)
     expect(listBody.value.teams.map((t) => t.team_id)).toContain('core-dev')
     expect(Array.isArray(listBody.value.teams[0].issues)).toBe(true)
     expect(listBody.value.teams[0].workflow.length).toBe(7)
-    // design-v4 §3.4 / ui-spec §8-D1：只读 teamsDir 供新建表单预填（不得为 undefined）
+    // v6.1：只读 teams_dir 供新建表单预填（不得为 undefined），键名与写参数 `teams_dir` 同名
     // 路径分隔符随 prism.yaml 原样回传（/ 或 \），比较前归一
-    expect(listBody.value.teamsDir.replaceAll('\\', '/')).toBe(join(home, 'teams').replaceAll('\\', '/'))
+    expect(listBody.value.teams_dir.replaceAll('\\', '/')).toBe(join(home, 'teams').replaceAll('\\', '/'))
 
     const one = await fetch(`${base}/api/teams/core-dev`)
     const oneBody = (await one.json()) as { ok: boolean; value: { team_id: string; deposit: Record<string, unknown> } }
@@ -119,7 +120,7 @@ describe('people 路由（design-v3 §3.4 F11：信封 + issues + activate）', 
    */
   it('ui-spec §8-D5：团队 not_found 文案指向真实落点 <id>.md（并注明兼容 <id>/AGENTS.md）', async () => {
     const list = await fetch(`${base}/api/teams`)
-    const teamsDirShown = ((await list.json()) as { value: { teamsDir: string } }).value.teamsDir
+    const teamsDirShown = ((await list.json()) as { value: { teams_dir: string } }).value.teams_dir
     const norm = (s: string): string => s.replaceAll('\\', '/')
     const expectedSource = `数据源 ${norm(teamsDirShown)}/<id>.md`
 
@@ -184,10 +185,10 @@ describe('people 路由（design-v3 §3.4 F11：信封 + issues + activate）', 
     const res = await fetch(`${base}/api/roles`)
     const body = (await res.json()) as {
       ok: boolean
-      value: { roles: Array<{ name: string; installed?: boolean }>; rolesDir: string }
+      value: { roles: Array<{ name: string; installed?: boolean }>; roles_dir: string }
     }
     expect(res.status).toBe(200)
-    expect(Array.isArray(body.value.roles)).toBe(true) // roles 仍是数组（容器改为 {roles, rolesDir}）
+    expect(Array.isArray(body.value.roles)).toBe(true) // roles 仍是数组（容器改为 {roles, roles_dir}）
     const byName = new Map(body.value.roles.map((r) => [r.name, r.installed]))
     expect(byName.get('dev-1')).toBe(true)
     expect(byName.get('tester')).toBe(false)
@@ -536,6 +537,54 @@ describe('people 写路由 v6（角色与团队 增删改）', () => {
     const del = await send('DELETE', '/api/teams/v6-team', { teams_dir: teamsDir })
     expect(del.status).toBe(200)
     expect(existsSync(join(teamsDir, 'v6-team.md'))).toBe(false)
+  })
+
+  it('POST /api/roles：首次创建带 force → overwritten=false（回真实是否覆盖，不回显入参）', async () => {
+    const res = await send('POST', '/api/roles', {
+      name: 'v6-force-first',
+      description: '首次创建',
+      force: true,
+      roles_dir: rolesDir,
+    })
+    const body = (await res.json()) as { ok: boolean; value: { overwritten: boolean } }
+    expect(res.status).toBe(200)
+    expect(body.value.overwritten).toBe(false) // 首次创建并没有覆盖任何既有文件
+
+    const again = await send('POST', '/api/roles', {
+      name: 'v6-force-first',
+      description: '第二次（此时文件已存在）',
+      force: true,
+      roles_dir: rolesDir,
+    })
+    const againBody = (await again.json()) as { value: { overwritten: boolean } }
+    expect(againBody.value.overwritten).toBe(true)
+  })
+
+  it('POST /api/teams：显式 roles_dir 生效（成员校验用指定角色库，不再无条件回落默认库）', async () => {
+    // 隔离角色库：只有 alt-role（默认 home/roles 里没有）
+    const altRoles = join(tmp, 'alt-roles')
+    await mkdir(altRoles, { recursive: true })
+    await writeFile(join(altRoles, 'alt-role.md'), ZCODE_ROLE_MD.replace(/dev-1/g, 'alt-role'), 'utf-8')
+
+    // 缺省仍回落默认角色库 → alt-role 不在库中 → 400（老行为保留，向后兼容）
+    const fallback = await send('POST', '/api/teams', {
+      team_id: 'v6-team-alt-default',
+      members: [{ role: 'alt-role', count: 1 }],
+      teams_dir: teamsDir,
+    })
+    expect(fallback.status).toBe(400)
+    expect(((await fallback.json()) as { error: { message: string } }).error.message).toContain('member_role_unknown')
+
+    // 显式 roles_dir → 用隔离库校验 → 通过并落盘
+    const res = await send('POST', '/api/teams', {
+      team_id: 'v6-team-alt',
+      members: [{ role: 'alt-role', count: 1 }],
+      teams_dir: teamsDir,
+      roles_dir: altRoles,
+    })
+    expect(res.status).toBe(200)
+    expect(existsSync(join(teamsDir, 'v6-team-alt.md'))).toBe(true)
+    await send('DELETE', '/api/teams/v6-team-alt', { teams_dir: teamsDir })
   })
 
   it('PATCH /api/teams/:id：改 members 缺 roles_dir → 400（校验角色存在所需参数不得隐式回落）', async () => {

@@ -61,8 +61,7 @@ import { writeEnrichment } from '../kb/enrich-writeback.js'
 
 /**
  * MCP stdio 服务（design.md §4 最小集 + design-v3 §3.4 P6 增量，手写 JSON-RPC 2.0）：
- * prism_kb_search / prism_kb_get / prism_kb_deposit / prism_graph_query / prism_graph_status
- * + prism_role_list / prism_role_render / prism_team_get / prism_team_activate。
+ * 知识库 / 图谱 / 角色 / 团队 / 技能 / 任务台账，共 43 个工具（v6：角色与团队补齐增删改查）。
  * 独立进程运行（`node dist/mcp/server.js`），与 prism serve 经 SQLite WAL 并存。
  */
 
@@ -85,7 +84,11 @@ const ERR_INVALID_PARAMS = -32602
 
 export interface McpDeps {
   home: string
-  /** ZCode 宿主根目录（role_render 目标提示、team_activate 判装配状态）；默认 PRISM_HARNESS_ROOT → ~/.zcode */
+  /**
+   * 宿主根目录（`role_render` 目标提示、`team_activate` 判装配状态）。
+   * 缺省由**配置激活的适配器**的默认根决定（`prism.yaml: harness` → 插件 `defaultRoot`）；
+   * `PRISM_HARNESS_ROOT` 可覆盖。**不是**硬编码的 `~/.zcode`——那会把插件路径钉死（v6 修）。
+   */
   harnessRoot?: string
   kb?: KnowledgeService
   kbFactory?: () => Promise<KnowledgeService>
@@ -292,7 +295,7 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
   const harnessRoot = dirs.harnessRoot
   const rolesDir = dirs.rolesDir
   const teamsDir = dirs.teamsDir
-  const zcode = harnessPaths(harnessRoot, deps.home)
+  const hostPaths = harnessPaths(harnessRoot, deps.home)
 
   const requireTeam = async (teamId: unknown) => {
     const id = asString(teamId)
@@ -308,7 +311,9 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
 
   const roleList = async (): Promise<unknown> => {
     const roles = await loadRoles(rolesDir)
-    return { count: roles.length, roles, agents_dir: zcode.agentsDir }
+    // 键名 = 写参数名（roles_dir）：宿主读回后可直接回填 prism_role_new|edit|rm 的 roles_dir。
+    // 旧名 agents_dir 是 zcode 遗留命名，已删（它与实际读取的 roles_dir 不一定是同一个路径）。
+    return { count: roles.length, roles, roles_dir: rolesDir }
   }
 
   /**
@@ -325,7 +330,7 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
     }
     const role = await loadRole(rolesDir, roleName)
     if (role === null) {
-      throw new Error(`角色不存在: ${roleName}（数据源 ${rolesDir}/<name>/AGENTS.md）`)
+      throw new Error(roleNotFoundMessage(rolesDir, roleName))
     }
     const layers = asStringArray(args.layers)
     const books = asStringArray(args.books)
@@ -446,7 +451,7 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
     }
     const role = await loadRole(rolesDir, name, { knownSkills: await installedSkillNames(harnessRoot, deps.home) })
     if (role === null) {
-      throw new Error(`角色不存在: ${name}（数据源 ${rolesDir}/<name>/AGENTS.md）`)
+      throw new Error(roleNotFoundMessage(rolesDir, name))
     }
     return role
   }
@@ -526,7 +531,7 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
 
   const teamActivate = async (args: Record<string, unknown>): Promise<unknown> => {
     const team = await requireTeam(args.team_id)
-    return await activateTeam(team, { rolesDir, targetDir: zcode.agentsDir })
+    return await activateTeam(team, { rolesDir, targetDir: hostPaths.agentsDir })
   }
 
   const tools: McpTool[] = [
@@ -1079,7 +1084,7 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
     {
       name: 'prism_role_list',
       description:
-        '列出角色库角色（数据源 = 宿主角色目录 roles_dir，即宿主自己扫描的 agents 目录；不写盘）',
+        '列出角色库角色（数据源 = 当前角色目录，只读不写盘）。返回体含 roles_dir——它就是要传给 prism_role_new|edit|rm 的 roles_dir（读回即可回填）',
       inputSchema: { type: 'object', properties: {} },
       call: roleList,
     },
@@ -1101,7 +1106,10 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
         type: 'object',
         properties: {
           name: { type: 'string', description: '角色名（kebab-case，= 落盘文件名）' },
-          roles_dir: { type: 'string', description: '**必填**：写入目录（防误写真实宿主）' },
+          roles_dir: {
+            type: 'string',
+            description: '**必填**：写入目录（防误写真实宿主）。取值来自 prism_role_list 的 roles_dir',
+          },
           description: { type: 'string', description: '一句话职责（含适用/不适用，供派遣决策）' },
           skills: { type: 'array', items: { type: 'string' }, description: 'Skill 白名单' },
           knowledge: {
@@ -1248,7 +1256,7 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
     {
       name: 'prism_team_new',
       description:
-        '新建团队定义（写 <teams_dir>/<team_id>.md；与 HTTP POST /api/teams、CLI `prism team new` 同一实现）。teams_dir 必填——写路径一律显式参数化，绝不回落到默认宿主目录',
+        '新建团队定义（写 <teams_dir>/<team_id>.md；与 HTTP POST /api/teams、CLI `prism team new` 同一实现）。teams_dir 必填——写路径一律显式参数化，绝不回落到默认宿主目录。成员角色须已存在于角色库（roles_dir 可显式指定，缺省取当前角色目录）',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1270,6 +1278,10 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
           },
           workflow_template: { enum: ['minimal', 'core-dev'], description: '工作流模板，缺省 minimal' },
           teams_dir: { type: 'string', description: '**必填**：写入目录（防误写真实宿主）' },
+          roles_dir: {
+            type: 'string',
+            description: '校验成员角色用的角色库（可选；缺省取当前角色目录）。取值来自 prism_role_list 的 roles_dir',
+          },
         },
         required: ['team_id', 'members', 'teams_dir'],
       },

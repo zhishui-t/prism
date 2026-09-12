@@ -1183,8 +1183,8 @@ async function main() {
       const teamsList = await httpJson('GET', '/api/teams')
       check(
         '19.6.6 F-C3/UI 依赖：GET /api/teams 返回只读 teamsDir（预填用）且指向临时 harnessRoot',
-        teamsList.status === 200 && teamsList.body?.value?.teamsDir === teamDir,
-        `teamsDir=${teamsList.body?.value?.teamsDir ?? ''}`,
+        teamsList.status === 200 && teamsList.body?.value?.teams_dir === teamDir,
+        `teams_dir=${teamsList.body?.value?.teams_dir ?? ''}`,
       )
 
       // ---------- F-D2 四处一致（CLI ≡ HTTP ≡ MCP） ----------

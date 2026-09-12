@@ -55,15 +55,15 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
   prism doctor [--port 7777]               环境自检
   prism role list [--source <dir>]         列出角色（默认 roles_dir，见下）
   prism role show <name>                   查看角色定义
-  prism role new <name> [--description <述>] [--skills a,b] [--layers global,project] [--books x,y]
+  prism role new <name> [--source <dir>] [--description <述>] [--skills a,b] [--layers global,project] [--books x,y]
                         [--color <色>] [--model <id>] [--thought-level low|high|max] [--from <角色>]
                         [--body-file <md|->] [--force] [--harness-root <dir>|--yes]
                                            新建角色到 roles_dir（宿主原生形态；只给名字则写骨架）
-  prism role edit <name> [--description <述>] [--skills a,b] [--layers ...] [--books ...] [--color <色>]
+  prism role edit <name> [--source <dir>] [--description <述>] [--skills a,b] [--layers ...] [--books ...] [--color <色>]
                         [--model <id>] [--thought-level ...] [--body-file <md|->] [--harness-root <dir>|--yes]
                                            修改角色（只改点名字段，正文与未知键原样保留）
                                            --skills "" / --color "" / --model "" = 清空该项
-  prism role rm <name> [--harness-root <dir>|--yes]
+  prism role rm <name> [--source <dir>] [--harness-root <dir>|--yes]
                                            删除角色文件（默认宿主目录需 --yes；不可逆）
   prism role validate [--source <dir>]     校验角色定义
   prism role render <name> [--model --thought-level]   渲染为当前 harness 原生形态（预览，不写盘）
@@ -83,6 +83,7 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
   <PRISM_HOME>/prism.yaml 可选覆盖：roles_dir / teams_dir / skills_dir；
   缺省落点由**激活的 harness 适配器**自述（ZCode 为 ~/.zcode/{agents,teams,skills}）。
   --harness-root 覆盖 harness 根（--zcode-dir 兼容旧名）。
+  --source <dir> 覆盖 roles_dir 本身（role 的读写命令**一律生效**；显式给出即等同 --harness-root，不再需要 --yes）
   prism kb import <file.md> [--layer --owner --book --module]
   prism kb sync <项目名|项目根> [--owner --book --module] [--dry-run]   扫描项目文档建引用索引
   prism kb search <query> [--layer --book --limit]

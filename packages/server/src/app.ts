@@ -24,7 +24,7 @@ import { loadKnowledgeService } from './kb/wiring.js'
 export interface AppOptions {
   /** PRISM_HOME 覆盖；默认 prismHome() */
   home?: string
-  /** ZCode 宿主根目录（/api/teams/:id/activate 判装配状态）；默认 PRISM_HARNESS_ROOT → ~/.zcode */
+  /** 宿主根目录（/api/teams/:id/activate 判装配状态）；缺省取**配置激活的适配器**默认根，PRISM_HARNESS_ROOT 可覆盖 */
   harnessRoot?: string
   /** 监听端口；默认 7777 */
   port?: number

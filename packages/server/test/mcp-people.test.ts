@@ -221,6 +221,46 @@ describe('MCP 角色/团队写工具 v6（增删改三入口对齐）', () => {
     expect(existsSync(join(home, 'roles', 'mcp-role.md'))).toBe(false)
   })
 
+  it('prism_role_list：返回 roles_dir（键名 = 写参数，读回即可回填；旧名 agents_dir 已删）', async () => {
+    const res = await call('prism_role_list', {})
+    expect(res?.result).toMatchObject({ isError: false })
+    const value = JSON.parse(textOf(res)) as {
+      count: number
+      roles: unknown[]
+      roles_dir: string
+      agents_dir?: string
+    }
+    expect(value.count).toBe(2)
+    expect(value.roles_dir.replaceAll('\\', '/')).toBe(join(home, 'roles').replaceAll('\\', '/'))
+    // 旧名 `agents_dir`（zcode 遗留）已删：它与写参数不同名，宿主照抄回填会 400 roles_dir_required
+    expect(value.agents_dir).toBeUndefined()
+  })
+
+  it('prism_team_new：显式 roles_dir 生效；缺省仍回落默认角色库', async () => {
+    const altRoles = join(tmp, 'alt-roles')
+    await mkdir(altRoles, { recursive: true })
+    await writeFile(join(altRoles, 'alt-role.md'), ZCODE_ROLE_MD.replace(/dev-1/g, 'alt-role'), 'utf-8')
+
+    // 缺省 → 默认角色库（home/roles 里没有 alt-role）→ isError member_role_unknown（老行为保留）
+    const fallback = await call('prism_team_new', {
+      team_id: 'mcp-alt-default',
+      members: [{ role: 'alt-role', count: 1 }],
+      teams_dir: writeTeams,
+    })
+    expect(fallback?.result).toMatchObject({ isError: true })
+    expect(textOf(fallback)).toContain('member_role_unknown')
+
+    // 显式 roles_dir → 用指定库校验 → 通过并落盘
+    const res = await call('prism_team_new', {
+      team_id: 'mcp-alt',
+      members: [{ role: 'alt-role', count: 1 }],
+      teams_dir: writeTeams,
+      roles_dir: altRoles,
+    })
+    expect(res?.result).toMatchObject({ isError: false })
+    expect(existsSync(join(writeTeams, 'mcp-alt.md'))).toBe(true)
+  })
+
   it('prism_role_new：宿主原生形态落盘（frontmatter 不含 skills，扩展落正文）', async () => {
     const res = await call('prism_role_new', {
       name: 'mcp-role',

@@ -10,8 +10,9 @@
 >
 > **新增 CLI**：`team new <id>`（建队脚手架 + 自动校验 + 写守卫；v6 由 `team init` 更名）、`kb structure show|generate|freeze`（书结构：总纲/模块清单/固化/继承）、`kb versions <id>`（条目版次历史）、`kb deposit`（按团队沉淀策略落库）、`skill effective --role [--team]`（Skill 有效集）、`task report --deposit`（终态沉淀建议 + 一步落库）。
 > **新增 MCP 工具**（4）：`prism_kb_versions`、`prism_kb_book_structure`、`prism_skill_effective`、`prism_team_create`（v6 更名 `prism_team_new`）——**工具总数以 `tools/list` 实测为准**（v4 由 31 增至 35；v5 多项目图谱合并（F-C2）再增至 36；**v6 角色/团队补齐增删改，36 → 43**）。
-> **新增/变更 HTTP**：`GET /api/kb/versions/:id`、`GET|POST /api/kb/book-structure`、`GET /api/skills/effective?role=&team=`、`POST /api/teams`（`teams_dir` 必填、无 env 回落）、`GET /api/teams` 增只读 `teamsDir`、`GET /api/kb/context-pack` 增 `layers/books/symbols/max_excerpt_chars`。
-> **v6 写路由补齐（2026-09-12）**：`POST /api/roles`、`PATCH|DELETE /api/roles/:name`、`PATCH|DELETE /api/teams/:id`；`GET /api/roles` 返回体由裸数组改为 `{ roles, rolesDir }`（与 `/api/teams` 的 `{ teams, teamsDir }` 同形）。写路径的 `roles_dir` / `teams_dir` **必填**。
+> **新增/变更 HTTP**：`GET /api/kb/versions/:id`、`GET|POST /api/kb/book-structure`、`GET /api/skills/effective?role=&team=`、`POST /api/teams`（`teams_dir` 必填、无 env 回落）、`GET /api/teams` 增只读目录字段、`GET /api/kb/context-pack` 增 `layers/books/symbols/max_excerpt_chars`。
+> **v6 写路由补齐（2026-09-12）**：`POST /api/roles`、`PATCH|DELETE /api/roles/:name`、`PATCH|DELETE /api/teams/:id`；`GET /api/roles` 返回体由裸数组改为 `{ roles, … }`（与 `/api/teams` **同形**）。写路径的 `roles_dir` / `teams_dir` **必填**。
+> **v6.1 参数契约统一（2026-09-12）**：读写两侧的**目录键名一律 snake_case 且同名**——`GET /api/roles` → `{ roles, roles_dir }`、`GET /api/teams` → `{ teams, teams_dir }`（旧 camel `rolesDir`/`teamsDir` 前端仍兼容，但它已不是契约）；`prism_role_list` 的 `agents_dir` 更名为 `roles_dir`（zcode 遗留名，与写参数不同名会让宿主回填失败）。`prism_team_new` / `POST /api/teams` 新增**可选** `roles_dir`（成员角色校验用；缺省才回落默认角色库）。
 > **已废弃**：工作队列（`prism_work_*` 工具、`work` 命令、`/api/work/*`）——见 `work-queue.md` 顶部；下方 §1 的 `work` 分组与 §2.5 已失效。同理 `uninit` / `harness detect` / `skill sync` 均未实现。
 
 ---
@@ -173,10 +174,13 @@ prism
 > **v6**：补齐增删改——`new|edit|rm` 与 CLI（`prism role|team new|edit|rm`）、
 > HTTP（`POST|PATCH|DELETE /api/roles[/:name]`、`POST|PATCH|DELETE /api/teams[/:id]`）**同名同位**。
 > 写路径的目录参数（`roles_dir` / `teams_dir`）**必填**——一律显式参数化，防误写真实宿主目录。
+>
+> **v6.1**：`prism_role_list` 返回 `roles_dir`（= 写参数名，读回即可回填）；`prism_team_new` 增**可选**
+> `roles_dir`（成员角色校验用，与 `prism_team_edit` 对齐；缺省才回落当前角色目录）。
 
 | 工具 | 作用 |
 | :--- | :--- |
-| `prism_role_list` | 列出角色库（数据源 = 宿主 roles_dir） |
+| `prism_role_list` | 列出角色库（数据源 = 当前角色目录）。返回 `{ count, roles, roles_dir }`——`roles_dir` 即要回填给 `prism_role_new\|edit\|rm` 的值（v6.1 由 `agents_dir` 更名） |
 | `prism_role_get` | 查看角色定义（全文） |
 | `prism_role_new` | 新建角色（按**宿主原生形态**落盘：frontmatter 只含适配器白名单字段，skills / 知识绑定落正文小节；v6 新增） |
 | `prism_role_edit` | 修改角色（字段补丁：`description`/`skills`/`knowledge`/`body`/`color`/`model`/`thought_level`；正文不重排；v6 新增） |
@@ -184,11 +188,24 @@ prism
 | `prism_role_render` | 渲染宿主格式角色文件（原文漏列） |
 | `prism_team_list` | 列出团队库（v6 新增） |
 | `prism_team_get` | 查看团队定义 |
-| `prism_team_new` | 新建团队定义（`teams_dir` 必填；v4 新增为 `prism_team_create`，v6 更名） |
+| `prism_team_new` | 新建团队定义（`teams_dir` 必填；`roles_dir` 可选＝成员角色校验用；v4 新增为 `prism_team_create`，v6 更名） |
 | `prism_team_edit` | 修改团队（`name`/`description`/`members`/`deposit`；改 `members` 时**工作流表按名册就地收窄**；v6 新增） |
 | `prism_team_rm` | 删除团队文件本体（**不可逆**；`teams_dir` 必填；v6 新增） |
 | `prism_team_render` | 渲染宿主格式团队文件（v6 新增） |
 | `prism_team_activate` | 拉取团队运行时配置（含装配状态） |
+
+> **三入口的能力边界（有意不对称；2026-09-12 审查后明确）**：
+>
+> | 能力 | CLI | MCP | HTTP | 说明 |
+> | :--- | :--- | :--- | :--- | :--- |
+> | `render`（预览宿主形态） | ✅ role/team | ✅ | ❌ | 本地开发/排障工具，控制台不需要 |
+> | `validate` | ✅ role（全量）/ team（单条） | ❌ | ❌ | 校验结果随 `list`/`detail` 的 `issues` 返回，无需独立入口 |
+> | Skill 写（install/uninstall/update） | ✅ | ❌ | ❌ | **已知缺口**：宿主无法经 MCP 装 skill（后续项） |
+> | `--from`（从既有定义复制） | ✅ role/team | ❌ | ❌ | 便于人手写；机器侧「读→改」即可 |
+> | 指定写目录 | ❌（换根 / prism.yaml） | ✅ 必填 | ✅ 必填 | CLI 侧另有 `--source`（role） |
+>
+> 除 **Skill 写侧**这一真缺口外，其余属**取舍**——文档不应把它们描述成「三入口全等」。
+> 三入口真正严格对齐的是**动词与落盘语义**：`new|edit|rm` ↔ `POST|PATCH|DELETE`，同一实现单点。
 
 ### 2.4 上下文（1）
 

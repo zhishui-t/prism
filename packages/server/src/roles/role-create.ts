@@ -11,6 +11,9 @@
  * 缺省由 agents 回落到 `renderZcodeRole`。
  */
 
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
+
 import { PrismError } from '@prism/core'
 import {
   editRole,
@@ -77,12 +80,15 @@ export async function createRoleDefinition(
     ...(opts.renderRole !== undefined ? { renderRole: opts.renderRole } : {}),
   }
 
+  // `overwritten` 必须是**真实是否覆盖了既有文件**：原写法直接回 `force === true`，
+  // 于是「首次创建 + --force」也会报 true（语义不准，控制台据此提示会误导）。
+  const existed = existsSync(join(targetDir, `${name}.md`))
   const result = await run(() => newRole(input))
   if (result.written.length === 0) {
     const path = result.skipped[0]?.path ?? name
     throw new PrismError('id_conflict', `角色已存在，未覆盖：${path}（如需修改请用 prism role edit 或 PATCH /api/roles/:name）`)
   }
-  return { path: result.written[0]!, overwritten: body.force === true }
+  return { path: result.written[0]!, overwritten: existed && body.force === true }
 }
 
 /** `PATCH /api/roles/:name` / `prism_role_edit`：按字段补丁修改既有角色。 */

@@ -373,7 +373,7 @@ prism graph affected "<节点>" --depth 2 --project <名>
 
 ## 查看定义
 
-- \`prism_role_list\`：角色库（含 \`issues\` 校验警告）；
+- \`prism_role_list\`：角色库（含 \`issues\` 校验警告）。返回体里的 \`roles_dir\` **就是要传给增删改工具的 \`roles_dir\`**——读回直接回填，不要自己拼宿主路径；
 - \`prism_role_render { name, model?, thought_level? }\`：渲染成宿主格式（含 \`target\` 路径）；
 - \`prism_team_get { team_id }\`：团队定义全文。
 
@@ -384,18 +384,20 @@ Prism 不持有第二份副本 —— 因此**不存在"把角色/团队装进�
 
 | 要做什么 | 怎么做 |
 | :--- | :--- |
-| 建团队 | \`prism_team_new { team_id, name, members, teams_dir }\`（等价入口：web 控制台 \`POST /api/teams\`、终端 \`prism team new <id>\`） |
+| 建团队 | \`prism_team_new { team_id, name, members, teams_dir, roles_dir? }\`（\`roles_dir\` 可选＝成员角色校验用；等价入口：web 控制台 \`POST /api/teams\`、终端 \`prism team new <id>\`） |
 | 建角色 | \`prism_role_new { name, roles_dir, description?, skills?, knowledge? }\`（等价入口：web 控制台 \`POST /api/roles\`、终端 \`prism role new\`）；只给名字则写骨架 |
 | 改团队 | \`prism_team_edit { team_id, teams_dir, name?/description?/members? }\`——改 members 时**工作流表就地按名册收窄** |
 | 改角色 | \`prism_role_edit { name, roles_dir, description?/skills?/knowledge?/body? }\`——只改点名字段，正文不重排 |
 | 删 | \`prism_team_rm\` / \`prism_role_rm\`（**不可逆**；CLI 删除默认宿主目录需 \`--yes\`） |
 | 查在不在 | \`prism_role_list\`（角色库）/ \`prism_team_list\`（团队库）/ \`prism_team_get { team_id }\`（单个团队定义全文） |
-| 校验 | \`prism team validate <id>\` / \`prism role validate\` |
+| 校验 | \`prism team validate <id>\` / \`prism role validate\`（MCP 侧无独立校验工具，看 list/detail 的 \`issues\`） |
 
 > 增删改三动作在 CLI / HTTP / MCP **同名同位**（\`new|edit|rm\` ↔ \`prism_role_new|edit|rm\` ↔ \`POST|PATCH|DELETE /api/roles\`）。
 > 写路径的目录参数（\`teams_dir\` / \`roles_dir\`）**必填**——一律显式参数化，防误写真实宿主目录。
+> 取值来源单一：先 \`prism_role_list\` 拿 \`roles_dir\`、\`prism_team_list\` 拿 \`teams_dir\`（读写两侧键名同名，可直接回填）。
 > \`<roles_dir>\`/\`<teams_dir>\` 由激活的适配器声明（如 WorkBuddy：\`~/.workbuddy/agents\`、\`~/.workbuddy/teams\`），
 > \`prism.yaml\` 可覆盖；用 \`prism harness show\` 看当前适配器。
+> **Skill 的装/卸只有 CLI**（\`prism skill install|uninstall|update\`）——MCP 侧没有对应工具。
 
 ## 沉淀规则（团队定义里）
 

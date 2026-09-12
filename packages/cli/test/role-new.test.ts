@@ -326,3 +326,69 @@ describe('prism role edit | rm（v6 增删改对齐）', () => {
     expect(out.value.content).toContain('name: dev-x')
   })
 })
+
+/**
+ * v6.1 回归：`--source` 对**写命令**同样生效。
+ *
+ * 旧行为（实测确认的缺陷）：`role.ts` 里的 `rolesDir`（含 `--source` 覆盖）只被
+ * list/show/validate/render 使用，`new`/`edit`/`rm` 硬用 `dirs.rolesDir` ——
+ * 于是 `role rm dup --source <src>` 实际删掉的是**默认宿主目录**里那份（而该命令的用法串
+ * 明写支持 `--source`），属不可逆误删。本块锁住「读写同源」这条契约。
+ */
+describe('prism role new|edit|rm --source（写命令与读命令同源）', () => {
+  let home: string
+  let src: string
+  let lines: string[]
+  let ctx: CommandContext
+  const cleanup: string[] = []
+
+  beforeEach(async () => {
+    home = await mkdtemp(join(tmpdir(), 'prism-role-source-home-'))
+    src = await mkdtemp(join(tmpdir(), 'prism-role-source-src-'))
+    cleanup.push(home, src)
+    await mkdir(join(home, 'roles'), { recursive: true })
+    lines = []
+    ctx = {
+      ...defaultContext({
+        stdout: (line) => lines.push(line),
+        stderr: (line) => lines.push(`[stderr] ${line}`),
+      }),
+      home,
+    }
+  })
+
+  afterEach(async () => {
+    for (const dir of cleanup) {
+      await rm(dir, { recursive: true, force: true }).catch(() => {})
+    }
+    cleanup.length = 0
+  })
+
+  it('new --source：落在 --source 指定目录，且不写默认 roles_dir（无需 --yes）', async () => {
+    // 不带 --yes：`--source` 已显式指定目录，与 `--harness-root` 同口径解除写守卫
+    expect(await runCommand(ctx, ['role', 'new', 'src-role', '--source', src])).toBe(0)
+    expect(existsSync(join(src, 'src-role.md'))).toBe(true)
+    expect(existsSync(join(home, 'roles', 'src-role.md'))).toBe(false)
+    expect(lines.join('\n')).toContain('--source')
+  })
+
+  it('rm --source：删的是 --source 那份；默认目录的同名文件原封不动', async () => {
+    const roleMd = '---\nname: dup\ndescription: d\n---\n'
+    await writeFile(join(src, 'dup.md'), roleMd, 'utf-8')
+    await writeFile(join(home, 'roles', 'dup.md'), roleMd, 'utf-8')
+
+    expect(await runCommand(ctx, ['role', 'rm', 'dup', '--source', src])).toBe(0)
+    expect(existsSync(join(src, 'dup.md'))).toBe(false) // 目标被删
+    expect(existsSync(join(home, 'roles', 'dup.md'))).toBe(true) // 旧实现删的是这里
+  })
+
+  it('edit --source：改的是 --source 那份', async () => {
+    const roleMd = '---\nname: e2\ndescription: 原述\n---\n'
+    await writeFile(join(src, 'e2.md'), roleMd, 'utf-8')
+    await writeFile(join(home, 'roles', 'e2.md'), roleMd, 'utf-8')
+
+    expect(await runCommand(ctx, ['role', 'edit', 'e2', '--source', src, '--description', '改述'])).toBe(0)
+    expect(await readFile(join(src, 'e2.md'), 'utf-8')).toContain('改述')
+    expect(await readFile(join(home, 'roles', 'e2.md'), 'utf-8')).toContain('原述')
+  })
+})

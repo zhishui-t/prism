@@ -120,15 +120,17 @@ export interface TeamsIndex {
 }
 
 /**
- * GET /api/teams 形状兼容：历史为裸数组；design-v4 §3.4 要求返回体增只读 `teamsDir`
- * （数组上加字段不可表达，故可能改为 `{ teams, teamsDir }`）。两种形状都接受，
- * 避免与流 2 的落地形状耦合。
+ * GET /api/teams 形状兼容：历史为裸数组 → `{ teams, teamsDir }`（v5）→ `{ teams, teams_dir }`（v6.1，
+ * 键名与写参数 `teams_dir` 同名，读回即可回填）。三种形状都接受，避免与后端落地形状耦合。
  */
-function normalizeTeams(value: TeamDefinition[] | { teams: TeamDefinition[]; teamsDir?: string }): TeamsIndex {
+function normalizeTeams(
+  value: TeamDefinition[] | { teams: TeamDefinition[]; teams_dir?: string; teamsDir?: string },
+): TeamsIndex {
   if (Array.isArray(value)) return { teams: value }
+  const dir = value.teams_dir ?? value.teamsDir
   return {
     teams: value.teams ?? [],
-    ...(value.teamsDir !== undefined ? { teamsDir: value.teamsDir } : {}),
+    ...(dir !== undefined ? { teamsDir: dir } : {}),
   }
 }
 
@@ -160,21 +162,22 @@ export type RoleColor = (typeof ROLE_COLORS)[number]
 /** 合法角色色（与服务端 `packages/agents/src/role/validate.ts` 的 `ROLE_COLORS` 同口径）。 */
 export const ROLE_COLOR_OPTIONS: readonly RoleColor[] = ROLE_COLORS
 
-/** `GET /api/roles` 返回体（v5：由裸数组改为 `{ roles, rolesDir }`，与 `/api/teams` 同形）。 */
+/** `GET /api/roles` 返回体（v6.1：`{ roles, roles_dir }`，键名与写参数同名，与 `/api/teams` 同形）。 */
 export interface RolesIndex {
   roles: RoleDefinition[]
   /** 受管 roles 目录绝对路径（只读）。仅用于新建表单预填，**不硬编码宿主路径**（R6）。 */
   rolesDir?: string
 }
 
-/** 裸数组（历史形状）与 `{roles, rolesDir}` 都接受——避免与后端落地形状耦合。 */
+/** 裸数组（历史形状）、`{roles, rolesDir}`（v5）与 `{roles, roles_dir}`（v6.1）都接受。 */
 function normalizeRoles(
-  value: RoleDefinition[] | { roles: RoleDefinition[]; rolesDir?: string },
+  value: RoleDefinition[] | { roles: RoleDefinition[]; roles_dir?: string; rolesDir?: string },
 ): RolesIndex {
   if (Array.isArray(value)) return { roles: value }
+  const dir = value.roles_dir ?? value.rolesDir
   return {
     roles: value.roles ?? [],
-    ...(value.rolesDir !== undefined ? { rolesDir: value.rolesDir } : {}),
+    ...(dir !== undefined ? { rolesDir: dir } : {}),
   }
 }
 
@@ -249,9 +252,12 @@ export interface EffectiveSkillSet {
 
 export const teamApi = {
   roles: () =>
-    request<RoleDefinition[] | { roles: RoleDefinition[]; rolesDir?: string }>('/api/roles').then(normalizeRoles),
+    request<RoleDefinition[] | { roles: RoleDefinition[]; roles_dir?: string; rolesDir?: string }>('/api/roles').then(normalizeRoles),
   role: (name: string) => request<RoleDefinition>(`/api/roles/${encodeURIComponent(name)}`),
-  teams: () => request<TeamDefinition[] | { teams: TeamDefinition[]; teamsDir?: string }>('/api/teams').then(normalizeTeams),
+  teams: () =>
+    request<TeamDefinition[] | { teams: TeamDefinition[]; teams_dir?: string; teamsDir?: string }>('/api/teams').then(
+      normalizeTeams,
+    ),
   team: (id: string) => request<TeamDefinition>(`/api/teams/${encodeURIComponent(id)}`),
   activate: (id: string) => request<TeamActivation>(`/api/teams/${encodeURIComponent(id)}/activate`),
   skills: () => request<PrismSkill[]>('/api/skills'),

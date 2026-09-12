@@ -56,11 +56,11 @@ beforeAll(async () => {
   })
   base = `http://127.0.0.1:${app.port}`
 
-  // ① 团队落盘：先问服务端要 teamsDir（保证与生产解析同源，不靠猜）
-  const teams = (await (await fetch(`${base}/api/teams`)).json()) as { value: { teamsDir: string } }
-  await mkdir(teams.value.teamsDir, { recursive: true })
+  // ① 团队落盘：先问服务端要 teams_dir（保证与生产解析同源，不靠猜）
+  const teams = (await (await fetch(`${base}/api/teams`)).json()) as { value: { teams_dir: string } }
+  await mkdir(teams.value.teams_dir, { recursive: true })
   await writeFile(
-    join(teams.value.teamsDir, 'core-dev.md'),
+    join(teams.value.teams_dir, 'core-dev.md'),
     fillTeamTemplate(CORE_DEV_TEAM_MD, { teamId: 'core-dev', name: '核心研发团队', description: '测试用' }),
     'utf-8',
   )
