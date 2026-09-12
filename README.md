@@ -340,8 +340,8 @@ embedding_model: small      # 向量模型档位：small | default | large
 
 ```bash
 pnpm typecheck     # 7 包类型检查
-pnpm test          # 759 单测（78 文件）
-pnpm test:e2e      # 133 项端到端
+pnpm test          # 921 单测（93 文件）
+pnpm test:e2e      # 158 项端到端
 pnpm test:package  # 发行冒烟（打包→解压→在解压环境验证关键路径）
 pnpm lint          # ESLint
 pnpm build         # 构建全部包 + web

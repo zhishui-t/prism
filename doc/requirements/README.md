@@ -25,6 +25,7 @@
 | `prism-skill.md` | Prism 自身 Skill：装配器 + 使用入口 |
 | `knowledge-injection.md` | 注入：MCP 拉取 / 上下文包 / AGENTS.md 静态注入 |
 | `deployment-model.md` | 部署：多 harness（内置+运行期插件）/ 单激活、多会话共享、WAL 并发 |
+| `cross-platform.md` | 平台支持：Windows / macOS 一线、Linux 尽力；平台差异的 4 类与唯一真相源 |
 | `code-graph.md` | 代码图谱：用 Graphify 工具/页面，产物放项目根 |
 | ~~`work-queue.md`~~ | **已废弃**（工作队列移除；富化改宿主直付，见该文顶部） |
 | `task-center.md` | 任务中心：被动台账、依赖图、回报协议 |
@@ -127,7 +128,16 @@
 
 ## 4. 当前实现状态
 
-**已落地并验证**（2026-09-10）：`pnpm -r typecheck` 7 包通过 ｜ `pnpm test` 376/376 ｜ `pnpm lint` 0 错。
+**已落地并验证**（2026-09-12，**Windows + macOS 双平台口径**；macOS 侧为 Intel Mac / x64 真机）：`pnpm -r typecheck` 7 包通过 ｜
+`pnpm test` 921 通过（2 条按平台 skip，93 文件）｜ `pnpm lint` 0 错 ｜ `pnpm build` 通过 ｜
+`pnpm test:e2e` 158/158 ｜ `pnpm test:package` 11/11 ｜ **macOS 向量链路端到端**：冷启动 1008ms / 热态 8–12ms / 常驻 43.9MB。
+
+> ⚠ `pnpm test` 若在**带 `rm` 守卫的沙箱**里跑，可能整文件报假红（`SAFE_DELETE_BULK_CONFIRM_REQUIRED`，
+> 见 `packages/server/test/archive-extract.test.ts` 文件头）——先看错误码，别改断言。
+
+> **本节下方的模块清单写于 v3 时期**，括号里的数字已过期（「MCP 10 工具」实为 46、
+> graphify 子模块已换 tag、**工作队列已废弃移除**）。措辞待随下一轮文档整理统一；
+> 命令面与工具数以 `cli-mcp-surface.md`、`README.md` §5 为准，平台差异见 `cross-platform.md`。
 
 ```
 prism/
