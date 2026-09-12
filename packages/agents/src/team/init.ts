@@ -1,5 +1,5 @@
 /**
- * `team init` 脚手架渲染（design-v4 §F-C1 / §3.3）——**只渲染，不落盘**。
+ * `team new` 脚手架渲染（design-v4 §F-C1 / §3.3）——**只渲染，不落盘**。
  *
  * 落盘由调用方负责（CLI 走 `guardWriteTarget` 写守卫；HTTP F-C3 显式传 `teams_dir`），
  * 使「写路径单点可审」。
@@ -75,7 +75,7 @@ export function renderTeamScaffold(opts: TeamInitOptions): TeamScaffold {
   const description = firstNonEmpty(
     opts.description,
     opts.from?.description,
-    `${name}：由 prism team init 生成，请补充职责、适用与不适用边界。`,
+    `${name}：由 prism team new 生成，请补充职责、适用与不适用边界。`,
   )
 
   let base: TeamDefinition

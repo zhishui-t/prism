@@ -1,9 +1,11 @@
 /**
- * 新建团队定义（design-v4 F-C3；HTTP `POST /api/teams` 与 MCP `prism_team_create` 共用）。
+ * 团队写盘的服务端入口（`POST|PATCH|DELETE /api/teams[/:id]` 与
+ * MCP `prism_team_new` / `prism_team_edit` / `prism_team_rm` 共用）。
  *
  * 分工（写路径单点可审）：
- * - 渲染 = agents `renderTeamScaffold`（与 CLI `prism team init` 同一实现，只渲染不落盘）；
- * - **校验 + 落盘 = 本模块**，且落点**恒为调用方显式给出的 `teams_dir`**：
+ * - 渲染 = agents `renderTeamScaffold`（与 CLI `prism team new` 同一实现，只渲染不落盘）；
+ * - 改/删 = agents `editTeam` / `removeTeam`（与 CLI `prism team edit|rm` 同一实现）；
+ * - **校验 + 落点参数化 = 本模块**，且落点**恒为调用方显式给出的 `teams_dir`**：
  *   没有 env 回落，也绝不复用 `resolveDirsFromHome` 的默认宿主目录（R5/R6 延伸）。
  */
 
@@ -11,12 +13,12 @@ import { existsSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
-import { parseTeamMarkdown, renderTeamScaffold, renderZcodeTeam } from '@prism/agents'
+import { editTeam, parseTeamMarkdown, removeTeam, renderTeamScaffold, renderZcodeTeam, TeamWriteError } from '@prism/agents'
 import { PrismError } from '@prism/core'
 
 import { loadRoles, type DepositPolicy, type TeamMember, type ValidationIssue } from './index.js'
 
-/** 新建团队请求体（ui-spec-v4 §2.5 `NewTeamInput` / MCP `prism_team_create` 入参）。 */
+/** 新建团队请求体（ui-spec-v4 §2.5 `NewTeamInput` / MCP `prism_team_new` 入参）。 */
 export interface NewTeamBody {
   team_id?: unknown
   name?: unknown
@@ -82,7 +84,7 @@ export async function createTeamDefinition(body: NewTeamBody, rolesDir: string):
     )
   }
 
-  // ⑤ 渲染（与 CLI `prism team init` 同一实现；只渲染不落盘）
+  // ⑤ 渲染（与 CLI `prism team new` 同一实现；只渲染不落盘）
   const name = asNonEmptyString(body.name)
   const description = asNonEmptyString(body.description)
   const scaffold = renderTeamScaffold({
@@ -114,6 +116,105 @@ export async function createTeamDefinition(body: NewTeamBody, rolesDir: string):
   await mkdir(targetDir, { recursive: true })
   await writeFile(path, markdown, 'utf-8')
   return { path, issues }
+}
+
+/** 修改团队请求体（`PATCH /api/teams/:id` / MCP `prism_team_edit`；`teams_dir` 必填）。 */
+export interface UpdateTeamBody {
+  name?: unknown
+  description?: unknown
+  members?: unknown
+  deposit?: unknown
+  /** **必填**：目标目录（无 env 回落，绝不回落到默认宿主目录） */
+  teams_dir?: unknown
+  /** 改 `members` 时用于校验角色是否存在（同样必须显式给出） */
+  roles_dir?: unknown
+}
+
+/**
+ * `PATCH /api/teams/:id` / `prism_team_edit`：按字段补丁修改既有团队。
+ * 改 `members` 时复用 agents `editTeam` 的名册收窄（工作流表就地裁剪），并校验每个角色都在角色库中。
+ */
+export async function updateTeamDefinition(
+  teamId: string,
+  body: UpdateTeamBody,
+): Promise<{ path: string; issues: ValidationIssue[] }> {
+  const targetDir = asNonEmptyString(body.teams_dir)
+  if (targetDir === undefined) {
+    throw new PrismError(
+      'bad_request',
+      'teams_dir_required：未指定团队目录（防误写真实宿主，写路径一律显式参数化）。',
+    )
+  }
+  const id = asNonEmptyString(teamId)
+  if (id === undefined || !KEBAB_CASE_RE.test(id)) {
+    throw new PrismError('bad_request', `team_id_invalid：团队 id 必须 kebab-case：${teamId}`)
+  }
+
+  let members: TeamMember[] | undefined
+  if (body.members !== undefined) {
+    members = parseMembers(body.members)
+    if (members.length === 0) {
+      throw new PrismError('bad_request', 'members_invalid：至少需要 1 个成员角色（形如 [{role,count}]）')
+    }
+    const rolesDir = asNonEmptyString(body.roles_dir)
+    if (rolesDir === undefined) {
+      throw new PrismError('bad_request', 'roles_dir_required：改 members 需同时给出 roles_dir（用于校验角色存在）')
+    }
+    const known = new Set((await loadRoles(rolesDir)).map((role) => role.name.toLowerCase()))
+    const missing = members.filter((member) => !known.has(member.role.toLowerCase())).map((member) => member.role)
+    if (missing.length > 0) {
+      throw new PrismError(
+        'bad_request',
+        `member_role_unknown：角色不在角色库中：${missing.join(', ')}（角色库 ${rolesDir}）`,
+      )
+    }
+  }
+
+  const name = asNonEmptyString(body.name)
+  const description = asNonEmptyString(body.description)
+  const deposit = typeof body.deposit === 'object' && body.deposit !== null ? (body.deposit as Partial<DepositPolicy>) : undefined
+  if (name === undefined && description === undefined && members === undefined && deposit === undefined) {
+    throw new PrismError('bad_request', 'team_patch_empty：未给出任何要修改的字段（name/description/members/deposit）')
+  }
+
+  try {
+    const result = await editTeam({
+      teamId: id,
+      teamsDir: targetDir,
+      patch: {
+        ...(name !== undefined ? { name } : {}),
+        ...(description !== undefined ? { description } : {}),
+        ...(members !== undefined ? { members } : {}),
+        ...(deposit !== undefined ? { deposit } : {}),
+      },
+    })
+    return { path: result.written[0]!, issues: result.issues }
+  } catch (err) {
+    if (err instanceof TeamWriteError) {
+      throw new PrismError(err.code === 'team_not_found' ? 'not_found' : 'bad_request', err.message, { path: err.path })
+    }
+    throw err
+  }
+}
+
+/** `DELETE /api/teams/:id` / `prism_team_rm`：删除团队文件本体。 */
+export async function deleteTeamDefinition(teamId: string, teamsDir: unknown): Promise<{ removed: string[] }> {
+  const targetDir = asNonEmptyString(teamsDir)
+  if (targetDir === undefined) {
+    throw new PrismError('bad_request', 'teams_dir_required：未指定团队目录（防误写真实宿主，写路径一律显式参数化）。')
+  }
+  const id = asNonEmptyString(teamId)
+  if (id === undefined || !KEBAB_CASE_RE.test(id)) {
+    throw new PrismError('bad_request', `team_id_invalid：团队 id 必须 kebab-case：${teamId}`)
+  }
+  try {
+    return await removeTeam({ teamId: id, teamsDir: targetDir })
+  } catch (err) {
+    if (err instanceof TeamWriteError) {
+      throw new PrismError(err.code === 'team_not_found' ? 'not_found' : 'bad_request', err.message, { path: err.path })
+    }
+    throw err
+  }
 }
 
 /** 非空字符串（trim 后）；否则 undefined。 */

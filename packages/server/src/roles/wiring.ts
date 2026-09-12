@@ -9,7 +9,7 @@
  * - installedSkillNames：已装 skill 名单（knownSkills 校验输入）
  *
  * 2026-09-11：`installTeam` / `parseRoleFile` / `renderPrismRole` 已随「装配/导入」语义一并移除
- * （角色/团队就直接住在宿主目录，没有第二份副本可搬运；建角色走 `role init` 或直接写文件）。
+ * （角色/团队就直接住在宿主目录，没有第二份副本可搬运；建角色走 `role new` 或直接写文件）。
  */
 
 import { existsSync } from 'node:fs'
@@ -80,12 +80,29 @@ export interface HarnessPaths {
  * @param harnessRoot harness 根目录（显式指定或由适配器 defaultRoot 推导）
  * @param home        PRISM_HOME（prism.yaml 所在目录）；缺省 → 不读 prism.yaml（仅 env 决定）
  */
-export function harnessPaths(harnessRoot: string, home?: string): HarnessPaths {
+/**
+ * 解析当前激活的适配器（口径与 `harnessPaths` 完全一致：env `PRISM_HARNESS` > prism.yaml `harness` > 默认）。
+ * 写盘前需要「宿主原生形态」的渲染器时用它——渲染规则归适配器，server 不自造。
+ */
+export function harnessAdapterOf(harnessRoot: string, home?: string): ReturnType<typeof resolveHarness>['adapter'] {
   const configuredId = home !== undefined && home !== '' ? loadPrismConfig(home)?.harness : undefined
-  const adapter = resolveHarness({
+  return resolveHarness({
     harnessRoot,
     ...(configuredId !== undefined && configuredId !== '' ? { configuredId } : {}),
   }).adapter
+}
+
+/**
+ * 角色渲染器（宿主原生形态；`role new` 写盘前取）。
+ * frontmatter 只含该适配器声明的白名单字段，Prism 扩展落正文 overlay 小节。
+ */
+export function roleRendererFor(harnessRoot: string, home?: string): (role: RoleDefinition) => string {
+  const adapter = harnessAdapterOf(harnessRoot, home)
+  return (role: RoleDefinition): string => adapter.renderRole(role).content
+}
+
+export function harnessPaths(harnessRoot: string, home?: string): HarnessPaths {
+  const adapter = harnessAdapterOf(harnessRoot, home)
   return {
     root: harnessRoot,
     agentsDir: adapter.agent.globalDir,
@@ -100,12 +117,22 @@ export function harnessPaths(harnessRoot: string, home?: string): HarnessPaths {
 /**
  * 默认 harness 根目录（探测起点；不存在时调用方警告但继续，design-v3 §3.6 ①）。
  *
- * 覆盖优先级：`PRISM_HARNESS_ROOT`（通用） > 适配器 `defaultRoot`。
+ * 覆盖优先级：`PRISM_HARNESS_ROOT`（通用） > **配置激活的适配器** `defaultRoot`（`prism.yaml: harness`
+ * 或 env `PRISM_HARNESS`）> 内置 zcode。
  * 注意：`ZCODE_DIR` **不在此生效**——它是 ZCode 专属旧变量，由 zcode 适配器自己消费
  * （见 adapters/zcode.ts），否则会泄漏到其它 harness。
+ *
+ * **`home` 必须由调用方显式传入**才能读到 `prism.yaml` 的 `harness` 键（口径同 `harnessPaths`）；
+ * 不传则只认 env。这不是可选优化——适配器工厂把传入的 root 当 `opts.root`，会**覆盖插件自述的
+ * `defaultRoot`**：早期实现硬用 `harnessLayout()`（= 内置 zcode），在 prism.yaml 声明插件适配器时
+ * 会把 `~/.zcode` 塞给插件，于是 MCP 注册与 Skill 全部落到 **zcode 目录**（实测：WorkBuddy 宿主上
+ * `~/.zcode/mcp.json` 被写出，而 `~/.workbuddy/skills/prism` 从未更新）。
  */
-export function defaultHarnessRoot(): string {
-  return process.env['PRISM_HARNESS_ROOT'] ?? harnessLayout().root
+export function defaultHarnessRoot(home?: string): string {
+  const envRoot = process.env['PRISM_HARNESS_ROOT']
+  if (envRoot !== undefined && envRoot !== '') return envRoot
+  const configuredId = home !== undefined && home !== '' ? loadPrismConfig(home)?.harness : undefined
+  return harnessLayout(configuredId).root
 }
 
 /** 已安装 skill 名单（读 `<harnessRoot>/skills/*` 目录名，只读）；目录不存在 → undefined（跳过引用校验）。 */
@@ -194,7 +221,7 @@ export async function loadTeam(
 /**
  * 「团队不存在」文案单点（ui-spec-v4 §8-D5）。
  *
- * **真实落点在前**：`<teamsDir>/<id>.md` 是 `team init` / MCP `prism_team_create`
+ * **真实落点在前**：`<teamsDir>/<id>.md` 是 `team new` / MCP `prism_team_new`
  * 的落盘形态；
  * 目录式 `<id>/AGENTS.md` 仍可被 `loadTeam` 双形态探测到，故只作**兼容形态**附带说明。
  * HTTP / MCP / KB 三面共用本函数——文案曾是三个变体（显式镜像漂移），收敛到此处。

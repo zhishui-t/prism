@@ -11,6 +11,19 @@
 > （"别处"与"这里"已是同一处）。建团队 = `prism team init` / web `POST /api/teams` /
 > MCP `prism_team_create`；建角色 = `prism role init <name>` 或直接写 `<roles_dir>/<name>.md`。
 > **下文正文中凡涉及 install/import 的步骤均保留为历史决策记录，实现以本注记口径为准。**
+>
+> **v6 修订（2026-09-12）：角色 / 团队命令面 = 增删改查，三入口同名同位。**
+> `init` → `new`（CLI `role new` / `team new`；MCP `prism_role_new` / `prism_team_new`；
+> HTTP `POST /api/roles` / `POST /api/teams`），并补齐 `edit` / `rm`（MCP `prism_role_edit|rm`、
+> `prism_team_edit|rm`；HTTP `PATCH|DELETE /api/roles/:name`、`/api/teams/:id`）。
+> - `new` = 按**宿主原生形态**渲染落盘（适配器 `renderRole`；frontmatter 只含宿主白名单字段，
+>   skills / 知识绑定落正文小节）——原 `role init` 把 `skills`/`knowledge` 塞进 frontmatter，
+>   与两个适配器自述都冲突，已废；
+> - `edit` = **外科式字段补丁**，只动点名字段，正文与未知 frontmatter 键原样保留；
+>   改 `--members` 时工作流表**就地按名册收窄**（`workflow_pruned` warning）；
+> - `rm` = **硬删**文件本体（不可逆）：CLI 在默认宿主目录下需 `--yes`，MCP / HTTP 的
+>   `roles_dir` / `teams_dir` **必填**（写路径一律显式参数化）。
+> 原 `prism_team_create` 更名为 `prism_team_new`。MCP 工具总数 36 → 43。
 
 ---
 

@@ -8,9 +8,10 @@
 >
 > 本文下方仍是 2026-09-09 的讨论稿；以下为**当前实现增量**，与下方冲突时以本节与 `README.md` 为准：
 >
-> **新增 CLI**：`team init <id>`（建队脚手架 + 自动校验 + 写守卫）、`kb structure show|generate|freeze`（书结构：总纲/模块清单/固化/继承）、`kb versions <id>`（条目版次历史）、`kb deposit`（按团队沉淀策略落库）、`skill effective --role [--team]`（Skill 有效集）、`task report --deposit`（终态沉淀建议 + 一步落库）。
-> **新增 MCP 工具**（4）：`prism_kb_versions`、`prism_kb_book_structure`、`prism_skill_effective`、`prism_team_create`——**工具总数以 `tools/list` 实测为准**（v4 由 31 增至 35；v5 多项目图谱合并（F-C2）再增至 **36**）。
+> **新增 CLI**：`team new <id>`（建队脚手架 + 自动校验 + 写守卫；v6 由 `team init` 更名）、`kb structure show|generate|freeze`（书结构：总纲/模块清单/固化/继承）、`kb versions <id>`（条目版次历史）、`kb deposit`（按团队沉淀策略落库）、`skill effective --role [--team]`（Skill 有效集）、`task report --deposit`（终态沉淀建议 + 一步落库）。
+> **新增 MCP 工具**（4）：`prism_kb_versions`、`prism_kb_book_structure`、`prism_skill_effective`、`prism_team_create`（v6 更名 `prism_team_new`）——**工具总数以 `tools/list` 实测为准**（v4 由 31 增至 35；v5 多项目图谱合并（F-C2）再增至 36；**v6 角色/团队补齐增删改，36 → 43**）。
 > **新增/变更 HTTP**：`GET /api/kb/versions/:id`、`GET|POST /api/kb/book-structure`、`GET /api/skills/effective?role=&team=`、`POST /api/teams`（`teams_dir` 必填、无 env 回落）、`GET /api/teams` 增只读 `teamsDir`、`GET /api/kb/context-pack` 增 `layers/books/symbols/max_excerpt_chars`。
+> **v6 写路由补齐（2026-09-12）**：`POST /api/roles`、`PATCH|DELETE /api/roles/:name`、`PATCH|DELETE /api/teams/:id`；`GET /api/roles` 返回体由裸数组改为 `{ roles, rolesDir }`（与 `/api/teams` 的 `{ teams, teamsDir }` 同形）。写路径的 `roles_dir` / `teams_dir` **必填**。
 > **已废弃**：工作队列（`prism_work_*` 工具、`work` 命令、`/api/work/*`）——见 `work-queue.md` 顶部；下方 §1 的 `work` 分组与 §2.5 已失效。同理 `uninit` / `harness detect` / `skill sync` 均未实现。
 
 ---
@@ -120,10 +121,12 @@ prism
 
 ## 2. MCP 工具清单
 
-> **v5 取齐说明**（2026-09-11）：工具总数 = **36**（`packages/server/src/mcp/server.ts` 内
-> `name: 'prism_*'` 逐条计数；v4 由 31 增至 35，新增 `prism_kb_versions`、`prism_kb_book_structure`、
-> `prism_skill_effective`、`prism_team_create`；v5 多项目图谱合并（F-C2）新增 `prism_graph_merge`，
-> 代码图谱 7 → 8）。下文原文缺漏的工具已在各节补齐；
+> **v6 取齐说明**（2026-09-12）：工具总数 = **43**（`packages/server/src/mcp/server.ts` 内
+> `name: 'prism_*'` 逐条计数）。v4 由 31 增至 35；v5 多项目图谱合并（F-C2）新增 `prism_graph_merge`
+> （代码图谱 7 → 8）到 **36**；v6 把「角色 / 团队」补齐成**增删改查**（`new|edit|rm` 在 CLI / HTTP / MCP
+> 三入口**同名同位**）——新增 `prism_role_new|edit|rm`、`prism_team_list|edit|rm|render` 共 7 个，
+> 并把 `prism_team_create` **更名**为 `prism_team_new`（团队与角色对称）到 **43**。
+> 下文原文缺漏的工具已在各节补齐；
 > `❌ 未实现` = 全仓 grep 0 命中、**从未存在**的工具。
 >
 > **口径已入守卫**：本文件与 `README.md` 的「总数 + 分组小计」由
@@ -165,16 +168,27 @@ prism
 | `prism_graph_status` | 陈旧状态（原文漏列） |
 | `prism_graph_merge` | 多项目图谱合并（v5 / F-C2 新增） |
 
-### 2.3 团队与角色（6）
+### 2.3 团队与角色（13）
+
+> **v6**：补齐增删改——`new|edit|rm` 与 CLI（`prism role|team new|edit|rm`）、
+> HTTP（`POST|PATCH|DELETE /api/roles[/:name]`、`POST|PATCH|DELETE /api/teams[/:id]`）**同名同位**。
+> 写路径的目录参数（`roles_dir` / `teams_dir`）**必填**——一律显式参数化，防误写真实宿主目录。
 
 | 工具 | 作用 |
 | :--- | :--- |
-| `prism_team_activate` | 拉取团队运行时配置（含装配状态） |
-| `prism_team_get` | 查看团队定义 |
-| `prism_team_create` | 新建团队定义（`teams_dir` 必填；v4 新增） |
-| `prism_role_get` | 查看角色定义 |
-| `prism_role_list` | 列出角色 |
+| `prism_role_list` | 列出角色库（数据源 = 宿主 roles_dir） |
+| `prism_role_get` | 查看角色定义（全文） |
+| `prism_role_new` | 新建角色（按**宿主原生形态**落盘：frontmatter 只含适配器白名单字段，skills / 知识绑定落正文小节；v6 新增） |
+| `prism_role_edit` | 修改角色（字段补丁：`description`/`skills`/`knowledge`/`body`/`color`/`model`/`thought_level`；正文不重排；v6 新增） |
+| `prism_role_rm` | 删除角色文件本体（**不可逆**；`roles_dir` 必填；v6 新增） |
 | `prism_role_render` | 渲染宿主格式角色文件（原文漏列） |
+| `prism_team_list` | 列出团队库（v6 新增） |
+| `prism_team_get` | 查看团队定义 |
+| `prism_team_new` | 新建团队定义（`teams_dir` 必填；v4 新增为 `prism_team_create`，v6 更名） |
+| `prism_team_edit` | 修改团队（`name`/`description`/`members`/`deposit`；改 `members` 时**工作流表按名册就地收窄**；v6 新增） |
+| `prism_team_rm` | 删除团队文件本体（**不可逆**；`teams_dir` 必填；v6 新增） |
+| `prism_team_render` | 渲染宿主格式团队文件（v6 新增） |
+| `prism_team_activate` | 拉取团队运行时配置（含装配状态） |
 
 ### 2.4 上下文（1）
 

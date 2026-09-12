@@ -10,6 +10,10 @@
 > （`roles_dir` / `teams_dir` 由适配器声明），不存在装配复制这一步；建角色走 `prism role init`，
 > 建团队走 `team init` / `POST /api/teams` / MCP `prism_team_create`。
 > 正文保留为历史决策记录。
+>
+> **v6 修订（2026-09-12）**：下文 `prism role init` / `team init` 读作 **`role new` / `team new`**；
+> MCP 侧 `prism_team_create` 更名为 **`prism_team_new`**，并新增 `prism_role_new|edit|rm`、
+> `prism_team_list|edit|rm|render`（角色 / 团队补齐增删改查）。
 
 ---
 

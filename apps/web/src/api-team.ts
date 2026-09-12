@@ -20,6 +20,8 @@ export interface RoleDefinition {
   sourcePath?: string
   /** 校验结果（服务端随列表/详情返回，P9） */
   issues?: ValidationIssue[]
+  /** 只读：宿主 agents 目录里是否已有该角色定义（server 侧包装，v5/S5） */
+  installed?: boolean
 }
 
 export interface TeamMember {
@@ -149,6 +151,86 @@ export interface NewTeamResult {
   issues: ValidationIssue[]
 }
 
+/* ==================== 角色增删改（v5 三入口对齐） ==================== */
+
+const ROLE_COLORS = ['red', 'blue', 'green', 'yellow', 'purple', 'orange', 'pink', 'cyan'] as const
+
+export type RoleColor = (typeof ROLE_COLORS)[number]
+
+/** 合法角色色（与服务端 `packages/agents/src/role/validate.ts` 的 `ROLE_COLORS` 同口径）。 */
+export const ROLE_COLOR_OPTIONS: readonly RoleColor[] = ROLE_COLORS
+
+/** `GET /api/roles` 返回体（v5：由裸数组改为 `{ roles, rolesDir }`，与 `/api/teams` 同形）。 */
+export interface RolesIndex {
+  roles: RoleDefinition[]
+  /** 受管 roles 目录绝对路径（只读）。仅用于新建表单预填，**不硬编码宿主路径**（R6）。 */
+  rolesDir?: string
+}
+
+/** 裸数组（历史形状）与 `{roles, rolesDir}` 都接受——避免与后端落地形状耦合。 */
+function normalizeRoles(
+  value: RoleDefinition[] | { roles: RoleDefinition[]; rolesDir?: string },
+): RolesIndex {
+  if (Array.isArray(value)) return { roles: value }
+  return {
+    roles: value.roles ?? [],
+    ...(value.rolesDir !== undefined ? { rolesDir: value.rolesDir } : {}),
+  }
+}
+
+/** 新建/修改角色入参。`roles_dir` 必须由调用方显式提供（无 env 回落，R5/R6）。 */
+export interface RoleWriteInput {
+  name?: string
+  description?: string
+  /** 能力白名单；`[]` = 清空（仅 PATCH 有意义） */
+  skills?: string[]
+  knowledge?: KnowledgeBinding
+  /** 正文（Markdown）。`new` 时省略 → 用内置骨架；`update` 时给出即整体替换正文。 */
+  body?: string
+  /** `''` / `null` = 清除该 frontmatter 键（仅 PATCH 有意义） */
+  color?: RoleColor | '' | null
+  model?: string | null
+  thought_level?: ThoughtLevel | '' | null
+  /** **必填**：写入目录 */
+  roles_dir: string
+  /** 仅 `create` 认：目标已存在时是否覆盖。 */
+  force?: boolean
+}
+
+/** 思考档位（与 `packages/agents/src/types.ts` 的 `RoleDefinition.thoughtLevel` 同口径）。 */
+export type ThoughtLevel = 'low' | 'high' | 'max'
+
+export const THOUGHT_LEVELS: readonly ThoughtLevel[] = ['low', 'high', 'max']
+
+/** 角色写盘结果（`POST/PATCH /api/roles`）。 */
+export interface RoleWriteResult {
+  path: string
+  /** 是否发生了覆盖（`force: true`）。 */
+  overwritten: boolean
+}
+
+/** `DELETE /api/roles/:name` 结果。 */
+export interface RoleRemoveResult {
+  removed: string[]
+}
+
+/** 修改团队入参（`PATCH /api/teams/:id`）。改 `members` 时须同时给 `roles_dir`。 */
+export interface UpdateTeamInput {
+  name?: string
+  description?: string
+  members?: TeamMember[]
+  deposit?: Partial<DepositPolicy>
+  /** **必填**：目标 teams 目录 */
+  teams_dir: string
+  /** 改 `members` 时必填（校验角色存在） */
+  roles_dir?: string
+}
+
+/** `DELETE /api/teams/:id` 结果。 */
+export interface RemoveResult {
+  removed: string[]
+}
+
 /** Skill 有效集（F-D2，角色 × 团队 → 能用的 skill）。 */
 export interface EffectiveSkill {
   name: string
@@ -166,7 +248,8 @@ export interface EffectiveSkillSet {
 }
 
 export const teamApi = {
-  roles: () => request<RoleDefinition[]>('/api/roles'),
+  roles: () =>
+    request<RoleDefinition[] | { roles: RoleDefinition[]; rolesDir?: string }>('/api/roles').then(normalizeRoles),
   role: (name: string) => request<RoleDefinition>(`/api/roles/${encodeURIComponent(name)}`),
   teams: () => request<TeamDefinition[] | { teams: TeamDefinition[]; teamsDir?: string }>('/api/teams').then(normalizeTeams),
   team: (id: string) => request<TeamDefinition>(`/api/teams/${encodeURIComponent(id)}`),
@@ -177,6 +260,38 @@ export const teamApi = {
   /** 新建团队（F-C2 → POST /api/teams，F-C3 落地）。 */
   create: (input: NewTeamInput) =>
     request<NewTeamResult>('/api/teams', { method: 'POST', body: JSON.stringify(input) }),
+
+  /** 修改团队（v5 → PATCH /api/teams/:id）。改 members 时服务端会就地收窄工作流。 */
+  updateTeam: (id: string, input: UpdateTeamInput) =>
+    request<{ path: string; issues: ValidationIssue[] }>(`/api/teams/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(input),
+    }),
+
+  /** 删除团队（v5 → DELETE /api/teams/:id）。**硬删**，`teams_dir` 必填。 */
+  deleteTeam: (id: string, teamsDir: string) =>
+    request<RemoveResult>(`/api/teams/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      body: JSON.stringify({ teams_dir: teamsDir }),
+    }),
+
+  /** 新建角色（v5 → POST /api/roles），按宿主原生形态落盘。 */
+  createRole: (input: RoleWriteInput) =>
+    request<RoleWriteResult>('/api/roles', { method: 'POST', body: JSON.stringify(input) }),
+
+  /** 修改角色（v5 → PATCH /api/roles/:name），外科式字段补丁，正文不重排。 */
+  updateRole: (name: string, input: RoleWriteInput) =>
+    request<RoleWriteResult>(`/api/roles/${encodeURIComponent(name)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(input),
+    }),
+
+  /** 删除角色（v5 → DELETE /api/roles/:name）。**硬删**，`roles_dir` 必填。 */
+  deleteRole: (name: string, rolesDir: string) =>
+    request<RoleRemoveResult>(`/api/roles/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+      body: JSON.stringify({ roles_dir: rolesDir }),
+    }),
 
   /** Skill 有效集（F-D2 → GET /api/skills/effective）。角色不存在时服务端 404 信封。 */
   effectiveSkills: (role: string, team?: string) => {

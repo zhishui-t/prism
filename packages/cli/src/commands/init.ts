@@ -34,10 +34,10 @@ export interface InitReport {
 
 /**
  * `prism init [--home] [--harness-root] [--force]`（design-v3 §3.6 五步）：
- * ① 探测 ZCode 目录（默认 ~/.zcode，不存在则警告但继续）
+ * ① 探测宿主目录（默认取**激活适配器**的 defaultRoot，不存在则警告但继续）
  * ② 建 <PRISM_HOME> 骨架：roles/ skills/ knowledge/ state/ catalog/ audit/
  *    （**不落任何团队**——是否建团队、建几个、用什么编制，是使用者的事，
- *      不替使用者做决定；需要时由使用者运行 `prism team init`）
+ *      不替使用者做决定；需要时由使用者运行 `prism team new`）
  *    **不建 teams/**：受管团队位置由适配器/prism.yaml 决定（默认 <harnessRoot>/teams）；
  *    旧版的 `<PRISM_HOME>/teams` 源目录已随 `team install` 移除而废弃（`PrismPaths.teamsDir` 已删），
  *    新装用户不需要它——建出来只会与受管位置同名异位、诱导误判（B9 遗留半边）。
@@ -50,10 +50,15 @@ export interface InitReport {
 export async function runInit(ctx: CommandContext, _args: string[], values: ArgValues): Promise<number> {
   const home = ctx.home ?? prismHome()
   const paths = prismPaths(home)
-  const rootExplicit = (values['harness-root'] ?? values['harness-root']) !== undefined
-  const harnessRoot = expandHome((values['harness-root'] ?? values['harness-root']) ?? defaultHarnessRoot())
+  // `--zcode-dir` 是兼容旧名（与 argv 的 harnessRootOverride 同口径）；早期此处写成
+  // `values['harness-root'] ?? values['harness-root']`（同一表达式两遍）→ 旧名被静默忽略。
+  const rootFlag = values['harness-root'] ?? values['zcode-dir']
+  const rootExplicit = rootFlag !== undefined && rootFlag !== ''
+  // 默认根取自**配置激活的适配器**（prism.yaml: harness / PRISM_HARNESS），须传 home 才读得到——
+  // 否则插件适配器会拿到 zcode 的默认根，MCP 注册与 Skill 全写错宿主（见 defaultHarnessRoot 注释）
+  const harnessRoot = expandHome(rootExplicit ? rootFlag : defaultHarnessRoot(home))
   // B6 写守卫：init 会写 <harnessRoot>/skills 与 <harnessRoot>/cli/config.json——
-  // 默认链（未显式 --harness-root）落真实 ~/.zcode，需 --yes 确认
+  // 默认链（未显式 --harness-root）落真实宿主目录，需 --yes 确认
   if (!rootExplicit && values.yes !== true) {
     ctx.stderr(
       `已阻止写入 [guard_required]: 检测到目标为默认宿主目录 ${harnessRoot}（未经 --harness-root 显式指定），` +
@@ -61,7 +66,7 @@ export async function runInit(ctx: CommandContext, _args: string[], values: ArgV
     )
     return 1
   }
-  const zcode = harnessPaths(harnessRoot, home)
+  const hostPaths = harnessPaths(harnessRoot, home)
   const force = values.force === true
 
   // ① 探测 ZCode（不存在 → 警告但继续）
@@ -93,13 +98,13 @@ export async function runInit(ctx: CommandContext, _args: string[], values: ArgV
   }
 
   // ③ 内置 Skill → <harnessRoot>/skills/（§5 冲突策略：人写不覆盖，.prism-new 供对比）
-  const skills = await installSkills({ targetDir: zcode.skillsDir, skills: listBuiltinSkills(), force })
+  const skills = await installSkills({ targetDir: hostPaths.skillsDir, skills: listBuiltinSkills(), force })
 
   // ④ MCP 注册 → <harnessRoot>/cli/config.json（合并 + 备份；冲突不覆盖，P16）
   const mcp = await registerMcp({
-    configFile: zcode.configFile,
-    format: zcode.mcpFormat,
-    serverName: zcode.mcpServerName,
+    configFile: hostPaths.configFile,
+    format: hostPaths.mcpFormat,
+    serverName: hostPaths.mcpServerName,
     home,
     force,
     mcpEntry: resolveMcpEntry(),
@@ -127,16 +132,22 @@ export async function runInit(ctx: CommandContext, _args: string[], values: ArgV
     } else {
       ctx.stdout(`  已初始化（幂等跳过）: ${configPath}；使用 --force 重建`)
     }
-    ctx.stdout('  团队: 未创建（是否建团队由你决定；需要时运行 prism team init）')
+    ctx.stdout('  团队: 未创建（是否建团队由你决定；需要时运行 prism team new）')
     ctx.stdout(
       `③ Skill 安装: 写 ${skills.written.length} 个${
         skills.skipped.length > 0 ? `，跳过 ${skills.skipped.length} 个（${skills.skipped.map((s) => s.path).join('；')}）` : ''
       }`,
     )
+    // 文案里的 JSON 路径随**形态**走：平铺宿主（WorkBuddy/VS Code）键在顶层 mcpServers.<name>，
+    // 不是 zcode 的 mcp.servers.<name>——写死会让读者按提示去配置里找不到那个键。
+    const mcpKeyPath =
+      hostPaths.mcpFormat === 'mcpServers-json'
+        ? `mcpServers.${hostPaths.mcpServerName}`
+        : `mcp.servers.${hostPaths.mcpServerName}`
     const mcpLine: Record<InitReport['mcp']['status'], string> = {
-      written: `已注册 prism MCP → ${mcp.configFile}`,
+      written: `已注册 ${hostPaths.mcpServerName} MCP → ${mcp.configFile}`,
       unchanged: `MCP 注册未变化（幂等）: ${mcp.configFile}`,
-      conflict: `MCP 注册冲突：mcp.servers.prism 已存在且指向不同路径，未覆盖；确认后加 --force 覆盖（${mcp.configFile}）`,
+      conflict: `MCP 注册冲突：${mcpKeyPath} 已存在且指向不同路径，未覆盖；确认后加 --force 覆盖（${mcp.configFile}）`,
       forced: `MCP 注册已按 --force 覆盖: ${mcp.configFile}`,
       unsupported: '当前 harness 无 MCP 注册机制（跳过；Skill 仍已安装）',
     }

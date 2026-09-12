@@ -16,17 +16,29 @@ import { ensureHarnessPluginsLoaded } from '@prism/agents'
 
 import {
   activateTeam,
+  createRoleDefinition,
   createTeamDefinition,
+  deleteRoleDefinition,
+  deleteTeamDefinition,
   installedSkillNames,
   loadEffectiveSkills,
   loadRole,
   loadRoles,
   loadTeam,
-  renderZcodeRole,
+  loadTeams,
+
+  renderZcodeTeam,
   resolveDirsFromHome,
   harnessPaths,
+  harnessAdapterOf,
+  roleNotFoundMessage,
+  roleRendererFor,
   teamNotFoundMessage,
+  updateRoleDefinition,
+  updateTeamDefinition,
   type NewTeamBody,
+  type RoleWriteBody,
+  type UpdateTeamBody,
 } from '../roles/index.js'
 import {
   runGraphify,
@@ -446,19 +458,66 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
     }
     const role = await loadRole(rolesDir, name)
     if (role === null) {
-      throw new Error(`角色不存在: ${name}（数据源 ${rolesDir}/<name>/AGENTS.md）`)
+      throw new Error(roleNotFoundMessage(rolesDir, name))
     }
-    const env: { model?: string; thoughtLevel?: string } = {}
     const model = asString(args.model)
     const thoughtLevel = asString(args.thought_level) ?? asString(args.thoughtLevel)
-    if (model !== undefined) {
-      env['model'] = model
+    const content = harnessAdapterOf(harnessRoot, deps.home).renderRole(role, {
+      ...(model !== undefined ? { model } : {}),
+      ...(thoughtLevel !== undefined ? { thoughtLevel } : {}),
+    }).content
+    return { name, target: join(rolesDir, `${name}.md`), content }
+  }
+
+  /** 新建角色：与 `POST /api/roles`、CLI `prism role new` 同一实现（渲染走宿主原生形态）。 */
+  const roleNew = async (args: Record<string, unknown>): Promise<unknown> =>
+    await createRoleDefinition(args as RoleWriteBody, { renderRole: roleRendererFor(harnessRoot, deps.home) })
+
+  /** 修改角色（字段补丁；正文不重排）。 */
+  const roleEdit = async (args: Record<string, unknown>): Promise<unknown> => {
+    const name = asString(args.name)
+    if (name === undefined) {
+      throw new Error('缺少 name')
     }
-    if (thoughtLevel !== undefined) {
-      env['thoughtLevel'] = thoughtLevel
+    return await updateRoleDefinition(name, args as RoleWriteBody, { renderRole: roleRendererFor(harnessRoot, deps.home) })
+  }
+
+  /** 删除角色文件本体。 */
+  const roleRemove = async (args: Record<string, unknown>): Promise<unknown> => {
+    const name = asString(args.name)
+    if (name === undefined) {
+      throw new Error('缺少 name')
     }
-    const content = renderZcodeRole(role, env)
-    return { name, target: join(zcode.agentsDir, `${name}.md`), content }
+    return await deleteRoleDefinition(name, args.roles_dir)
+  }
+
+  const teamList = async (): Promise<unknown> => {
+    const teams = await loadTeams(teamsDir, { rolesDir })
+    return { count: teams.length, teams, teams_dir: teamsDir }
+  }
+
+  /** 修改团队（字段补丁；改 members 时工作流就地收窄）。 */
+  const teamEdit = async (args: Record<string, unknown>): Promise<unknown> => {
+    const teamId = asString(args.team_id)
+    if (teamId === undefined) {
+      throw new Error('缺少 team_id')
+    }
+    return await updateTeamDefinition(teamId, args as UpdateTeamBody)
+  }
+
+  /** 删除团队文件本体。 */
+  const teamRemove = async (args: Record<string, unknown>): Promise<unknown> => {
+    const teamId = asString(args.team_id)
+    if (teamId === undefined) {
+      throw new Error('缺少 team_id')
+    }
+    return await deleteTeamDefinition(teamId, args.teams_dir)
+  }
+
+  /** 团队渲染预览（不写盘；与 role_render 对称）。 */
+  const teamRender = async (args: Record<string, unknown>): Promise<unknown> => {
+    const team = await requireTeam(args.team_id)
+    return { team_id: team.team_id, target: join(teamsDir, `${team.team_id}.md`), content: renderZcodeTeam(team) }
   }
 
   const teamGet = async (args: Record<string, unknown>): Promise<unknown> => {
@@ -1019,7 +1078,8 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
     },
     {
       name: 'prism_role_list',
-      description: '列出 Prism 角色库角色（数据源 <PRISM_HOME>/roles/；供装配器拉取定义）',
+      description:
+        '列出角色库角色（数据源 = 宿主角色目录 roles_dir，即宿主自己扫描的 agents 目录；不写盘）',
       inputSchema: { type: 'object', properties: {} },
       call: roleList,
     },
@@ -1032,6 +1092,66 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
         required: ['name'],
       },
       call: roleGet,
+    },
+    {
+      name: 'prism_role_new',
+      description:
+        '新建角色（按宿主原生形态写 <roles_dir>/<name>.md；与 HTTP POST /api/roles、CLI `prism role new` 同一实现）。只给 name → 写骨架（描述为占位 TODO）；给出 description/skills/knowledge/body → 写出的就是填好的定义。roles_dir 必填——写路径一律显式参数化，绝不回落到默认宿主目录',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: '角色名（kebab-case，= 落盘文件名）' },
+          roles_dir: { type: 'string', description: '**必填**：写入目录（防误写真实宿主）' },
+          description: { type: 'string', description: '一句话职责（含适用/不适用，供派遣决策）' },
+          skills: { type: 'array', items: { type: 'string' }, description: 'Skill 白名单' },
+          knowledge: {
+            type: 'object',
+            description: '知识绑定：{layers:[global|project|role], books:[...]}（可选）',
+          },
+          body: { type: 'string', description: '正文（缺省用内置骨架：核心第一原则/职责/边界/协作位置/完成判定）' },
+          color: { type: 'string' },
+          model: { type: 'string' },
+          thought_level: { enum: ['low', 'high', 'max'] },
+          force: { type: 'boolean', description: '已存在时覆盖（缺省跳过，绝不覆盖人写文件）' },
+        },
+        required: ['name', 'roles_dir'],
+      },
+      call: roleNew,
+    },
+    {
+      name: 'prism_role_edit',
+      description:
+        '修改角色（字段补丁：description/skills/knowledge/body/color/model/thought_level）。只改点名的字段——正文与未知 frontmatter 键原样保留，不整文件重排。roles_dir 必填',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: '角色名（kebab-case）' },
+          roles_dir: { type: 'string', description: '**必填**：角色所在目录' },
+          description: { type: 'string' },
+          skills: { type: 'array', items: { type: 'string' }, description: '能力白名单；[] = 清空' },
+          knowledge: { type: 'object', description: '{layers:[...], books:[...]}；{layers:[]} = 清空' },
+          body: { type: 'string', description: '整段替换正文（缺省不动）' },
+          color: { type: 'string', description: '角色色（red/blue/green/yellow/purple/orange/pink/cyan）；空串 = 清除' },
+          model: { type: 'string', description: '空串 = 清除' },
+          thought_level: { enum: ['low', 'high', 'max'], description: '空串 = 清除' },
+        },
+        required: ['name', 'roles_dir'],
+      },
+      call: roleEdit,
+    },
+    {
+      name: 'prism_role_rm',
+      description:
+        '删除角色文件本体（扁平 <name>.md 与兼容形态 <name>/AGENTS.md 都删）。不可逆——roles_dir 必填，绝不回落到默认宿主目录',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: '角色名（kebab-case）' },
+          roles_dir: { type: 'string', description: '**必填**：角色所在目录' },
+        },
+        required: ['name', 'roles_dir'],
+      },
+      call: roleRemove,
     },
     {
       name: 'prism_context_pack',
@@ -1085,7 +1205,8 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
     },
     {
       name: 'prism_role_render',
-      description: '渲染单个角色为 ZCode 格式（含 marker；装配器按返回 target 写入 agents 目录）',
+      description:
+        '渲染单个角色为宿主原生形态（只预览不写盘）——与 prism_role_new 同一渲染器。用途：看「若新建/归一化，落盘会是什么样」，或校验手写角色能否被宿主认',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1098,8 +1219,14 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
       call: roleRender,
     },
     {
+      name: 'prism_team_list',
+      description: '列出团队库团队（数据源 = 宿主团队目录 teams_dir；只读）',
+      inputSchema: { type: 'object', properties: {} },
+      call: teamList,
+    },
+    {
       name: 'prism_team_get',
-      description: '取团队定义（frontmatter + 工作流 + 沉淀规则；数据源 <PRISM_HOME>/teams/）',
+      description: '取团队定义（frontmatter + 工作流 + 沉淀规则；数据源 = 宿主团队目录 teams_dir）',
       inputSchema: {
         type: 'object',
         properties: { team_id: { type: 'string' } },
@@ -1119,9 +1246,9 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
       call: teamActivate,
     },
     {
-      name: 'prism_team_create',
+      name: 'prism_team_new',
       description:
-        '新建团队定义（写 <teams_dir>/<team_id>.md；与 HTTP POST /api/teams 同一实现）。teams_dir 必填——写路径一律显式参数化，绝不回落到默认宿主目录',
+        '新建团队定义（写 <teams_dir>/<team_id>.md；与 HTTP POST /api/teams、CLI `prism team new` 同一实现）。teams_dir 必填——写路径一律显式参数化，绝不回落到默认宿主目录',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1147,6 +1274,57 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
         required: ['team_id', 'members', 'teams_dir'],
       },
       call: async (args) => await createTeamDefinition(args as NewTeamBody, rolesDir),
+    },
+    {
+      name: 'prism_team_edit',
+      description:
+        '修改团队（字段补丁：name/description/members/deposit）。改 members 时工作流表**就地按名册收窄**（剔除不属于名册的角色，空阶段删除并重编号），并校验角色都在角色库中。teams_dir 必填',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          team_id: { type: 'string' },
+          teams_dir: { type: 'string', description: '**必填**：团队所在目录' },
+          name: { type: 'string' },
+          description: { type: 'string' },
+          members: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: { role: { type: 'string' }, count: { type: 'integer', minimum: 1 } },
+              required: ['role'],
+            },
+            description: '新名册（替换式；给定时必须同时给 roles_dir）',
+          },
+          roles_dir: { type: 'string', description: '改 members 时必填：用于校验角色存在' },
+          deposit: { type: 'object', description: '沉淀策略补丁（只覆盖给出的键）' },
+        },
+        required: ['team_id', 'teams_dir'],
+      },
+      call: teamEdit,
+    },
+    {
+      name: 'prism_team_rm',
+      description:
+        '删除团队文件本体（扁平 <id>.md 与兼容形态 <id>/AGENTS.md 都删）。不可逆——teams_dir 必填，绝不回落到默认宿主目录',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          team_id: { type: 'string' },
+          teams_dir: { type: 'string', description: '**必填**：团队所在目录' },
+        },
+        required: ['team_id', 'teams_dir'],
+      },
+      call: teamRemove,
+    },
+    {
+      name: 'prism_team_render',
+      description: '渲染单个团队为宿主原生形态（只预览不写盘）——与 prism_team_new 同一渲染器',
+      inputSchema: {
+        type: 'object',
+        properties: { team_id: { type: 'string' } },
+        required: ['team_id'],
+      },
+      call: teamRender,
     },
     {
       name: 'prism_task_register',

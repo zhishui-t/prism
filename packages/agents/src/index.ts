@@ -20,7 +20,7 @@ export type {
   RoleRegistry,
   TeamRegistry,
   TeamActivation,
-  RoleInitResult,
+  RoleWriteResult,
 } from './types.js'
 
 // frontmatter（独立 YAML 子集，§3.1.1）
@@ -83,7 +83,7 @@ export type {
 export { activateTeam } from './team/activate.js'
 export type { ActivateTeamOptions } from './team/activate.js'
 export { renderZcodeTeam, teamMarker, hasTeamMarker } from './team/render.js'
-// `team init` 脚手架（只渲染不落盘；F-C1）+ 内置团队模板（独立于 server 出厂模板）
+// `team new` 脚手架（只渲染不落盘；F-C1）+ 内置团队模板（独立于 server 出厂模板）
 export { renderTeamScaffold, parseMembersSpec, type TeamInitOptions, type TeamScaffold } from './team/init.js'
 export {
   MINIMAL_TEAM_MD,
@@ -107,9 +107,12 @@ export {
 export { createRoleRegistry, createTeamRegistry } from './registry.js'
 export type { ImportFailures } from './registry.js'
 
-// 角色模板初始化（「装配」语义已随「角色直接住宿主目录」移除：无 installRoles / installTeamDefinitions / migrateTeams）
-export { initRole, InitRoleError } from './init-role.js'
-export type { InitRoleOptions } from './init-role.js'
+// 角色与团队写盘（new / edit / rm 的唯一实现；「装配」语义已随「角色直接住宿主目录」移除：
+// 无 installRoles / installTeamDefinitions / migrateTeams）
+export { newRole, editRole, removeRole, patchRoleRaw, replaceSection, RoleWriteError, ROLE_DESCRIPTION_PLACEHOLDER } from './role/write.js'
+export type { NewRoleInput, EditRoleInput, RemoveRoleInput, RolePatch, RoleRenderer } from './role/write.js'
+export { editTeam, removeTeam, patchTeamRaw, assertTeamId, TeamWriteError } from './team/write.js'
+export type { EditTeamInput, RemoveTeamInput, TeamPatch, TeamWriteResult } from './team/write.js'
 
 // 宿主适配器注册表（deployment-model §1：编译期多适配器，运行期只激活一个）
 // **新增 harness 只改 `harness-manifest.ts`（加一行），本文件无需改动**——
@@ -170,4 +173,4 @@ export {
 export type { PrismDirConfig, PrismDirKey, ResolvedDirs, DirProvenance } from './dirs.js'
 
 // 内置模板
-export { ROLE_TEMPLATE_MD, ROLE_TEMPLATE_NAME_PLACEHOLDER } from './templates.js'
+export { ROLE_BODY_SKELETON, ROLE_TEMPLATE_NAME_PLACEHOLDER } from './templates.js'

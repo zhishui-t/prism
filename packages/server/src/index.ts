@@ -183,7 +183,7 @@ export type {
   ValidationIssue,
   ValidationResult,
   TeamActivation,
-  RoleInitResult,
+  RoleWriteResult,
   EffectiveSkill,
   EffectiveSkillSet,
   TeamInitOptions,
@@ -205,7 +205,13 @@ export {
   validateTeam,
   renderZcodeRole,
   renderZcodeTeam,
-  initRole,
+  newRole,
+  editRole,
+  removeRole,
+  patchRoleRaw,
+  editTeam,
+  removeTeam,
+  patchTeamRaw,
   activateTeam,
   // 沉淀策略执行 + 原则一致性
   applyDepositPolicy,
@@ -229,7 +235,7 @@ export {
   resolveDirs,
   resolveDirsFromHome,
   expandTildePath,
-  ROLE_TEMPLATE_MD,
+  ROLE_BODY_SKELETON,
   splitFrontmatter,
   parseFrontmatter,
   emitScalar,
@@ -239,10 +245,27 @@ export {
   hasPrismMarker,
   hasTeamMarker,
   harnessPaths,
+  harnessAdapterOf,
+  roleRendererFor,
   defaultHarnessRoot,
   CORE_DEV_TEAM_MD,
   teamNotFoundMessage,
   roleNotFoundMessage,
+} from './roles/index.js'
+
+// 角色/团队写盘（HTTP 与 MCP 共用；CLI 也走同一实现，避免三份写路径漂移）
+export {
+  createRoleDefinition,
+  updateRoleDefinition,
+  deleteRoleDefinition,
+  createTeamDefinition,
+  updateTeamDefinition,
+  deleteTeamDefinition,
+  type RoleWriteBody,
+  type RoleWriteOutcome,
+  type NewTeamBody,
+  type UpdateTeamBody,
+  type CreateTeamResult,
 } from './roles/index.js'
 
 // AGENTS.md 注入块（knowledge-injection.md §5 模式 C）

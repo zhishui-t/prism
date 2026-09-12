@@ -43,10 +43,10 @@ describe('B6 写守卫：默认宿主目录写入需确认', () => {
     else process.env['PRISM_HARNESS_ROOT'] = prevEnv
   })
 
-  it('role init：默认链 + 无确认 → rc 1 + 提示 + 不写；--yes → 写临时默认链；显式 --harness-root → 直接写', async () => {
+  it('role new：默认链 + 无确认 → rc 1 + 提示 + 不写；--yes → 写临时默认链；显式 --harness-root → 直接写', async () => {
     // 1) 默认链，无确认 → 阻止
     lines = []
-    expect(await runCommand(bareCtx, ['role', 'init', 'guard-blocked'])).toBe(1)
+    expect(await runCommand(bareCtx, ['role', 'new', 'guard-blocked'])).toBe(1)
     const blocked = lines.join('\n')
     expect(blocked).toContain('已阻止写入')
     expect(blocked).toContain('--harness-root')
@@ -55,13 +55,13 @@ describe('B6 写守卫：默认宿主目录写入需确认', () => {
 
     // 2) --yes → 放行（写入 env 注入的临时默认链，非真实 ~/.zcode）
     lines = []
-    expect(await runCommand(bareCtx, ['role', 'init', 'guard-blocked', '--yes'])).toBe(0)
+    expect(await runCommand(bareCtx, ['role', 'new', 'guard-blocked', '--yes'])).toBe(0)
     expect(lines.join('\n')).toContain('--yes：确认写入')
     expect(existsSync(join(fakeDefaultZcode, 'agents', 'guard-blocked.md'))).toBe(true)
 
     // 3) 显式 --harness-root → 直接写，无需 --yes
     lines = []
-    expect(await runCommand(bareCtx, ['role', 'init', 'guard-direct', '--harness-root', directZcode])).toBe(0)
+    expect(await runCommand(bareCtx, ['role', 'new', 'guard-direct', '--harness-root', directZcode])).toBe(0)
     expect(existsSync(join(directZcode, 'agents', 'guard-direct.md'))).toBe(true)
   })
 

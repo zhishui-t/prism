@@ -76,8 +76,9 @@ prism serve --port 7777            # 起 HTTP 服务 + 控制台
    - \`fallback\`：未装——用 \`general-purpose\` 派发，并把它返回的 \`definition\`（核心契约 + 职责）粘进 prompt 开头；交付报告须注明「降级派发」。
 2. 角色文件在**会话启动时扫描一次**：新装/改写的角色要**下一会话**才能 native 派发。
 3. 角色与团队**直接住在宿主目录**（\`<roles_dir>/*.md\`、\`<teams_dir>/<id>.md\`）——**没有"导入/装配"这一步**：
-   建角色 = \`prism role init <name>\` 生成骨架（或直接写该目录下的 \`<name>.md\`）；
-   建团队 = \`prism_team_create\`（MCP）／web 控制台／\`prism team init\`。
+   建角色 = \`prism_role_new\`（MCP）／\`prism role new <name>\`（CLI）／web 控制台；
+   建团队 = \`prism_team_new\`（MCP）／\`prism team new <id>\`（CLI）／web 控制台。
+   改/删同理同名：\`prism_role_edit|rm\`、\`prism_team_edit|rm\`（CLI \`role edit|rm\` / \`team edit|rm\`）。
    派生要求：\`prism_team_activate\` 报 \`fallback\` 时说明该角色文件不在宿主目录，别去找"装配命令"。
 
 ## 3. 硬约定（违反会被评审打回）
@@ -108,13 +109,13 @@ prism serve --port 7777            # 起 HTTP 服务 + 控制台
 - **不编边**：图谱没有的关系不要推断；\`confidence\` 字段（EXTRACTED/INFERRED）照实呈现；
 - **不读全图**：用查询拿子图（\`limit\`/\`depth\` 有界），避免把整张图塞进上下文。
 
-## 5. 工具速查（36 个 MCP 工具）
+## 5. 工具速查（43 个 MCP 工具）
 
 | 分组 | 工具 |
 | :--- | :--- |
 | 知识库（17） | \`prism_kb_search\` \`prism_kb_get\` \`prism_kb_deposit\` \`prism_kb_convert\` \`prism_kb_import\` \`prism_kb_enrich\` \`prism_kb_graph\` \`prism_kb_tree\` \`prism_kb_stats\` \`prism_kb_catalog\` \`prism_kb_path\` \`prism_kb_remove\` \`prism_kb_restore\` \`prism_kb_conflicts\` \`prism_kb_resolve_conflict\` \`prism_kb_versions\` \`prism_kb_book_structure\` |
 | 代码图谱（8） | \`prism_graph_query\` \`prism_graph_path\` \`prism_graph_explain\` \`prism_graph_affected\` \`prism_graph_god_nodes\` \`prism_graph_summary\` \`prism_graph_status\` \`prism_graph_merge\` |
-| 角色团队（8） | \`prism_role_list\` \`prism_role_get\` \`prism_role_render\` \`prism_context_pack\` \`prism_team_get\` \`prism_team_activate\` \`prism_team_create\` \`prism_skill_effective\` |
+| 角色团队（15） | \`prism_role_list\` \`prism_role_get\` \`prism_role_new\` \`prism_role_edit\` \`prism_role_rm\` \`prism_role_render\` \`prism_team_list\` \`prism_team_get\` \`prism_team_new\` \`prism_team_edit\` \`prism_team_rm\` \`prism_team_render\` \`prism_team_activate\` \`prism_context_pack\` \`prism_skill_effective\` |
 | 任务台账（3） | \`prism_task_register\` \`prism_task_report\` \`prism_task_status\` |
 
 > **导入三件套**：\`prism_kb_convert\`（文档→Markdown，本地 anydoc 转换）→ 你提炼 →
@@ -383,12 +384,16 @@ Prism 不持有第二份副本 —— 因此**不存在"把角色/团队装进�
 
 | 要做什么 | 怎么做 |
 | :--- | :--- |
-| 建团队 | \`prism_team_create { team_id, name, members, teams_dir }\`（等价入口：web 控制台 \`POST /api/teams\`、终端 \`prism team init\`） |
-| 建角色 | \`prism role init <name>\` 生成合法骨架，或直接在该目录写 \`<name>.md\` |
-| 查在不在 | \`prism_role_list\`（角色库）/ \`prism_team_get { team_id }\`（单个团队定义全文） |
+| 建团队 | \`prism_team_new { team_id, name, members, teams_dir }\`（等价入口：web 控制台 \`POST /api/teams\`、终端 \`prism team new <id>\`） |
+| 建角色 | \`prism_role_new { name, roles_dir, description?, skills?, knowledge? }\`（等价入口：web 控制台 \`POST /api/roles\`、终端 \`prism role new\`）；只给名字则写骨架 |
+| 改团队 | \`prism_team_edit { team_id, teams_dir, name?/description?/members? }\`——改 members 时**工作流表就地按名册收窄** |
+| 改角色 | \`prism_role_edit { name, roles_dir, description?/skills?/knowledge?/body? }\`——只改点名字段，正文不重排 |
+| 删 | \`prism_team_rm\` / \`prism_role_rm\`（**不可逆**；CLI 删除默认宿主目录需 \`--yes\`） |
+| 查在不在 | \`prism_role_list\`（角色库）/ \`prism_team_list\`（团队库）/ \`prism_team_get { team_id }\`（单个团队定义全文） |
 | 校验 | \`prism team validate <id>\` / \`prism role validate\` |
 
-> \`prism_team_create\` 的 \`teams_dir\` **必填**——写路径一律显式参数化，防误写真实宿主目录。
+> 增删改三动作在 CLI / HTTP / MCP **同名同位**（\`new|edit|rm\` ↔ \`prism_role_new|edit|rm\` ↔ \`POST|PATCH|DELETE /api/roles\`）。
+> 写路径的目录参数（\`teams_dir\` / \`roles_dir\`）**必填**——一律显式参数化，防误写真实宿主目录。
 > \`<roles_dir>\`/\`<teams_dir>\` 由激活的适配器声明（如 WorkBuddy：\`~/.workbuddy/agents\`、\`~/.workbuddy/teams\`），
 > \`prism.yaml\` 可覆盖；用 \`prism harness show\` 看当前适配器。
 

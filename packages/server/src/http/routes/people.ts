@@ -8,7 +8,10 @@ import type { GraphStatusDetail } from '../../graph/registry.js'
 import type { RouteContext } from '../router.js'
 import {
   activateTeam,
+  createRoleDefinition,
   createTeamDefinition,
+  deleteRoleDefinition,
+  deleteTeamDefinition,
   installedSkillNames,
   loadEffectiveSkills,
   loadRole,
@@ -17,8 +20,14 @@ import {
   loadTeams,
   resolveDirsFromHome,
   harnessPaths,
+  roleNotFoundMessage,
+  roleRendererFor,
   teamNotFoundMessage,
+  updateRoleDefinition,
+  updateTeamDefinition,
   type NewTeamBody,
+  type RoleWriteBody,
+  type UpdateTeamBody,
 } from '../../roles/index.js'
 
 export interface PeopleDeps {
@@ -52,6 +61,9 @@ export interface PeopleDeps {
 export function peopleRoutes(deps: PeopleDeps): {
   roles: (ctx: RouteContext) => Promise<Envelope>
   role: (ctx: RouteContext) => Promise<Envelope>
+  createRole: (ctx: RouteContext) => Promise<Envelope>
+  updateRole: (ctx: RouteContext) => Promise<Envelope>
+  deleteRole: (ctx: RouteContext) => Promise<Envelope>
   teams: (ctx: RouteContext) => Promise<Envelope>
   team: (ctx: RouteContext) => Promise<Envelope>
   teamActivate: (ctx: RouteContext) => Promise<Envelope>
@@ -59,6 +71,8 @@ export function peopleRoutes(deps: PeopleDeps): {
   skillUsage: (ctx: RouteContext) => Promise<Envelope>
   skillsEffective: (ctx: RouteContext) => Promise<Envelope>
   createTeam: (ctx: RouteContext) => Promise<Envelope>
+  updateTeam: (ctx: RouteContext) => Promise<Envelope>
+  deleteTeam: (ctx: RouteContext) => Promise<Envelope>
 } {
   const dirs = resolveDirsFromHome(deps.home, { harnessRoot: deps.harnessRoot, rootExplicit: true })
   const rolesDir = dirs.rolesDir
@@ -76,17 +90,23 @@ export function peopleRoutes(deps: PeopleDeps): {
    * - **只在 server 侧包装**——不改 `packages/agents` 的冻结类型（v5 裁决 3）；
    * - 返回体仍是**数组**（既有消费方 `apps/web/src/api-team.ts` 的 `teamApi.roles()`
    *   依赖数组形态；只加字段、不改容器）。
+   * 形状（v5 增删改对齐）：`{ roles, rolesDir }`——`rolesDir` 供控制台新建表单预填且可改，
+   * 与 `GET /api/teams` 的 `{ teams, teamsDir }` **同形**。仍只读、不写盘；
+   * 写路径只认 `POST /api/roles` 的显式 `roles_dir`。历史裸数组由前端 `normalizeRoles` 兼容。
    */
   const roles = async (): Promise<Envelope> => {
     const agentsDir = harnessPaths(deps.harnessRoot, deps.home).agentsDir
     const list = await loadRoles(rolesDir, { knownSkills: await knownSkills() })
-    return ok(list.map((role) => ({ ...role, installed: isInstalledInHost(agentsDir, rolesDir, role.name) })))
+    return ok({
+      roles: list.map((role) => ({ ...role, installed: isInstalledInHost(agentsDir, rolesDir, role.name) })),
+      rolesDir,
+    })
   }
 
   const role = async (ctx: RouteContext): Promise<Envelope> => {
     const name = ctx.params.name ?? ''
     const found = await loadRole(rolesDir, name, { knownSkills: await knownSkills() })
-    return found === null ? fail('not_found', `角色不存在: ${name}（数据源 ${rolesDir}/<name>/AGENTS.md）`) : ok(found)
+    return found === null ? fail('not_found', roleNotFoundMessage(rolesDir, name)) : ok(found)
   }
 
   /**
@@ -212,7 +232,57 @@ export function peopleRoutes(deps: PeopleDeps): {
   /** F-C3：新建团队。只传 `rolesDir`——写路径不得看见默认 `teamsDir`。 */
   const createTeam = async (ctx: RouteContext): Promise<Envelope> => await createTeamRoute(ctx, rolesDir)
 
-  return { roles, role, teams, team, teamActivate, skills, skillUsage, skillsEffective, createTeam }
+  return {
+    roles,
+    role,
+    createRole: (ctx) => roleCreateRoute(ctx, deps),
+    updateRole: (ctx) => roleUpdateRoute(ctx, deps),
+    deleteRole: (ctx) => roleDeleteRoute(ctx),
+    teams,
+    team,
+    teamActivate,
+    skills,
+    skillUsage,
+    skillsEffective,
+    createTeam,
+    updateTeam: (ctx) => teamUpdateRoute(ctx),
+    deleteTeam: (ctx) => teamDeleteRoute(ctx),
+  }
+}
+
+/**
+ * `POST /api/roles`：按**宿主原生形态**（激活适配器 `renderRole`）写**显式** `roles_dir`。
+ * 实现单点在 `roles/role-create.ts`（MCP `prism_role_new` 共用，保证「两入口同校验同落盘」）。
+ */
+async function roleCreateRoute(ctx: RouteContext, deps: PeopleDeps): Promise<Envelope> {
+  const body = (await ctx.body()) as RoleWriteBody
+  return ok(await createRoleDefinition(body, { renderRole: roleRendererFor(deps.harnessRoot, deps.home) }))
+}
+
+/** `PATCH /api/roles/:name`：字段补丁（外科式，正文不重排）。 */
+async function roleUpdateRoute(ctx: RouteContext, deps: PeopleDeps): Promise<Envelope> {
+  const body = (await ctx.body()) as RoleWriteBody
+  return ok(await updateRoleDefinition(ctx.params.name ?? '', body, { renderRole: roleRendererFor(deps.harnessRoot, deps.home) }))
+}
+
+/** `DELETE /api/roles/:name`：删除角色文件本体（`?roles_dir=` 必填；不落默认宿主目录）。 */
+async function roleDeleteRoute(ctx: RouteContext): Promise<Envelope> {
+  const body = await ctx.body().catch(() => ({}))
+  const rolesDir = (body as { roles_dir?: unknown }).roles_dir ?? ctx.query.get('roles_dir') ?? undefined
+  return ok(await deleteRoleDefinition(ctx.params.name ?? '', rolesDir))
+}
+
+/** `PATCH /api/teams/:id`：字段补丁（改名册时工作流就地收窄）。 */
+async function teamUpdateRoute(ctx: RouteContext): Promise<Envelope> {
+  const body = (await ctx.body()) as UpdateTeamBody
+  return ok(await updateTeamDefinition(ctx.params.id ?? '', body))
+}
+
+/** `DELETE /api/teams/:id`：删除团队文件本体（`teams_dir` 必填；不落默认宿主目录）。 */
+async function teamDeleteRoute(ctx: RouteContext): Promise<Envelope> {
+  const body = await ctx.body().catch(() => ({}))
+  const teamsDir = (body as { teams_dir?: unknown }).teams_dir ?? ctx.query.get('teams_dir') ?? undefined
+  return ok(await deleteTeamDefinition(ctx.params.id ?? '', teamsDir))
 }
 
 /**
@@ -257,9 +327,9 @@ async function skillsEffectiveRoute(
 }
 
 /**
- * `POST /api/teams`（F-C3）：校验 → 渲染（agents `renderTeamScaffold`，与 CLI `team init`
+ * `POST /api/teams`（F-C3）：校验 → 渲染（agents `renderTeamScaffold`，与 CLI `team new`
  * 同一实现）→ 写**显式** `teams_dir`。实现单点在 `roles/team-create.ts`
- * （MCP `prism_team_create` 共用，保证「两入口同校验同落盘」）。
+ * （MCP `prism_team_new` 共用，保证「三入口同校验同落盘」）。
  */
 async function createTeamRoute(ctx: RouteContext, rolesDir: string): Promise<Envelope> {
   const body = (await ctx.body()) as NewTeamBody

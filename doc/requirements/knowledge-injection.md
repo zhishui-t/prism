@@ -70,7 +70,7 @@ Prism 提供 `prism mcp install` 写入 ZCode 配置：
 | `prism_graph_explain` | 节点解释 |
 | `prism_graph_affected` | 变更影响面（review-analysis） |
 | `prism_team_activate` | 拉取团队运行时配置 |
-| `prism_team_create` | 新建团队定义（写显式 `teams_dir`；与 HTTP `POST /api/teams` 同一实现） |
+| `prism_team_new` | 新建团队定义（写显式 `teams_dir`；与 HTTP `POST /api/teams` 同一实现；v6 由 `prism_team_create` 更名） |
 | `prism_skill_effective` | 有效 Skill 集（角色 × 团队；与 HTTP `/api/skills/effective` 同一装配点） |
 | `prism_kb_versions` | 条目版本历史（降序 + `is_latest`） |
 | `prism_context_pack` | 生成上下文包（模式 B；入参见 §4.2） |

@@ -16,7 +16,7 @@
  * | 角色文件 | `<root>/agents/<name>.md`（通用 markdown + 直引 frontmatter） | ⚠️ **未核实** |
  *
  * **关于「未核实」**：WorkBuddy 没有公开的「角色目录」约定（它的专家/角色走插件市场，
- * 不是扫描某个 agents/ 目录）。因此 `team install` 落在 `<root>/agents/` 的文件是
+ * 不是扫描某个 agents/ 目录）。因此 `prism role new` / 团队启用落在 `<root>/agents/` 的文件是
  * **惰性产物**——Prism 侧流程完整、可审计、可回滚，但**不宣称 WorkBuddy 会加载它们**。
  * 本适配器保证的是 **Skill + MCP 两条真实接入路径**。
  *

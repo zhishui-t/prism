@@ -1,0 +1,350 @@
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+import { afterEach, describe, expect, it } from 'vitest'
+
+import { splitFrontmatter } from '../src/frontmatter.js'
+import { parseRoleMarkdown } from '../src/role/parse.js'
+import {
+  editRole,
+  newRole,
+  patchRoleRaw,
+  removeRole,
+  RoleWriteError,
+  ROLE_DESCRIPTION_PLACEHOLDER,
+} from '../src/role/write.js'
+import { activateTeam } from '../src/team/activate.js'
+import { parseTeamMarkdown } from '../src/team/parse.js'
+
+/**
+ * 角色写盘（`new` / `edit` / `rm` 的唯一实现）。
+ *
+ * **形态口径（2026-09-12）**：落盘 = **宿主原生形态**——frontmatter 只含适配器白名单字段
+ * （zcode 六字段），Prism 扩展（`skills` 白名单、知识绑定）一律落正文的
+ * `## 能力（Skill 白名单）` / `## 知识绑定` 两节。原 `initRole` 把这两键塞进 frontmatter，
+ * 与两个适配器自述都冲突，已废（本次改测 `newRole` 三兄弟 + `patchRoleRaw` 纯函数）。
+ *
+ * **历史**：本文件原测「装配」（`installRoles` / `installTeamDefinitions` / `migrateTeams` 的
+ * §5 冲突策略与渲染往返）。这些函数连同 `role import` / `role install` / `team install`
+ * 三个命令已移除——角色/团队就直接住在宿主目录，没有第二份副本可供装配。
+ * `activateTeam`（installed 判定）仍保留在本文件。
+ */
+
+const created: string[] = []
+
+/** 独立临时目录（用 mkdtemp 保证唯一；afterEach 回收，不留 `prism-*` 残留）。 */
+function makeTmp(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'prism-agents-role-'))
+  created.push(dir)
+  return dir
+}
+
+afterEach(async () => {
+  for (const dir of created) {
+    await rm(dir, { recursive: true, force: true }).catch(() => {})
+  }
+  created.length = 0
+})
+
+const ROLE_RAW = [
+  '---',
+  'name: "dev-1"',
+  'description: "一般开发：常规功能开发。适用于：功能编码。不适用于：架构攻关（升级 super-dev）。"',
+  'color: cyan',
+  'model: "custom:builtin%3Abigmodel-coding-plan:GLM-5.3-Flash"',
+  'thoughtLevel: max',
+  'injectAgentsMd: true',
+  '---',
+  '',
+  '# 一般开发 dev-1',
+  '',
+  '## 核心契约',
+  '**交付可运行的增量，绝不扩大战场。**',
+].join('\n')
+
+const TEAM_RAW = [
+  '---',
+  'team_id: core-dev',
+  'name: 核心研发团队',
+  'description: 负责设计、开发、测试与质量收口。',
+  'default: false',
+  'members:',
+  '  - role: dev-1',
+  '    count: 2',
+  '  - role: tester',
+  '    count: 1',
+  'skills: []',
+  'knowledge:',
+  '  layers: [global, project]',
+  'deposit:',
+  '  enabled: true',
+  '  default_layer: project',
+  '  default_type: pitfall',
+  '  priority: medium',
+  '  require_note: true',
+  'arbitration: [safety, quality]',
+  'rework_limit: 2',
+  '---',
+  '',
+  '## 工作流',
+].join('\n')
+
+describe('activateTeam（installed = roles_dir 中存在角色文件）', () => {
+  it('roles_dir 即宿主目录：文件存在 → native；缺失 → fallback + definition + hint', async () => {
+    const rolesDir = makeTmp()
+    const team = parseTeamMarkdown(TEAM_RAW)
+    // dev-1 扁平住在 roles_dir；tester 目录式住在 roles_dir
+    writeFileSync(join(rolesDir, 'dev-1.md'), ROLE_RAW)
+    mkdirSync(join(rolesDir, 'tester'))
+    writeFileSync(
+      join(rolesDir, 'tester', 'AGENTS.md'),
+      ROLE_RAW.replace('name: "dev-1"', 'name: "tester"').replace('# 一般开发 dev-1', '# 测试 tester'),
+    )
+
+    const activation = await activateTeam(team, { rolesDir })
+    expect(activation.team_id).toBe('core-dev')
+    expect(activation.rework_limit).toBe(2)
+    expect(activation.workflow).toEqual(team.workflow)
+
+    const dev1 = activation.members.find((m) => m.role === 'dev-1')
+    expect(dev1?.installed).toBe(true)
+    expect(dev1?.dispatch).toBe('native')
+
+    const tester = activation.members.find((m) => m.role === 'tester')
+    expect(tester?.installed).toBe(true) // 目录式形态也算"存在"
+    expect(tester?.dispatch).toBe('native')
+    expect(tester?.definition?.name).toBe('tester')
+
+    // 角色受管目录里不存在的成员：fallback + hint
+    const ghostTeam = parseTeamMarkdown(TEAM_RAW.replace('- role: tester', '- role: ghost'))
+    const ghostActivation = await activateTeam(ghostTeam, { rolesDir })
+    const ghost = ghostActivation.members.find((m) => m.role === 'ghost')
+    expect(ghost?.installed).toBe(false)
+    expect(ghost?.dispatch).toBe('fallback')
+    expect(ghost?.definition).toBeUndefined()
+    expect(ghost?.hint).toContain('不存在')
+  })
+})
+
+describe('newRole（宿主原生形态：frontmatter 白名单 + Prism 扩展落正文）', () => {
+  it('只给 name → 骨架正文 + 占位描述；frontmatter 不含 skills/knowledge', async () => {
+    const rolesDir = makeTmp()
+    const result = await newRole({ name: 'code-reviewer', rolesDir })
+    const path = join(rolesDir, 'code-reviewer.md')
+    expect(result.written).toEqual([path])
+    expect(result.skipped).toEqual([])
+
+    const content = readFileSync(path, 'utf8')
+    const { data } = splitFrontmatter(content)
+    // 白名单字段在，Prism 扩展键不在
+    expect(data?.name).toBe('code-reviewer')
+    expect(data?.description).toBe(ROLE_DESCRIPTION_PLACEHOLDER)
+    expect(data).not.toHaveProperty('skills')
+    expect(data).not.toHaveProperty('knowledge')
+
+    // 正文：骨架（{{name}} 已替换）+ 默认知识绑定 overlay + marker
+    expect(content).toContain('# code-reviewer')
+    expect(content).not.toContain('{{name}}')
+    expect(content).toContain('## 知识绑定')
+    expect(content).toContain('- layers: global, project')
+    expect(content).toContain('<!-- generated by prism (role: code-reviewer) -->')
+
+    // 往返等价：解析回来与写入意图一致
+    const parsed = parseRoleMarkdown(content)
+    expect(parsed.name).toBe('code-reviewer')
+    expect(parsed.skills).toEqual([])
+    expect(parsed.knowledge.layers).toEqual(['global', 'project'])
+    expect(parsed.principle).toContain('TODO')
+  })
+
+  it('给了字段 → 写出的就是填好的定义（skills 落正文小节，不进 frontmatter）', async () => {
+    const rolesDir = makeTmp()
+    await newRole({
+      name: 'dev-x',
+      rolesDir,
+      description: '一句话职责：交付可运行增量。',
+      skills: ['code_review', 'prism'],
+      knowledge: { layers: ['project'], books: ['ps-pipeline'] },
+      color: 'blue',
+      model: 'custom:m',
+      thoughtLevel: 'max',
+      body: '# dev-x\n\n## 核心第一原则\n**先收敛再动手。**\n',
+    })
+    const content = readFileSync(join(rolesDir, 'dev-x.md'), 'utf8')
+    const { data } = splitFrontmatter(content)
+    expect(data?.description).toBe('一句话职责：交付可运行增量。')
+    expect(data?.color).toBe('blue')
+    expect(data?.model).toBe('custom:m')
+    expect(data?.thoughtLevel).toBe('max')
+    expect(data).not.toHaveProperty('skills')
+    expect(data).not.toHaveProperty('knowledge')
+
+    // 正文两个 overlay 小节都在
+    expect(content).toContain('## 能力（Skill 白名单）')
+    expect(content).toContain('- code_review')
+    expect(content).toContain('## 知识绑定')
+    expect(content).toContain('- layers: project')
+    expect(content).toContain('- books: ps-pipeline')
+
+    const parsed = parseRoleMarkdown(content)
+    expect(parsed.skills).toEqual(['code_review', 'prism'])
+    expect(parsed.knowledge.layers).toEqual(['project'])
+    expect(parsed.knowledge.books).toEqual(['ps-pipeline'])
+    expect(parsed.principle).toContain('先收敛再动手')
+  })
+
+  it('已存在 → skipped 绝不覆盖人写文件；force → 覆盖；非 kebab 名 → role_name_invalid', async () => {
+    const rolesDir = makeTmp()
+    await newRole({ name: 'dev-x', rolesDir })
+    const path = join(rolesDir, 'dev-x.md')
+    // 模拟人工补充后重跑：原样保留
+    const original = `${readFileSync(path, 'utf8')}\n<!-- 人工补充 -->\n`
+    writeFileSync(path, original)
+
+    const again = await newRole({ name: 'dev-x', rolesDir })
+    expect(again.written).toHaveLength(0)
+    expect(again.skipped[0]?.reason).toContain('已存在')
+    expect(readFileSync(path, 'utf8')).toBe(original)
+
+    const forced = await newRole({ name: 'dev-x', rolesDir, force: true, description: 'v2' })
+    expect(forced.written).toEqual([path])
+    expect(readFileSync(path, 'utf8')).toContain('v2')
+
+    await expect(newRole({ name: 'Dev X', rolesDir })).rejects.toThrow(RoleWriteError)
+  })
+})
+
+describe('editRole（外科式补丁：只动点名字段，正文不重排）', () => {
+  it('宿主原生形态（frontmatter 无 skills 键）→ 改正文 overlay 小节', async () => {
+    const rolesDir = makeTmp()
+    await newRole({ name: 'dev-x', rolesDir, skills: ['a'], description: '旧述' })
+    const path = join(rolesDir, 'dev-x.md')
+
+    await editRole({ name: 'dev-x', rolesDir, patch: { skills: ['b', 'c'], description: '新述' } })
+    const content = readFileSync(path, 'utf8')
+    const { data } = splitFrontmatter(content)
+    expect(data?.description).toBe('新述')
+    expect(data).not.toHaveProperty('skills') // 仍不进 frontmatter
+    expect(content).not.toContain('- a\n')
+    const parsed = parseRoleMarkdown(content)
+    expect(parsed.skills).toEqual(['b', 'c'])
+    // 正文骨架未被重排
+    expect(content).toContain('# dev-x')
+    expect(content).toContain('## 核心第一原则')
+  })
+
+  it('Prism 规范形态（frontmatter 已有 skills 键）→ 改 frontmatter，未知键与正文原样保留', async () => {
+    const rolesDir = makeTmp()
+    const file = join(rolesDir, 'legacy.md')
+    mkdirSync(rolesDir, { recursive: true })
+    writeFileSync(
+      file,
+      [
+        '---',
+        'name: legacy',
+        'description: 旧形态',
+        'skills: [old]',
+        'customKey: keep-me',
+        '---',
+        '',
+        '# legacy',
+        '',
+        '## 核心第一原则',
+        '**人写的内容不该被命令重排。**',
+        '',
+      ].join('\n'),
+    )
+
+    await editRole({ name: 'legacy', rolesDir, patch: { skills: ['new'], color: 'red' } })
+    const content = readFileSync(file, 'utf8')
+    const { data } = splitFrontmatter(content)
+    expect(data?.skills).toEqual(['new']) // 改 frontmatter
+    expect(data?.customKey).toBe('keep-me') // 未知键保留
+    expect(data?.color).toBe('red')
+    expect(content).toContain('**人写的内容不该被命令重排。**') // 正文保留
+    expect(content).not.toContain('## 能力（Skill 白名单）') // 没有多塞 overlay 节
+  })
+
+  it('color/model/thoughtLevel = null → 删除该 frontmatter 键（不留 color: "" 半残态）', async () => {
+    const rolesDir = makeTmp()
+    await newRole({ name: 'dev-x', rolesDir, color: 'blue', model: 'custom:m', thoughtLevel: 'max' })
+    const path = join(rolesDir, 'dev-x.md')
+    expect(splitFrontmatter(readFileSync(path, 'utf8')).data).toHaveProperty('color')
+
+    await editRole({ name: 'dev-x', rolesDir, patch: { color: null, model: null, thoughtLevel: null } })
+    const content = readFileSync(path, 'utf8')
+    const { data } = splitFrontmatter(content)
+    expect(data).not.toHaveProperty('color')
+    expect(data).not.toHaveProperty('model')
+    expect(data).not.toHaveProperty('thoughtLevel')
+    expect(content).not.toMatch(/^color:\s*''?$/m)
+  })
+
+  it('目标不存在 → role_not_found（只改不隐式新建）', async () => {
+    const rolesDir = makeTmp()
+    await expect(editRole({ name: 'nope', rolesDir, patch: { description: 'x' } })).rejects.toThrow(RoleWriteError)
+    await expect(editRole({ name: 'nope', rolesDir, patch: { description: 'x' } })).rejects.toMatchObject({
+      code: 'role_not_found',
+    })
+    expect(existsSync(join(rolesDir, 'nope.md'))).toBe(false)
+  })
+})
+
+describe('patchRoleRaw（纯函数：落点判定 + marker 保持）', () => {
+  it('marker 原本存在 → 补丁后仍保留（在文末）', () => {
+    const raw = ['---', 'name: r1', 'description: d', '---', '', '# r1', '', '<!-- generated by prism (role: r1) -->', ''].join('\n')
+    const next = patchRoleRaw(raw, { description: 'd2' })
+    expect(next).toContain('description: d2')
+    expect(next.trimEnd().endsWith('<!-- generated by prism (role: r1) -->')).toBe(true)
+  })
+
+  it('marker 原本不存在（人写文件）→ 补丁后不擅自追加 marker', () => {
+    const raw = ['---', 'name: r1', 'description: d', '---', '', '# r1 手写', ''].join('\n')
+    const next = patchRoleRaw(raw, { description: 'd2' })
+    expect(next).not.toContain('generated by prism')
+    expect(next).toContain('# r1 手写')
+  })
+
+  it('给 body → 整段替换正文；空 skills 列表 → overlay 小节被删除', () => {
+    const raw = [
+      '---',
+      'name: r1',
+      'description: d',
+      '---',
+      '',
+      '# 旧正文',
+      '',
+      '## 能力（Skill 白名单）',
+      '- old-skill',
+      '',
+    ].join('\n')
+    const next = patchRoleRaw(raw, { body: '# 新正文\n\n正文内容\n' })
+    expect(next).toContain('# 新正文')
+    expect(next).not.toContain('# 旧正文')
+
+    const cleared = patchRoleRaw(raw, { skills: [] })
+    expect(cleared).not.toContain('## 能力（Skill 白名单）')
+    expect(cleared).not.toContain('- old-skill')
+  })
+})
+
+describe('removeRole（硬删文件本体；扁平 + 目录式两形态）', () => {
+  it('扁平 <name>.md 与目录式 <name>/AGENTS.md 都删；两处皆无 → role_not_found', async () => {
+    const rolesDir = makeTmp()
+    writeFileSync(join(rolesDir, 'flat.md'), ROLE_RAW)
+    mkdirSync(join(rolesDir, 'dir-form'), { recursive: true })
+    writeFileSync(join(rolesDir, 'dir-form', 'AGENTS.md'), ROLE_RAW)
+
+    const flatResult = await removeRole({ name: 'flat', rolesDir })
+    expect(flatResult.removed).toEqual([join(rolesDir, 'flat.md')])
+    expect(existsSync(join(rolesDir, 'flat.md'))).toBe(false)
+
+    const dirResult = await removeRole({ name: 'dir-form', rolesDir })
+    expect(dirResult.removed).toEqual([join(rolesDir, 'dir-form', 'AGENTS.md')])
+    expect(existsSync(join(rolesDir, 'dir-form'))).toBe(false)
+
+    await expect(removeRole({ name: 'ghost', rolesDir })).rejects.toMatchObject({ code: 'role_not_found' })
+  })
+})

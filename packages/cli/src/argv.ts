@@ -55,12 +55,25 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
   prism doctor [--port 7777]               环境自检
   prism role list [--source <dir>]         列出角色（默认 roles_dir，见下）
   prism role show <name>                   查看角色定义
-  prism role init <name> [--force]         从模板新建角色文件到 roles_dir（角色直接住宿主目录，无导入/装配）
+  prism role new <name> [--description <述>] [--skills a,b] [--layers global,project] [--books x,y]
+                        [--color <色>] [--model <id>] [--thought-level low|high|max] [--from <角色>]
+                        [--body-file <md|->] [--force] [--harness-root <dir>|--yes]
+                                           新建角色到 roles_dir（宿主原生形态；只给名字则写骨架）
+  prism role edit <name> [--description <述>] [--skills a,b] [--layers ...] [--books ...] [--color <色>]
+                        [--model <id>] [--thought-level ...] [--body-file <md|->] [--harness-root <dir>|--yes]
+                                           修改角色（只改点名字段，正文与未知键原样保留）
+                                           --skills "" / --color "" / --model "" = 清空该项
+  prism role rm <name> [--harness-root <dir>|--yes]
+                                           删除角色文件（默认宿主目录需 --yes；不可逆）
   prism role validate [--source <dir>]     校验角色定义
-  prism role render <name> [--model --thought-level]   渲染为当前 harness 原生格式（预览，不写盘）
-  prism team list | show <id> | validate <id>
-  prism team init <id> [--from <team>|--members <role[:n],...>] [--name <名>] [--description <述>] [--template minimal|core-dev] [--harness-root <dir>|--yes]
-                                           从模板/既有团队脚手架建新团队（自动校验，error 不落盘）
+  prism role render <name> [--model --thought-level]   渲染为当前 harness 原生形态（预览，不写盘）
+  prism team list | show <id> | validate <id> | render <id>
+  prism team new <id> [--from <team>|--members <role[:n],...>] [--name <名>] [--description <述>] [--template minimal|core-dev] [--harness-root <dir>|--yes]
+                                           新建团队（自动校验，error 不落盘）
+  prism team edit <id> [--name <名>] [--description <述>] [--members <role[:n],...>] [--harness-root <dir>|--yes]
+                                           修改团队（改名册时工作流表就地收窄）
+  prism team rm <id> [--harness-root <dir>|--yes]
+                                           删除团队文件（默认宿主目录需 --yes；不可逆）
   prism team activate <id>
   prism skill list | install | update | uninstall | validate [name...] [--force]
   prism skill effective --role <r> [--team <t>] [--json]
@@ -189,11 +202,11 @@ const CLI_OPTIONS = {
   /** kb convert 正文上限 */
   'max-chars': { type: 'string' },
   // design-v4 §3.5（流 3 命令面）
-  /** team init --members <role[:n],...> */
+  /** team new|edit --members <role[:n],...> */
   members: { type: 'string' },
-  /** team init --template minimal|core-dev */
+  /** team new --template minimal|core-dev */
   template: { type: 'string' },
-  /** team init --description <描述> */
+  /** team new|edit --description <描述> */
   description: { type: 'string' },
   /** kb deposit --title <t> */
   title: { type: 'string' },
@@ -211,6 +224,17 @@ const CLI_OPTIONS = {
   modules: { type: 'string' },
   /** kb structure generate|freeze --confirmed-by <who> */
   'confirmed-by': { type: 'string' },
+  // design-v4 §3.5（流 4：角色/团队增删改对齐）
+  /** role new|edit --skills a,b（Skill 白名单） */
+  skills: { type: 'string' },
+  /** role new|edit --layers global,project（知识层绑定） */
+  layers: { type: 'string' },
+  /** role new|edit --books x,y（知识书过滤） */
+  books: { type: 'string' },
+  /** role new|edit --color <枚举色> */
+  color: { type: 'string' },
+  /** role new|edit --body-file <md|->（整段正文；`-` 读 stdin） */
+  'body-file': { type: 'string' },
 } as const
 
 export interface ParsedInvocation {
@@ -295,6 +319,11 @@ export type ArgValues = {
   deposit?: string
   modules?: string
   'confirmed-by'?: string
+  skills?: string
+  layers?: string
+  books?: string
+  color?: string
+  'body-file'?: string
 }
 
 /** `~`/`~\/` 前缀展开为用户主目录（Windows/Node 不自动展开；CLI 层统一负责，design-v3 §5 P14）。 */
@@ -341,7 +370,7 @@ export function resolveTargetDirs(ctx: CommandContext, values: ArgValues): Resol
 }
 
 /**
- * 落点来源的人读标注（`prism role init` / `skill install` 打印目录时附上）。
+ * 落点来源的人读标注（`prism role new|edit` / `skill install` 打印目录时附上）。
  *
  * 为什么要单点：这些文案原来各自写 `dirs.source === 'config' ? '（prism.yaml）' : …`，
  * 而 `source` 的语义是**有没有配置文件**，不是**这个目录由谁定的**——于是
@@ -367,16 +396,18 @@ export function guardWriteTarget(
   dirs: ResolvedDirs,
   target: GuardedTarget,
   plannedWrites: number,
+  op: 'write' | 'delete' = 'write',
 ): boolean {
   if (!dirs.guard[target] || plannedWrites <= 0) return true
   const dirPath = target === 'roles' ? dirs.rolesDir : target === 'teams' ? dirs.teamsDir : dirs.skillsDir
+  const action = op === 'delete' ? '删除' : '写入'
   if (values.yes === true) {
-    ctx.stdout(`--yes：确认写入默认宿主目录 ${dirPath}（${plannedWrites} 个文件）`)
+    ctx.stdout(`--yes：确认${action}默认宿主目录 ${dirPath}（${plannedWrites} 个文件）`)
     return true
   }
   ctx.stderr(
-    `已阻止写入 [guard_required]: 检测到目标为默认宿主目录 ${dirPath}（未经 --harness-root / prism.yaml 显式指定），` +
-      `将写入 ${plannedWrites} 个文件；加 --harness-root 指定其他位置，或加 --yes 确认。`,
+    `已阻止${action} [guard_required]: 检测到目标为默认宿主目录 ${dirPath}（未经 --harness-root / prism.yaml 显式指定），` +
+      `将${action} ${plannedWrites} 个文件；加 --harness-root 指定其他位置，或加 --yes 确认。`,
   )
   return false
 }

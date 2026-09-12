@@ -6,7 +6,9 @@ import {
   type NewTeamInput,
   type RoleDefinition,
   type TeamActivation,
+  type TeamDefinition,
   type TeamMember,
+  type UpdateTeamInput,
 } from '../api-team.ts'
 import { EffectiveSkills } from '../components/EffectiveSkills.tsx'
 import { State } from '../components/State.tsx'
@@ -31,13 +33,28 @@ export function TeamsPage({
   const [activating, setActivating] = useState(false)
   const [actError, setActError] = useState<string>('')
   const [formOpen, setFormOpen] = useState(false)
+  /** 详情里就地编辑（v5：团队与角色对称，`new|edit|rm` 三入口同名同位） */
+  const [editing, setEditing] = useState(false)
+  const [confirming, setConfirming] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [delError, setDelError] = useState('')
+  /** 删除时的 teams_dir：`null` = 跟随服务端给的默认目录 */
+  const [delDir, setDelDir] = useState<string | null>(null)
   const [created, setCreated] = useState<{ id: string; path: string; warning: string } | null>(null)
+  const [notice, setNotice] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
 
-  // 角色库只在打开表单时拉取（省一次首屏请求）
-  const roles = useAsync(
-    () => (formOpen ? teamApi.roles() : Promise.resolve([] as RoleDefinition[])),
-    [formOpen],
+  // 角色库只在打开表单/编辑时拉取（省一次首屏请求）；`GET /api/roles` 返回 `{roles, rolesDir}`（v5）
+  const needRoles = formOpen || editing
+  const roleIndex = useAsync(
+    () =>
+      needRoles
+        ? teamApi.roles()
+        : Promise.resolve({ roles: [] as RoleDefinition[], rolesDir: undefined as string | undefined }),
+    [needRoles],
   )
+  const roleList = roleIndex.data?.roles ?? []
+  /** 角色受管目录：改 members 时服务端要求显式给出（用于校验角色存在） */
+  const rolesDir = roleIndex.data?.rolesDir
 
   // 从「技能 → 使用情况」跳进来时展开目标团队
   useEffect(() => {
@@ -67,6 +84,30 @@ export function TeamsPage({
       setActError(e instanceof Error ? e.message : String(e))
     } finally {
       setActivating(false)
+    }
+  }
+
+  /** 删除团队（`DELETE /api/teams/:id`，硬删；`teams_dir` 必须显式给出）。 */
+  const onDelete = async () => {
+    if (!selected) return
+    const dir = (delDir ?? teams.data?.teamsDir ?? '').trim()
+    if (dir === '') {
+      setDelError('未指定团队目录（teams_dir）——请在下方填写后再删除。')
+      return
+    }
+    setDeleting(true)
+    setDelError('')
+    try {
+      const result = await teamApi.deleteTeam(selected, dir)
+      setNotice({ kind: 'ok', text: `${selected} 已删除（${result.removed.length} 个文件；不可逆）` })
+      setSelected('')
+      setActivation(null)
+      setConfirming(false)
+      teams.reload()
+    } catch (e) {
+      setDelError(describeFailure(e instanceof Error ? e.message : String(e), selected))
+    } finally {
+      setDeleting(false)
     }
   }
 
@@ -163,10 +204,10 @@ export function TeamsPage({
 
       {formOpen && (
         <NewTeamForm
-          roles={roles.data ?? []}
-          rolesLoading={roles.loading}
-          rolesError={roles.error}
-          onReloadRoles={roles.reload}
+          roles={roleList}
+          rolesLoading={roleIndex.loading}
+          rolesError={roleIndex.error}
+          onReloadRoles={roleIndex.reload}
           existingIds={(teams.data?.teams ?? []).map((t) => t.team_id)}
           defaultTeamsDir={teams.data?.teamsDir}
           onCancel={() => setFormOpen(false)}
@@ -181,13 +222,39 @@ export function TeamsPage({
               团队详情 <span className="mono small muted">{selected}</span>
             </h3>
             <div className="row">
-              <button className="primary" onClick={onActivate} disabled={activating}>
-                {activating ? '启用中…' : '启用团队'}
-              </button>
+              {!editing && (
+                <button className="primary" onClick={onActivate} disabled={activating}>
+                  {activating ? '启用中…' : '启用团队'}
+                </button>
+              )}
+              {!editing && detail.data !== undefined && (
+                <button
+                  onClick={() => {
+                    setEditing(true)
+                    setConfirming(false)
+                    setNotice(null)
+                  }}
+                >
+                  编辑
+                </button>
+              )}
+              {!editing && detail.data !== undefined && (
+                <button
+                  onClick={() => {
+                    setConfirming((prev) => !prev)
+                    setDelError('')
+                  }}
+                  disabled={deleting}
+                >
+                  {confirming ? '取消删除' : '删除'}
+                </button>
+              )}
               <button
                 onClick={() => {
                   setSelected('')
                   setActivation(null)
+                  setEditing(false)
+                  setConfirming(false)
                 }}
               >
                 关闭
@@ -195,6 +262,78 @@ export function TeamsPage({
             </div>
           </div>
 
+          {notice !== null && (
+            <div className="row" style={{ gap: 8, marginBottom: 10 }}>
+              <span className={`tag ${notice.kind === 'ok' ? 'ok' : 'err'}`}>
+                {notice.kind === 'ok' ? '已完成' : '失败'}
+              </span>
+              <span className="small">{notice.text}</span>
+            </div>
+          )}
+
+          {confirming && !editing && detail.data !== undefined && (
+            <div
+              className="card"
+              style={{ background: 'var(--panel-2)', marginBottom: 12, borderLeft: '3px solid var(--err)' }}
+            >
+              <div className="small" style={{ marginBottom: 8 }}>
+                <strong>删除是不可逆的硬删</strong>：会直接删掉 <span className="mono">{selected}.md</span>
+                （兼容形态 <span className="mono">{selected}/AGENTS.md</span> 一并删）。服务端要求显式给出目录。
+              </div>
+              <label className="field" htmlFor="td-dir">
+                <span className="label">团队目录（teams_dir，必填）</span>
+                <input
+                  id="td-dir"
+                  value={delDir ?? teams.data?.teamsDir ?? ''}
+                  placeholder={teams.data?.teamsDir ?? '如 D:\\prism-home\\teams'}
+                  disabled={deleting}
+                  onChange={(e) => setDelDir(e.target.value)}
+                />
+                {teams.data?.teamsDir === undefined && (
+                  <span className="small muted">
+                    未从 <span className="mono">GET /api/teams</span> 拿到默认目录 → 必须手动填写。
+                  </span>
+                )}
+              </label>
+              {delError !== '' && (
+                <div className="error" role="alert" style={{ marginTop: 8 }}>
+                  {delError}
+                </div>
+              )}
+              <div className="form-actions" style={{ marginTop: 10 }}>
+                <button onClick={() => setConfirming(false)} disabled={deleting}>
+                  取消
+                </button>
+                <button
+                  className="primary"
+                  disabled={deleting || (delDir ?? teams.data?.teamsDir ?? '').trim() === ''}
+                  onClick={() => void onDelete()}
+                >
+                  {deleting ? '删除中…' : '确认删除'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {editing && detail.data !== undefined ? (
+            <EditTeamForm
+              team={detail.data}
+              roles={roleList}
+              rolesLoading={roleIndex.loading}
+              rolesError={roleIndex.error}
+              onReloadRoles={roleIndex.reload}
+              rolesDir={rolesDir}
+              defaultTeamsDir={teams.data?.teamsDir}
+              onCancel={() => setEditing(false)}
+              onSaved={(text) => {
+                setEditing(false)
+                setNotice({ kind: 'ok', text })
+                teams.reload()
+                detail.reload()
+              }}
+              onFailed={(text) => setNotice({ kind: 'err', text })}
+            />
+          ) : (
           <State loading={detail.loading} error={detail.error}>
             {detail.data && (
               <>
@@ -248,14 +387,15 @@ export function TeamsPage({
               </>
             )}
           </State>
+          )}
 
-          {actError && (
+          {!editing && actError && (
             <div className="error" style={{ marginTop: 12 }} role="alert">
               启用失败：{actError}
             </div>
           )}
 
-          {activation && (
+          {!editing && activation && (
             <>
               <h3 style={{ marginTop: 16 }}>装配状态</h3>
               <div className="table-scroll">
@@ -653,7 +793,7 @@ function NewTeamForm({
         </div>
       ) : roles.length === 0 ? (
         <div className="empty">
-          角色库是空的，无法建队。先执行 <span className="mono">prism role init dev-1</span> 生成角色骨架（或直接写角色文件）。
+          角色库是空的，无法建队。先执行 <span className="mono">prism role new dev-1</span> 生成角色骨架（或直接写角色文件）。
           <div className="row" style={{ justifyContent: 'center', marginTop: 8 }}>
             <button onClick={onReloadRoles}>重试</button>
           </div>
@@ -855,6 +995,395 @@ function NewTeamForm({
         </button>
         <button className="primary" onClick={() => void submit()} disabled={!canSubmit}>
           {submitting ? '创建中…' : '创建团队'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/* ==================== v5 修改团队（字段补丁：只提交改动过的那几项） ==================== */
+
+interface TeamEditValues {
+  name: string
+  description: string
+  counts: Record<string, number>
+  depositEnabled: boolean
+  defaultLayer: string
+  defaultType: string
+  priority: string
+  requireNote: boolean
+  teamsDir: string
+}
+
+/**
+ * `PATCH /api/teams/:id`：改身份 / 成员 / 沉淀规则。
+ *
+ * - 只提交**改动过**的字段（服务端 PATCH 语义：缺省 = 不改）；
+ * - 改 `members` 时服务端会**就地收窄工作流**（`narrowWorkflow`）并回 `workflow_pruned` warning
+ *   ——这里把服务端返回的 issues 原样呈现，不静默；
+ * - `teams_dir` 必填；改 members 还要 `roles_dir`（校验角色存在，取自 `GET /api/roles`）。
+ */
+function EditTeamForm({
+  team,
+  roles,
+  rolesLoading,
+  rolesError,
+  onReloadRoles,
+  rolesDir,
+  defaultTeamsDir,
+  onCancel,
+  onSaved,
+  onFailed,
+}: {
+  team: TeamDefinition
+  roles: RoleDefinition[]
+  rolesLoading: boolean
+  rolesError: string | undefined
+  onReloadRoles: () => void
+  rolesDir: string | undefined
+  defaultTeamsDir: string | undefined
+  onCancel: () => void
+  onSaved: (text: string) => void
+  onFailed: (text: string) => void
+}) {
+  const [initial] = useState<TeamEditValues>(() => ({
+    name: team.name,
+    description: team.description,
+    counts: Object.fromEntries(team.members.map((m) => [m.role, m.count])),
+    depositEnabled: team.deposit.enabled,
+    defaultLayer: team.deposit.default_layer,
+    defaultType: team.deposit.default_type,
+    priority: team.deposit.priority,
+    requireNote: team.deposit.require_note,
+    teamsDir: defaultTeamsDir ?? '',
+  }))
+  const [v, setV] = useState<TeamEditValues>(initial)
+  const [filter, setFilter] = useState('')
+  const [alert, setAlert] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+
+  const set = <K extends keyof TeamEditValues>(key: K, value: TeamEditValues[K]) =>
+    setV((prev) => ({ ...prev, [key]: value }))
+
+  /** 角色库 + 定义里出现但角色库已没有的角色（后者必须可见，否则无法移除） */
+  const candidates = useMemo(() => {
+    const known = new Set(roles.map((r) => r.name))
+    const orphan = [...new Set(team.members.map((m) => m.role))]
+      .filter((n) => !known.has(n))
+      .map((name) => ({ name, description: '（不在角色库中）', skills: [], knowledge: { layers: [] }, principle: '', body: '' }) as RoleDefinition)
+    return [...roles, ...orphan]
+  }, [roles, team.members])
+
+  const visible = useMemo(() => {
+    const q = filter.trim().toLowerCase()
+    return candidates
+      .filter((r) => q === '' || r.name.toLowerCase().includes(q))
+      .slice()
+      .sort((a, b) => {
+        const picked = (r: RoleDefinition) => ((v.counts[r.name] ?? 0) > 0 ? 0 : 1)
+        const diff = picked(a) - picked(b)
+        return diff !== 0 ? diff : a.name.localeCompare(b.name)
+      })
+  }, [candidates, v.counts, filter])
+
+  const members = useMemo<TeamMember[]>(
+    () =>
+      Object.entries(v.counts)
+        .filter(([, count]) => count > 0)
+        .map(([role, count]) => ({ role, count }))
+        .sort((a, b) => a.role.localeCompare(b.role)),
+    [v.counts],
+  )
+  const initialMembers = useMemo(
+    () => [...team.members].sort((a, b) => a.role.localeCompare(b.role)),
+    [team.members],
+  )
+
+  const bump = (role: string, delta: number) =>
+    setV((prev) => {
+      const next = Math.max(0, Math.min(9, (prev.counts[role] ?? 0) + delta))
+      return { ...prev, counts: { ...prev.counts, [role]: next } }
+    })
+
+  const submit = async () => {
+    const teamsDir = v.teamsDir.trim()
+    if (teamsDir === '') {
+      setAlert('请先填写团队目录（teams_dir）')
+      return
+    }
+    if (v.name.trim() === '') {
+      setAlert('名称不能为空')
+      return
+    }
+    if (v.name.trim().length > 40) {
+      setAlert('名称最多 40 字符')
+      return
+    }
+    if (v.description.length > 200) {
+      setAlert('描述最多 200 字')
+      return
+    }
+    if (members.length === 0) {
+      setAlert('至少保留 1 个成员角色')
+      return
+    }
+
+    const init = initial
+    const patch: UpdateTeamInput = { teams_dir: teamsDir }
+    const fields: string[] = []
+
+    if (v.name !== init.name) {
+      patch.name = v.name.trim()
+      fields.push('name')
+    }
+    if (v.description !== init.description) {
+      patch.description = v.description
+      fields.push('description')
+    }
+    const sameMembers =
+      members.map((m) => `${m.role}×${m.count}`).join(',') ===
+      initialMembers.map((m) => `${m.role}×${m.count}`).join(',')
+    if (!sameMembers) {
+      if (rolesDir === undefined || rolesDir.trim() === '') {
+        setAlert('改动成员需要 roles_dir（服务端用于校验角色存在），但没从 GET /api/roles 拿到 → 请刷新角色库')
+        return
+      }
+      patch.members = members
+      patch.roles_dir = rolesDir
+      fields.push('members')
+    }
+    const depositChanged =
+      v.depositEnabled !== init.depositEnabled ||
+      v.defaultLayer !== init.defaultLayer ||
+      v.defaultType !== init.defaultType ||
+      v.priority !== init.priority ||
+      v.requireNote !== init.requireNote
+    if (depositChanged) {
+      patch.deposit = {
+        enabled: v.depositEnabled,
+        default_layer: v.defaultLayer,
+        default_type: v.defaultType,
+        priority: v.priority,
+        require_note: v.requireNote,
+      }
+      fields.push('deposit')
+    }
+
+    if (fields.length === 0) {
+      setAlert('没有任何改动——改一处再提交。')
+      return
+    }
+    setAlert('')
+    setSubmitting(true)
+    try {
+      const result = await teamApi.updateTeam(team.team_id, patch)
+      // 服务端的 issues（如 members 变更触发的 workflow_pruned）必须可见，不静默
+      const warns = (result.issues ?? []).filter((i) => i.level !== 'error').map((i) => i.message)
+      onSaved(
+        `${team.team_id} 已更新（改动字段：${fields.join(', ')}）` + (warns.length > 0 ? `；${warns.join('；')}` : ''),
+      )
+    } catch (e) {
+      onFailed(describeFailure(e instanceof Error ? e.message : String(e), team.team_id))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <div>
+      <div className="row" style={{ justifyContent: 'space-between', marginBottom: 8 }}>
+        <h3 style={{ margin: 0 }}>
+          编辑团队 <span className="mono small muted">{team.team_id}</span>
+        </h3>
+        <span className="small muted">只提交改动过的字段；改成员会就地把工作流收窄。</span>
+      </div>
+
+      {alert !== '' && (
+        <div className="error" role="alert" style={{ marginBottom: 12 }}>
+          {alert}
+        </div>
+      )}
+
+      <div className="form-grid">
+        <label className="field" htmlFor="etf-name">
+          <span className="label">名称</span>
+          <input
+            id="etf-name"
+            value={v.name}
+            disabled={submitting}
+            onChange={(e) => set('name', e.target.value)}
+          />
+        </label>
+        <label className="field" htmlFor="etf-description" style={{ gridColumn: '1 / -1' }}>
+          <span className="label">描述</span>
+          <textarea
+            id="etf-description"
+            rows={2}
+            value={v.description}
+            disabled={submitting}
+            onChange={(e) => set('description', e.target.value)}
+          />
+        </label>
+      </div>
+
+      <h3 style={{ marginTop: 16 }}>成员（角色 + 数量）</h3>
+      <div className="row" style={{ justifyContent: 'space-between', marginBottom: 6 }}>
+        <span className="small muted">
+          {members.length > 0
+            ? `当前 ${members.length} 个成员（${members.map((m) => `${m.role}×${m.count}`).join(', ')}）`
+            : '未选成员'}
+        </span>
+        {!rolesLoading && roles.length > 0 && (
+          <span className="small muted">还可选：{candidates.filter((r) => (v.counts[r.name] ?? 0) === 0).length} 个角色</span>
+        )}
+      </div>
+
+      {rolesLoading ? (
+        <div className="empty">加载中…</div>
+      ) : rolesError !== undefined ? (
+        <div className="error" role="alert">
+          请求失败：{rolesError}{' '}
+          <button className="rel-link" onClick={onReloadRoles}>
+            重试
+          </button>
+        </div>
+      ) : (
+        <>
+          {candidates.length > 8 && (
+            <label className="field" htmlFor="etf-filter" style={{ marginBottom: 8 }}>
+              <input
+                id="etf-filter"
+                value={filter}
+                placeholder="筛选角色…"
+                onChange={(e) => setFilter(e.target.value)}
+              />
+            </label>
+          )}
+          <div className="form-grid">
+            {visible.map((r) => {
+              const count = v.counts[r.name] ?? 0
+              return (
+                <div
+                  key={r.name}
+                  className={`list-row${count === 0 ? ' muted' : ''}`}
+                  style={{ borderLeft: `3px solid ${count > 0 ? 'var(--accent)' : 'transparent'}` }}
+                >
+                  <span className="mono list-main">{r.name}</span>
+                  <div className="stepper">
+                    <button
+                      aria-label={`减少 ${r.name} 数量`}
+                      disabled={count <= 0 || submitting}
+                      onClick={() => bump(r.name, -1)}
+                    >
+                      −
+                    </button>
+                    <span className="n">{count}</span>
+                    <button
+                      aria-label={`增加 ${r.name} 数量`}
+                      disabled={count >= 9 || submitting}
+                      onClick={() => bump(r.name, 1)}
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </>
+      )}
+
+      <h3 style={{ marginTop: 16 }}>沉淀规则</h3>
+      <label className="row" style={{ gap: 6, cursor: 'pointer' }}>
+        <input
+          type="checkbox"
+          checked={v.depositEnabled}
+          disabled={submitting}
+          onChange={(e) => set('depositEnabled', e.target.checked)}
+        />
+        <span>启用沉淀（关 = 任务完成时不提示落库）</span>
+      </label>
+      {v.depositEnabled && (
+        <div className="form-grid" style={{ marginTop: 10 }}>
+          <label className="field" htmlFor="etf-defaultLayer">
+            <span className="label">默认层</span>
+            <select
+              id="etf-defaultLayer"
+              value={v.defaultLayer}
+              disabled={submitting}
+              onChange={(e) => set('defaultLayer', e.target.value)}
+            >
+              {DEPOSIT_LAYERS.map((l) => (
+                <option key={l.value} value={l.value}>
+                  {l.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field" htmlFor="etf-defaultType">
+            <span className="label">默认类型</span>
+            <select
+              id="etf-defaultType"
+              value={v.defaultType}
+              disabled={submitting}
+              onChange={(e) => set('defaultType', e.target.value)}
+            >
+              {DEPOSIT_TYPES.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field" htmlFor="etf-priority">
+            <span className="label">优先级</span>
+            <select
+              id="etf-priority"
+              value={v.priority}
+              disabled={submitting}
+              onChange={(e) => set('priority', e.target.value)}
+            >
+              {DEPOSIT_PRIORITIES.map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="row" style={{ gap: 6, alignSelf: 'end', cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={v.requireNote}
+              disabled={submitting}
+              onChange={(e) => set('requireNote', e.target.checked)}
+            />
+            <span className="small">要求备注（require_note）</span>
+          </label>
+        </div>
+      )}
+
+      <label className="field" htmlFor="etf-teamsDir" style={{ marginTop: 16 }}>
+        <span className="label">团队目录（teams_dir，必填）</span>
+        <input
+          id="etf-teamsDir"
+          value={v.teamsDir}
+          placeholder="如 D:\prism-home\teams"
+          disabled={submitting}
+          onChange={(e) => set('teamsDir', e.target.value)}
+        />
+        {defaultTeamsDir === undefined && (
+          <span className="small muted">
+            未从 <span className="mono">GET /api/teams</span> 拿到默认目录 → 必须手动填写。
+          </span>
+        )}
+      </label>
+
+      <div className="form-actions" style={{ marginTop: 14 }}>
+        <button onClick={onCancel} disabled={submitting}>
+          取消
+        </button>
+        <button className="primary" onClick={() => void submit()} disabled={submitting || v.teamsDir.trim() === ''}>
+          {submitting ? '保存中…' : '保存修改'}
         </button>
       </div>
     </div>

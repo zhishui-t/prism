@@ -1,7 +1,14 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { parseMembersSpec, renderTeamScaffold, type ResolvedDirs } from '@prism/agents'
+import {
+  editTeam,
+  parseMembersSpec,
+  removeTeam,
+  renderTeamScaffold,
+  renderZcodeTeam,
+  type ResolvedDirs,
+} from '@prism/agents'
 import {
   activateTeam,
   inspectGraphStatus,
@@ -20,14 +27,14 @@ import { guardWriteTarget, resolveTargetDirs } from '../argv.js'
 import { graphBuild } from './graph.js'
 
 /**
- * `prism team list/show/validate/init/activate`（design-v3 §3.5 F10）。
+ * `prism team list/show/new/edit/rm/validate/render/activate`（design-v3 §3.5 F10；v5 对齐增删改）。
  * 团队受管目录 = resolveDirs().teamsDir（默认宿主根下 teams/，prism.yaml 可覆盖）；
  * 落点在 roles_dir 的**同级**而非 agents/ 内——ZCode 递归扫描 agents/ 下全部 .md，
  * 团队文件含 name+description 会被误注册成 agent（R3 实测 / B7）。
  *
- * 2026-09-11：原 `team install` 已移除——它的两项职责（复制成员角色、把团队文件搬进受管目录）
- * 在「角色直接住 roles_dir」+「team init 直接写受管位置」之后已全部失效，只剩一段
- * 零测试覆盖的旧源目录迁移。建团队 = `team init`（或 web `POST /api/teams` / MCP `prism_team_create`）。
+ * 2026-09-11：原 `team install` 已移除（「装配/导入」语义整体失效，详见 `role.ts` 头注）。
+ * 2026-09-12：`init` → `new`（同一动作在三入口同名：CLI `team new` / MCP `prism_team_new` /
+ * HTTP `POST /api/teams`），并补齐 `edit` / `rm` / `render`，与角色侧严格对称。
  */
 export async function runTeam(ctx: CommandContext, args: string[], values: ArgValues): Promise<number> {
   const [sub, ...rest] = args
@@ -37,8 +44,8 @@ export async function runTeam(ctx: CommandContext, args: string[], values: ArgVa
   const rolesDir = dirs.rolesDir
 
   switch (sub) {
-    case 'init': {
-      return await teamInit(ctx, rest, values, dirs)
+    case 'new': {
+      return await teamNew(ctx, rest, values, dirs)
     }
 
     case 'list': {
@@ -48,7 +55,7 @@ export async function runTeam(ctx: CommandContext, args: string[], values: ArgVa
         return 0
       }
       if (teams.length === 0) {
-        ctx.stdout(`团队库为空: ${teamsDir}（用 prism team init 创建你的团队）`)
+        ctx.stdout(`团队库为空: ${teamsDir}（用 prism team new 创建你的团队）`)
         return 0
       }
       for (const team of teams) {
@@ -182,26 +189,119 @@ export async function runTeam(ctx: CommandContext, args: string[], values: ArgVa
       return 0
     }
 
+    case 'edit': {
+      const id = rest[0]
+      if (id === undefined) {
+        ctx.stderr(TEAM_EDIT_USAGE)
+        return 1
+      }
+      let members: TeamMember[] | undefined
+      if (values.members !== undefined) {
+        const parsed = parseMembersSpec(String(values.members))
+        const errors = parsed.issues.filter((i) => i.level === 'error')
+        if (errors.length > 0) {
+          for (const issue of errors) ctx.stderr(`错误 [${issue.code}] ${issue.message}`)
+          return 1
+        }
+        members = parsed.members
+      }
+      const patch = {
+        ...(values.name !== undefined ? { name: String(values.name) } : {}),
+        ...(values.description !== undefined ? { description: String(values.description) } : {}),
+        ...(members !== undefined ? { members } : {}),
+      }
+      if (Object.keys(patch).length === 0) {
+        ctx.stderr('错误 [bad_request] 未给出任何要修改的字段')
+        ctx.stderr(TEAM_EDIT_USAGE)
+        return 1
+      }
+      if (!guardWriteTarget(ctx, values, dirs, 'teams', 1)) return 1
+      try {
+        const result = await editTeam({ teamId: id, teamsDir, patch })
+        // `--json`：issue 走 JSON payload（`...result` 已含 issues），stdout 保持整体可解析
+        if (!ctx.json) {
+          for (const issue of result.issues) {
+            ctx.stdout(`${issue.level === 'error' ? 'ERROR' : 'WARN'} [${issue.code}] ${issue.message}`)
+          }
+        }
+        if (ctx.json) {
+          ctx.stdout(JSON.stringify({ ok: true, value: { teamId: id, teamsDir, ...result, fields: Object.keys(patch) } }))
+          return 0
+        }
+        for (const p of result.written) ctx.stdout(`  已更新 ${p}`)
+        ctx.stdout(`团队 ${id} 已更新（改动字段: ${Object.keys(patch).join(', ')}）`)
+        return 0
+      } catch (error) {
+        ctx.stderr(`错误 [${(error as { code?: string }).code ?? 'bad_request'}] ${error instanceof Error ? error.message : String(error)}`)
+        return 1
+      }
+    }
+
+    case 'rm': {
+      const id = rest[0]
+      if (id === undefined) {
+        ctx.stderr('用法: prism team rm <id> [--harness-root <dir>|--yes]')
+        return 1
+      }
+      if (!guardWriteTarget(ctx, values, dirs, 'teams', 1, 'delete')) return 1
+      try {
+        const result = await removeTeam({ teamId: id, teamsDir })
+        if (ctx.json) {
+          ctx.stdout(JSON.stringify({ ok: true, value: { teamId: id, removed: result.removed } }))
+          return 0
+        }
+        for (const p of result.removed) ctx.stdout(`  已删除 ${p}`)
+        ctx.stdout(`团队 ${id} 已删除（不可逆；宿主在会话启动时扫描——下一会话生效）`)
+        return 0
+      } catch (error) {
+        ctx.stderr(`错误 [${(error as { code?: string }).code ?? 'bad_request'}] ${error instanceof Error ? error.message : String(error)}`)
+        return 1
+      }
+    }
+
+    case 'render': {
+      const id = rest[0]
+      if (id === undefined) {
+        ctx.stderr('用法: prism team render <id>')
+        return 1
+      }
+      const team = await loadTeam(teamsDir, id, { rolesDir })
+      if (team === null) {
+        ctx.stderr(`错误 [not_found] ${teamNotFoundMessage(teamsDir, id)}`)
+        return 1
+      }
+      const content = renderZcodeTeam(team)
+      if (ctx.json) {
+        ctx.stdout(JSON.stringify({ ok: true, value: { team_id: id, target: join(teamsDir, `${id}.md`), content } }))
+      } else {
+        ctx.stdout(content)
+      }
+      return 0
+    }
+
     default:
-      ctx.stderr(`未知子命令: team ${sub ?? ''}\n用法: prism team list|show|validate|init|activate`)
+      ctx.stderr(`未知子命令: team ${sub ?? ''}\n用法: prism team list|show|new|edit|rm|validate|render|activate`)
       return 1
   }
 }
 
-const TEAM_INIT_USAGE =
-  '用法: prism team init <id> [--from <team>|--members <role[:n],...>] [--name <名>] [--description <述>] [--template minimal|core-dev] [--harness-root <dir>|--yes]'
+const TEAM_EDIT_USAGE =
+  '用法: prism team edit <id> [--name <名>] [--description <述>] [--members <role[:n],...>] [--harness-root <dir>|--yes]'
+
+const TEAM_NEW_USAGE =
+  '用法: prism team new <id> [--from <team>|--members <role[:n],...>] [--name <名>] [--description <述>] [--template minimal|core-dev] [--harness-root <dir>|--yes]'
 
 /**
- * `prism team init <id>`（design-v4 §F-C1）：
+ * `prism team new <id>`（design-v4 §F-C1）：
  * 渲染团队脚手架（`renderTeamScaffold`，只渲染）→ 解析回定义 → **自动 validateTeam**
  * （error 则不落盘）→ 写守卫 → 落 `<teams_dir>/<id>.md`（扁平形态，registry/wiring 双形态均识别）。
  *
  * - `--from <team>`：复用 `@prism/server` 的 `loadTeam`（**不自造第二个 loader**），`extends` 保留；
  * - `--members`：收窄名册时自动裁剪工作流（并出 `workflow_pruned` warning）；
- * - 已存在 → skipped（不覆盖，对齐 `role init` 语义）；
+ * - 已存在 → skipped（不覆盖，对齐 `role new` 语义）；
  * - 写守卫口径 = `--harness-root` / prism.yaml（**不引入 `--teams-dir`**）。
  */
-async function teamInit(
+async function teamNew(
   ctx: CommandContext,
   rest: string[],
   values: ArgValues,
@@ -211,7 +311,7 @@ async function teamInit(
   const rolesDir = dirs.rolesDir
   const id = rest[0]
   if (id === undefined) {
-    ctx.stderr(TEAM_INIT_USAGE)
+    ctx.stderr(TEAM_NEW_USAGE)
     return 1
   }
   const flatPath = join(teamsDir, `${id}.md`)
@@ -278,6 +378,10 @@ async function teamInit(
   // 看起来像两个不同的悬空成员——2026-09-12 实测（`团队: demo-role×1`）。
   const printed = new Set<string>()
   const printIssue = (issue: ValidationIssue): void => {
+    // `--json`：issue 一律走 JSON payload（下方 `issues`），stdout 必须**整体可被 JSON.parse**——
+    // 早前无条件打自由文本，`team new --json` 的 stdout 是「WARN 行 + JSON」两段，
+    // 调用方 `JSON.parse(stdout)` 直接失败（e2e 里就这么炸过）。
+    if (ctx.json) return
     const line = `${issue.level === 'error' ? 'ERROR' : 'WARN'} [${issue.code}] ${issue.message}`
     if (printed.has(line)) return
     printed.add(line)
@@ -305,7 +409,7 @@ async function teamInit(
   for (const issue of validation.issues) printIssue(issue)
   if (!validation.ok) {
     ctx.stderr(
-      `错误 [team_invalid] 团队 ${id} 校验存在 error，未落盘（成员角色需先在 roles_dir：prism role init <name>）`,
+      `错误 [team_invalid] 团队 ${id} 校验存在 error，未落盘（成员角色需先在 roles_dir：prism role new <name>）`,
     )
     return 1
   }

@@ -20,7 +20,7 @@ export type {
   ValidationIssue,
   ValidationResult,
   TeamActivation,
-  RoleInitResult,
+  RoleWriteResult,
   EffectiveSkill,
   EffectiveSkillSet,
   TeamInitOptions,
@@ -43,8 +43,14 @@ export {
   // 渲染（ZCode 产物）
   renderZcodeRole,
   renderZcodeTeam,
-  // 模板初始化（装配/导入语义已于 2026-09-11 移除）
-  initRole,
+  // 角色写盘（new / edit / rm；装配/导入语义已于 2026-09-11 移除）
+  newRole,
+  editRole,
+  removeRole,
+  patchRoleRaw,
+  editTeam,
+  removeTeam,
+  patchTeamRaw,
   // 团队脚手架渲染（F-C1/F-C3 同一实现；只渲染不落盘）+ Skill 有效集纯函数（F-D1）
   renderTeamScaffold,
   parseMembersSpec,
@@ -99,7 +105,7 @@ export {
   resolveDirs,
   resolveDirsFromHome,
   expandTildePath,
-  ROLE_TEMPLATE_MD,
+  ROLE_BODY_SKELETON,
   type PrismDirConfig,
   type ResolvedDirs,
 } from '@prism/agents'
@@ -112,6 +118,8 @@ export {
   loadTeam,
   installedSkillNames,
   harnessPaths,
+  harnessAdapterOf,
+  roleRendererFor,
   defaultHarnessRoot,
   loadEffectiveSkills,
   teamNotFoundMessage,
@@ -120,12 +128,29 @@ export {
   type LoadEffectiveSkillsInput,
 } from './wiring.js'
 
-// 新建团队定义（F-C3：HTTP POST /api/teams 与 MCP prism_team_create 共用写路径）
+// 角色写盘（HTTP `/api/roles` 与 MCP `prism_role_new|edit|rm` 共用写路径）
+export {
+  createRoleDefinition,
+  updateRoleDefinition,
+  deleteRoleDefinition,
+  strArray,
+  parseKnowledge,
+  strictStrArray,
+  strictKnowledge,
+  optionalClearable,
+  type RoleWriteBody,
+  type RoleWriteOutcome,
+} from './role-create.js'
+
+// 团队写盘（HTTP `/api/teams` 与 MCP `prism_team_new|edit|rm` 共用写路径）
 export {
   createTeamDefinition,
+  updateTeamDefinition,
+  deleteTeamDefinition,
   asNonEmptyString,
   parseMembers,
   type NewTeamBody,
+  type UpdateTeamBody,
   type CreateTeamResult,
 } from './team-create.js'
 

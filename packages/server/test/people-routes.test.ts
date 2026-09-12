@@ -58,16 +58,22 @@ describe('people 路由（design-v3 §3.4 F11：信封 + issues + activate）', 
     await rm(join(home, '..'), { recursive: true, force: true }).catch(() => {})
   })
 
-  it('GET /api/roles → 信封 ok:true，角色数组携带 issues 数组', async () => {
+  it('GET /api/roles → 信封 ok:true，{roles, rolesDir} 携带 issues 数组（v6 与 /api/teams 同形）', async () => {
     const res = await fetch(`${base}/api/roles`)
     const body = (await res.json()) as {
       ok: boolean
-      value: Array<{ name: string; skills: string[]; issues: Array<{ level: string; code: string }> }>
+      value: {
+        roles: Array<{ name: string; skills: string[]; issues: Array<{ level: string; code: string }> }>
+        rolesDir: string
+      }
     }
     expect(res.status).toBe(200)
     expect(body.ok).toBe(true)
-    expect(body.value.map((r) => r.name)).toContain('dev-1')
-    expect(Array.isArray(body.value[0].issues)).toBe(true)
+    expect(body.value.roles.map((r) => r.name)).toContain('dev-1')
+    expect(Array.isArray(body.value.roles[0]!.issues)).toBe(true)
+    // rolesDir 只读返回，供控制台新建表单预填（写路径仍只认 POST /api/roles 的显式 roles_dir）
+    // 分隔符按 `/` 归一后比较：prism.yaml 里写的是 `/` 形式，回读保持原样
+    expect(body.value.rolesDir.replaceAll('\\', '/')).toBe(join(home, 'roles').replaceAll('\\', '/'))
   })
 
   it('GET /api/roles/:name → 单角色；不存在 → not_found 信封', async () => {
@@ -148,7 +154,7 @@ describe('people 路由（design-v3 §3.4 F11：信封 + issues + activate）', 
     expect(body.value.team_id).toBe('core-dev')
     expect(body.value.members[0]).toMatchObject({ role: 'dev-1', installed: false, dispatch: 'fallback' })
     expect(body.value.members[0].definition?.name).toBe('dev-1')
-    expect(body.value.members[0].hint).toContain('prism role init')
+    expect(body.value.members[0].hint).toContain('prism role new')
 
     // 装配后 → native
     await mkdir(join(harnessRoot, 'agents'), { recursive: true })
@@ -176,10 +182,13 @@ describe('people 路由（design-v3 §3.4 F11：信封 + issues + activate）', 
     await writeFile(join(home, 'roles', 'tester', 'AGENTS.md'), ZCODE_ROLE_MD.replace(/dev-1/g, 'tester'), 'utf-8')
 
     const res = await fetch(`${base}/api/roles`)
-    const body = (await res.json()) as { ok: boolean; value: Array<{ name: string; installed?: boolean }> }
+    const body = (await res.json()) as {
+      ok: boolean
+      value: { roles: Array<{ name: string; installed?: boolean }>; rolesDir: string }
+    }
     expect(res.status).toBe(200)
-    expect(Array.isArray(body.value)).toBe(true) // 容器形态不变（数组）
-    const byName = new Map(body.value.map((r) => [r.name, r.installed]))
+    expect(Array.isArray(body.value.roles)).toBe(true) // roles 仍是数组（容器改为 {roles, rolesDir}）
+    const byName = new Map(body.value.roles.map((r) => [r.name, r.installed]))
     expect(byName.get('dev-1')).toBe(true)
     expect(byName.get('tester')).toBe(false)
 
@@ -328,3 +337,227 @@ describe('people 写路由（F-C3 新建团队）与有效集（F-D2）', () => 
     expect(body.error.message).toContain('角色不存在')
   })
 })
+
+/**
+ * v6：角色 / 团队写路由补齐（`POST|PATCH|DELETE /api/roles[/:name]`、`PATCH|DELETE /api/teams/:id`）。
+ *
+ * 口径（与 CLI / MCP 三入口同名同位）：
+ * - 写路径的 `roles_dir` / `teams_dir` **必填**，绝不复用默认宿主目录（R5/R6）；
+ * - `POST /api/roles` 落**宿主原生形态**：frontmatter 只含适配器白名单字段，
+ *   `skills` / 知识绑定落正文 `## 能力（Skill 白名单）` / `## 知识绑定` 小节；
+ * - `PATCH` 是**外科式补丁**：只动点名字段，正文与未知 frontmatter 键原样保留；
+ *   `''` / `null` = 清除该 frontmatter 键；
+ * - `DELETE` 是**硬删**（不可逆）。
+ */
+describe('people 写路由 v6（角色与团队 增删改）', () => {
+  let app: AppHandle
+  let base: string
+  let tmp: string
+  let home: string
+  let rolesDir: string
+  let teamsDir: string
+
+  beforeAll(async () => {
+    tmp = await mkdtemp(join(tmpdir(), 'prism-people-v6-'))
+    home = join(tmp, 'home')
+    // 读源 = 临时 home 下；**写目标另给**（写路径只认 body 里的显式目录）
+    rolesDir = join(tmp, 'managed-roles')
+    teamsDir = join(tmp, 'managed-teams')
+    await mkdir(home, { recursive: true })
+    await writeFile(
+      join(home, 'prism.yaml'),
+      `roles_dir: ${join(home, 'roles').replaceAll('\\', '/')}\nteams_dir: ${join(home, 'teams').replaceAll('\\', '/')}\n`,
+      'utf-8',
+    )
+    await mkdir(join(home, 'roles', 'dev-1'), { recursive: true })
+    await writeFile(join(home, 'roles', 'dev-1', 'AGENTS.md'), ZCODE_ROLE_MD, 'utf-8')
+    await mkdir(join(home, 'roles', 'tester'), { recursive: true })
+    await writeFile(join(home, 'roles', 'tester', 'AGENTS.md'), ZCODE_ROLE_MD.replace(/dev-1/g, 'tester'), 'utf-8')
+    app = await startServer({ home, harnessRoot: join(tmp, 'zcode'), port: 0 })
+    base = `http://127.0.0.1:${app.port}`
+  })
+
+  afterAll(async () => {
+    await app.close()
+    await rm(tmp, { recursive: true, force: true }).catch(() => {})
+  })
+
+  const send = (method: string, path: string, payload?: unknown): Promise<Response> =>
+    fetch(`${base}${path}`, {
+      method,
+      headers: { 'content-type': 'application/json' },
+      ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
+    })
+
+  it('POST /api/roles：缺 roles_dir → 400 + roles_dir_required（不落默认宿主目录）', async () => {
+    const res = await send('POST', '/api/roles', { name: 'v6-role' })
+    const body = (await res.json()) as { ok: boolean; error: { message: string } }
+    expect(res.status).toBe(400)
+    expect(body.ok).toBe(false)
+    expect(body.error.message).toContain('roles_dir_required')
+    expect(existsSync(join(home, 'roles', 'v6-role.md'))).toBe(false)
+  })
+
+  it('POST /api/roles：宿主原生形态落盘（skills / 知识绑定落正文小节，不污染 frontmatter）', async () => {
+    const res = await send('POST', '/api/roles', {
+      name: 'v6-role',
+      description: 'v6 冒烟角色',
+      skills: ['kb', 'graph'],
+      knowledge: { layers: ['global'] },
+      color: 'blue',
+      roles_dir: rolesDir,
+    })
+    const body = (await res.json()) as { ok: boolean; value: { path: string; overwritten: boolean } }
+    expect(res.status).toBe(200)
+    expect(body.value.path.replaceAll('\\', '/')).toBe(join(rolesDir, 'v6-role.md').replaceAll('\\', '/'))
+    expect(body.value.overwritten).toBe(false)
+
+    const md = await readFile(body.value.path, 'utf-8')
+    // frontmatter 只有白名单字段（name/description/color）——不含 skills / knowledge
+    const fm = md.slice(md.indexOf('---'), md.indexOf('---', 3))
+    expect(fm).toContain('name: v6-role')
+    expect(fm).toContain('color: blue')
+    expect(fm).not.toContain('skills')
+    expect(fm).not.toContain('knowledge')
+    // Prism 扩展落正文
+    expect(md).toContain('## 能力（Skill 白名单）')
+    expect(md).toContain('- kb')
+    expect(md).toContain('## 知识绑定')
+    expect(md).toContain('- layers: global')
+
+    // 读回闭环：换成 writeDir 当读源后仍能解析出 skills / knowledge
+    const app2 = await startServer({ home: await rolesHome(rolesDir), harnessRoot: join(tmp, 'zcode'), port: 0 })
+    try {
+      const got = await fetch(`http://127.0.0.1:${app2.port}/api/roles/v6-role`)
+      const gotBody = (await got.json()) as {
+        value: { skills: string[]; knowledge: { layers: string[] }; color?: string }
+      }
+      expect(gotBody.value.skills).toEqual(['kb', 'graph'])
+      expect(gotBody.value.knowledge.layers).toEqual(['global'])
+      expect(gotBody.value.color).toBe('blue')
+    } finally {
+      await app2.close()
+    }
+  })
+
+  it('POST /api/roles 已存在 → 409 id_conflict（不静默覆盖）', async () => {
+    const res = await send('POST', '/api/roles', { name: 'v6-role', roles_dir: rolesDir })
+    const body = (await res.json()) as { error: { code: string } }
+    expect(res.status).toBe(409)
+    expect(body.error.code).toBe('id_conflict')
+  })
+
+  it('PATCH /api/roles/:name：外科式补丁（改 skills 只动白名单；model 键保留）', async () => {
+    // 先给一个 model，验证补丁**不动**未点名的字段
+    const rolePath = join(rolesDir, 'v6-role.md')
+    const before = await readFile(rolePath, 'utf-8')
+    await writeFile(rolePath, before.replace('color: blue', 'color: blue\nmodel: "custom:x"'), 'utf-8')
+
+    const res = await send('PATCH', '/api/roles/v6-role', { skills: ['arch'], roles_dir: rolesDir })
+    expect(res.status).toBe(200)
+
+    const md = await readFile(rolePath, 'utf-8')
+    expect(md).toContain('model: "custom:x"') // 未点名 → 保留
+    expect(md).toContain('- arch')
+    expect(md).not.toContain('- kb') // 白名单被整体替换（补丁语义，不是追加）
+  })
+
+  it('PATCH /api/roles/:name：color 空串 → 清除该 frontmatter 键（不是留个空串）', async () => {
+    const res = await send('PATCH', '/api/roles/v6-role', { color: '', roles_dir: rolesDir })
+    expect(res.status).toBe(200)
+    const md = await readFile(join(rolesDir, 'v6-role.md'), 'utf-8')
+    expect(md).not.toMatch(/^color:/m)
+  })
+
+  it('PATCH /api/roles/:name：未给任何字段 → 400 role_patch_empty', async () => {
+    const res = await send('PATCH', '/api/roles/v6-role', { roles_dir: rolesDir })
+    const body = (await res.json()) as { error: { message: string } }
+    expect(res.status).toBe(400)
+    expect(body.error.message).toContain('role_patch_empty')
+  })
+
+  it('PATCH /api/roles/:name：目标不存在 → 404（只改，不隐式新建）', async () => {
+    const res = await send('PATCH', '/api/roles/ghost-role', { description: 'x', roles_dir: rolesDir })
+    const body = (await res.json()) as { error: { code: string } }
+    expect(res.status).toBe(404)
+    expect(body.error.code).toBe('not_found')
+    expect(existsSync(join(rolesDir, 'ghost-role.md'))).toBe(false)
+  })
+
+  it('DELETE /api/roles/:name：硬删文件本体；再删 → 404', async () => {
+    const rolePath = join(rolesDir, 'v6-role.md')
+    expect(existsSync(rolePath)).toBe(true)
+
+    const del = await send('DELETE', '/api/roles/v6-role', { roles_dir: rolesDir })
+    const delBody = (await del.json()) as { ok: boolean; value: { removed: string[] } }
+    expect(del.status).toBe(200)
+    expect(delBody.value.removed.length).toBe(1)
+    expect(existsSync(rolePath)).toBe(false)
+
+    const again = await send('DELETE', '/api/roles/v6-role', { roles_dir: rolesDir })
+    const againBody = (await again.json()) as { error: { code: string } }
+    expect(again.status).toBe(404)
+    expect(againBody.error.code).toBe('not_found')
+  })
+
+  it('DELETE /api/roles/:name：缺 roles_dir → 400（不回落默认宿主目录）', async () => {
+    const res = await send('DELETE', '/api/roles/dev-1', {})
+    const body = (await res.json()) as { error: { message: string } }
+    expect(res.status).toBe(400)
+    expect(body.error.message).toContain('roles_dir_required')
+  })
+
+  it('PATCH /api/teams/:id：改名册 → 工作流就地收窄（workflow_pruned）；DELETE 硬删', async () => {
+    // 先建一个双成员团队
+    const created = await send('POST', '/api/teams', {
+      team_id: 'v6-team',
+      name: 'v6 队',
+      members: [
+        { role: 'dev-1', count: 1 },
+        { role: 'tester', count: 1 },
+      ],
+      teams_dir: teamsDir,
+    })
+    expect(created.status).toBe(200)
+
+    const patched = await send('PATCH', '/api/teams/v6-team', {
+      members: [{ role: 'dev-1', count: 2 }],
+      teams_dir: teamsDir,
+      roles_dir: join(home, 'roles'),
+    })
+    const patchedBody = (await patched.json()) as { ok: boolean; value: { issues: Array<{ code: string }> } }
+    expect(patched.status).toBe(200)
+    expect(patchedBody.value.issues.some((i) => i.code === 'workflow_pruned')).toBe(true)
+
+    const md = await readFile(join(teamsDir, 'v6-team.md'), 'utf-8')
+    expect(md).toContain('- role: dev-1')
+    expect(md).not.toContain('- role: tester')
+
+    const del = await send('DELETE', '/api/teams/v6-team', { teams_dir: teamsDir })
+    expect(del.status).toBe(200)
+    expect(existsSync(join(teamsDir, 'v6-team.md'))).toBe(false)
+  })
+
+  it('PATCH /api/teams/:id：改 members 缺 roles_dir → 400（校验角色存在所需参数不得隐式回落）', async () => {
+    const created = await send('POST', '/api/teams', {
+      team_id: 'v6-team-2',
+      members: [{ role: 'dev-1', count: 1 }],
+      teams_dir: teamsDir,
+    })
+    expect(created.status).toBe(200)
+    const res = await send('PATCH', '/api/teams/v6-team-2', {
+      members: [{ role: 'dev-1', count: 1 }],
+      teams_dir: teamsDir,
+    })
+    const body = (await res.json()) as { error: { message: string } }
+    expect(res.status).toBe(400)
+    expect(body.error.message).toContain('roles_dir_required')
+  })
+})
+
+/** 为一个受管 roles 目录造一个最小 home（写 prism.yaml 指向它），用于「读回」断言。 */
+async function rolesHome(dir: string): Promise<string> {
+  const h = await mkdtemp(join(tmpdir(), 'prism-people-v6-read-'))
+  await writeFile(join(h, 'prism.yaml'), `roles_dir: ${dir.replaceAll('\\', '/')}\n`, 'utf-8')
+  return h
+}

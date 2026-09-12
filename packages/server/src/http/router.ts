@@ -31,7 +31,7 @@ interface Route {
 export class Router {
   readonly #routes: Route[] = []
 
-  add(method: 'GET' | 'POST', pattern: string, handler: RouteHandler): this {
+  add(method: 'GET' | 'POST' | 'PATCH' | 'DELETE', pattern: string, handler: RouteHandler): this {
     const segments = pattern.split('/').filter((s) => s !== '')
     const hasWildcard = segments[segments.length - 1] === '*'
     if (hasWildcard) {
@@ -64,7 +64,7 @@ export class Router {
     }
     if (methodMismatch) {
       // 固定错误码集合无 method_not_allowed，归入 not_found，状态码保留 405
-      sendJson(res, 405, fail('not_found', `不支持的方法: ${String(req.method)}`), 'GET, POST, OPTIONS')
+      sendJson(res, 405, fail('not_found', `不支持的方法: ${String(req.method)}`), 'GET, POST, PATCH, DELETE, OPTIONS')
       return true
     }
     return false

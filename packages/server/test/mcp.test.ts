@@ -31,7 +31,7 @@ describe('MCP stdio（手写 JSON-RPC，design.md §4 最小 5 工具 + design-v
     })
   })
 
-  it('tools/list → 固定 36 个工具（kb 17 + graph 8 + role/team 8 + task 3；design-v4 增 versions/skill_effective/team_create/book_structure；v5 增 graph_merge）', async () => {
+  it('tools/list → 固定 43 个工具（kb 17 + graph 8 + 角色/团队/技能/上下文 15 + task 3；v5 增 graph_merge；v6 角色/团队补齐增删改 + team_create→team_new）', async () => {
     const tools = createMcpTools({ home: await makeTempDir('prism-mcp-') })
     const res = await handleRpcRequest(rpc('tools/list'), tools)
     const names = ((res?.result as { tools: Array<{ name: string }> }).tools).map((t) => t.name)
@@ -63,15 +63,23 @@ describe('MCP stdio（手写 JSON-RPC，design.md §4 最小 5 工具 + design-v
       'prism_graph_merge',
       'prism_role_list',
       'prism_role_get',
+      'prism_role_new',
+      'prism_role_edit',
+      'prism_role_rm',
       'prism_context_pack',
       'prism_skill_effective',
       'prism_role_render',
+      'prism_team_list',
       'prism_team_get',
       'prism_team_activate',
-      'prism_team_create',
+      'prism_team_new',
+      'prism_team_edit',
+      'prism_team_rm',
+      'prism_team_render',
       'prism_task_register',
       'prism_task_report',
       'prism_task_status',
+
     ])
   })
 

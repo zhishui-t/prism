@@ -180,11 +180,18 @@ export async function createApp(options: AppOptions = {}): Promise<{
       return { job_id: job.job_id }
     },
   })
+  // 角色/团队：读路由只读；写路由只认请求体里**显式**给出的 roles_dir / teams_dir
+  // （绝不复用 dirs 的默认宿主目录）。增删改三入口在 CLI / HTTP / MCP 上对称。
   router.add('GET', '/api/roles', people.roles)
+  router.add('POST', '/api/roles', people.createRole)
   router.add('GET', '/api/roles/:name', people.role)
+  router.add('PATCH', '/api/roles/:name', people.updateRole)
+  router.add('DELETE', '/api/roles/:name', people.deleteRole)
   router.add('GET', '/api/teams', people.teams)
   router.add('POST', '/api/teams', people.createTeam)
   router.add('GET', '/api/teams/:id', people.team)
+  router.add('PATCH', '/api/teams/:id', people.updateTeam)
+  router.add('DELETE', '/api/teams/:id', people.deleteTeam)
   router.add('GET', '/api/teams/:id/activate', people.teamActivate)
   router.add('GET', '/api/skills', people.skills)
   router.add('GET', '/api/skills/usage', people.skillUsage)

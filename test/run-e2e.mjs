@@ -225,11 +225,11 @@ async function main() {
 
     // 3.3 使用者显式编队：建不建团队、建什么编制，是使用者自己的事
     const mkCoreDev = await cli(
-      ['team', 'init', 'core-dev', '--template', 'core-dev', '--harness-root', harnessRoot, '--json'],
+      ['team', 'new', 'core-dev', '--template', 'core-dev', '--harness-root', harnessRoot, '--json'],
       env,
     )
     check(
-      '3.3 使用者自建 core-dev（team init --template core-dev）',
+      '3.3 使用者自建 core-dev（team new --template core-dev）',
       mkCoreDev.code === 0,
       mkCoreDev.stderr.trim().slice(0, 200),
     )
@@ -977,16 +977,16 @@ async function main() {
         versHttpGhost.status === 200 && (versHttpGhost.body?.value?.versions ?? []).length === 0,
       )
 
-      // ---------- F-C1 CLI 建队（含写守卫三态） ----------
+      // ---------- F-C1/v6 CLI 建队与改删（含写守卫） ----------
       const teamDir = join(harnessRoot, 'teams')
       const e2eTeamPath = join(teamDir, 'e2e-team.md')
       const initOk = await cli(
-        ['team', 'init', 'e2e-team', '--harness-root', harnessRoot, '--members', 'dev-1', '--json'],
+        ['team', 'new', 'e2e-team', '--harness-root', harnessRoot, '--members', 'dev-1', '--json'],
         env,
       )
       const validateOk = await cli(['team', 'validate', 'e2e-team', '--harness-root', harnessRoot, '--json'], env)
       check(
-        '19.5.1 F-C1 team init（--harness-root）→ 落盘 + validate 通过 + workflow_pruned 警告',
+        '19.5.1 F-C1 team new（--harness-root）→ 落盘 + validate 通过 + workflow_pruned 警告',
         initOk.code === 0 &&
           (await fileExists(e2eTeamPath)) &&
           initOk.stdout.includes('workflow_pruned') &&
@@ -995,13 +995,13 @@ async function main() {
         `validate=${validateOk.code} warn=${initOk.stdout.includes('workflow_pruned')}`,
       )
       const guardedPath = join(teamDir, 'e2e-guarded.md')
-      const guarded = await cli(['team', 'init', 'e2e-guarded', '--members', 'dev-1', '--json'], env)
+      const guarded = await cli(['team', 'new', 'e2e-guarded', '--members', 'dev-1', '--json'], env)
       check(
         '19.5.2 F-C1 写守卫：默认宿主目录未加 --yes → guard_required 且不落盘',
         guarded.code !== 0 && guarded.stderr.includes('guard_required') && !(await fileExists(guardedPath)),
         guarded.stderr.trim().slice(0, 130),
       )
-      const forced = await cli(['team', 'init', 'e2e-guarded', '--members', 'dev-1', '--yes', '--json'], env)
+      const forced = await cli(['team', 'new', 'e2e-guarded', '--members', 'dev-1', '--yes', '--json'], env)
       check(
         '19.5.3 F-C1 写守卫：--yes 放行并落盘',
         forced.code === 0 &&
@@ -1010,7 +1010,7 @@ async function main() {
         `path=${guardedPath}`,
       )
       const badMember = await cli(
-        ['team', 'init', 'e2e-bad', '--harness-root', harnessRoot, '--members', 'ghost-role', '--json'],
+        ['team', 'new', 'e2e-bad', '--harness-root', harnessRoot, '--members', 'ghost-role', '--json'],
         env,
       )
       check(
@@ -1021,7 +1021,7 @@ async function main() {
         badMember.stderr.trim().slice(0, 130),
       )
       const badId = await cli(
-        ['team', 'init', 'Demo_Bad', '--harness-root', harnessRoot, '--members', 'dev-1', '--json'],
+        ['team', 'new', 'Demo_Bad', '--harness-root', harnessRoot, '--members', 'dev-1', '--json'],
         env,
       )
       check(
@@ -1030,7 +1030,7 @@ async function main() {
         badId.stderr.trim().slice(0, 120),
       )
       const initAgain = await cli(
-        ['team', 'init', 'e2e-team', '--harness-root', harnessRoot, '--members', 'dev-1', '--json'],
+        ['team', 'new', 'e2e-team', '--harness-root', harnessRoot, '--members', 'dev-1', '--json'],
         env,
       )
       check(
@@ -1039,7 +1039,7 @@ async function main() {
         initAgain.stdout.trim().slice(0, 120),
       )
       const prunedTeam = await cli(
-        ['team', 'init', 'e2e-pruned', '--harness-root', harnessRoot, '--template', 'core-dev', '--members', 'dev-1', '--json'],
+        ['team', 'new', 'e2e-pruned', '--harness-root', harnessRoot, '--template', 'core-dev', '--members', 'dev-1', '--json'],
         env,
       )
       const prunedValidate = await cli(['team', 'validate', 'e2e-pruned', '--harness-root', harnessRoot, '--json'], env)
@@ -1049,6 +1049,75 @@ async function main() {
           prunedTeam.stdout.includes('workflow_pruned') &&
           prunedValidate.code === 0 &&
           (await fileExists(join(teamDir, 'e2e-pruned.md'))),
+      )
+
+      // ---------- v6：团队 / 角色 改 + 删（三入口同名同位，CLI 侧闭环） ----------
+      const teamEdit = await cli(
+        ['team', 'edit', 'e2e-team', '--harness-root', harnessRoot, '--name', 'E2E 改名', '--json'],
+        env,
+      )
+      const teamEditRead = await cli(['team', 'show', 'e2e-team', '--harness-root', harnessRoot, '--json'], env)
+      const teamEditV = jparse(teamEdit).value ?? {}
+      check(
+        '19.5.8 v6 team edit：只改点名字段（name），成员与工作流不被重排',
+        teamEdit.code === 0 &&
+          (teamEditV.fields ?? []).includes('name') &&
+          jparse(teamEditRead).value.name === 'E2E 改名' &&
+          jparse(teamEditRead).value.members.length === 1,
+        teamEdit.stderr.trim().slice(0, 130),
+      )
+      // 名册收窄必须是「角色集合变小」才会裁剪工作流——只改 count 不触发（故另建 2 成员队）
+      const multiTeam = await cli(
+        ['team', 'new', 'e2e-multi', '--harness-root', harnessRoot, '--members', 'dev-1,tester', '--json'],
+        env,
+      )
+      const multiEdit = await cli(
+        ['team', 'edit', 'e2e-multi', '--harness-root', harnessRoot, '--members', 'dev-1', '--json'],
+        env,
+      )
+      const multiValidate = await cli(['team', 'validate', 'e2e-multi', '--harness-root', harnessRoot, '--json'], env)
+      const multiEditV = jparse(multiEdit).value ?? {}
+      check(
+        '19.5.9 v6 team edit --members：名册收窄（dev-1,tester → dev-1）→ 工作流就地裁剪（workflow_pruned）且改后校验通过',
+        multiTeam.code === 0 &&
+          multiEdit.code === 0 &&
+          (multiEditV.issues ?? []).some((i) => i.code === 'workflow_pruned') &&
+          (multiEditV.fields ?? []).includes('members') &&
+          multiValidate.code === 0 &&
+          jparse(multiValidate).ok === true,
+        `new=${multiTeam.code} edit=${multiEdit.code} warn=${JSON.stringify((multiEditV.issues ?? []).map((i) => i.code))} validate=${multiValidate.code}`,
+      )
+      const roleNewE2e = await cli(
+        ['role', 'new', 'e2e-role', '--harness-root', harnessRoot, '--description', 'E2E 角色', '--skills', 'kb', '--json'],
+        env,
+      )
+      const roleEditE2e = await cli(
+        ['role', 'edit', 'e2e-role', '--harness-root', harnessRoot, '--skills', 'kb,graph', '--json'],
+        env,
+      )
+      const roleShowE2e = await cli(['role', 'show', 'e2e-role', '--harness-root', harnessRoot, '--json'], env)
+      check(
+        '19.5.10 v6 role new → edit：白名单就地更新（外科式补丁，正文不重排）',
+        roleNewE2e.code === 0 &&
+          roleEditE2e.code === 0 &&
+          JSON.stringify(jparse(roleShowE2e).value.skills) === JSON.stringify(['kb', 'graph']),
+        `new=${roleNewE2e.code} edit=${roleEditE2e.code} ${roleEditE2e.stderr.trim().slice(0, 100)}`,
+      )
+      const roleRmE2e = await cli(['role', 'rm', 'e2e-role', '--harness-root', harnessRoot, '--json'], env)
+      const teamRmE2e = await cli(['team', 'rm', 'e2e-team', '--harness-root', harnessRoot, '--json'], env)
+      check(
+        '19.5.11 v6 rm：角色 / 团队硬删文件本体（不可逆，--harness-root 显式放行）',
+        roleRmE2e.code === 0 &&
+          teamRmE2e.code === 0 &&
+          !(await fileExists(join(harnessRoot, 'agents', 'e2e-role.md'))) &&
+          !(await fileExists(e2eTeamPath)),
+        `role=${roleRmE2e.code} team=${teamRmE2e.code} ${teamRmE2e.stderr.trim().slice(0, 100)}`,
+      )
+      const rmAgain = await cli(['team', 'rm', 'e2e-team', '--harness-root', harnessRoot, '--json'], env)
+      check(
+        '19.5.12 v6 rm 边界：删不存在的团队 → team_not_found（不静默成功）',
+        rmAgain.code !== 0 && rmAgain.stderr.includes('team_not_found'),
+        rmAgain.stderr.trim().slice(0, 130),
       )
 
       // ---------- F-C3 POST /api/teams 三态 + GET teamsDir ----------

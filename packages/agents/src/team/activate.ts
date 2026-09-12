@@ -37,8 +37,8 @@ export async function activateTeam(team: TeamDefinition, opts: ActivateTeamOptio
     if (definition !== undefined) activation.definition = definition
     if (!installed) {
       activation.hint = definition
-        ? `角色 ${member.role} 未落在宿主角色目录：当前会话请用 general-purpose 兜底派发并把 definition 契约粘进 prompt；或先运行 prism role init ${member.role}（或直接在该目录写 ${member.role}.md）并重启会话以启用原生派发`
-        : `角色 ${member.role} 在角色受管目录（${opts.rolesDir}）中不存在：无法降级派发，请先补齐角色定义（prism role init ${member.role}）`
+        ? `角色 ${member.role} 未落在宿主角色目录：当前会话请用 general-purpose 兜底派发并把 definition 契约粘进 prompt；或先运行 prism role new ${member.role}（或直接在该目录写 ${member.role}.md）并重启会话以启用原生派发`
+        : `角色 ${member.role} 在角色受管目录（${opts.rolesDir}）中不存在：无法降级派发，请先补齐角色定义（prism role new ${member.role}）`
     }
     return activation
   })

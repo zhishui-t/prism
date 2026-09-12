@@ -9,6 +9,10 @@
 > 也不再预建 `<PRISM_HOME>/teams`（那是旧版团队源目录，非受管位置）；
 > `team install` / `role import` / `role install` 已移除——角色/团队直接住在宿主目录。
 > 下文 §1 表格与 §4 流程中的 install/装配步骤均作废，保留为历史记录。
+>
+> **v6 修订（2026-09-12）**：建角色 / 建团队的动作名 `init` → **`new`**，并补齐 `edit` / `rm`
+> （CLI / MCP / HTTP 三入口同名同位）。本文档下文出现 `prism role init` / `prism team init`
+> 之处一律读作 `role new` / `team new`。
 
 ---
 

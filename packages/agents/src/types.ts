@@ -150,12 +150,13 @@ export interface TeamActivation {
 }
 
 /**
- * `role init` 的写入结果（`written` 为空 / `skipped` 非空 = 目标已存在且未 `--force`）。
+ * 角色写盘结果（`prism role new | edit`；`written` 为空 / `skipped` 非空 = 目标已存在且未 `--force`）。
  *
- * 2026-09-12 由 `InstallResult` 改名：旧的 `InstallOptions`（`targetDir` + `roles` + `force` +
- * 渲染适配器）已作为**死类型**删除——它唯一真实使用者是随「装配语义」删除的 `installRoles`。
+ * 2026-09-12 两次改名，都是为了跟上命令语义：`InstallResult` → `RoleInitResult` → `RoleWriteResult`。
+ * 旧的 `InstallOptions`（`targetDir` + `roles` + `force` + 渲染适配器）已作为**死类型**删除——
+ * 它唯一真实使用者是随「装配语义」删除的 `installRoles`。
  */
-export interface RoleInitResult {
+export interface RoleWriteResult {
   written: string[]
   skipped: {
     path: string

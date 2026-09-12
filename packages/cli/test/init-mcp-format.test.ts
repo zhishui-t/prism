@@ -5,11 +5,14 @@
  * 接入用平铺形态的宿主（WorkBuddy / VS Code：`{ mcpServers: {} }`）时会**静默写错层级**
  * ——宿主读不到，还往人家配置里塞了无意义的 `mcp` 键。
  *
- * 本文件锁两件事：
+ * 本文件锁三件事：
  *   1. 默认宿主（zcode）仍写嵌套形态，且**幂等**、**不碰同文件其它键**；
- *   2. 声明 `format: 'mcpServers-json'` 的插件宿主 → 写平铺形态到其 `configFile`。
+ *   2. 声明 `format: 'mcpServers-json'` 的插件宿主 → 写平铺形态到其 `configFile`；
+ *   3. **未给 `--harness-root` 时，默认根取自「配置激活的适配器」的 `defaultRoot`**——
+ *      早期实现硬走 `harnessLayout()`（内置 zcode），插件适配器工厂会把传入 root 当
+ *      `opts.root` 进而覆盖插件自述默认根 → MCP 与 Skill 全写到 zcode 目录（实测缺陷）。
  *
- * 第 2 条用的是仓库里真实交付的插件 `examples/harnesses/workbuddy/`（而非测试内联的假插件），
+ * 第 2、3 条用的是仓库里真实交付的插件 `examples/harnesses/workbuddy/`（而非测试内联的假插件），
  * 这样插件本身也被门禁覆盖。
  */
 
@@ -37,7 +40,7 @@ describe('prism init：MCP 注册形态分派', () => {
   const savedEnv: Record<string, string | undefined> = {}
 
   beforeEach(() => {
-    for (const key of ['PRISM_HARNESS', 'PRISM_HARNESS_ROOT', 'PRISM_HARNESS_DIR', 'PRISM_NO_HARNESS_PLUGINS']) {
+    for (const key of ['PRISM_HARNESS', 'PRISM_HARNESS_ROOT', 'PRISM_HARNESS_DIR', 'PRISM_NO_HARNESS_PLUGINS', 'WORKBUDDY_DIR']) {
       savedEnv[key] = process.env[key]
       delete process.env[key]
     }
@@ -175,6 +178,25 @@ describe('prism init：MCP 注册形态分派', () => {
     expect(lines2.join('\n')).not.toContain('备份')
   })
 
+  it('未给 --harness-root：默认根取自配置激活的适配器 defaultRoot（回归：曾硬走 zcode 默认根）', async () => {
+    const { home, ctx } = await makeHarness()
+    await installPlugin(home)
+    // 插件适配器的默认根用 WORKBUDDY_DIR 指到临时目录——**绝不碰真实 ~/.workbuddy**
+    const pluginRoot = await mkdtemp(join(tmpdir(), 'prism-initmcp-wbroot-'))
+    cleanup.push(pluginRoot)
+    process.env['WORKBUDDY_DIR'] = pluginRoot
+    // 关键：不设 PRISM_HARNESS / PRISM_HARNESS_ROOT，只靠 prism.yaml 声明
+    await writeFile(join(home, 'prism.yaml'), 'harness: workbuddy\n', 'utf-8')
+
+    expect(await runCommand(ctx, ['init', '--home', home, '--yes', '--json'])).toBe(0)
+
+    const { existsSync } = await import('node:fs')
+    // MCP 注册与 Skill 都落在**插件自述的默认根**下（若回落 zcode，两者都会写到 ~/.zcode）
+    expect(existsSync(join(pluginRoot, 'mcp.json'))).toBe(true)
+    expect(existsSync(join(pluginRoot, 'skills', 'prism', 'SKILL.md'))).toBe(true)
+    expect(existsSync(join(pluginRoot, 'cli', 'config.json'))).toBe(false)
+  })
+
   it('prism.yaml 的 harness 键同样生效（回归：harnessPaths 曾只认 env，会静默回落到 zcode）', async () => {
     const { home, root, ctx } = await makeHarness()
     await installPlugin(home)
@@ -187,6 +209,25 @@ describe('prism init：MCP 注册形态分派', () => {
     expect((cfg['mcpServers'] as Record<string, unknown>)['prism']).toBeDefined()
     // 若回落成 zcode，这里会写到 cli/config.json 且出现 mcp 键
     expect(cfg['mcp']).toBeUndefined()
+  })
+
+  it('冲突提示按形态给出真实 JSON 路径（平铺 → mcpServers.prism，不写死 zcode 的 mcp.servers）', async () => {
+    const { home, root, ctx: baseCtx } = await makeHarness()
+    await installPlugin(home)
+    process.env['PRISM_HARNESS'] = 'workbuddy'
+    const lines: string[] = []
+    const ctx: CommandContext = { ...baseCtx, stdout: (l) => lines.push(l) }
+    await writeFile(
+      join(root, 'mcp.json'),
+      `${JSON.stringify({ mcpServers: { prism: { command: 'node', args: ['elsewhere.js'] } } }, null, 2)}\n`,
+      'utf-8',
+    )
+
+    expect(await runCommand(ctx, ['init', '--home', home, '--harness-root', root])).toBe(0)
+    const output = lines.join('\n')
+    expect(output).toContain('MCP 注册冲突')
+    expect(output).toContain('mcpServers.prism')
+    expect(output).not.toContain('mcp.servers.prism')
   })
 
   it('prism harness list 能看到插件适配器（external）', async () => {

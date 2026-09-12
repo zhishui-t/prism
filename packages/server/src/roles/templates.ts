@@ -3,7 +3,7 @@
  *
  * **`prism init` 不再使用它**：初始化只建空 `teams/`，是否建团队、建几个、用什么编制
  * 一律由使用者决定（2026-09-11 定：不替使用者做决定）。需要这套编排时走
- * `prism team init --template core-dev`（模板源在 `@prism/agents` 的 `TEAM_TEMPLATES['core-dev']`）。
+ * `prism team new --template core-dev`（模板源在 `@prism/agents` 的 `TEAM_TEMPLATES['core-dev']`）。
  *
  * 仍保留导出：作为 server 入口可取到的 core-dev 完整样本（测试 fixture 亦依赖）。
  * 成员引用本机角色库角色名，`队长` 为编排角色（校验豁免）。

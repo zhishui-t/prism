@@ -468,16 +468,16 @@ describe('流 B：server 增量（F-B1/B2/B4/D2/E2/E3）', () => {
   })
 
   // ---------------------------------------------------------------- F-C3（MCP 面）
-  it('F-C3 MCP prism_team_create 与 HTTP POST /api/teams 同实现（同校验同落盘）', async () => {
+  it('F-C3 MCP prism_team_new 与 HTTP POST /api/teams 同实现（同校验同落盘）', async () => {
     const writeDir = join(tmp, 'mcp-teams')
     // 缺 teams_dir → 明确报错（不回落默认宿主）
-    const noDir = await callToolError(tools, 'prism_team_create', {
+    const noDir = await callToolError(tools, 'prism_team_new', {
       team_id: 'mcp-team',
       members: [{ role: 'dev-1', count: 1 }],
     })
     expect(noDir).toContain('teams_dir_required')
 
-    const created = (await callTool(tools, 'prism_team_create', {
+    const created = (await callTool(tools, 'prism_team_new', {
       team_id: 'mcp-team',
       name: 'MCP 建队',
       members: [{ role: 'dev-1', count: 1 }],
@@ -486,7 +486,7 @@ describe('流 B：server 增量（F-B1/B2/B4/D2/E2/E3）', () => {
     expect(created.path.replaceAll('\\', '/')).toBe(join(writeDir, 'mcp-team.md').replaceAll('\\', '/'))
 
     // 与 HTTP 同一校验：非法成员同样被拒
-    const bad = await callToolError(tools, 'prism_team_create', {
+    const bad = await callToolError(tools, 'prism_team_new', {
       team_id: 'mcp-team-2',
       members: [{ role: 'ghost', count: 1 }],
       teams_dir: writeDir,
@@ -494,7 +494,7 @@ describe('流 B：server 增量（F-B1/B2/B4/D2/E2/E3）', () => {
     expect(bad).toContain('member_role_unknown')
 
     // 已存在 → 不覆盖
-    const dup = await callToolError(tools, 'prism_team_create', {
+    const dup = await callToolError(tools, 'prism_team_new', {
       team_id: 'mcp-team',
       members: [{ role: 'dev-1', count: 1 }],
       teams_dir: writeDir,

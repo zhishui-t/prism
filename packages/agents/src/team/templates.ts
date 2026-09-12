@@ -1,9 +1,9 @@
 /**
- * `team init` 的内置团队骨架模板（design-v4 §F-C1 / §3.3）。
+ * `team new` 的内置团队骨架模板（design-v4 §F-C1 / §3.3）。
  *
  * 与 `packages/server/src/roles/templates.ts` 的 `CORE_DEV_TEAM_MD` **互为独立资产**：
  * 后者是 server 侧导出的完整样本（`prism init` 自 2026-09-11 起**不再播种团队**），
- * 本文件服务 `prism team init` 的脚手架渲染，**不做合并**
+ * 本文件服务 `prism team new` 的脚手架渲染，**不做合并**
  * （design-v4 §F-C1 明确：避免跨包搬运；agents 不依赖 server）。
  *
  * 占位符在渲染前替换（`{{team_id}}` / `{{name}}` / `{{description}}`），
@@ -125,7 +125,7 @@ rework_limit: 2
 知识检索与注入的优先级：role > project > global（同相关性下）。
 `
 
-/** 模板 id → 骨架（`team init --template`）。 */
+/** 模板 id → 骨架（`team new --template`）。 */
 export const TEAM_TEMPLATES: Record<'minimal' | 'core-dev', string> = {
   minimal: MINIMAL_TEAM_MD,
   'core-dev': CORE_DEV_TEAM_MD,

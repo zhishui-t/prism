@@ -42,7 +42,7 @@ describe('CLI 参数解析与 ~ 展开（design-v3 §5 P14）', () => {
   it('parseArgv 接受 --harness-root/--source/--force/--thought-level', () => {
     const { positionals, values } = parseArgv([
       'role',
-      'init',
+      'new',
       'dev-1',
       '--harness-root',
       '~/x',
@@ -52,7 +52,7 @@ describe('CLI 参数解析与 ~ 展开（design-v3 §5 P14）', () => {
       '--thought-level',
       'max',
     ])
-    expect(positionals).toEqual(['role', 'init', 'dev-1'])
+    expect(positionals).toEqual(['role', 'new', 'dev-1'])
     expect(values['harness-root']).toBe('~/x')
     expect(values['source']).toBe('D:/roles')
     expect(values['thought-level']).toBe('max')

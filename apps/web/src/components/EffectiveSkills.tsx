@@ -51,7 +51,7 @@ export function EffectiveSkills({
   // 选择器选项：全部角色 + 全部团队（读接口，缺省给空列表即可）
   const lists = useAsync(
     () => Promise.all([teamApi.roles(), teamApi.teams()]).then(([roles, teams]) => ({
-      roles: roles.map((r) => r.name).sort((a, b) => a.localeCompare(b)),
+      roles: roles.roles.map((r) => r.name).sort((a, b) => a.localeCompare(b)),
       teams: teams.teams.map((t) => t.team_id).sort((a, b) => a.localeCompare(b)),
     })),
     [],

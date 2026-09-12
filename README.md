@@ -213,11 +213,19 @@ IR 是源、HTML 是派生，两者都可作为 `type: diagram` 条目沉淀。
 
 角色/团队**直接住在宿主目录**（`<harness 根>/agents/`、`<harness 根>/teams/`），源与产物合一——运行时只服务一个 harness，不需要装配复制。
 
+增删改查在三个入口**同名同位**：`new | edit | rm` ↔ MCP `prism_role_new|edit|rm` / `prism_team_new|edit|rm` ↔ HTTP `POST|PATCH|DELETE /api/roles[/:name]`、`/api/teams[/:id]`。
+
 ```bash
-prism role import --from ~/.zcode/agents
-prism role validate dev-1
-prism role render dev-1                # 渲染为当前 harness 原生格式
-prism team init my-team --members dev-1,tester   # 新建团队：脚手架 + 自动校验 + 写守卫
+prism role list
+prism role new dev-1 --description "开发角色：交付可运行增量。" --skills kb,graph
+prism role edit dev-1 --skills kb,graph,arch   # 外科式字段补丁：只改点名字段，正文不重排
+prism role rm dev-1 --yes                      # 硬删；默认宿主目录需 --yes
+prism role validate
+prism role render dev-1                # 渲染为当前 harness 原生格式（target = 真实落点）
+prism team list
+prism team new my-team --members dev-1,tester   # 新建团队：脚手架 + 自动校验 + 写守卫
+prism team edit my-team --members dev-1         # 改名册 → 工作流表就地按名册收窄
+prism team rm my-team --yes                     # 硬删；默认宿主目录需 --yes
 prism team validate core-dev
 prism team activate core-dev           # 返回运行时配置（含每个角色的装配状态）
 ```
@@ -273,8 +281,8 @@ prism
 ├── init / serve / doctor
 ├── embedding  install | status | start | stop | models | use | reindex
 ├── harness    list | show                              宿主适配器（内置 + 运行期插件）
-├── role       list | show | init | import | validate | render | install
-├── team       init | list | show | validate | install | activate
+├── role       list | show | new | edit | rm | validate | render
+├── team       list | show | new | edit | rm | validate | render | activate
 ├── skill      list | install | update | uninstall | validate | effective
 ├── kb         import | sync | search | get | tree | stats | graph | path
 │              | export | remove | restore | conflicts | resolve | history | reindex
@@ -287,7 +295,7 @@ prism
 └── task       list | show | graph | register | report | stats
 ```
 
-**MCP 工具 36 个**：知识库 17 · 代码图谱 8 · 角色/团队/技能 7 · 任务台账 3 · 上下文包 1（`tools/list` 实测）。
+**MCP 工具 43 个**：知识库 17 · 代码图谱 8 · 角色/团队/技能 14 · 任务台账 3 · 上下文包 1（`tools/list` 实测）。
 
 ---
 

@@ -29,7 +29,7 @@ prism init --harness-root ~/.workbuddy --yes
 - ✅ **已核实**：Skill 目录 `~/.workbuddy/skills/<name>/SKILL.md`；MCP 注册 `~/.workbuddy/mcp.json`
   的平铺 `mcpServers`；项目指令 `<repo>/AGENTS.md`。
 - ⚠️ **未核实**：`~/.workbuddy/agents/*.md`（角色文件）。WorkBuddy 没有公开的「角色目录」约定，
-  故 `prism team install` 的产物是**惰性产物**——流程完整、可审计，但不宣称被宿主加载。
+  故 `prism role new` / 团队启用落在该目录的产物是**惰性产物**——流程完整、可审计，但不宣称被宿主加载。
 
 `mcp.configFile` 的 JSON 形态由适配器 `mcp.format` 决定，`prism init` 按形态分派写入：
 
