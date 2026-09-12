@@ -3,7 +3,7 @@ import { join as joinPath } from 'node:path'
 import { parseArgs } from 'node:util'
 
 import { prismHome, type PrismPersistence } from '@prism/core'
-import { ensureHarnessPluginsLoaded, resolveDirsFromHome, type ResolvedDirs } from '@prism/agents'
+import { ensureHarnessPluginsLoaded, resolveDirsFromHome, type DirProvenance, type ResolvedDirs } from '@prism/agents'
 import { applyEmbeddingConfig } from '@prism/server'
 import type { BuildRunner, KnowledgeService } from '@prism/server'
 import { runInit } from './commands/init.js'
@@ -338,6 +338,20 @@ export function harnessRootOverride(values: ArgValues): { root?: string; explici
 export function resolveTargetDirs(ctx: CommandContext, values: ArgValues): ResolvedDirs {
   const { root, explicit } = harnessRootOverride(values)
   return resolveDirsFromHome(ctx.home, { ...(root !== undefined ? { harnessRoot: root } : {}), rootExplicit: explicit })
+}
+
+/**
+ * 落点来源的人读标注（`prism role init` / `skill install` 打印目录时附上）。
+ *
+ * 为什么要单点：这些文案原来各自写 `dirs.source === 'config' ? '（prism.yaml）' : …`，
+ * 而 `source` 的语义是**有没有配置文件**，不是**这个目录由谁定的**——于是
+ * 「有 prism.yaml 但用 --harness-root」会被标成 prism.yaml（实测），反向也会误标。
+ * 现按 {@link DirProvenance} 逐目录如实标注，收敛到本函数一处。
+ */
+export function dirProvenanceLabel(p: DirProvenance): string {
+  if (p === 'config') return 'prism.yaml'
+  if (p === 'flag') return '--harness-root'
+  return '适配器默认'
 }
 
 export type GuardedTarget = 'roles' | 'teams' | 'skills'

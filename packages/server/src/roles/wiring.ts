@@ -203,6 +203,18 @@ export function teamNotFoundMessage(teamsDir: string, teamId: string): string {
   return `团队不存在: ${teamId}（数据源 ${teamsDir}/<id>.md，兼容 <id>/AGENTS.md 双形态）`
 }
 
+/**
+ * 「角色不存在」文案单点（与 {@link teamNotFoundMessage} 同口径）。
+ *
+ * 补此函数的理由（2026-09-12）：团队侧已收敛到单点，但**角色侧没有单点**——
+ * `loadEffectiveSkills` 内联一份（目录式在前），CLI 又各自硬编码**只报目录式**
+ * （`role.ts` / `team.ts` 共四处），同一错误出现三种形态；而 CLI 报的恰好是
+ * 已被降级为**兼容形态**的那种，与「扁平 `<name>.md` 才是落盘形态」相矛盾。
+ */
+export function roleNotFoundMessage(rolesDir: string, roleId: string): string {
+  return `角色不存在: ${roleId}（数据源 ${rolesDir}/<name>.md，兼容 <name>/AGENTS.md 双形态）`
+}
+
 /** 不做 extends/校验的原样加载（extends 链的父级解析用，避免递归校验）。 */
 async function loadTeamRaw(teamsDir: string, teamId: string): Promise<TeamDefinition | null> {
   const candidates = [join(teamsDir, teamId, 'AGENTS.md'), join(teamsDir, `${teamId}.md`)]
@@ -244,10 +256,7 @@ export async function loadEffectiveSkills(input: LoadEffectiveSkillsInput): Prom
 
   const role = await loadRole(input.rolesDir, input.roleId)
   if (role === null) {
-    throw new PrismError(
-      'not_found',
-      `角色不存在: ${input.roleId}（数据源 ${input.rolesDir}/<name>/AGENTS.md | <name>.md）`,
-    )
+    throw new PrismError('not_found', roleNotFoundMessage(input.rolesDir, input.roleId))
   }
 
   const teamId = input.teamId !== undefined && input.teamId !== '' ? input.teamId : undefined

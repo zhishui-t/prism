@@ -39,6 +39,17 @@ export interface PrismDirConfig {
 export type PrismDirKey = 'roles_dir' | 'teams_dir' | 'skills_dir'
 
 /** 解析后的目录集。 */
+/**
+ * 单个目录的**来源**：这个目录是「谁定下来的」。
+ * - `'config'`：由 `<PRISM_HOME>/prism.yaml` 的显式键定下（`teams` 含「跟随已配置的 roles_dir」）
+ * - `'flag'`：由调用方显式指定的根（CLI `--harness-root`）推导而来
+ * - `'default'`：回落到激活适配器的默认根
+ *
+ * 逐目录而非单值：同一个调用里 `roles_dir` 可能来自 prism.yaml、`skills_dir` 来自 flag，
+ * 单值字段**无法**如实表达（旧字段 `source` 因此会说谎——它实际表示「有没有配置文件」）。
+ */
+export type DirProvenance = 'config' | 'flag' | 'default'
+
 export interface ResolvedDirs {
   /** 角色受管目录（由适配器 `agent.globalDir` 推导；如 ZCode 的 <root>/agents）。 */
   rolesDir: string
@@ -46,8 +57,15 @@ export interface ResolvedDirs {
   teamsDir: string
   /** Skill 受管目录（适配器 `skill.nativeDir`；不支持则 <root>/skills 兜底）。 */
   skillsDir: string
-  /** 来源：'config' = prism.yaml 存在（键缺省仍回落默认）；'default' = 无配置文件。 */
-  source: 'config' | 'default'
+  /**
+   * 逐目录来源（供人读的落点标注用）。口径与 {@link ResolvedDirs.guard} **严格互补**：
+   * `provenance[x] === 'default'` ⟺ `guard[x] === true`。
+   */
+  provenance: {
+    roles: DirProvenance
+    teams: DirProvenance
+    skills: DirProvenance
+  }
   /** 运行时激活的宿主适配器 id（prism.yaml `harness` 键；缺省 zcode）。 */
   harness: string
   /** 作为默认推导基准的 harness 根目录（如 ZCode 的 ~/.zcode）。 */
@@ -137,13 +155,23 @@ export function resolveDirs(
     // 适配器未约定 teamDir 时回落到 roles_dir 同级 teams/（避开 agent 扫描路径，B7）
     teamsDir: layout.teamsDir ?? join(dirname(rolesDir), 'teams'),
     skillsDir: layout.skillsDir ?? join(harnessRoot, 'skills'),
-    source: config !== null && config !== undefined ? 'config' : 'default',
+    provenance: { roles: 'default', teams: 'default', skills: 'default' },
     harness: harnessId,
     harnessRoot,
     guard: { roles: true, teams: true, skills: true },
   }
   const has = (key: keyof PrismDirConfig): boolean =>
     config !== null && config !== undefined && config[key] !== undefined && config[key] !== ''
+  // 逐目录来源：yaml 显式键 > 显式根（--harness-root）> 适配器默认。
+  // 与下方 guard 判定**同源**（guard=true 恰好等价于 provenance==='default'），避免两处口径漂移。
+  const provenanceOf = (fromConfig: boolean): DirProvenance =>
+    fromConfig ? 'config' : explicit ? 'flag' : 'default'
+  resolved.provenance = {
+    roles: provenanceOf(has('roles_dir')),
+    // teams_dir 未配置但 roles_dir 已配置 → 跟随（与 guard.teams / 落点联动口径一致）
+    teams: provenanceOf(has('teams_dir') || has('roles_dir')),
+    skills: provenanceOf(has('skills_dir')),
+  }
   // 显式 harnessRoot → 全部放行；否则逐键按「prism.yaml 是否配置」判定（teams 缺省跟随 roles_dir 落点）
   if (!explicit) {
     resolved.guard.roles = !has('roles_dir')

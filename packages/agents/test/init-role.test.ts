@@ -4,7 +4,7 @@ import { join } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
-import { InstallError, initRole } from '../src/install.js'
+import { InitRoleError, initRole } from '../src/init-role.js'
 import { parseRoleMarkdown } from '../src/role/parse.js'
 import { parseTeamMarkdown } from '../src/team/parse.js'
 import { activateTeam } from '../src/team/activate.js'
@@ -117,7 +117,7 @@ describe('initRole（模板初始化）', () => {
     expect(role.knowledge.layers).toEqual(['global', 'project'])
   })
 
-  it('已存在 → skipped 不覆盖；--force 覆盖；非 kebab 名 → InstallError', async () => {
+  it('已存在 → skipped 不覆盖；--force 覆盖；非 kebab 名 → InitRoleError', async () => {
     const rolesDir = makeTmp()
     await initRole({ name: 'dev-x', rolesDir })
     const path = join(rolesDir, 'dev-x.md')
@@ -131,6 +131,6 @@ describe('initRole（模板初始化）', () => {
     expect(forced.written).toEqual([path])
     expect(readFileSync(path, 'utf8')).toContain('v2')
 
-    await expect(initRole({ name: 'Dev X', rolesDir })).rejects.toThrow(InstallError)
+    await expect(initRole({ name: 'Dev X', rolesDir })).rejects.toThrow(InitRoleError)
   })
 })

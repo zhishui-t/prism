@@ -7,6 +7,11 @@
  * 随 `prism team install` / `prism role import` / `prism role install` 三个命令一并移除的函数：
  * `installRoles`、`installTeamDefinitions`、`migrateTeams`（及其 marker 冲突策略辅助）。
  *
+ * **2026-09-12 命名收口**：文件 `install.ts` → `init-role.ts`、类 `InstallError` → `InitRoleError`、
+ * 错误码 `install_failed` → `role_init_failed`、返回类型 `InstallResult` → `RoleInitResult`，
+ * 并删除已成死类型的 `InstallOptions`（唯一真实使用者是被删的 `installRoles`）。
+ * 理由：命令早已不存在，源码却仍顶着「装配」词汇——命名与产品语义反向漂移。
+ *
  * 现仅保留 `role init`：从模板生成一个合法的角色骨架文件到 `roles_dir`。
  * 安全：目标目录由参数传入，**绝不硬编码宿主根**；测试必须用临时目录。
  */
@@ -15,16 +20,16 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { ROLE_TEMPLATE_NAME_PLACEHOLDER, ROLE_TEMPLATE_MD } from './templates.js'
-import type { InstallResult } from './types.js'
+import type { RoleInitResult } from './types.js'
 
 /** 初始化失败（目标不可写/创建失败等）。 */
-export class InstallError extends Error {
-  readonly code = 'install_failed'
+export class InitRoleError extends Error {
+  readonly code = 'role_init_failed'
   readonly path?: string
 
   constructor(message: string, path?: string) {
-    super(`install_failed: ${message}${path ? ` (${path})` : ''}`)
-    this.name = 'InstallError'
+    super(`role_init_failed: ${message}${path ? ` (${path})` : ''}`)
+    this.name = 'InitRoleError'
     this.path = path
   }
 }
@@ -44,12 +49,12 @@ export interface InitRoleOptions {
 
 /**
  * `role init`：从模板新建角色文件到 roles_dir（角色直接住宿主目录模型）。
- * 已存在 → skipped（除非 force）；name 非 kebab-case → InstallError。
+ * 已存在 → skipped（除非 force）；name 非 kebab-case → InitRoleError。
  */
-export async function initRole(opts: InitRoleOptions): Promise<InstallResult> {
+export async function initRole(opts: InitRoleOptions): Promise<RoleInitResult> {
   const name = opts.name.trim()
   if (!KEBAB_CASE_RE.test(name)) {
-    throw new InstallError(`角色名必须是 kebab-case：${opts.name}（用于文件名 ${name}.md）`)
+    throw new InitRoleError(`角色名必须是 kebab-case：${opts.name}（用于文件名 ${name}.md）`)
   }
   ensureTargetDir(opts.rolesDir)
   const path = join(opts.rolesDir, `${name}.md`)
@@ -66,10 +71,10 @@ function ensureTargetDir(dir: string): void {
   try {
     mkdirSync(dir, { recursive: true })
   } catch (err) {
-    throw new InstallError(`目标目录创建失败（不可写或被占用）：${err instanceof Error ? err.message : String(err)}`, dir)
+    throw new InitRoleError(`目标目录创建失败（不可写或被占用）：${err instanceof Error ? err.message : String(err)}`, dir)
   }
   if (!existsSync(dir)) {
-    throw new InstallError('目标目录创建失败：路径不可用', dir)
+    throw new InitRoleError('目标目录创建失败：路径不可用', dir)
   }
 }
 
@@ -77,6 +82,6 @@ function writeFile(path: string, content: string): void {
   try {
     writeFileSync(path, content, 'utf8')
   } catch (err) {
-    throw new InstallError(`目标文件不可写：${err instanceof Error ? err.message : String(err)}`, path)
+    throw new InitRoleError(`目标文件不可写：${err instanceof Error ? err.message : String(err)}`, path)
   }
 }

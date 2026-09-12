@@ -183,8 +183,7 @@ export type {
   ValidationIssue,
   ValidationResult,
   TeamActivation,
-  InstallResult,
-  InstallOptions,
+  RoleInitResult,
   EffectiveSkill,
   EffectiveSkillSet,
   TeamInitOptions,
@@ -242,6 +241,8 @@ export {
   harnessPaths,
   defaultHarnessRoot,
   CORE_DEV_TEAM_MD,
+  teamNotFoundMessage,
+  roleNotFoundMessage,
 } from './roles/index.js'
 
 // AGENTS.md 注入块（knowledge-injection.md §5 模式 C）

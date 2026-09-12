@@ -8,7 +8,7 @@ import { PRISM_MARKER_PREFIX } from '@prism/skills'
 import { loadEffectiveSkills } from '@prism/server'
 
 import type { ArgValues, CommandContext } from '../argv.js'
-import { guardWriteTarget, resolveTargetDirs } from '../argv.js'
+import { dirProvenanceLabel, guardWriteTarget, resolveTargetDirs } from '../argv.js'
 
 /**
  * `prism skill list/install`（design-v3 §3.5 F10；本期裁剪 update/uninstall/uninit）。
@@ -36,7 +36,7 @@ export async function runSkill(ctx: CommandContext, args: string[], values: ArgV
         ctx.stdout(`${skill.name}  builtin  desc=${skill.description.length}字符  ${errors === 0 ? 'ok' : `${errors}E`}`)
         ctx.stdout(`  ${skill.description}`)
       }
-      ctx.stdout(`共 ${skills.length} 个内置 Skill（安装目标 ${skillsDir}/<name>/SKILL.md${dirs.source === 'config' ? '，prism.yaml' : ''}）`)
+      ctx.stdout(`共 ${skills.length} 个内置 Skill（安装目标 ${skillsDir}/<name>/SKILL.md，来源：${dirProvenanceLabel(dirs.provenance.skills)}）`)
       return 0
     }
 

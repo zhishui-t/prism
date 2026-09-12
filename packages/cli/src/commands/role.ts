@@ -9,10 +9,11 @@ import {
   loadTeams,
   renderZcodeRole,
   harnessPaths,
+  roleNotFoundMessage,
 } from '@prism/server'
 
 import type { ArgValues, CommandContext } from '../argv.js'
-import { expandHome, guardWriteTarget, resolveTargetDirs } from '../argv.js'
+import { dirProvenanceLabel, expandHome, guardWriteTarget, resolveTargetDirs } from '../argv.js'
 
 /**
  * `prism role list/show/init/validate/render`（design-v3 §3.5 F10）。
@@ -59,7 +60,7 @@ export async function runRole(ctx: CommandContext, args: string[], values: ArgVa
       }
       const role = await loadRole(rolesDir, name, { knownSkills: await installedSkillNames(harnessRoot, ctx.home) })
       if (role === null) {
-        ctx.stderr(`错误 [not_found] 角色不存在: ${name}（数据源 ${rolesDir}/<name>/AGENTS.md）`)
+        ctx.stderr(`错误 [not_found] ${roleNotFoundMessage(rolesDir, name)}`)
         return 1
       }
       if (ctx.json) {
@@ -136,7 +137,7 @@ export async function runRole(ctx: CommandContext, args: string[], values: ArgVa
       }
       const role = await loadRole(rolesDir, name)
       if (role === null) {
-        ctx.stderr(`错误 [not_found] 角色不存在: ${name}（数据源 ${rolesDir}/<name>/AGENTS.md）`)
+        ctx.stderr(`错误 [not_found] ${roleNotFoundMessage(rolesDir, name)}`)
         return 1
       }
       const env: { model?: string; thoughtLevel?: string } = {}
@@ -160,7 +161,7 @@ export async function runRole(ctx: CommandContext, args: string[], values: ArgVa
       // B6 写守卫：目标为默认宿主目录（未经显式指定）时需 --yes 确认
       if (!guardWriteTarget(ctx, values, dirs, 'roles', 1)) return 1
       if (!ctx.json) {
-        ctx.stdout(`目标 roles_dir: ${dirs.rolesDir}${dirs.source === 'config' ? '（prism.yaml）' : '（适配器默认）'}`)
+        ctx.stdout(`目标 roles_dir: ${dirs.rolesDir}（来源：${dirProvenanceLabel(dirs.provenance.roles)}）`)
       }
       try {
         const result = await initRole({ name, rolesDir: dirs.rolesDir, force: values.force })

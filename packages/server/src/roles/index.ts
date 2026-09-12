@@ -20,8 +20,7 @@ export type {
   ValidationIssue,
   ValidationResult,
   TeamActivation,
-  InstallOptions,
-  InstallResult,
+  RoleInitResult,
   EffectiveSkill,
   EffectiveSkillSet,
   TeamInitOptions,
@@ -116,6 +115,7 @@ export {
   defaultHarnessRoot,
   loadEffectiveSkills,
   teamNotFoundMessage,
+  roleNotFoundMessage,
   type HarnessPaths,
   type LoadEffectiveSkillsInput,
 } from './wiring.js'

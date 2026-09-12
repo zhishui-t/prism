@@ -149,20 +149,13 @@ export interface TeamActivation {
   rework_limit: number
 }
 
-/** 角色装配选项（目标目录由参数传入，**绝不硬编码宿主根**）。 */
-export interface InstallOptions {
-  targetDir: string
-  roles: RoleDefinition[]
-  env?: {
-    model?: string
-    thoughtLevel?: string
-  }
-  force?: boolean
-  /** 渲染用适配器；缺省取激活适配器（测试可注入，避免硬编码 ZCode 格式）。 */
-  adapter?: import('@prism/core').HarnessAdapter<RoleDefinition, TeamDefinition>
-}
-
-export interface InstallResult {
+/**
+ * `role init` 的写入结果（`written` 为空 / `skipped` 非空 = 目标已存在且未 `--force`）。
+ *
+ * 2026-09-12 由 `InstallResult` 改名：旧的 `InstallOptions`（`targetDir` + `roles` + `force` +
+ * 渲染适配器）已作为**死类型**删除——它唯一真实使用者是随「装配语义」删除的 `installRoles`。
+ */
+export interface RoleInitResult {
   written: string[]
   skipped: {
     path: string

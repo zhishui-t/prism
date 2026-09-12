@@ -10,9 +10,10 @@ import {
   loadTeams,
   parseTeamMarkdown,
   ProjectRegistry,
+  teamNotFoundMessage,
   validateTeam,
 } from '@prism/server'
-import type { GraphStatusDetail, TeamDefinition, TeamMember } from '@prism/server'
+import type { GraphStatusDetail, TeamDefinition, TeamMember, ValidationIssue } from '@prism/server'
 
 import type { ArgValues, CommandContext } from '../argv.js'
 import { guardWriteTarget, resolveTargetDirs } from '../argv.js'
@@ -67,7 +68,7 @@ export async function runTeam(ctx: CommandContext, args: string[], values: ArgVa
       }
       const team = await loadTeam(teamsDir, id, { rolesDir })
       if (team === null) {
-        ctx.stderr(`错误 [not_found] 团队不存在: ${id}（数据源 ${teamsDir}/<id>/AGENTS.md）`)
+        ctx.stderr(`错误 [not_found] ${teamNotFoundMessage(teamsDir, id)}`)
         return 1
       }
       if (ctx.json) {
@@ -100,7 +101,7 @@ export async function runTeam(ctx: CommandContext, args: string[], values: ArgVa
       }
       const team = await loadTeam(teamsDir, id, { rolesDir })
       if (team === null) {
-        ctx.stderr(`错误 [not_found] 团队不存在: ${id}（数据源 ${teamsDir}/<id>/AGENTS.md）`)
+        ctx.stderr(`错误 [not_found] ${teamNotFoundMessage(teamsDir, id)}`)
         return 1
       }
       const result = validateTeam(team, { roles: await loadRoles(rolesDir) })
@@ -271,10 +272,20 @@ async function teamInit(
     ...(from !== undefined ? { from } : {}),
     ...(template !== undefined ? { template: template as 'minimal' | 'core-dev' } : {}),
   })
-  // 渲染诊断（warning 照打，便于看见「工作流按名册收窄」之类动作）
-  for (const issue of scaffold.issues) {
-    ctx.stdout(`${issue.level === 'error' ? 'ERROR' : 'WARN'} [${issue.code}] ${issue.message}`)
+  // 诊断打印：**去重**（同一行只打一次）。
+  // 原因：渲染侧（renderTeamScaffold）与落盘前校验侧（parseTeamMarkdown + validateTeam）
+  // 会各跑一轮重叠的检查，`unused_member` 这类告警**逐字重复两行**，
+  // 看起来像两个不同的悬空成员——2026-09-12 实测（`团队: demo-role×1`）。
+  const printed = new Set<string>()
+  const printIssue = (issue: ValidationIssue): void => {
+    const line = `${issue.level === 'error' ? 'ERROR' : 'WARN'} [${issue.code}] ${issue.message}`
+    if (printed.has(line)) return
+    printed.add(line)
+    ctx.stdout(line)
   }
+
+  // 渲染诊断（warning 照打，便于看见「工作流按名册收窄」之类动作）
+  for (const issue of scaffold.issues) printIssue(issue)
   const hardErrors = scaffold.issues.filter((i) => i.level === 'error')
   if (hardErrors.length > 0) {
     ctx.stderr(`错误 [${hardErrors[0]!.code}] 脚手架渲染失败，未落盘`)
@@ -291,9 +302,7 @@ async function teamInit(
   }
   const library = await loadRoles(rolesDir)
   const validation = validateTeam(definition, { roles: library })
-  for (const issue of validation.issues) {
-    ctx.stdout(`${issue.level === 'error' ? 'ERROR' : 'WARN'} [${issue.code}] ${issue.message}`)
-  }
+  for (const issue of validation.issues) printIssue(issue)
   if (!validation.ok) {
     ctx.stderr(
       `错误 [team_invalid] 团队 ${id} 校验存在 error，未落盘（成员角色需先在 roles_dir：prism role init <name>）`,

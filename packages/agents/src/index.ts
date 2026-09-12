@@ -20,8 +20,7 @@ export type {
   RoleRegistry,
   TeamRegistry,
   TeamActivation,
-  InstallOptions,
-  InstallResult,
+  RoleInitResult,
 } from './types.js'
 
 // frontmatter（独立 YAML 子集，§3.1.1）
@@ -109,8 +108,8 @@ export { createRoleRegistry, createTeamRegistry } from './registry.js'
 export type { ImportFailures } from './registry.js'
 
 // 角色模板初始化（「装配」语义已随「角色直接住宿主目录」移除：无 installRoles / installTeamDefinitions / migrateTeams）
-export { initRole, InstallError } from './install.js'
-export type { InitRoleOptions } from './install.js'
+export { initRole, InitRoleError } from './init-role.js'
+export type { InitRoleOptions } from './init-role.js'
 
 // 宿主适配器注册表（deployment-model §1：编译期多适配器，运行期只激活一个）
 // **新增 harness 只改 `harness-manifest.ts`（加一行），本文件无需改动**——
@@ -168,7 +167,7 @@ export {
   resolveDirsFromHome,
   expandTildePath,
 } from './dirs.js'
-export type { PrismDirConfig, PrismDirKey, ResolvedDirs } from './dirs.js'
+export type { PrismDirConfig, PrismDirKey, ResolvedDirs, DirProvenance } from './dirs.js'
 
 // 内置模板
 export { ROLE_TEMPLATE_MD, ROLE_TEMPLATE_NAME_PLACEHOLDER } from './templates.js'
