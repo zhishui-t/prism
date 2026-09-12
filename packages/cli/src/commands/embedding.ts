@@ -24,6 +24,7 @@ import {
   embedText,
   embeddingInstalled,
   ensureEmbeddingServer,
+  gpuBackendLabel,
   preferredBackend,
   resolveTier,
   stopEmbeddingServer,
@@ -82,7 +83,7 @@ function models(ctx: CommandContext): number {
   })
   if (ctx.json) ctx.stdout(JSON.stringify({ ok: true, value: { backend, current, models: rows } }))
   else {
-    ctx.stdout(`后端: ${backend === 'gpu' ? 'GPU（Vulkan）' : 'CPU'}    当前档位: ${current}（${EMBEDDING_MODELS[current].label}）`)
+    ctx.stdout(`后端: ${backend === 'gpu' ? `GPU（${gpuBackendLabel() ?? '加速'}）` : 'CPU'}    当前档位: ${current}（${EMBEDDING_MODELS[current].label}）`)
     for (const r of rows) {
       const mark = r.current ? '▶' : ' '
       const state = r.installed ? '' : '  [未安装]'

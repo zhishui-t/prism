@@ -91,12 +91,21 @@ prism embedding install              # 一条命令完成：编译 + 按算力�
 node scripts/setup-embedding.mjs     # 选项：--tier small|default|large / --gpu / --no-gpu / --prebuilt / --check
 ```
 
-- CPU 二进制：本地 MinGW + CMake 编译（`GGML_NATIVE`/关 OpenMP/关 curl 提速）；
-  找不到工具链时回落官方预编译包。
-- GPU 二进制：官方 **Vulkan** 预编译包（约 28MB，NVIDIA/AMD/Intel 通用，无需 CUDA SDK），
-  运行时 `-ngl 99` 全层卸载。
-- 模型：按算力分档下载（有显卡 large+small，无显卡只 small）。
+- 主二进制（落 `3rd/llama-runtime/bin/`）：
+  - **Windows**：本地 MinGW + CMake 源码编译（`GGML_NATIVE`/关 OpenMP/关 curl 提速），
+    找不到工具链时回落官方预编译包；
+  - **macOS / Linux**：默认直接用**官方预编译包**（无需本机工具链）；想本地编译加 `--source`。
+- 加速后端（按平台，判据见 `doc/requirements/cross-platform.md` §2）：
+  - Windows / Linux：官方 **Vulkan** 预编译包（约 28MB，NVIDIA/AMD/Intel 通用，无需 CUDA SDK）
+    → `bin-vulkan/`，运行时 `-ngl 99` 全层卸载；
+  - **macOS arm64**：Metal 随包分发（`libggml-metal.*.dylib`），无需额外下载；
+  - ⚠ **macOS x64（Intel）**：官方预编译包**不含 Metal**（上游 `-DGGML_METAL=OFF`）→ 走 CPU + BLAS。
+    要 Metal 只能 `--source` 源码编译。
+- 模型：按算力分档下载（探测到加速器才装 large+small，否则只装 small）。
+  **Intel Mac 不会被判为「有加速器」**（硬件支持 Metal，但预编译包没有）。
 - 下载源：release 走镜像（`ghfast.top` 等，github.com 直连常阻断）；模型走 `hf-mirror.com`。
+- 归档解压统一走 `scripts/archive.mjs`：摊平上游顶层目录、**保留 dylib 版本链软链**、
+  补 POSIX 可执行位（漏任一项都会「装了却起不来」）。
 
 ## anydoc（v0.2.4，Rust 原生，下载预编译）
 

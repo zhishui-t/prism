@@ -16,7 +16,7 @@
  */
 
 import { spawn } from 'node:child_process'
-import { existsSync, readFileSync, writeFileSync, rmSync, statSync } from 'node:fs'
+import { appendFileSync, closeSync, existsSync, openSync, readdirSync, readFileSync, writeFileSync, rmSync, statSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 
@@ -34,22 +34,214 @@ import {
 /** 源码是 submodule（3rd/llama.cpp）；构建产物与模型在 Prism 自有的 3rd/llama-runtime/。 */
 /** 发行根经 `repoRoot` 向上查找（兼容 packages/ 与 node_modules/@prism/ 两种布局）。 */
 const RUNTIME_DIR = join(repoRoot(import.meta.url, 8) ?? fileURLToPath(new URL('../../../../', import.meta.url)), '3rd', 'llama-runtime')
-const CPU_SERVER_EXE = join(RUNTIME_DIR, 'bin', 'llama-server.exe')
-/** GPU（Vulkan 预编译）二进制；有则优先（CPU 推理慢约 170 倍）。 */
-const GPU_SERVER_EXE = join(RUNTIME_DIR, 'bin-vulkan', 'llama-server.exe')
 const MODELS_DIR = join(RUNTIME_DIR, 'models')
 const PID_FILE = join(RUNTIME_DIR, 'llama-server.pid')
+
+/** llama-server 子进程输出 + 启动记录的落点（排障用）。 */
+const SERVER_LOG = join(RUNTIME_DIR, 'llama-server.log')
+/** 日志上限：超过就截断（只保留最近一次启动的记录，避免长期累积）。 */
+const SERVER_LOG_MAX = 2 * 1024 * 1024
+
+/** 追加一行启动记录（写不了就静默——日志失败不该影响检索）。 */
+function appendServerLog(message: string): void {
+  try {
+    appendFileSync(SERVER_LOG, `[${new Date().toISOString()}] ${message}\n`, 'utf-8')
+  } catch {
+    // 只读文件系统等场合忽略
+  }
+}
+
+/**
+ * 子进程 stdio：**把 llama-server 的输出落盘**，不再 `'ignore'`。
+ *
+ * 为什么必须留：曾经丢弃子进程全部输出，于是「启动超时」在用户侧只表现为
+ * 「模型未就绪（档位模型缺失？跑 prism embedding install）」——**连日志都没有**，
+ * 排查只能靠猜（2026-09-12 实测：冷启动两次各卡满 60s 后失败、第三次秒成，
+ * 而失败那两次的子进程为何没起来，因输出被丢弃已无从复原）。
+ * 落盘失败时退回 `'ignore'`。
+ */
+function openServerLog(): { stdio: 'ignore' | ['ignore', number, number]; close: () => void } {
+  try {
+    try {
+      if (statSync(SERVER_LOG).size > SERVER_LOG_MAX) writeFileSync(SERVER_LOG, '', 'utf-8')
+    } catch {
+      // 文件不存在等 → 不用截断
+    }
+    const fd = openSync(SERVER_LOG, 'a')
+    return {
+      stdio: ['ignore', fd, fd],
+      close: () => {
+        try {
+          closeSync(fd)
+        } catch {
+          // 已关闭
+        }
+      },
+    }
+  } catch {
+    return { stdio: 'ignore', close: () => {} }
+  }
+}
+
+/**
+ * llama.cpp 产物名（**跨平台**，2026-09-12 双平台支持）：Windows 带 `.exe`，macOS / Linux 无扩展名。
+ *
+ * 早先这里与 GPU 目录都写死 `llama-server.exe` + `bin-vulkan`，于是 macOS 上
+ * `embeddingInstalled()` **恒为 false**——向量检索静默降级成纯 BM25，不报错、不阻塞，
+ * 属于最难发现的一类跨平台缺陷（`prism doctor` 也只会说「未安装（可选）」）。
+ */
+const SERVER_BIN = process.platform === 'win32' ? 'llama-server.exe' : 'llama-server'
+
+const IS_WINDOWS = process.platform === 'win32'
+const IS_MACOS = process.platform === 'darwin'
+
+/**
+ * 加速后端候选目录（按平台；存在即用，优先于 CPU——CPU 推理慢一个数量级）：
+ * - Windows：`bin-vulkan`（官方预编译 Vulkan 包，NVIDIA/AMD/Intel 通用，免 CUDA SDK）
+ * - macOS：`bin`（Metal 若编进去了就在这个目录，不另立子目录）
+ * - Linux：`bin-cuda`（装了 CUDA SDK）→ `bin-vulkan`
+ *
+ * ⚠ 「macOS → bin」只说**去哪个目录找**，不说明那里一定带 Metal：见 `accelBackend()`。
+ */
+const GPU_DIRS = IS_WINDOWS ? ['bin-vulkan'] : IS_MACOS ? ['bin'] : ['bin-cuda', 'bin-vulkan']
+
+const CPU_SERVER_EXE = join(RUNTIME_DIR, 'bin', SERVER_BIN)
+
+/** 当前平台的 GPU 二进制候选路径（按优先级；无论是否已安装）。 */
+export function gpuServerCandidates(): string[] {
+  return GPU_DIRS.map((dir) => join(RUNTIME_DIR, dir, SERVER_BIN))
+}
+
+/** 实际已安装的 GPU 二进制路径（都没装 → null）。 */
+function gpuServerExe(): string | null {
+  return gpuServerCandidates().find((candidate) => existsSync(candidate)) ?? null
+}
+
+/** 加速后端名。 */
+export type AccelBackend = 'metal' | 'cuda' | 'vulkan'
+
+/**
+ * macOS 上 Metal 是否真在**已安装的运行时**里。
+ *
+ * **判定依据必须是「装了什么」，不能是「是什么平台」**：上游 `release.yml`（tag b10883）
+ * 对 macOS 两个构建的开关本就不同——
+ *
+ *   | 构建                  | defines                              | 包内是否有 Metal |
+ *   | :-------------------- | :----------------------------------- | :--------------- |
+ *   | arm64（macos-26）     | `-DGGML_METAL_EMBED_LIBRARY=ON`      | 有 `libggml-metal.*.dylib` |
+ *   | x64（macos-15-intel） | `-DGGML_METAL=OFF`                   | **没有**         |
+ *
+ * 上游 x64 关 Metal 的原文注释：
+ * `Metal is disabled on x64 due to intermittent failures with Github runners not having a GPU`。
+ *
+ * 2026-09-12 实测（Intel Mac / x64 / b10883）：x64 包内无 `libggml-metal*`，全部二进制
+ * 不含 `ggml_metal` 符号，`llama-server` 只链 `CoreFoundation` + `libggml-blas`；而 arm64
+ * 包内有 `libggml-metal.0.23.0.dylib`（1795 个 metal 符号）。
+ * 注意**机器硬件**照样报 `Metal Support: Metal 3`（`system_profiler`），所以任何「看硬件」
+ * 或「看平台」的判定都会得到假阳性——Intel Mac 上会谎报 Metal。
+ *
+ * 按 dylib 是否存在判定，对三种情形同时成立：预编译 arm64（有）、预编译 x64（无）、
+ * 源码编译（跟随 cmake 的 `-DGGML_METAL`）。探测不到的场合用 `PRISM_EMBEDDING_BACKEND`
+ * 显式声明。
+ */
+function metalDylibPresent(): boolean {
+  try {
+    return readdirSync(join(RUNTIME_DIR, 'bin')).some((f) => /^libggml-metal.*\.dylib$/.test(f))
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 加速后端探测输入（抽成参数，使判定表可在**任一平台**上被测全，见
+ * `packages/server/test/embedding-platform.test.ts`）。与
+ * `graphify.ts::resolvePythonCommand(env)` 同一手法：把决策从环境里取出来做纯函数。
+ */
+export interface AccelProbe {
+  platform: NodeJS.Platform
+  /** `bin/` 下是否存在 `libggml-metal*.dylib`（macOS 的 Metal 后端随包分发） */
+  hasMetalDylib: boolean
+  /** `bin-vulkan/llama-server` 是否存在 */
+  hasVulkanBin: boolean
+  /** `bin-cuda/llama-server` 是否存在 */
+  hasCudaBin: boolean
+}
+
+/**
+ * 加速后端判定表（**纯函数**：同一输入恒得同一结果）。
+ *
+ * macOS 分支只看 `hasMetalDylib`、**不看是不是 darwin**——上游 x64 预编译包显式
+ * `-DGGML_METAL=OFF`，光看平台会把 Intel Mac 判成 Metal（见 `metalDylibPresent`）。
+ */
+export function resolveAccelBackend(probe: AccelProbe): AccelBackend | null {
+  if (probe.platform === 'win32') return probe.hasVulkanBin ? 'vulkan' : null
+  if (probe.platform === 'darwin') return probe.hasMetalDylib ? 'metal' : null
+  if (probe.hasCudaBin) return 'cuda'
+  return probe.hasVulkanBin ? 'vulkan' : null
+}
+
+/**
+ * 本机实际可用的加速后端（无 → null）。**全仓唯一的加速后端判定点**。
+ *
+ * `PRISM_EMBEDDING_BACKEND` 可显式覆盖：`metal` / `cuda` / `vulkan` 强制指定，
+ * `cpu`（亦认 `none` / `off`）强制走 CPU——用于「Intel Mac 上源码编译开了 Metal」
+ * 这类自动探测覆盖不到的场合。
+ */
+export function accelBackend(): AccelBackend | null {
+  const override = (process.env['PRISM_EMBEDDING_BACKEND'] ?? '').trim().toLowerCase()
+  if (override === 'cpu' || override === 'none' || override === 'off') return null
+  if (override === 'metal' || override === 'cuda' || override === 'vulkan') return override
+
+  return resolveAccelBackend({
+    platform: process.platform,
+    hasMetalDylib: IS_MACOS ? metalDylibPresent() : false,
+    hasVulkanBin: existsSync(join(RUNTIME_DIR, 'bin-vulkan', SERVER_BIN)),
+    hasCudaBin: existsSync(join(RUNTIME_DIR, 'bin-cuda', SERVER_BIN)),
+  })
+}
 
 /** 推理后端。 */
 export type EmbeddingBackend = 'gpu' | 'cpu'
 
-/** 优先后端：装了 GPU 包就用 GPU，否则 CPU。 */
+/** 优先后端：有可用加速后端就走 GPU，否则 CPU。 */
 export function preferredBackend(): EmbeddingBackend {
-  return existsSync(GPU_SERVER_EXE) ? 'gpu' : 'cpu'
+  return accelBackend() !== null ? 'gpu' : 'cpu'
+}
+
+const ACCEL_LABELS: Record<AccelBackend, string> = { metal: 'Metal', cuda: 'CUDA', vulkan: 'Vulkan' }
+
+/**
+ * 加速后端展示名（`prism doctor` / `prism embedding` 用）。
+ *
+ * 返回**实际探测到的**后端；未探测到加速后端时返回 `null`（调用方据此走 CPU 文案）。
+ * 早先这里在 macOS 上恒返回 `'Metal'`，Intel Mac 上因此谎报后端。
+ */
+export function gpuBackendLabel(): string | null {
+  const accel = accelBackend()
+  return accel === null ? null : ACCEL_LABELS[accel]
+}
+
+/**
+ * 走 CPU 时给用户的补充说明（`prism doctor` 的 embedding 行）。
+ *
+ * 平台差异在此**一次性**判定，CLI 侧不再自己判平台（见
+ * `doc/requirements/cross-platform.md` §3「唯一真相源」）。Intel Mac 上「装个 GPU 包」
+ * 无从装起——上游 x64 预编译包就没编 Metal（见 `metalDylibPresent`），只能换 Apple
+ * Silicon 机器，或源码编译（`pnpm run 3rd:setup -- --source`）。
+ */
+export function cpuBackendHint(): string {
+  if (IS_MACOS && process.arch !== 'arm64') {
+    return '（上游 x64 预编译包不含 Metal；Intel Mac 想要加速需源码编译）'
+  }
+  return '（较慢，建议有显卡时装 GPU 包）'
 }
 
 function serverExeFor(backend: EmbeddingBackend): string {
-  return backend === 'gpu' ? GPU_SERVER_EXE : CPU_SERVER_EXE
+  if (backend === 'gpu') {
+    const exe = gpuServerExe()
+    if (exe !== null) return exe
+  }
+  return CPU_SERVER_EXE
 }
 
 function modelPathOf(def: EmbeddingModelDef): string {
@@ -111,7 +303,7 @@ export const EMBEDDING_CTX = EMBEDDING_MODELS.default.ctx
 /** 安装是否就绪（二进制 + **任一档**模型在）。`PRISM_EMBEDDING=off` 时一律视为未就绪（降级纯 BM25）。 */
 export function embeddingInstalled(): boolean {
   if (embeddingDisabled()) return false
-  if (!existsSync(GPU_SERVER_EXE) && !existsSync(CPU_SERVER_EXE)) return false
+  if (gpuServerExe() === null && !existsSync(CPU_SERVER_EXE)) return false
   return EMBEDDING_TIERS.some((t) => existsSync(modelPathOf(EMBEDDING_MODELS[t])))
 }
 
@@ -247,15 +439,26 @@ export function ensureEmbeddingServer(): Promise<boolean> {
           ...(def.pooling !== undefined ? ['--pooling', def.pooling] : []),
           ...(backend === 'gpu' ? ['-ngl', '99'] : []),
         ]
-        const child = spawn(serverExeFor(backend), argv, { detached: true, stdio: 'ignore', windowsHide: true })
+        const log = openServerLog()
+        const child = spawn(serverExeFor(backend), argv, {
+          detached: true,
+          stdio: log.stdio,
+          windowsHide: true,
+        })
+        log.close()
         child.unref()
         try {
           writeFileSync(PID_FILE, JSON.stringify({ pid: child.pid, backend, model: def.id }), 'utf-8')
         } catch {
           // PID 记录失败不影响运行
         }
+        appendServerLog(`spawn pid=${child.pid} backend=${backend} model=${def.id}\n  argv: ${argv.join(' ')}`)
         const ok = await waitAlive(START_TIMEOUT_MS)
-        if (!ok) starting = undefined // 允许下次重试
+        if (!ok) {
+          // 不静默：失败要留下可查的线索，否则用户只见「模型未就绪」，无从查起
+          appendServerLog(`启动失败：${START_TIMEOUT_MS}ms 内 /health 未就绪（详见本文件上部子进程输出）`)
+          starting = undefined // 允许下次重试
+        }
         return ok
       } finally {
         releaseStartLock()
@@ -267,7 +470,15 @@ export function ensureEmbeddingServer(): Promise<boolean> {
 
 /** 启动锁：`<dir>/llama-server.lock`（独占创建；陈旧锁自动接管）。 */
 const LOCK_FILE = join(RUNTIME_DIR, 'llama-server.lock')
-const LOCK_STALE_MS = 120_000
+/**
+ * 陈旧锁的接管阈值——**必须与 `START_TIMEOUT_MS` 配套**：持锁者最多等
+ * `START_TIMEOUT_MS`（60s）就放弃并释放锁，所以比它更旧的锁一定是崩溃/被杀留下的残骸。
+ *
+ * 早先写死 120s（> 60s），于是残骸会让后续调用**各白等满 60s**：2026-09-12 实测两次
+ * 连续冷启动就这么被拖成 2 分钟（第三次锁够旧才接管成功）。取 `START_TIMEOUT_MS + 30s`
+ * 既留余量不误抢仍在等待的持锁者，又能在 90s 内接管残骸。
+ */
+const LOCK_STALE_MS = START_TIMEOUT_MS + 30_000
 
 function tryAcquireStartLock(): boolean {
   try {
@@ -348,7 +559,12 @@ export async function embedText(text: string): Promise<EmbedText> {
     return { ok: false, error: 'embedding 未安装（跑 node scripts/setup-embedding.mjs）' }
   }
   if (!(await ensureEmbeddingServer())) {
-    return { ok: false, error: 'embedding 模型未就绪（档位模型缺失？跑 prism embedding install）' }
+    // 走到这里「未安装」已被上面挡掉，所以只可能是：档位模型缺失，或 llama-server 没起来。
+    // 别再说成「模型未就绪」——模型明明在的时候这句话会把排查带偏（2026-09-12 实测踩到）。
+    return {
+      ok: false,
+      error: `embedding 服务未就绪（档位模型缺失，或 llama-server 未能启动；日志：${SERVER_LOG}）`,
+    }
   }
   const def = activeModel()
   try {

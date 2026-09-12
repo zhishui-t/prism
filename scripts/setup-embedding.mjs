@@ -4,17 +4,32 @@
  *
  *   node scripts/setup-embedding.mjs [选项]
  *
- *   源码：llama.cpp 是 **git submodule**（`3rd/llama.cpp`，锁定上游 tag），不下载源码 zip；
- *         本地 MinGW + CMake **out-of-source** 编译（产物落 `3rd/llama-runtime/`，不污染子模块）。
- *         找不到工具链时回落到官方预编译包。
+ * **双平台（2026-09-12）**：Windows 与 macOS / Linux 同级支持，但取二进制的方式不同——
+ *
+ *   | 平台              | 默认路径            | 加速后端                                      |
+ *   | :---------------- | :------------------ | :-------------------------------------------- |
+ *   | Windows           | 本地 MinGW 源码编译 | 预编译 Vulkan 包 → `bin-vulkan/`（独立目录）   |
+ *   | macOS **arm64**   | 官方预编译包         | Metal（`GGML_METAL_EMBED_LIBRARY=ON`，包内 `libggml-metal.*.dylib`） |
+ *   | macOS **x64**     | 官方预编译包         | **无**（上游显式 `-DGGML_METAL=OFF`，见下文）  |
+ *   | Linux             | 官方预编译包         | 预编译 Vulkan 包 → `bin-vulkan/`（可选）       |
+ *
+ *   ⚠ **Intel Mac 的预编译包没有 Metal**（2026-09-12 实测 + 上游 release.yml 佐证）：
+ *   上游 macOS 构建矩阵对两个架构开关不同——arm64 `-DGGML_METAL_EMBED_LIBRARY=ON`、
+ *   x64 `-DGGML_METAL=OFF`（原文注释：Metal is disabled on x64 due to intermittent
+ *   failures with Github runners not having a GPU）。实测 x64 包内无 `libggml-metal*`、
+ *   二进制不含 `ggml_metal` 符号，只链 `CoreFoundation` + `libggml-blas`。
+ *   而机器**硬件**照样报 `Metal Support: Metal 3`，所以「看硬件/看平台」必然假阳性——
+ *   后果是本脚本会判「有显卡」去下 634MB 的 `large` 模型，然后在纯 CPU 上慢跑。
+ *
+ *   Windows 默认走源码编译是因为本机有 MinGW + CMake 工具链（产物可控）；macOS/Linux
+ *   默认走预编译包——不需本机工具链，预编译包已带 Vulkan（macOS **arm64** 带 Metal）。
+ *   `--prebuilt` / 编译失败回落对三家一视同仁。源码来自 git submodule（`3rd/llama.cpp`），
+ *   产物落 Prism 自有的 `3rd/llama-runtime/`，绝不写进子模块。
+ *
  *   模型：**按算力分档下载**——有显卡装 large(Qwen3-Emb-0.6B)+small；无显卡只装
  *         small(bge-small-zh, 25MB, 512 维)。default(BGE-M3) 需 --tier default 显式装。
  *
- * GPU 加速（重要）：CPU 推理大模型极慢（实测 1500 字 ≈ 7.5s）。检测到显卡即下载
- * 官方 **Vulkan** 预编译包（仅约 28MB，NVIDIA/AMD/Intel 通用，无需 CUDA SDK）到
- * `bin-vulkan/`，运行时全部层卸载到 GPU（实测 1500 字 ≈ 44ms，快约 170 倍）。
- *
- * 前置：`git submodule update --init --recursive`（llama.cpp 源码）。
+ * 前置：`git submodule update --init --recursive`（仅源码编译路径需要）。
  *
  * 选项：
  *   --check        只检查是否就绪（退出码 0/1）
@@ -22,26 +37,30 @@
  *   --bin-only     只装二进制，跳过模型
  *   --model-only   只装模型，跳过二进制
  *   --prebuilt     强制用官方预编译包（不编译）
- *   --gpu          强制下载 GPU（Vulkan）包（即使未探到显卡）
+ *   --source       强制源码编译（POSIX 默认用预编译包，需本机有 cmake）
+ *   --gpu          强制下载 GPU 包（即使未探到加速器）
  *   --no-gpu       跳过 GPU 包（只用 CPU）
  *   --force        重编译/重下载
  *
  * 产物（均 gitignored，不进仓库）：
- *   3rd/llama-runtime/bin/llama-server.exe          CPU（本地编译）
- *   3rd/llama-runtime/bin-vulkan/llama-server.exe   GPU（Vulkan 预编译，有显卡时）
+ *   3rd/llama-runtime/bin/llama-server[.exe]          主二进制（Windows=CPU / macOS arm64=Metal / macOS x64=CPU）
+ *   3rd/llama-runtime/bin-vulkan/llama-server[.exe]   GPU（Vulkan 预编译，Windows/Linux）
  *   3rd/llama-runtime/models/<档位模型>.gguf
  *
  * 验证：prism doctor 会检查 embedding 可用性；检索自动走 BM25+向量混合。
  */
 import { createWriteStream } from 'node:fs'
-import { mkdir, stat, rm, access, constants, readdir, rename, copyFile } from 'node:fs/promises'
+import { chmod, copyFile, mkdir, readdir, rename, rm, stat, access, constants } from 'node:fs/promises'
 import { spawn, spawnSync } from 'node:child_process'
 import { pipeline } from 'node:stream/promises'
 import { fileURLToPath } from 'node:url'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import os from 'node:os'
+
+// 归档解压 + 摊平（上游包带顶层目录，不摊平会「装了却检测不到」）
+import { extractArchive } from './archive.mjs'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 /** 源码：git submodule（只读，绝不写构建产物进去）。 */
@@ -50,16 +69,54 @@ const SRC_DIR = join(ROOT, '3rd', 'llama.cpp')
 const RUNTIME_DIR = join(ROOT, '3rd', 'llama-runtime')
 const BUILD_DIR = join(RUNTIME_DIR, 'build')
 const BIN_DIR = join(RUNTIME_DIR, 'bin')
+/** GPU 独立目录（Vulkan 包 → bin-vulkan）；macOS 不用它——Metal 不另立目录，落在 bin/。 */
 const GPU_BIN_DIR = join(RUNTIME_DIR, 'bin-vulkan')
 const MODEL_DIR = join(RUNTIME_DIR, 'models')
 
+const IS_WINDOWS = process.platform === 'win32'
+const IS_MACOS = process.platform === 'darwin'
+/** macOS arm64 的官方预编译包才带 Metal（x64 上游显式关掉，见文件头说明）。 */
+const METAL_PREBUILT = IS_MACOS && process.arch === 'arm64'
+
+/** llama.cpp 产物名：Windows 带 `.exe`，macOS / Linux 无扩展名。 */
+const SERVER_BIN = IS_WINDOWS ? 'llama-server.exe' : 'llama-server'
+
 /**
  * llama.cpp 版本 = submodule 锁定的 tag（升级：改 submodule 引用即可，
- * 本脚本不再下载源码 zip）。常量仅用于 GPU 预编译包 URL 与提示。
+ * 本脚本不再下载源码 zip）。常量仅用于预编译包资产名与提示。
  */
 const LLAMA_TAG = 'b10883'
-const PREBUILT_URL = `https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_TAG}/llama-${LLAMA_TAG}-bin-win-cpu-x64.zip`
-const VULKAN_URL = `https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_TAG}/llama-${LLAMA_TAG}-bin-win-vulkan-x64.zip`
+
+/**
+ * 官方预编译包资产名（**按平台**）。
+ *
+ * 资产名经 GitHub releases API 实查核对，**不要凭记忆改**：
+ *   curl -s https://api.github.com/repos/ggml-org/llama.cpp/releases/tags/<tag> | grep '"name"'
+ * 实测可用形态：`-bin-win-cpu-x64.zip`、`-bin-win-vulkan-x64.zip`、`-bin-macos-arm64.tar.gz`、
+ * `-bin-macos-x64.tar.gz`、`-bin-ubuntu-x64.tar.gz`、`-bin-ubuntu-vulkan-x64.tar.gz`。
+ *
+ * macOS **没有独立的 GPU 资产**（两个架构都只有 `-bin-macos-<arch>.tar.gz`），
+ * 但「有没有 Metal 后端」按架构不同：arm64 有（`libggml-metal.*.dylib`），x64 没有。
+ * 所以 `gpu` 一律为 null（无独立资产可下），运行时侧另由「包内是否有 libggml-metal」
+ * 判定（见 `packages/server/src/kb/embedding.ts::accelBackend`）。
+ */
+const PREBUILT = (() => {
+  const base = `llama-${LLAMA_TAG}-bin`
+  if (IS_WINDOWS) {
+    return { cpu: `${base}-win-cpu-x64.zip`, gpu: `${base}-win-vulkan-x64.zip`, ext: 'zip' }
+  }
+  if (IS_MACOS) {
+    const arch = process.arch === 'arm64' ? 'arm64' : 'x64'
+    return { cpu: `${base}-macos-${arch}.tar.gz`, gpu: null, ext: 'tar.gz' }
+  }
+  const arch = process.arch === 'arm64' ? 'arm64' : 'x64'
+  return { cpu: `${base}-ubuntu-${arch}.tar.gz`, gpu: `${base}-ubuntu-vulkan-${arch}.tar.gz`, ext: 'tar.gz' }
+})()
+
+/** 预编译包下载地址（GitHub release 直链；镜像前缀由 withMirrors 叠加）。 */
+function prebuiltUrl(asset) {
+  return `https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_TAG}/${asset}`
+}
 
 /**
  * 模型档位表（**必须与 packages/server/src/kb/embedding-models.ts 一致**；
@@ -132,6 +189,7 @@ const CHECK_ONLY = args.includes('--check')
 const BIN_ONLY = args.includes('--bin-only')
 const MODEL_ONLY = args.includes('--model-only')
 const FORCE_PREBUILT = args.includes('--prebuilt')
+const FORCE_SOURCE = args.includes('--source')
 const FORCE = args.includes('--force')
 const FORCE_GPU = args.includes('--gpu')
 
@@ -249,21 +307,6 @@ async function downloadAny(urls, dest, expectedBytes) {
   throw lastError instanceof Error ? lastError : new Error('所有下载源均失败')
 }
 
-/** 解压 zip（Python zipfile，零依赖、Windows 可用）。 */
-async function unzip(zipPath, destDir) {
-  log(`解压 ${zipPath} → ${destDir}`)
-  const code = await new Promise((resolveCode) => {
-    const py = spawn(
-      'python',
-      ['-c', `import zipfile,sys; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])`, zipPath, destDir],
-      { stdio: 'inherit' },
-    )
-    py.on('close', resolveCode)
-    py.on('error', () => resolveCode(-1))
-  })
-  if (code !== 0) throw new Error('解压失败（需要 python 在 PATH）')
-}
-
 /** 运行命令，实时透传输出；失败抛错。 */
 async function run(cmd, cmdArgs, options = {}) {
   log(`$ ${cmd} ${cmdArgs.join(' ')}`)
@@ -278,14 +321,10 @@ async function run(cmd, cmdArgs, options = {}) {
   if (code !== 0) throw new Error(`命令失败（退出码 ${code}）: ${cmd} ${cmdArgs.join(' ')}`)
 }
 
-/** 源码编译 llama.cpp（源码来自 submodule）→ bin/。 */
+/** 源码编译 llama.cpp（源码来自 submodule）→ `bin/`。Windows 默认走这条；POSIX 需 --source。 */
 async function buildFromSource() {
   const cmake = findTool('cmake', CMAKE_CANDIDATES)
   if (cmake === null) throw new Error('未找到 cmake（装 CMake 或加进 PATH）')
-  const mingwBin = findMingwBin()
-  const gcc = mingwBin === null ? findTool('gcc', []) : join(mingwBin, 'gcc.exe')
-  const make = mingwBin === null ? 'mingw32-make' : join(mingwBin, 'mingw32-make.exe')
-  if (gcc === null) throw new Error('未找到 MinGW gcc（装 MinGW-w64 或加进 PATH）')
 
   // 源码来自 submodule：先确保已初始化（否则提示 git submodule update）
   if (!(await exists(join(SRC_DIR, 'CMakeLists.txt')))) {
@@ -296,24 +335,39 @@ async function buildFromSource() {
   log(`源码: ${SRC_DIR}（submodule）`)
 
   const env = { ...process.env }
-  if (mingwBin !== null) {
-    env.PATH = `${mingwBin};${env.PATH ?? ''}`
-    env.CC = join(mingwBin, 'gcc.exe')
-    env.CXX = join(mingwBin, 'g++.exe')
+  /** 生成器与工具链参数：Windows 走 MinGW Makefiles，POSIX 交给 cmake 默认（Make/Ninja）。 */
+  const toolchainArgs = []
+  let mingwBin = null
+
+  if (IS_WINDOWS) {
+    mingwBin = findMingwBin()
+    const gcc = mingwBin === null ? findTool('gcc', []) : join(mingwBin, 'gcc.exe')
+    if (gcc === null) throw new Error('未找到 MinGW gcc（装 MinGW-w64 或加进 PATH）')
+    const make = mingwBin === null ? 'mingw32-make' : join(mingwBin, 'mingw32-make.exe')
+    if (mingwBin !== null) {
+      env.PATH = `${mingwBin}${delimiter}${env.PATH ?? ''}`
+      env.CC = join(mingwBin, 'gcc.exe')
+      env.CXX = join(mingwBin, 'g++.exe')
+    }
+    toolchainArgs.push('-G', 'MinGW Makefiles', `-DCMAKE_MAKE_PROGRAM=${make}`)
   }
 
-  // 配置（MinGW Makefiles；关 OpenMP 免 libgomp 依赖，关 curl/tests 提速）
+  // 配置（关 OpenMP 免 libgomp 依赖，关 curl/tests 提速）
   // **out-of-source**：构建目录在 3rd/llama-runtime/build，绝不写进 submodule。
   await rm(BUILD_DIR, { recursive: true, force: true })
   await mkdir(BUILD_DIR, { recursive: true })
   const native = process.env.PRISM_EMBED_NATIVE !== '0' ? 'ON' : 'OFF'
+  /**
+   * macOS：显式开 Metal（Apple 平台本就默认开，写出来是为了可读、可查）。
+   * **x64 上这是拿到 Metal 的唯一途径**——官方预编译包把 x64 的 Metal 关了。
+   */
+  const accel = IS_MACOS ? ['-DGGML_METAL=ON'] : []
   await run(
     cmake,
     [
       '-S', SRC_DIR,
       '-B', BUILD_DIR,
-      '-G', 'MinGW Makefiles',
-      `-DCMAKE_MAKE_PROGRAM=${make}`,
+      ...toolchainArgs,
       '-DCMAKE_BUILD_TYPE=Release',
       `-DGGML_NATIVE=${native}`,
       '-DGGML_OPENMP=OFF',
@@ -322,6 +376,7 @@ async function buildFromSource() {
       '-DLLAMA_BUILD_EXAMPLES=ON',
       '-DLLAMA_BUILD_TOOLS=ON',
       '-DLLAMA_BUILD_SERVER=ON',
+      ...accel,
     ],
     { env },
   )
@@ -330,98 +385,146 @@ async function buildFromSource() {
   const jobs = String(Math.max(1, os.cpus().length))
   await run(cmake, ['--build', BUILD_DIR, '--config', 'Release', '--target', 'llama-server', '-j', jobs], { env })
 
-  // 收集产物：build/bin 下所有 exe/dll + MinGW 运行库
+  // 收集产物：build/bin 下的二进制（+ Windows 的 dll 与 MinGW 运行库）
   const outBin = join(BUILD_DIR, 'bin')
-  if (!(await exists(join(outBin, 'llama-server.exe')))) {
-    throw new Error(`编译完成但未找到 ${join(outBin, 'llama-server.exe')}`)
+  const produced = join(outBin, SERVER_BIN)
+  if (!(await exists(produced))) {
+    throw new Error(`编译完成但未找到 ${produced}`)
   }
   await rm(BIN_DIR, { recursive: true, force: true })
   await mkdir(BIN_DIR, { recursive: true })
   for (const f of await readdir(outBin)) {
-    await copyFile(join(outBin, f), join(BIN_DIR, f))
+    const src = join(outBin, f)
+    const info = await stat(src)
+    if (!info.isFile()) continue
+    await copyFile(src, join(BIN_DIR, f))
   }
-  if (mingwBin !== null) {
+  if (IS_WINDOWS && mingwBin !== null) {
     for (const dll of MINGW_RUNTIME_DLLS) {
       const src = join(mingwBin, dll)
       if (existsSync(src)) await copyFile(src, join(BIN_DIR, dll))
     }
   }
-  log(`源码编译完成 → ${BIN_DIR}/llama-server.exe`)
+  if (!IS_WINDOWS) {
+    try {
+      await chmod(join(BIN_DIR, SERVER_BIN), 0o755)
+    } catch {
+      // 无 POSIX 权限的文件系统上忽略
+    }
+  }
+  log(`源码编译完成 → ${BIN_DIR}/${SERVER_BIN}`)
 }
 
-/** 官方 CPU 预编译包（回落路径）。 */
+/** 官方预编译包（主二进制）→ `bin/`；资产名按平台取自 `PREBUILT`。 */
 async function installPrebuilt() {
-  const zipPath = join(RUNTIME_DIR, `llama-${LLAMA_TAG}-bin-win-cpu-x64.zip`)
-  await downloadAny(withMirrors(PREBUILT_URL), zipPath)
-  await rm(BIN_DIR, { recursive: true, force: true })
-  await unzip(zipPath, BIN_DIR)
-  await rm(zipPath, { force: true })
-  log(`预编译包安装完成（${(await exists(join(BIN_DIR, 'llama-server.exe'))) ? 'llama-server.exe OK' : '警告: 未找到 llama-server.exe'}）`)
+  const archive = join(RUNTIME_DIR, PREBUILT.cpu)
+  await downloadAny(withMirrors(prebuiltUrl(PREBUILT.cpu)), archive)
+  await extractArchive(archive, BIN_DIR, SERVER_BIN, log)
+  await rm(archive, { force: true })
+  if (!(await exists(join(BIN_DIR, SERVER_BIN)))) {
+    // 不静默：装完却没有二进制 = 「装了却检测不到」，只警告会让人一头雾水
+    throw new Error(`预编译包安装完成但未找到 ${join(BIN_DIR, SERVER_BIN)}`)
+  }
+  log(`预编译包安装完成 → ${BIN_DIR}/${SERVER_BIN}`)
 }
 
 /**
- * GPU（Vulkan）预编译包 → bin-vulkan/。
+ * GPU 加速包 → `bin-vulkan/`（Windows / Linux）。
+ *
  * 为什么选 Vulkan 而非 CUDA：Vulkan 包仅约 28MB 且无需 CUDA SDK，在 NVIDIA/AMD/Intel
  * 上都能卸载到 GPU；CUDA 包 179MB + 391MB 运行时，收益并无量级差异（瓶颈在显存带宽）。
+ *
+ * **macOS 不走这里**：官方 macos 包没有独立 GPU 资产（`PREBUILT.gpu === null`）——
+ * Metal 不另发包，arm64 的 Metal 就编在主二进制同目录的 `libggml-metal.*.dylib` 里，
+ * x64 则根本没有（见文件头）。
  */
 async function installGpu() {
-  const zipPath = join(RUNTIME_DIR, `llama-${LLAMA_TAG}-bin-win-vulkan-x64.zip`)
-  await downloadAny(withMirrors(VULKAN_URL), zipPath)
-  await rm(GPU_BIN_DIR, { recursive: true, force: true })
-  await unzip(zipPath, GPU_BIN_DIR)
-  await rm(zipPath, { force: true })
-  const ok = await exists(join(GPU_BIN_DIR, 'llama-server.exe'))
-  log(ok ? `GPU(Vulkan) 包安装完成 → ${GPU_BIN_DIR}/llama-server.exe` : '警告: GPU 包未找到 llama-server.exe')
+  if (PREBUILT.gpu === null) {
+    log('本平台无独立 GPU 包，跳过')
+    return false
+  }
+  const archive = join(RUNTIME_DIR, PREBUILT.gpu)
+  await downloadAny(withMirrors(prebuiltUrl(PREBUILT.gpu)), archive)
+  await extractArchive(archive, GPU_BIN_DIR, SERVER_BIN, log)
+  await rm(archive, { force: true })
+  const ok = await exists(join(GPU_BIN_DIR, SERVER_BIN))
+  log(ok ? `GPU(Vulkan) 包安装完成 → ${GPU_BIN_DIR}/${SERVER_BIN}` : `警告: GPU 包内未找到 ${SERVER_BIN}`)
   return ok
 }
 
-/** 探测本机是否有可用显卡（nvidia-smi / wmic），用于决定是否装 GPU 包。 */
+/** 探测本机加速器（决定是否装 GPU 包、以及模型档位）。 */
 function detectGpu() {
+  // 通用：NVIDIA 驱动（Linux / Windows 都适用）
   const nv = spawnSync('nvidia-smi', ['--query-gpu=name', '--format=csv,noheader'], { encoding: 'utf-8' })
   if (nv.status === 0 && (nv.stdout ?? '').trim() !== '') return (nv.stdout ?? '').trim().split('\n')[0]
+
+  // macOS：**只有 arm64 的官方预编译包带 Metal**（x64 被上游显式关掉，见文件头）。
+  // 不能拿 system_profiler 的「Metal Support」当真——那是**硬件**能力，Intel Mac 照样报
+  // 「Metal 3」，但预编译的 llama-server 里没有 Metal 后端。误判的代价是白下 634MB 的
+  // large 模型然后在纯 CPU 上慢跑（本判据同时决定模型档位，见 tiersToInstall）。
+  if (IS_MACOS) {
+    if (!METAL_PREBUILT) return null
+    const sp = spawnSync('system_profiler', ['SPDisplaysDataType'], { encoding: 'utf-8' })
+    const chip = /Chipset Model:\s*(.+)/.exec(sp.stdout ?? '')
+    return chip !== null ? `${chip[1].trim()}（Metal）` : 'Apple GPU（Metal）'
+  }
+
   // Windows 通用探测：wmic 列显卡名（非 NVIDIA 也可能支持 Vulkan）
-  const wmic = spawnSync('wmic', ['path', 'win32_VideoController', 'get', 'name'], { encoding: 'utf-8' })
-  if (wmic.status === 0) {
-    const names = (wmic.stdout ?? '')
-      .split('\n')
-      .map((l) => l.trim())
-      .filter((l) => l !== '' && l.toLowerCase() !== 'name')
-    if (names.length > 0) return names[0]
+  if (IS_WINDOWS) {
+    const wmic = spawnSync('wmic', ['path', 'win32_VideoController', 'get', 'name'], { encoding: 'utf-8' })
+    if (wmic.status === 0) {
+      const names = (wmic.stdout ?? '')
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => l !== '' && l.toLowerCase() !== 'name')
+      if (names.length > 0) return names[0]
+    }
   }
   return null
 }
 
+/**
+ * 取二进制：Windows 默认源码编译（本机有 MinGW 工具链，产物可控），
+ * 失败即回落预编译包；macOS / Linux 默认直接用官方预编译包（无需本机工具链），
+ * 想本地编译就显式加 `--source`。
+ */
 async function installBinary() {
   if (FORCE_PREBUILT) {
     log('--prebuilt：使用官方预编译包')
     await installPrebuilt()
     return
   }
-  try {
-    await buildFromSource()
-  } catch (error) {
-    log(`源码编译不可用（${error instanceof Error ? error.message : String(error)}）`)
-    log('回落到官方预编译包…')
-    await installPrebuilt()
+  if (FORCE_SOURCE || IS_WINDOWS) {
+    try {
+      await buildFromSource()
+      return
+    } catch (error) {
+      log(`源码编译不可用（${error instanceof Error ? error.message : String(error)}）`)
+      log('回落到官方预编译包…')
+    }
   }
+  await installPrebuilt()
 }
 
-/** 是否装 GPU 包：显式 --gpu > 探测到显卡且未 --no-gpu。 */
+/** 是否装 GPU 包：显式 --gpu > 探测到加速器且未 --no-gpu；平台无独立 GPU 包时直接跳过。 */
 function shouldInstallGpu() {
   if (NO_GPU) return { want: false, reason: '--no-gpu' }
+  if (PREBUILT.gpu === null) {
+    return { want: false, reason: '本平台无独立 GPU 包' }
+  }
   if (FORCE_GPU) return { want: true, reason: '--gpu' }
   const gpu = detectGpu()
   return gpu !== null
-    ? { want: true, reason: `探测到显卡: ${gpu}` }
-    : { want: false, reason: '未探测到显卡（可 --gpu 强制，或装 GPU 驱动后重试）' }
+    ? { want: true, reason: `探测到加速器: ${gpu}` }
+    : { want: false, reason: '未探测到加速器（可 --gpu 强制，或装 GPU 驱动后重试）' }
 }
 
 async function main() {
   await mkdir(RUNTIME_DIR, { recursive: true })
   await mkdir(MODEL_DIR, { recursive: true })
 
-  const serverExe = join(BIN_DIR, 'llama-server.exe')
-  const gpuServerExe = join(GPU_BIN_DIR, 'llama-server.exe')
+  const serverExe = join(BIN_DIR, SERVER_BIN)
+  const gpuServerExe = join(GPU_BIN_DIR, SERVER_BIN)
   const binReady = await exists(serverExe)
   const gpuReady = await exists(gpuServerExe)
   const tierState = TIER_NAMES.map((t) => ({ tier: t, ready: existsSync(join(MODEL_DIR, TIERS[t].file)) }))

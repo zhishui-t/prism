@@ -7,9 +7,11 @@ import { openPersistence, prismPaths } from '@prism/core'
 import {
   EMBEDDING_PORT,
   activeModel,
+  cpuBackendHint,
   embedText,
   embeddingInstalled,
   ensureHarnessPluginsLoaded,
+  gpuBackendLabel,
   harnessDir,
   listHarnesses,
   preferredBackend,
@@ -113,7 +115,8 @@ export async function runDoctor(ctx: CommandContext, _args: string[], values: Ar
     const probe = await embedText('健康检查')
     const backend = preferredBackend()
     const def = activeModel()
-    const backendLabel = backend === 'gpu' ? 'GPU/Vulkan' : 'CPU（较慢，建议有显卡时装 GPU 包）'
+    // 后端文案（含「走 CPU 时怎么办」的建议）由 @prism/server 统一给，CLI 不自己判平台
+    const backendLabel = backend === 'gpu' ? `GPU/${gpuBackendLabel()}` : `CPU${cpuBackendHint()}`
     checks.push({
       name: 'embedding',
       ok: probe.ok,
