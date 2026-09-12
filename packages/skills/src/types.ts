@@ -55,3 +55,22 @@ export interface SkillInstallResult {
   written: string[]
   skipped: SkillInstallSkipped[]
 }
+
+export interface SkillUninstallOptions {
+  /** 卸载目标目录（来自 --harness-root / adapter.skill.nativeDir 推导，绝不硬编码） */
+  targetDir: string
+  /** 要卸载的 skill 名；缺省或空数组 = 扫描目录下全部子目录 */
+  names?: string[]
+}
+
+export interface SkillUninstallKept {
+  name: string
+  /** 该 skill 的落点（保留原因指向的文件/目录） */
+  path: string
+  reason: string
+}
+
+export interface SkillUninstallResult {
+  removed: string[]
+  kept: SkillUninstallKept[]
+}

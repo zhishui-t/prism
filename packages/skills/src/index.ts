@@ -10,10 +10,14 @@ export type {
   SkillInstallOptions,
   SkillInstallResult,
   SkillInstallSkipped,
+  SkillUninstallOptions,
+  SkillUninstallKept,
+  SkillUninstallResult,
 } from './types.js'
 
 export { validateSkill, MAX_DESCRIPTION_LENGTH } from './validate.js'
 export { installSkills } from './install.js'
+export { uninstallSkills } from './uninstall.js'
 export { PRISM_MARKER_PREFIX, prismSkillMarker, hasPrismMarker } from './marker.js'
 export { prismSkill } from './builtin/index.js'
 

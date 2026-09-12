@@ -109,13 +109,13 @@ prism serve --port 7777            # 起 HTTP 服务 + 控制台
 - **不编边**：图谱没有的关系不要推断；\`confidence\` 字段（EXTRACTED/INFERRED）照实呈现；
 - **不读全图**：用查询拿子图（\`limit\`/\`depth\` 有界），避免把整张图塞进上下文。
 
-## 5. 工具速查（43 个 MCP 工具）
+## 5. 工具速查（46 个 MCP 工具）
 
 | 分组 | 工具 |
 | :--- | :--- |
 | 知识库（17） | \`prism_kb_search\` \`prism_kb_get\` \`prism_kb_deposit\` \`prism_kb_convert\` \`prism_kb_import\` \`prism_kb_enrich\` \`prism_kb_graph\` \`prism_kb_tree\` \`prism_kb_stats\` \`prism_kb_catalog\` \`prism_kb_path\` \`prism_kb_remove\` \`prism_kb_restore\` \`prism_kb_conflicts\` \`prism_kb_resolve_conflict\` \`prism_kb_versions\` \`prism_kb_book_structure\` |
 | 代码图谱（8） | \`prism_graph_query\` \`prism_graph_path\` \`prism_graph_explain\` \`prism_graph_affected\` \`prism_graph_god_nodes\` \`prism_graph_summary\` \`prism_graph_status\` \`prism_graph_merge\` |
-| 角色团队（15） | \`prism_role_list\` \`prism_role_get\` \`prism_role_new\` \`prism_role_edit\` \`prism_role_rm\` \`prism_role_render\` \`prism_team_list\` \`prism_team_get\` \`prism_team_new\` \`prism_team_edit\` \`prism_team_rm\` \`prism_team_render\` \`prism_team_activate\` \`prism_context_pack\` \`prism_skill_effective\` |
+| 角色团队（18） | \`prism_role_list\` \`prism_role_get\` \`prism_role_new\` \`prism_role_edit\` \`prism_role_rm\` \`prism_role_render\` \`prism_team_list\` \`prism_team_get\` \`prism_team_new\` \`prism_team_edit\` \`prism_team_rm\` \`prism_team_render\` \`prism_team_activate\` \`prism_context_pack\` \`prism_skill_effective\` \`prism_skill_list\` \`prism_skill_install\` \`prism_skill_uninstall\` |
 | 任务台账（3） | \`prism_task_register\` \`prism_task_report\` \`prism_task_status\` |
 
 > **导入三件套**：\`prism_kb_convert\`（文档→Markdown，本地 anydoc 转换）→ 你提炼 →
@@ -137,10 +137,9 @@ prism graph  build/query/path/explain/affected/god-nodes/summary/export/status
 prism inject <项目根> [--team <id>] [--remove]  把 Prism 指引写进项目 AGENTS.md 标记块
 prism project add/list/show/remove          项目台账（登记后 kb sync 可扫）
 prism arch   types/validate/render             # 架构图谱（五类图）
-prism role   list/show/init/import/validate/render/install
-prism team   list/show/validate/install/activate
-prism skill  list/install
-prism work   pending/enqueue/claim/complete/fail/reclaim/stats
+prism role   list/show/new/edit/rm/validate/render [--source <dir>]
+prism team   list/show/new/edit/rm/validate/render/activate [--source <dir>] [--roles-dir <dir>]
+prism skill  list/install/update/uninstall/validate/effective
 prism task   list/show/graph/register/report/stats
 \`\`\`
 
@@ -397,7 +396,7 @@ Prism 不持有第二份副本 —— 因此**不存在"把角色/团队装进�
 > 取值来源单一：先 \`prism_role_list\` 拿 \`roles_dir\`、\`prism_team_list\` 拿 \`teams_dir\`（读写两侧键名同名，可直接回填）。
 > \`<roles_dir>\`/\`<teams_dir>\` 由激活的适配器声明（如 WorkBuddy：\`~/.workbuddy/agents\`、\`~/.workbuddy/teams\`），
 > \`prism.yaml\` 可覆盖；用 \`prism harness show\` 看当前适配器。
-> **Skill 的装/卸只有 CLI**（\`prism skill install|uninstall|update\`）——MCP 侧没有对应工具。
+> **Skill 的装/卸三入口齐**：CLI \`prism skill install|uninstall|update\` ↔ MCP \`prism_skill_install|uninstall\` ↔ HTTP \`POST /api/skills/install|uninstall\`；写路径 \`skills_dir\` 必填（防误写真实宿主），先用 \`prism_skill_list\` 拿 \`skills_dir\` 回填。
 
 ## 沉淀规则（团队定义里）
 

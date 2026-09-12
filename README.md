@@ -217,7 +217,7 @@ IR 是源、HTML 是派生，两者都可作为 `type: diagram` 条目沉淀。
 
 **目录字段怎么取**：读接口返回的键名与写参数**同名**，读回即可回填——`GET /api/roles` → `{ roles, roles_dir }`、`prism_role_list` → `roles_dir`；`GET /api/teams` → `{ teams, teams_dir }`、`prism_team_list` → `teams_dir`。
 
-**三入口并非全等**（取舍，非缺陷）：`render` 只有 CLI/MCP；`validate` 只有 CLI；`--from`（从既有定义复制）只有 CLI；**Skill 的装/卸只有 CLI**（MCP/HTTP 无写工具，属已知缺口）。三入口真正严格对齐的是**动词与落盘语义**。
+**三入口的取舍（有意不对称，非缺陷）**：`render` 只有 CLI/MCP；`validate` 只有 CLI（校验结果随 `list`/`detail` 的 `issues` 返回）；`--from`（从既有定义复制）只有 CLI。**Skill 的装/卸三入口齐**：CLI `prism skill install|uninstall|update` ↔ MCP `prism_skill_install|uninstall` ↔ HTTP `POST /api/skills/install|uninstall`（写路径 `skills_dir` 必填；先用 `prism_skill_list` 拿回该目录）。三入口真正严格对齐的是**动词与落盘语义**。
 
 ```bash
 prism role list
@@ -228,7 +228,9 @@ prism role rm dev-1 --yes                      # 硬删；默认宿主目录需 
 prism role validate
 prism role render dev-1                # 渲染为当前 harness 原生格式（target = 真实落点）
 prism team list
+prism team list --source D:/tmp/teams           # --source 覆盖 teams_dir（读写一律生效）
 prism team new my-team --members dev-1,tester   # 新建团队：脚手架 + 自动校验 + 写守卫
+prism team new my-team --source D:/tmp/teams --roles-dir D:/tmp/roles --members dev-1   # 显式目录：隔离场景（无需 --yes）
 prism team edit my-team --members dev-1         # 改名册 → 工作流表就地按名册收窄
 prism team rm my-team --yes                     # 硬删；默认宿主目录需 --yes
 prism team validate core-dev
@@ -300,7 +302,7 @@ prism
 └── task       list | show | graph | register | report | stats
 ```
 
-**MCP 工具 43 个**：知识库 17 · 代码图谱 8 · 角色/团队/技能 14 · 任务台账 3 · 上下文包 1（`tools/list` 实测）。
+**MCP 工具 46 个**：知识库 17 · 代码图谱 8 · 角色/团队/技能 17 · 任务台账 3 · 上下文包 1（`tools/list` 实测）。
 
 ---
 

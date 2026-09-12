@@ -602,6 +602,35 @@ describe('people 写路由 v6（角色与团队 增删改）', () => {
     expect(res.status).toBe(400)
     expect(body.error.message).toContain('roles_dir_required')
   })
+
+  it('POST /api/skills/install：显式 skills_dir 落盘；缺 skills_dir → 400（写路径不回落）', async () => {
+    const skillsDir = join(tmp, 'managed-skills')
+
+    const missing = await send('POST', '/api/skills/install', {})
+    expect(missing.status).toBe(400)
+    expect(((await missing.json()) as { error: { message: string } }).error.message).toContain('skills_dir_required')
+
+    const res = await send('POST', '/api/skills/install', { skills_dir: skillsDir, names: ['prism'] })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { value: { skills_dir: string; written: string[] } }
+    expect(body.value.skills_dir).toBe(skillsDir)
+    expect(existsSync(join(skillsDir, 'prism', 'SKILL.md'))).toBe(true)
+  })
+
+  it('POST /api/skills/uninstall：只删 Prism 产物（人写的保留在 kept）', async () => {
+    const skillsDir = join(tmp, 'uninstall-skills')
+    await send('POST', '/api/skills/install', { skills_dir: skillsDir, names: ['prism'] })
+    await mkdir(join(skillsDir, 'handwritten'), { recursive: true })
+    await writeFile(join(skillsDir, 'handwritten', 'SKILL.md'), '# 人写的\n', 'utf-8')
+
+    const res = await send('POST', '/api/skills/uninstall', { skills_dir: skillsDir })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { value: { removed: string[]; kept: Array<{ name: string }> } }
+    expect(body.value.removed).toContain('prism')
+    expect(body.value.kept.map((k) => k.name)).toContain('handwritten')
+    expect(existsSync(join(skillsDir, 'prism'))).toBe(false)
+    expect(existsSync(join(skillsDir, 'handwritten', 'SKILL.md'))).toBe(true)
+  })
 })
 
 /** 为一个受管 roles 目录造一个最小 home（写 prism.yaml 指向它），用于「读回」断言。 */

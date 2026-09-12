@@ -1,10 +1,9 @@
-import { rm, readdir, readFile } from 'node:fs/promises'
+import { readdir } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { PrismError } from '@prism/core'
-import { installSkills, listBuiltinSkills, validateSkill } from '@prism/skills'
-import { PRISM_MARKER_PREFIX } from '@prism/skills'
+import { installSkills, listBuiltinSkills, uninstallSkills, validateSkill } from '@prism/skills'
 import { loadEffectiveSkills } from '@prism/server'
 
 import type { ArgValues, CommandContext } from '../argv.js'
@@ -115,42 +114,25 @@ export async function runSkill(ctx: CommandContext, args: string[], values: ArgV
     }
 
     case 'uninstall': {
-      // 只删 Prism 产物（SKILL.md 含 marker）；人写的 Skill 一律不动
+      // 只删 Prism 产物（SKILL.md 含 marker）；人写的 Skill 一律不动。
+      // 实现单点在 @prism/skills 的 uninstallSkills（与 MCP `prism_skill_uninstall`、
+      // HTTP `POST /api/skills/uninstall` 共用）。
       const names = rest.filter((n) => !n.startsWith('-'))
-      let targets = names
-      if (targets.length === 0) {
-        if (!existsSync(skillsDir)) {
-          ctx.stdout('（skills_dir 不存在，无需卸载）')
-          return 0
-        }
+      // 守卫要知道**计划删除的数量**：未点名 = 目标目录下现有子目录数（无目录 → 0，直接放行）
+      let planned = names.length
+      if (planned === 0 && existsSync(skillsDir)) {
         const entries = await readdir(skillsDir, { withFileTypes: true })
-        targets = entries.filter((e) => e.isDirectory()).map((e) => e.name)
+        planned = entries.filter((e) => e.isDirectory()).length
       }
-      if (!guardWriteTarget(ctx, values, dirs, 'skills', targets.length)) return 1
+      if (!guardWriteTarget(ctx, values, dirs, 'skills', planned, 'delete')) return 1
 
-      const removed: string[] = []
-      const kept: string[] = []
-      for (const name of targets) {
-        const dir = join(skillsDir, name)
-        const skillFile = join(dir, 'SKILL.md')
-        if (!existsSync(skillFile)) {
-          kept.push(`${name}（无 SKILL.md）`)
-          continue
-        }
-        const text = await readFile(skillFile, 'utf-8')
-        if (!text.includes(PRISM_MARKER_PREFIX)) {
-          kept.push(`${name}（非 Prism 产物，保留）`)
-          continue
-        }
-        await rm(dir, { recursive: true, force: true })
-        removed.push(name)
-      }
+      const result = await uninstallSkills({ targetDir: skillsDir, names })
       if (ctx.json) {
-        ctx.stdout(JSON.stringify({ ok: true, value: { removed, kept } }))
+        ctx.stdout(JSON.stringify({ ok: true, value: { skillsDir, ...result } }))
       } else {
-        for (const name of removed) ctx.stdout(`  已卸载 ${name}`)
-        for (const name of kept) ctx.stdout(`  跳过 ${name}`)
-        ctx.stdout(`卸载完成（${removed.length} 删 / ${kept.length} 跳过）`)
+        for (const name of result.removed) ctx.stdout(`  已卸载 ${name}`)
+        for (const k of result.kept) ctx.stdout(`  跳过 ${k.name}（${k.reason}）`)
+        ctx.stdout(`卸载完成（${result.removed.length} 删 / ${result.kept.length} 跳过）`)
         ctx.stdout('注意: 请重启 ZCode 会话使卸载生效')
       }
       return 0

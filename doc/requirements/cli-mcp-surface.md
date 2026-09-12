@@ -9,7 +9,7 @@
 > 本文下方仍是 2026-09-09 的讨论稿；以下为**当前实现增量**，与下方冲突时以本节与 `README.md` 为准：
 >
 > **新增 CLI**：`team new <id>`（建队脚手架 + 自动校验 + 写守卫；v6 由 `team init` 更名）、`kb structure show|generate|freeze`（书结构：总纲/模块清单/固化/继承）、`kb versions <id>`（条目版次历史）、`kb deposit`（按团队沉淀策略落库）、`skill effective --role [--team]`（Skill 有效集）、`task report --deposit`（终态沉淀建议 + 一步落库）。
-> **新增 MCP 工具**（4）：`prism_kb_versions`、`prism_kb_book_structure`、`prism_skill_effective`、`prism_team_create`（v6 更名 `prism_team_new`）——**工具总数以 `tools/list` 实测为准**（v4 由 31 增至 35；v5 多项目图谱合并（F-C2）再增至 36；**v6 角色/团队补齐增删改，36 → 43**）。
+> **新增 MCP 工具**（4）：`prism_kb_versions`、`prism_kb_book_structure`、`prism_skill_effective`、`prism_team_create`（v6 更名 `prism_team_new`）——**工具总数以 `tools/list` 实测为准**（v4 由 31 增至 35；v5 多项目图谱合并（F-C2）再增至 36；**v6 角色/团队补齐增删改，36 → 43**；**v6.2 补 MCP Skill 写入口 `skill_list|install|uninstall`，43 → 46**）。
 > **新增/变更 HTTP**：`GET /api/kb/versions/:id`、`GET|POST /api/kb/book-structure`、`GET /api/skills/effective?role=&team=`、`POST /api/teams`（`teams_dir` 必填、无 env 回落）、`GET /api/teams` 增只读目录字段、`GET /api/kb/context-pack` 增 `layers/books/symbols/max_excerpt_chars`。
 > **v6 写路由补齐（2026-09-12）**：`POST /api/roles`、`PATCH|DELETE /api/roles/:name`、`PATCH|DELETE /api/teams/:id`；`GET /api/roles` 返回体由裸数组改为 `{ roles, … }`（与 `/api/teams` **同形**）。写路径的 `roles_dir` / `teams_dir` **必填**。
 > **v6.1 参数契约统一（2026-09-12）**：读写两侧的**目录键名一律 snake_case 且同名**——`GET /api/roles` → `{ roles, roles_dir }`、`GET /api/teams` → `{ teams, teams_dir }`（旧 camel `rolesDir`/`teamsDir` 前端仍兼容，但它已不是契约）；`prism_role_list` 的 `agents_dir` 更名为 `roles_dir`（zcode 遗留名，与写参数不同名会让宿主回填失败）。`prism_team_new` / `POST /api/teams` 新增**可选** `roles_dir`（成员角色校验用；缺省才回落默认角色库）。
@@ -122,11 +122,13 @@ prism
 
 ## 2. MCP 工具清单
 
-> **v6 取齐说明**（2026-09-12）：工具总数 = **43**（`packages/server/src/mcp/server.ts` 内
+> **v6.2 取齐说明**（2026-09-12）：工具总数 = **46**（`packages/server/src/mcp/server.ts` 内
 > `name: 'prism_*'` 逐条计数）。v4 由 31 增至 35；v5 多项目图谱合并（F-C2）新增 `prism_graph_merge`
 > （代码图谱 7 → 8）到 **36**；v6 把「角色 / 团队」补齐成**增删改查**（`new|edit|rm` 在 CLI / HTTP / MCP
 > 三入口**同名同位**）——新增 `prism_role_new|edit|rm`、`prism_team_list|edit|rm|render` 共 7 个，
-> 并把 `prism_team_create` **更名**为 `prism_team_new`（团队与角色对称）到 **43**。
+> 并把 `prism_team_create` **更名**为 `prism_team_new`（团队与角色对称）到 **43**；
+> v6.2 补上 **Skill 写入口**（`prism_skill_list|install|uninstall`）——此前宿主 agent
+> 无法经 MCP 装 Skill，是接口审查中唯一确认的**真能力缺口**，补齐后 skill 装/卸三入口齐。
 > 下文原文缺漏的工具已在各节补齐；
 > `❌ 未实现` = 全仓 grep 0 命中、**从未存在**的工具。
 >
@@ -194,17 +196,17 @@ prism
 | `prism_team_render` | 渲染宿主格式团队文件（v6 新增） |
 | `prism_team_activate` | 拉取团队运行时配置（含装配状态） |
 
-> **三入口的能力边界（有意不对称；2026-09-12 审查后明确）**：
+> **三入口的能力边界（有意不对称；2026-09-12 审查后明确，v6.2 收口）**：
 >
 > | 能力 | CLI | MCP | HTTP | 说明 |
 > | :--- | :--- | :--- | :--- | :--- |
 > | `render`（预览宿主形态） | ✅ role/team | ✅ | ❌ | 本地开发/排障工具，控制台不需要 |
 > | `validate` | ✅ role（全量）/ team（单条） | ❌ | ❌ | 校验结果随 `list`/`detail` 的 `issues` 返回，无需独立入口 |
-> | Skill 写（install/uninstall/update） | ✅ | ❌ | ❌ | **已知缺口**：宿主无法经 MCP 装 skill（后续项） |
+> | Skill 写（install/uninstall/update） | ✅ | ✅ | ✅ | **v6.2 已补齐**（原为唯一真缺口）：`skill list|install|uninstall` ↔ `prism_skill_list|install|uninstall` ↔ `POST /api/skills/install|uninstall` |
 > | `--from`（从既有定义复制） | ✅ role/team | ❌ | ❌ | 便于人手写；机器侧「读→改」即可 |
-> | 指定写目录 | ❌（换根 / prism.yaml） | ✅ 必填 | ✅ 必填 | CLI 侧另有 `--source`（role） |
+> | 指定写目录 | ✅ `--source`（role=roles_dir / team=teams_dir） | ✅ 必填 | ✅ 必填 | team 侧另可用 `--roles-dir` 指定成员校验库 |
 >
-> 除 **Skill 写侧**这一真缺口外，其余属**取舍**——文档不应把它们描述成「三入口全等」。
+> 其余不对称属**取舍**——文档不应把它们描述成「三入口全等」。
 > 三入口真正严格对齐的是**动词与落盘语义**：`new|edit|rm` ↔ `POST|PATCH|DELETE`，同一实现单点。
 
 ### 2.4 上下文（1）
@@ -213,11 +215,14 @@ prism
 | :--- | :--- |
 | `prism_context_pack` | 生成带预算的上下文包（v4 增 `layers/books/symbols/max_excerpt_chars`） |
 
-### 2.5 Skill（1）
+### 2.5 Skill（4）
 
 | 工具 | 作用 |
 | :--- | :--- |
 | `prism_skill_effective` | Skill 有效集（global ∪ 团队声明 ∪ 角色声明；v4 新增） |
+| `prism_skill_list` | 列出内置 Skill + 宿主是否已装；返回 `skills_dir`（= 写参数名，读回即可回填；v6.2 新增） |
+| `prism_skill_install` | 安装内置 Skill 到显式 `skills_dir`（人写的同名 Skill 不覆盖，写 `.prism-new` 供对比；v6.2 新增） |
+| `prism_skill_uninstall` | 卸载 Skill（**只删 Prism 产物**；人写的保留并记入 `kept`；v6.2 新增） |
 
 ### 2.6 工作队列 ⚠ 已废弃（0）
 

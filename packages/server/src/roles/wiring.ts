@@ -25,6 +25,7 @@ import {
   loadPrismConfig,
   parseRoleMarkdown,
   parseTeamMarkdown,
+  resolveDirsFromHome,
   resolveTeamExtends,
   validateRole,
   validateTeam,
@@ -135,9 +136,16 @@ export function defaultHarnessRoot(home?: string): string {
   return harnessLayout(configuredId).root
 }
 
-/** 已安装 skill 名单（读 `<harnessRoot>/skills/*` 目录名，只读）；目录不存在 → undefined（跳过引用校验）。 */
+/**
+ * 已安装 skill 名单（读安装目录下的子目录名，只读）；目录不存在 → undefined（跳过引用校验）。
+ *
+ * 目录取**配置解析后**的 `skills_dir`（`prism.yaml` 的 `skills_dir` 覆盖生效），与
+ * CLI `prism skill install` 的落点、MCP `prism_skill_list` 回填的 `skills_dir` **同源**。
+ * 早期用 `harnessPaths().skillsDir`（只认适配器默认），在 prism.yaml 覆盖 `skills_dir` 时
+ * 会去读一个并不存在安装产物的目录 → `skill_unknown` 误报（2026-09-12 一并收口）。
+ */
 export async function installedSkillNames(harnessRoot: string, home?: string): Promise<string[] | undefined> {
-  const dir = harnessPaths(harnessRoot, home).skillsDir
+  const dir = resolveDirsFromHome(home, { harnessRoot, rootExplicit: true }).skillsDir
   if (!existsSync(dir)) {
     return undefined
   }

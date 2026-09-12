@@ -96,6 +96,9 @@ describe('MCP 角色/团队工具（design-v3 §3.4 P6；stdio JSON-RPC 手写�
       'prism_role_rm',
       'prism_context_pack',
       'prism_skill_effective',
+      'prism_skill_list',
+      'prism_skill_install',
+      'prism_skill_uninstall',
       'prism_role_render',
       'prism_team_list',
       'prism_team_get',
@@ -381,5 +384,106 @@ describe('MCP 角色/团队写工具 v6（增删改三入口对齐）', () => {
     const del = await call('prism_team_rm', { team_id: 'mcp-team', teams_dir: writeTeams })
     expect(del?.result).toMatchObject({ isError: false })
     expect(existsSync(join(writeTeams, 'mcp-team.md'))).toBe(false)
+  })
+})
+
+describe('MCP Skill 写工具（v6.2 补齐：skill_list / install / uninstall）', () => {
+  let tmp: string
+  let home: string
+  let tools: ReturnType<typeof createMcpTools>
+  let skillsDir: string
+
+  beforeAll(async () => {
+    tmp = await mkdtemp(join(tmpdir(), 'prism-mcp-skill-'))
+    home = join(tmp, 'home')
+    skillsDir = join(tmp, 'host-skills')
+    await mkdir(home, { recursive: true })
+    // 数据源与 CLI 同源：prism.yaml 把目录指到临时区，绝不碰真实宿主
+    await writeFile(
+      join(home, 'prism.yaml'),
+      `roles_dir: ${join(home, 'roles').replaceAll('\\', '/')}\n` +
+        `teams_dir: ${join(home, 'teams').replaceAll('\\', '/')}\n` +
+        `skills_dir: ${skillsDir.replaceAll('\\', '/')}\n`,
+      'utf-8',
+    )
+    tools = createMcpTools({
+      home,
+      harnessRoot: join(tmp, 'zcode'),
+      kbFactory: async () => {
+        throw new Error('本测试不消费 kb')
+      },
+    })
+  })
+
+  afterAll(async () => {
+    tools.close?.()
+    await rm(tmp, { recursive: true, force: true }).catch(() => {})
+  })
+
+  const call = (name: string, args: Record<string, unknown>) =>
+    handleRpcRequest(rpc(900, 'tools/call', { name, arguments: args }), tools)
+
+  it('prism_skill_list → {count, skills, skills_dir}（键名 = 写参数名，读回即可回填）', async () => {
+    const res = await call('prism_skill_list', {})
+    expect(res?.result).toMatchObject({ isError: false })
+    const value = JSON.parse(textOf(res)) as {
+      count: number
+      skills: Array<{ name: string; installed: boolean }>
+      skills_dir: string
+    }
+    expect(value.count).toBeGreaterThan(0)
+    expect(value.skills.map((s) => s.name)).toContain('prism')
+    expect(value.skills.every((s) => s.installed === false)).toBe(true)
+    // prism.yaml 里写的是正斜杠，解析后原样返回——按分隔符归一后比较
+    expect(value.skills_dir.replaceAll('\\', '/')).toBe(skillsDir.replaceAll('\\', '/'))
+  })
+
+  it('prism_skill_install：未给 skills_dir → isError（写路径绝不回落默认宿主目录）', async () => {
+    const res = await call('prism_skill_install', {})
+    expect(res?.result).toMatchObject({ isError: true })
+    expect(textOf(res)).toContain('skills_dir_required')
+  })
+
+  it('prism_skill_install：装指定 Skill → 落盘；重复装幂等；unknown → isError', async () => {
+    const res = await call('prism_skill_install', { skills_dir: skillsDir, names: ['prism'] })
+    expect(res?.result).toMatchObject({ isError: false })
+    const value = JSON.parse(textOf(res)) as { skills_dir: string; written: string[] }
+    expect(value.skills_dir).toBe(skillsDir)
+    expect(existsSync(join(skillsDir, 'prism', 'SKILL.md'))).toBe(true)
+
+    // 装完，list 的 installed 应变 true
+    const after = JSON.parse(textOf(await call('prism_skill_list', {}))) as {
+      skills: Array<{ name: string; installed: boolean }>
+    }
+    expect(after.skills.find((s) => s.name === 'prism')?.installed).toBe(true)
+
+    // 幂等：重装不报错（Prism 产物直接覆盖）
+    const again = await call('prism_skill_install', { skills_dir: skillsDir, names: ['prism'] })
+    expect(again?.result).toMatchObject({ isError: false })
+
+    const ghost = await call('prism_skill_install', { skills_dir: skillsDir, names: ['no-such-skill'] })
+    expect(ghost?.result).toMatchObject({ isError: true })
+    expect(textOf(ghost)).toContain('unknown_skill')
+  })
+
+  it('prism_skill_uninstall：只删 Prism 产物；人写的同名 Skill 保留并记入 kept', async () => {
+    // 造一个「人写」的 Skill（无 Prism marker）→ 必须保留
+    await mkdir(join(skillsDir, 'handwritten'), { recursive: true })
+    await writeFile(join(skillsDir, 'handwritten', 'SKILL.md'), '# 人写的\n\n不含 marker。\n', 'utf-8')
+
+    const res = await call('prism_skill_uninstall', { skills_dir: skillsDir })
+    expect(res?.result).toMatchObject({ isError: false })
+    const value = JSON.parse(textOf(res)) as {
+      removed: string[]
+      kept: Array<{ name: string; reason: string }>
+    }
+    expect(value.removed).toContain('prism')
+    expect(existsSync(join(skillsDir, 'prism'))).toBe(false)
+    expect(value.kept.map((k) => k.name)).toContain('handwritten')
+    expect(existsSync(join(skillsDir, 'handwritten', 'SKILL.md'))).toBe(true)
+
+    const noDir = await call('prism_skill_uninstall', {})
+    expect(noDir?.result).toMatchObject({ isError: true })
+    expect(textOf(noDir)).toContain('skills_dir_required')
   })
 })

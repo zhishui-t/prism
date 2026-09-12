@@ -67,14 +67,14 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
                                            删除角色文件（默认宿主目录需 --yes；不可逆）
   prism role validate [--source <dir>]     校验角色定义
   prism role render <name> [--model --thought-level]   渲染为当前 harness 原生形态（预览，不写盘）
-  prism team list | show <id> | validate <id> | render <id>
-  prism team new <id> [--from <team>|--members <role[:n],...>] [--name <名>] [--description <述>] [--template minimal|core-dev] [--harness-root <dir>|--yes]
+  prism team list | show <id> | validate <id> | render <id> [--source <dir>] [--roles-dir <dir>]
+  prism team new <id> [--source <dir>] [--roles-dir <dir>] [--from <team>|--members <role[:n],...>] [--name <名>] [--description <述>] [--template minimal|core-dev] [--harness-root <dir>|--yes]
                                            新建团队（自动校验，error 不落盘）
-  prism team edit <id> [--name <名>] [--description <述>] [--members <role[:n],...>] [--harness-root <dir>|--yes]
+  prism team edit <id> [--source <dir>] [--roles-dir <dir>] [--name <名>] [--description <述>] [--members <role[:n],...>] [--harness-root <dir>|--yes]
                                            修改团队（改名册时工作流表就地收窄）
-  prism team rm <id> [--harness-root <dir>|--yes]
+  prism team rm <id> [--source <dir>] [--harness-root <dir>|--yes]
                                            删除团队文件（默认宿主目录需 --yes；不可逆）
-  prism team activate <id>
+  prism team activate <id> [--source <dir>] [--roles-dir <dir>]
   prism skill list | install | update | uninstall | validate [name...] [--force]
   prism skill effective --role <r> [--team <t>] [--json]
                                            角色（可选绑定团队）的生效 Skill 集（global∪team∪role + 缺失告警）
@@ -83,7 +83,9 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
   <PRISM_HOME>/prism.yaml 可选覆盖：roles_dir / teams_dir / skills_dir；
   缺省落点由**激活的 harness 适配器**自述（ZCode 为 ~/.zcode/{agents,teams,skills}）。
   --harness-root 覆盖 harness 根（--zcode-dir 兼容旧名）。
-  --source <dir> 覆盖 roles_dir 本身（role 的读写命令**一律生效**；显式给出即等同 --harness-root，不再需要 --yes）
+  --source <dir> 覆盖受管目录本身（role = roles_dir / team = teams_dir；读写命令**一律生效**；
+                 显式给出即等同 --harness-root，不再需要 --yes）
+  --roles-dir <dir> team 子命令专有：成员校验用的角色库（对齐 MCP team_new|edit 的 roles_dir）
   prism kb import <file.md> [--layer --owner --book --module]
   prism kb sync <项目名|项目根> [--owner --book --module] [--dry-run]   扫描项目文档建引用索引
   prism kb search <query> [--layer --book --limit]
@@ -158,6 +160,8 @@ const CLI_OPTIONS = {
   from: { type: 'string' },
   to: { type: 'string' },
   source: { type: 'string' },
+  /** team 侧成员校验用的角色库（对齐 MCP `prism_team_new|edit` 的 `roles_dir`） */
+  'roles-dir': { type: 'string' },
   model: { type: 'string' },
   'thought-level': { type: 'string' },
   depth: { type: 'string' },
@@ -266,6 +270,8 @@ export type ArgValues = {
   from?: string
   to?: string
   source?: string
+  /** `team <子命令> --roles-dir <dir>`：成员校验用的角色库（对齐 MCP `roles_dir`） */
+  'roles-dir'?: string
   model?: string
   'thought-level'?: string
   depth?: string

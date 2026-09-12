@@ -13,6 +13,7 @@ import {
   type PrismPersistence,
 } from '@prism/core'
 import { ensureHarnessPluginsLoaded } from '@prism/agents'
+import { listBuiltinSkills } from '@prism/skills'
 
 import {
   activateTeam,
@@ -21,6 +22,7 @@ import {
   deleteRoleDefinition,
   deleteTeamDefinition,
   installedSkillNames,
+  installBuiltinSkillDefinitions,
   loadEffectiveSkills,
   loadRole,
   loadRoles,
@@ -34,6 +36,7 @@ import {
   roleNotFoundMessage,
   roleRendererFor,
   teamNotFoundMessage,
+  uninstallSkillDefinitions,
   updateRoleDefinition,
   updateTeamDefinition,
   type NewTeamBody,
@@ -442,6 +445,45 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
       ...(teamId !== undefined ? { teamId } : {}),
     })
   }
+
+  /**
+   * 内置 Skill 清单（读）：让宿主先「看见有什么可装」，并拿到 `skills_dir` 回填给
+   * `prism_skill_install|uninstall`（键名 = 写参数名，与 `roles_dir` / `teams_dir` 同一纪律）。
+   * `installed` 由宿主 skills 目录实测（与 `installedSkillNames` 同源）。
+   */
+  const skillList = async (): Promise<unknown> => {
+    const installed = new Set((await installedSkillNames(harnessRoot, deps.home)) ?? [])
+    const skills = listBuiltinSkills().map((s) => ({
+      name: s.name,
+      description: s.description,
+      installed: installed.has(s.name),
+    }))
+    return { count: skills.length, skills, skills_dir: dirs.skillsDir }
+  }
+
+  /**
+   * 安装内置 Skill（写）：与 CLI `prism skill install`、HTTP `POST /api/skills/install`
+   * 共用 `installBuiltinSkillDefinitions`（`skills_dir` **必填**——写路径一律显式参数化，
+   * 绝不回落到默认宿主目录）。冲突策略（design-v3 §5）：人写的 Skill（无 Prism marker）
+   * 不覆盖，写 `.prism-new` 供对比。
+   */
+  const skillInstall = async (args: Record<string, unknown>): Promise<unknown> =>
+    await installBuiltinSkillDefinitions({
+      skills_dir: args.skills_dir,
+      names: args.names,
+      force: args.force,
+    })
+
+  /**
+   * 卸载 Skill（写）：与 CLI `prism skill uninstall`、HTTP `POST /api/skills/uninstall`
+   * 共用 `uninstallSkillDefinitions`。**只删 Prism 产物**——人写的 Skill 一律不动并记入 `kept`。
+   * `skills_dir` 必填；`names` 缺省 = 扫描该目录下全部 Skill。
+   */
+  const skillUninstall = async (args: Record<string, unknown>): Promise<unknown> =>
+    await uninstallSkillDefinitions({
+      skills_dir: args.skills_dir,
+      names: args.names,
+    })
 
   /** 取单个角色定义（装配器按名拉取，免拉全量）。 */
   const roleGet = async (args: Record<string, unknown>): Promise<unknown> => {
@@ -1210,6 +1252,49 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
         required: ['role'],
       },
       call: skillEffective,
+    },
+    {
+      name: 'prism_skill_list',
+      description:
+        '列出内置 Skill（只读）。返回体含 skills_dir——它就是要传给 prism_skill_install|uninstall 的 skills_dir（读回即可回填）；installed 为宿主 skills 目录实测结果',
+      inputSchema: { type: 'object', properties: {} },
+      call: skillList,
+    },
+    {
+      name: 'prism_skill_install',
+      description:
+        '安装内置 Skill 到宿主（写 <skills_dir>/<name>/SKILL.md；与 HTTP POST /api/skills/install、CLI `prism skill install` 同一实现）。names 缺省 = 装全部内置。人写的 Skill（无 Prism marker）不覆盖，写 .prism-new 供对比（force=true 强制覆盖）。skills_dir 必填——写路径一律显式参数化，绝不回落到默认宿主目录',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          skills_dir: {
+            type: 'string',
+            description: '**必填**：安装目标目录（防误写真实宿主）。取值来自 prism_skill_list 的 skills_dir',
+          },
+          names: {
+            type: 'array',
+            items: { type: 'string' },
+            description: '要安装的 Skill 名（缺省 = 全部内置）',
+          },
+          force: { type: 'boolean', description: '覆盖人写的同名 Skill（缺省不覆盖，写 .prism-new 供对比）' },
+        },
+        required: ['skills_dir'],
+      },
+      call: skillInstall,
+    },
+    {
+      name: 'prism_skill_uninstall',
+      description:
+        '卸载 Skill（**只删 Prism 产物**：SKILL.md 含 marker；人写的 Skill 一律不动并记入 kept）。names 缺省 = 扫描 skills_dir 下全部 Skill。不可逆——skills_dir 必填，绝不回落到默认宿主目录',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          skills_dir: { type: 'string', description: '**必填**：Skill 所在目录' },
+          names: { type: 'array', items: { type: 'string' }, description: '要卸载的 Skill 名（缺省 = 目录下全部）' },
+        },
+        required: ['skills_dir'],
+      },
+      call: skillUninstall,
     },
     {
       name: 'prism_role_render',

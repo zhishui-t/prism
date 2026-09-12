@@ -156,3 +156,12 @@ export {
 
 // 出厂团队模板（server 侧资产）
 export { CORE_DEV_TEAM_MD } from './templates.js'
+
+// Skill 写盘（HTTP `/api/skills/install|uninstall` 与 MCP `prism_skill_install|uninstall` 共用写路径）
+export {
+  installBuiltinSkillDefinitions,
+  uninstallSkillDefinitions,
+  type SkillWriteBody,
+  type SkillInstallOutcome,
+  type SkillUninstallOutcome,
+} from './skill-create.js'

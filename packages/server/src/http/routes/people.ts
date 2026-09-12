@@ -13,6 +13,7 @@ import {
   deleteRoleDefinition,
   deleteTeamDefinition,
   installedSkillNames,
+  installBuiltinSkillDefinitions,
   loadEffectiveSkills,
   loadRole,
   loadRoles,
@@ -23,10 +24,12 @@ import {
   roleNotFoundMessage,
   roleRendererFor,
   teamNotFoundMessage,
+  uninstallSkillDefinitions,
   updateRoleDefinition,
   updateTeamDefinition,
   type NewTeamBody,
   type RoleWriteBody,
+  type SkillWriteBody,
   type UpdateTeamBody,
 } from '../../roles/index.js'
 
@@ -71,6 +74,8 @@ export function peopleRoutes(deps: PeopleDeps): {
   skills: (ctx: RouteContext) => Promise<Envelope>
   skillUsage: (ctx: RouteContext) => Promise<Envelope>
   skillsEffective: (ctx: RouteContext) => Promise<Envelope>
+  skillInstall: (ctx: RouteContext) => Promise<Envelope>
+  skillUninstall: (ctx: RouteContext) => Promise<Envelope>
   createTeam: (ctx: RouteContext) => Promise<Envelope>
   updateTeam: (ctx: RouteContext) => Promise<Envelope>
   deleteTeam: (ctx: RouteContext) => Promise<Envelope>
@@ -233,6 +238,17 @@ export function peopleRoutes(deps: PeopleDeps): {
   const skillsEffective = async (ctx: RouteContext): Promise<Envelope> =>
     await skillsEffectiveRoute(ctx, deps, { teamsDir, rolesDir })
 
+  /**
+   * Skill 写（v6.2 补齐）：`POST /api/skills/install` / `POST /api/skills/uninstall`。
+   * 与 MCP `prism_skill_install|uninstall`、CLI `prism skill install|uninstall` 共用
+   * `roles/skill-create.ts` 的单点——body 的 `skills_dir` **必填**，绝不复用 `dirs` 的默认宿主目录。
+   */
+  const skillInstall = async (ctx: RouteContext): Promise<Envelope> =>
+    ok(await installBuiltinSkillDefinitions((await ctx.body()) as SkillWriteBody))
+
+  const skillUninstall = async (ctx: RouteContext): Promise<Envelope> =>
+    ok(await uninstallSkillDefinitions((await ctx.body()) as SkillWriteBody))
+
   /** F-C3：新建团队。只传 `rolesDir`——写路径不得看见默认 `teamsDir`。 */
   const createTeam = async (ctx: RouteContext): Promise<Envelope> => await createTeamRoute(ctx, rolesDir)
 
@@ -248,6 +264,8 @@ export function peopleRoutes(deps: PeopleDeps): {
     skills,
     skillUsage,
     skillsEffective,
+    skillInstall,
+    skillUninstall,
     createTeam,
     updateTeam: (ctx) => teamUpdateRoute(ctx),
     deleteTeam: (ctx) => teamDeleteRoute(ctx),

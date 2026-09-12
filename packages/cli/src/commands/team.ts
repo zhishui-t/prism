@@ -23,7 +23,7 @@ import {
 import type { GraphStatusDetail, TeamDefinition, TeamMember, ValidationIssue } from '@prism/server'
 
 import type { ArgValues, CommandContext } from '../argv.js'
-import { guardWriteTarget, resolveTargetDirs } from '../argv.js'
+import { dirProvenanceLabel, expandHome, guardWriteTarget, resolveTargetDirs } from '../argv.js'
 import { graphBuild } from './graph.js'
 
 /**
@@ -40,12 +40,20 @@ export async function runTeam(ctx: CommandContext, args: string[], values: ArgVa
   const [sub, ...rest] = args
   const home = ctx.home ?? '.'
   const dirs = resolveTargetDirs(ctx, values)
-  const teamsDir = dirs.teamsDir
-  const rolesDir = dirs.rolesDir
+  // v6.2：与 role 侧对称——`--source` 覆盖本命令的**受管目录**（team = teams_dir），
+  // 读写一律生效；显式给出即视为「用户指定了目录」，与 --harness-root 同口径**解除写守卫**。
+  // 此前 team 侧连读都没有目录参数（team 是三入口里唯一不能指定写目录的）。
+  const sourceExplicit = values.source !== undefined
+  const teamsDir = sourceExplicit ? expandHome(values.source!) : dirs.teamsDir
+  const writeDirs = sourceExplicit ? { ...dirs, guard: { ...dirs.guard, teams: false } } : dirs
+  // `--roles-dir`：成员校验用的角色库（对齐 MCP `prism_team_new|edit` 的 `roles_dir`）；
+  // 缺省 = 默认角色目录（与激活适配器 / prism.yaml 同源）。
+  const rolesDir =
+    values['roles-dir'] !== undefined ? expandHome(values['roles-dir']) : dirs.rolesDir
 
   switch (sub) {
     case 'new': {
-      return await teamNew(ctx, rest, values, dirs)
+      return await teamNew(ctx, rest, values, teamsDir, rolesDir, writeDirs)
     }
 
     case 'list': {
@@ -70,7 +78,7 @@ export async function runTeam(ctx: CommandContext, args: string[], values: ArgVa
     case 'show': {
       const id = rest[0]
       if (id === undefined) {
-        ctx.stderr('用法: prism team show <id>')
+        ctx.stderr('用法: prism team show <id> [--source <dir>] [--roles-dir <dir>]')
         return 1
       }
       const team = await loadTeam(teamsDir, id, { rolesDir })
@@ -103,7 +111,7 @@ export async function runTeam(ctx: CommandContext, args: string[], values: ArgVa
     case 'validate': {
       const id = rest[0]
       if (id === undefined) {
-        ctx.stderr('用法: prism team validate <id>')
+        ctx.stderr('用法: prism team validate <id> [--source <dir>] [--roles-dir <dir>]')
         return 1
       }
       const team = await loadTeam(teamsDir, id, { rolesDir })
@@ -129,7 +137,7 @@ export async function runTeam(ctx: CommandContext, args: string[], values: ArgVa
     case 'activate': {
       const id = rest[0]
       if (id === undefined) {
-        ctx.stderr('用法: prism team activate <id> [--project <名>|--build-project <名>]')
+        ctx.stderr('用法: prism team activate <id> [--source <dir>] [--roles-dir <dir>] [--project <名>|--build-project <名>]')
         return 1
       }
       const team = await loadTeam(teamsDir, id, { rolesDir })
@@ -215,7 +223,7 @@ export async function runTeam(ctx: CommandContext, args: string[], values: ArgVa
         ctx.stderr(TEAM_EDIT_USAGE)
         return 1
       }
-      if (!guardWriteTarget(ctx, values, dirs, 'teams', 1)) return 1
+      if (!guardWriteTarget(ctx, values, writeDirs, 'teams', 1)) return 1
       try {
         const result = await editTeam({ teamId: id, teamsDir, patch })
         // `--json`：issue 走 JSON payload（`...result` 已含 issues），stdout 保持整体可解析
@@ -240,10 +248,10 @@ export async function runTeam(ctx: CommandContext, args: string[], values: ArgVa
     case 'rm': {
       const id = rest[0]
       if (id === undefined) {
-        ctx.stderr('用法: prism team rm <id> [--harness-root <dir>|--yes]')
+        ctx.stderr('用法: prism team rm <id> [--source <dir>] [--harness-root <dir>|--yes]')
         return 1
       }
-      if (!guardWriteTarget(ctx, values, dirs, 'teams', 1, 'delete')) return 1
+      if (!guardWriteTarget(ctx, values, writeDirs, 'teams', 1, 'delete')) return 1
       try {
         const result = await removeTeam({ teamId: id, teamsDir })
         if (ctx.json) {
@@ -262,7 +270,7 @@ export async function runTeam(ctx: CommandContext, args: string[], values: ArgVa
     case 'render': {
       const id = rest[0]
       if (id === undefined) {
-        ctx.stderr('用法: prism team render <id>')
+        ctx.stderr('用法: prism team render <id> [--source <dir>]')
         return 1
       }
       const team = await loadTeam(teamsDir, id, { rolesDir })
@@ -280,7 +288,7 @@ export async function runTeam(ctx: CommandContext, args: string[], values: ArgVa
     }
 
     default:
-      ctx.stderr(`未知子命令: team ${sub ?? ''}\n用法: prism team list|show|new|edit|rm|validate|render|activate`)
+      ctx.stderr(`未知子命令: team ${sub ?? ''}\n用法: prism team list|show|new|edit|rm|validate|render|activate [--source <dir>] [--roles-dir <dir>]`)
       return 1
   }
 }
@@ -299,16 +307,16 @@ const TEAM_NEW_USAGE =
  * - `--from <team>`：复用 `@prism/server` 的 `loadTeam`（**不自造第二个 loader**），`extends` 保留；
  * - `--members`：收窄名册时自动裁剪工作流（并出 `workflow_pruned` warning）；
  * - 已存在 → skipped（不覆盖，对齐 `role new` 语义）；
- * - 写守卫口径 = `--harness-root` / prism.yaml（**不引入 `--teams-dir`**）。
+ * - 写守卫口径 = `--harness-root` / prism.yaml / `--source`（显式指定 teams_dir）。
  */
 async function teamNew(
   ctx: CommandContext,
   rest: string[],
   values: ArgValues,
-  dirs: ResolvedDirs,
+  teamsDir: string,
+  rolesDir: string,
+  writeDirs: ResolvedDirs,
 ): Promise<number> {
-  const teamsDir = dirs.teamsDir
-  const rolesDir = dirs.rolesDir
   const id = rest[0]
   if (id === undefined) {
     ctx.stderr(TEAM_NEW_USAGE)
@@ -316,6 +324,10 @@ async function teamNew(
   }
   const flatPath = join(teamsDir, `${id}.md`)
   const dirPath = join(teamsDir, id, 'AGENTS.md')
+  if (!ctx.json) {
+    const sourceLabel = values.source !== undefined ? '--source' : dirProvenanceLabel(writeDirs.provenance.teams)
+    ctx.stdout(`目标 teams_dir: ${teamsDir}（来源：${sourceLabel}）`)
+  }
 
   // 已存在 → skipped（绝不覆盖人写文件；要重建请先删或换 id）
   const existing = existsSync(flatPath) ? flatPath : existsSync(dirPath) ? dirPath : null
@@ -415,7 +427,7 @@ async function teamNew(
   }
 
   // 写守卫：目标是默认宿主目录（非 --harness-root / prism.yaml 显式指定）时需 --yes
-  if (!guardWriteTarget(ctx, values, dirs, 'teams', 1)) return 1
+  if (!guardWriteTarget(ctx, values, writeDirs, 'teams', 1)) return 1
   try {
     mkdirSync(teamsDir, { recursive: true })
     writeFileSync(flatPath, scaffold.markdown, 'utf-8')
