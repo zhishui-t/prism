@@ -89,8 +89,11 @@ function makeArchive(options: { binary?: boolean; symlink?: boolean } = {}): str
     symlinkSync('libllama-common.0.4.0.dylib', join(pkg, 'libllama-common.0.dylib'))
   }
 
+  // Git Bash 的 GNU tar 会把 `D:/...` 当远程主机（`Cannot connect to D`）——
+  // 仓库已两次踩坑（scripts/package.mjs、scripts/smoke-package.mjs 均有注释）。
+  // 解法同前：cwd 到 root、`-C .`、只传相对名。
   const tarPath = join(root, 'pkg.tar.gz')
-  execFileSync('tar', ['-czf', tarPath, '-C', root, basename(pkg)])
+  execFileSync('tar', ['-czf', 'pkg.tar.gz', '-C', '.', basename(pkg)], { cwd: root })
   return tarPath
 }
 

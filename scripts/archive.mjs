@@ -19,7 +19,7 @@
  *   libllama-common.0.4.0.dylib`），只拷普通文件会让 dyld 找不到 `@rpath` 目标并 abort。
  *   Windows 的 zip 里没有软链，所以这条只在 macOS / Linux 暴露（见 `copyLink`）。
  */
-import { chmod, copyFile, mkdir, readdir, readlink, rm, symlink } from 'node:fs/promises'
+import { chmod, copyFile, mkdir, readdir, readlink, rename, rm, symlink } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { basename, dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -55,7 +55,17 @@ export async function extractArchive(archivePath, destDir, binaryName, log = () 
     if (archivePath.endsWith('.zip')) {
       await extractZip(archivePath, staging)
     } else {
-      const code = await spawnAndWait('tar', ['-xzf', archivePath, '-C', staging])
+      // Git Bash 的 GNU tar 把 `D:/...` 当远程主机（`Cannot connect to D`，仓库已三次踩坑）。
+      // 解法：把归档**搬进 staging**（同盘 rename 零成本；跨盘 EXDEV 退回复制），
+      // cwd=staging、`-C .`——tar 的所有参数都不含盘符绝对路径。
+      const localArchive = join(staging, basename(archivePath))
+      try {
+        await rename(archivePath, localArchive)
+      } catch {
+        await copyFile(archivePath, localArchive)
+        await rm(archivePath, { force: true })
+      }
+      const code = await spawnAndWait('tar', ['-xzf', basename(localArchive), '-C', '.'], { cwd: staging })
       if (code !== 0) throw new Error(`tar 解压失败（退出码 ${code}）: ${archivePath}`)
     }
     await flattenInto(staging, destDir, binaryName)
