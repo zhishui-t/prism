@@ -250,6 +250,75 @@ describe('扫描尊重 .gitignore', () => {
     kb.close()
   })
 
+  it('多级叠加：子目录 .gitignore 生效，且不外溢到别的子树', async () => {
+    const { scanProject } = await import('../../server/src/kb/scan.js')
+    const root = await makeProject({
+      '.gitignore': 'root-only.md\n',
+      'README.md': '# 项目',
+      'root-only.md': '# 根级忽略',
+      // 用 artifacts/ 而非 build/：后者在 DEFAULT_IGNORE_DIRS 里，属内置忽略、不计入 .gitignore 报告
+      'pkg/.gitignore': 'local.md\nartifacts/\n',
+      'pkg/local.md': '# 子包忽略',
+      'pkg/keep.md': '# 保留',
+      'pkg/artifacts/out.md': '# 产物',
+      'other/local.md': '# 同名文件：pkg 的规则管不到这里',
+    })
+    const home = await makeTempDir('prism-gitignore-multi-')
+    const kb = makeKb(home)
+
+    const report = await scanProject(kb, { root, owner: 'p', book: 'p' })
+    const rels = report.files.map((f) => f.rel)
+    expect(rels).toContain('README.md')
+    expect(rels).toContain('pkg/keep.md')
+    expect(rels).toContain('other/local.md') // 子目录规则不外溢
+    expect(rels).not.toContain('root-only.md')
+    expect(rels).not.toContain('pkg/local.md')
+    expect(rels).not.toContain('pkg/artifacts/out.md')
+    expect(report.ignored_dirs).toEqual(['pkg/artifacts'])
+    expect(report.ignored_files).toBe(2) // root-only.md + pkg/local.md
+    kb.close()
+  })
+
+  it('深层「没意见」不覆盖浅层的忽略判定', async () => {
+    const { scanProject } = await import('../../server/src/kb/scan.js')
+    const root = await makeProject({
+      '.gitignore': 'secrets/\n',
+      'sub/.gitignore': 'notes.md\n',
+      'sub/notes.md': '# 子层忽略',
+      'secrets/key.md': '# 根层忽略',
+      'sub/secrets/key.md': '# 子层的 .gitignore 压根没提它，根层判定必须保留',
+    })
+    const home = await makeTempDir('prism-gitignore-layer-')
+    const kb = makeKb(home)
+
+    const report = await scanProject(kb, { root, owner: 'p', book: 'p' })
+    const rels = report.files.map((f) => f.rel)
+    expect(rels).not.toContain('sub/notes.md')
+    expect(rels).not.toContain('secrets/key.md')
+    expect(rels).not.toContain('sub/secrets/key.md')
+    expect(report.ignored_dirs.sort()).toEqual(['secrets', 'sub/secrets'])
+    kb.close()
+  })
+
+  it('子目录 .gitignore 的取反可捞回父层忽略的文件', async () => {
+    const { scanProject } = await import('../../server/src/kb/scan.js')
+    const root = await makeProject({
+      '.gitignore': '*.tmp.md\n',
+      'pkg/.gitignore': '!keep.tmp.md\n',
+      'pkg/keep.tmp.md': '# 被深层取反捞回',
+      'pkg/drop.tmp.md': '# 仍被根层挡下',
+    })
+    const home = await makeTempDir('prism-gitignore-neg2-')
+    const kb = makeKb(home)
+
+    const report = await scanProject(kb, { root, owner: 'p', book: 'p' })
+    const rels = report.files.map((f) => f.rel)
+    expect(rels).toContain('pkg/keep.tmp.md')
+    expect(rels).not.toContain('pkg/drop.tmp.md')
+    expect(report.ignored_files).toBe(1)
+    kb.close()
+  })
+
   it('respectGitignore: false → 只按内置目录名过滤，.gitignore 不生效', async () => {
     const { scanProject } = await import('../../server/src/kb/scan.js')
     const root = await makeProject({

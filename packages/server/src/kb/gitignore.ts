@@ -10,9 +10,13 @@
  * - 模式含 `/`（非尾部）→ 锚定到 .gitignore 所在目录；否则匹配**任意层级**；
  * - `*`（不跨 `/`）、`?`（单字符，不跨 `/`）、`[...]` 字符类、`**`（跨 `/`）。
  *
- * **有意不覆盖**：多级 `.gitignore` 叠加（子目录内的）、`.git/info/exclude`、
- * `core.excludesFile`、`--no-index`。需要这些的宿主可用 `ScanOptions.ignoreDirs`
- * 或 `respectGitignore: false` 自行处理。
+ * **多级叠加由 `scanProject` 负责**：本文件只做「单个 `.gitignore` 文本 → 匹配器」。
+ * 子目录级的 `.gitignore` 由 `scan.ts` 逐层加载、按层判定再合并——见
+ * `GitignoreMatcher.match()`：未命中返回 `undefined`，因此深层「本层没意见」不会
+ * 覆盖浅层的判定。
+ *
+ * **有意不覆盖**：`.git/info/exclude`、`core.excludesFile`、`--no-index`。
+ * 需要这些的宿主可用 `ScanOptions.ignoreDirs` 或 `respectGitignore: false` 自行处理。
  *
  * 匹配语义按「逐层 walk」设计：调用方从根往下走，父目录一旦被忽略就不再进入，
  * 因此 `ignores(rel, isDir)` 只需判断**单条相对路径**，无需自己展开子树。
@@ -147,16 +151,32 @@ export class GitignoreMatcher {
   }
 
   /**
-   * `rel` 是否被忽略。`rel` 是 POSIX 相对路径（无前导 `./`、无盘符）。
+   * `rel` 在本层规则下的判定。`rel` 是 POSIX 相对路径（无前导 `./`、无盘符），
+   * **相对本 `.gitignore` 所在目录**。
+   *
+   * 返回三态而非布尔——这是多级叠加能正确工作的关键：
+   * - `true`  —— 命中忽略规则；
+   * - `false` —— 命中取反（`!`）规则，显式捞回；
+   * - `undefined` —— **本层没有规则命中**，即「本层没意见」。
+   *
+   * 若压成布尔，深层 `.gitignore` 里一条不相干的规则会把浅层的忽略判定**误判为「不忽略」**。
    * 取反规则按书写顺序覆盖前面的判定（git 语义）。
    */
-  ignores(rel: string, isDir: boolean): boolean {
-    let ignored = false
+  match(rel: string, isDir: boolean): boolean | undefined {
+    let verdict: boolean | undefined
     for (const rule of this.#rules) {
       if (rule.dirOnly && !isDir) continue
-      if (rule.regex.test(rel)) ignored = !rule.negated
+      if (rule.regex.test(rel)) verdict = !rule.negated
     }
-    return ignored
+    return verdict
+  }
+
+  /**
+   * `rel` 是否被忽略（单层语义：未命中即不忽略）。
+   * 多级叠加请用 `scanProject`，它在每层上调 `match` 并按「深层覆盖浅层」合并。
+   */
+  ignores(rel: string, isDir: boolean): boolean {
+    return this.match(rel, isDir) ?? false
   }
 }
 

@@ -102,6 +102,15 @@ describe('.gitignore 匹配语义', () => {
     ])
   })
 
+  it('match() 三态：命中忽略 / 命中取反 / 本层没意见（多级叠加的前提）', () => {
+    const matcher = createGitignoreMatcher('generated/\n!keep.md\n')
+    expect(matcher.match('generated', true)).toBe(true) // 命中忽略
+    expect(matcher.match('a/keep.md', false)).toBe(false) // 命中取反 → 显式捞回
+    expect(matcher.match('unrelated.md', false)).toBeUndefined() // 本层无规则命中
+    // 压成布尔的旧口径会把「本层没意见」误判成「不忽略」
+    expect(matcher.ignores('unrelated.md', false)).toBe(false)
+  })
+
   it('目录被忽略时，其后代在「逐层 walk」中不会到达（父目录已挡）', () => {
     // 这里只验匹配器本身：后代路径仍会命中非锚定模式
     check('generated/', [['generated', true, true], ['generated/deep/nested', true, true]])

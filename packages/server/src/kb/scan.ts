@@ -6,11 +6,11 @@
  * - **零 LLM**——格式转换是机械的（anydoc），语义抽取交给工作队列；
  * - **引用型只索引**——项目文件是真相，Prism 不复制、不做版次。
  *
- * 关于 `.gitignore`（2026-09-14）：扫描**读项目根的 `.gitignore` 文本文件**，把其中
- * 忽略的目录/文件一并跳过。这不违反上面「不读 git」——该红线约束的是**不介入版本控制**
- * （不执行 git 命令、不读 `.git/`、不问分支与提交）；`.gitignore` 只是一个普通的文本
- * 清单，描述「哪些路径不算项目内容」，属于**扫描范围**问题。可用
- * `respectGitignore: false` 关掉。
+ * 关于 `.gitignore`（2026-09-14，当晚扩到多级子目录）：扫描**逐层读目录里的
+ * `.gitignore`**（根 + 各级子目录），把其中忽略的目录/文件一并跳过。这不违反上面
+ * 「不读 git」——该红线约束的是**不介入版本控制**（不执行 git 命令、不读 `.git/`、
+ * 不问分支与提交）；`.gitignore` 只是一个普通的文本清单，描述「哪些路径不算项目内容」，
+ * 属于**扫描范围**问题。可用 `respectGitignore: false` 关掉。
  *
  * 扫描流程：
  *   遍历目录 → 过滤扩展名 / 硬编码忽略目录 / `.gitignore` 忽略 → 逐个转 Markdown →
@@ -59,7 +59,7 @@ export interface ScanOptions {
   /** 额外忽略的目录名 */
   ignoreDirs?: string[]
   /**
-   * 是否读项目根的 `.gitignore` 并跳过其中忽略的路径（默认 `true`）。
+   * 是否读 `.gitignore`（**根 + 各级子目录，逐层叠加**）并跳过其中忽略的路径（默认 `true`）。
    * 置 `false` 时只按 `DEFAULT_IGNORE_DIRS` + `ignoreDirs` 过滤。
    */
   respectGitignore?: boolean
@@ -105,9 +105,9 @@ export interface ScanReport {
   missing: string[]
   /** 不可读的目录（权限/占用等），显式报告不静默 */
   unreadable: string[]
-  /** 被 `.gitignore` 忽略的目录（相对路径；**不递归展开**，进了就不再往下走） */
+  /** 被 `.gitignore`（任意一层）忽略的目录（相对路径；**不递归展开**，拦下就不再往下走） */
   ignored_dirs: string[]
-  /** 被 `.gitignore` 忽略的文件数（只计数——目录已挡在前面，通常量很小） */
+  /** 被 `.gitignore`（任意一层）忽略的文件数（只计数——目录已挡在前面，通常量很小） */
   ignored_files: number
 }
 
@@ -185,14 +185,15 @@ export function makeDryRunKb(real: KnowledgeService): KnowledgeService {
 }
 
 /**
- * 读项目根的 `.gitignore`（不存在/不可读/无规则 → `null`）。
+ * 读某个目录的 `.gitignore`（不存在/不可读/无规则 → `null`）。
  *
- * 只读**根**这一处：多级 `.gitignore` 叠加（子目录内的）有意不做——覆盖面收益小，
- * 而「哪些子目录有自己的 .gitignore」本身要递归才发现。需要时走 `ignoreDirs`。
+ * **逐层调用**：根目录与每一级子目录各读一次，叠加成完整的忽略语义。
+ * 每层规则只作用于**该目录的后代**，且**不作用于该目录自身**——与 git 一致
+ * （否则 `sub/.gitignore` 里一条 `sub/` 就能把自己整个抹掉，自相矛盾）。
  */
-async function loadGitignore(root: string): Promise<GitignoreMatcher | null> {
+async function loadGitignore(dir: string): Promise<GitignoreMatcher | null> {
   try {
-    const text = await readFile(join(root, '.gitignore'), 'utf-8')
+    const text = await readFile(join(dir, '.gitignore'), 'utf-8')
     const matcher = createGitignoreMatcher(text)
     return matcher.size > 0 ? matcher : null
   } catch {
@@ -234,56 +235,94 @@ export async function scanProject(kb: KnowledgeService, options: ScanOptions): P
     ignored_files: 0,
   }
 
-  const gitignore = options.respectGitignore === false ? null : await loadGitignore(root)
-
   const candidates: string[] = []
   const unreadable: string[] = []
-  const walk = async (dir: string): Promise<void> => {
-    if (candidates.length >= maxFiles) {
-      report.truncated = true
-      return
+  const respectGitignore = options.respectGitignore !== false
+  /**
+   * 已加载的 `.gitignore` 层，**从根往下**（`base` = 该层所在目录相对 root 的 POSIX 路径）。
+   *
+   * 判定时从浅到深依次问，**只有深层「命中」才覆盖浅层的结论**——深层本层没有相关
+   * 规则（`match` 返回 `undefined`）时必须保持浅层的判定，否则子目录里一条不相干的
+   * 规则会把父级的忽略悄悄取消掉。
+   */
+  const layers: Array<{ base: string; matcher: GitignoreMatcher }> = []
+
+  /** 多层叠加判定；`rel` 是相对 root 的 POSIX 路径。 */
+  const isIgnored = (rel: string, isDir: boolean): boolean => {
+    let ignored = false
+    for (const layer of layers) {
+      let sub: string
+      if (layer.base === '') {
+        sub = rel
+      } else if (rel.startsWith(`${layer.base}/`)) {
+        // 只作用于本目录的**后代**：`sub/.gitignore` 管不到 `sub` 自己
+        sub = rel.slice(layer.base.length + 1)
+      } else {
+        continue
+      }
+      const verdict = layer.matcher.match(sub, isDir)
+      if (verdict !== undefined) ignored = verdict
     }
-    let entries
+    return ignored
+  }
+
+  const walk = async (dir: string, base: string): Promise<void> => {
+    // 本目录的 `.gitignore` 先入栈再遍历：它管的是**本目录的内容**，不含本目录自身
+    let pushed = false
+    if (respectGitignore) {
+      const matcher = await loadGitignore(dir)
+      if (matcher !== null) {
+        layers.push({ base, matcher })
+        pushed = true
+      }
+    }
     try {
-      entries = await readdir(dir, { withFileTypes: true })
-    } catch (error) {
-      // 不可读目录显式记录（QA 遗留 4：静默跳过会让用户以为扫全了）
-      unreadable.push(`${dir}（${error instanceof Error ? error.message : String(error)}）`)
-      return
-    }
-    for (const entry of entries) {
       if (candidates.length >= maxFiles) {
         report.truncated = true
         return
       }
-      const abs = join(dir, entry.name)
-      if (entry.isDirectory()) {
-        if (ignore.has(entry.name)) continue
-        if (gitignore !== null) {
+      let entries
+      try {
+        entries = await readdir(dir, { withFileTypes: true })
+      } catch (error) {
+        // 不可读目录显式记录（QA 遗留 4：静默跳过会让用户以为扫全了）
+        unreadable.push(`${dir}（${error instanceof Error ? error.message : String(error)}）`)
+        return
+      }
+      for (const entry of entries) {
+        if (candidates.length >= maxFiles) {
+          report.truncated = true
+          return
+        }
+        const abs = join(dir, entry.name)
+        if (entry.isDirectory()) {
+          if (ignore.has(entry.name)) continue
           const rel = relative(root, abs).split(sep).join('/')
-          if (gitignore.ignores(rel, true)) {
+          if (isIgnored(rel, true)) {
             report.ignored_dirs.push(rel)
             continue
           }
-        }
-        await walk(abs)
-        continue
-      }
-      if (!entry.isFile()) continue
-      // 先过扩展名：只有「本来会被扫」的文件才算「被 .gitignore 挡掉」，
-      // 否则 `.log` 这类本就不支持的扩展名会虚增忽略计数
-      if (!isSupported(entry.name)) continue
-      if (gitignore !== null) {
-        const rel = relative(root, abs).split(sep).join('/')
-        if (gitignore.ignores(rel, false)) {
-          report.ignored_files++
+          await walk(abs, rel)
           continue
         }
+        if (!entry.isFile()) continue
+        // 先过扩展名：只有「本来会被扫」的文件才算「被 .gitignore 挡掉」，
+        // 否则 `.log` 这类本就不支持的扩展名会虚增忽略计数
+        if (!isSupported(entry.name)) continue
+        if (respectGitignore) {
+          const rel = relative(root, abs).split(sep).join('/')
+          if (isIgnored(rel, false)) {
+            report.ignored_files++
+            continue
+          }
+        }
+        candidates.push(abs)
       }
-      candidates.push(abs)
+    } finally {
+      if (pushed) layers.pop()
     }
   }
-  await walk(root)
+  await walk(root, '')
   report.discovered = candidates.length
   report.unreadable = unreadable
 
