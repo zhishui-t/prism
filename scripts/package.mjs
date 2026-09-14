@@ -1,42 +1,92 @@
 #!/usr/bin/env node
 /**
- * Prism 打包脚本：产出自包含 tarball + 一键启动入口。
+ * Prism 打包脚本：产出**按平台自包含**的发布包（解压即用，无需 git、无需联网）。
  *
- *   node scripts/package.mjs [--out <dir>] [--skip-build]
+ *   node scripts/package.mjs [--out <dir>] [--skip-build] [--models small|all] [--full-3rd]
  *   pnpm run package
+ *
+ * 产物：
+ *   <out>/prism-<version>_<platform>.tgz     例：dist/prism-0.1.0-alpha_win_x64.tgz
+ *   <out>/SHA256SUMS                         校验和（Release 附件一并上传）
+ *
+ * 为什么平台后缀进包名：包内带**本机平台的三方运行时**——
+ *   - `3rd/llama-runtime/`   llama-server 二进制（CPU 自编译 + Vulkan 预编译）
+ *   - `3rd/anydoc-runtime/`  anydoc 原生绑定（napi `.node`，平台专属）
+ * 二者都不可跨平台复用，所以 mac 版必须**另出一个** `_mac_arm64` / `_mac_x64` 包，
+ * 而不是共用同一个包。
  *
  * 产物结构（解压即用，无需 pnpm install）：
  *
- *   prism-<version>/
- *   ├── bin/prism.js               # 一键启动入口
- *   ├── packages/<name>/dist/      # 各包构建产物
- *   ├── packages/<name>/package.json
- *   ├── node_modules/@prism/<name> → 物化的包副本（真实目录，非符号链接）
- *   ├── apps/web/dist/             # 控制台静态资源
- *   ├── 3rd/archify/               # submodule 源码（自包含 CLI）
- *   ├── 3rd/graphify/              # submodule 源码（Python，需本机装依赖）
- *   ├── 3rd/anydoc/                # submodule 源码（Rust；运行时由目标机下载）
- *   ├── examples/harnesses/        # 宿主适配器插件（复制到 <PRISM_HOME>/harnesses/ 即用）
- *   ├── scripts/setup-*.mjs        # 运行时安装脚本（embedding / anydoc）
+ *   prism-<version>_<platform>/
+ *   ├── bin/prism.js                        # 一键启动入口
+ *   ├── packages/<name>/dist/               # 各包构建产物
+ *   ├── node_modules/@prism/<name>/         # 物化的包副本（真实目录，非符号链接）
+ *   ├── apps/web/dist/                      # 控制台静态资源
+ *   ├── 3rd/archify/                        # 子模块源码（自包含 CLI，免构建）
+ *   ├── 3rd/graphify/                       # 子模块源码（Python，免构建）
+ *   ├── 3rd/anydoc/                         # 子模块源码（含 JS 包装层）
+ *   ├── 3rd/anydoc-runtime/                 # ★ 原生绑定 + JS 包装层（本平台）
+ *   ├── 3rd/llama-runtime/bin/              # ★ llama-server（本机 CPU / 平台预编译）
+ *   ├── 3rd/llama-runtime/bin-vulkan/       # ★ Vulkan 加速后端（Windows / Linux）
+ *   ├── 3rd/llama-runtime/models/bge-small-zh-v1.5-q8_0.gguf  # ★ 最小向量模型（26MB）
+ *   ├── scripts/setup-*.mjs                 # 可选：重装 / 换档 / 换平台
+ *   ├── examples/harnesses/                 # 宿主适配器插件
+ *   ├── PRISM-MANIFEST.json                 # 版本 / 平台 / 运行时清单 / 体积
  *   ├── README.md / AGENTS.md / LICENSE
  *   └── package.json
  *
  * 设计要点：
  * - **仅 workspace 内部包**物化进 tarball，解压后无需 `pnpm install`；
- * - workspace 包在开发态是符号链接，打包时**物化**为真实目录，避免解压后链接失效；
- * - 三方件走 **git submodule + 安装脚本**：archify/graphify 随包（免构建）；llama.cpp 与
- *   anydoc 的运行时由目标机跑脚本生成（平台相关，不随包）；
- * - graphify 的 Python 依赖（tree-sitter 等）需目标机 `pnpm run 3rd:build` 安装——
- *   tarball 不携带 Python 环境，bin/prism.js 启动时会检测并给出提示。
+ * - **三方运行时随包**（本平台），目标机**不需要 git、也不需要联网**即可跑通
+ *   向量检索与文档转换——这正是「有的环境访问不了 git 就装不上」的根治；
+ * - **默认只带最小向量模型**（`bge-small-zh` 26MB，CPU 默认档）→ 解压即开箱可用语义检索；
+ *   大档模型（bge-m3 / Qwen3-Embedding，各 600MB+）走 `--models all` 或目标机按需下载；
+ * - **排除项**（有依据，见下方 RUNTIME_DIRS / THIRD_PARTY_SLIM 注释）：
+ *   `3rd/llama.cpp` 源码 173MB（只有「源码编译」路径需要）、
+ *   `3rd/llama-runtime/build` 编译中间产物 95MB、非本平台运行时、
+ *   以及 3rd 各子模块里与运行无关的 docs / examples / tests（约 46MB，全仓零引用）；
+ *   `--full-3rd` 可保留 3rd 子模块的全部内容（llama.cpp 源码与运行时档位不受影响）。
+ * - graphify 的 Python 依赖（tree-sitter / networkx / numpy / rapidfuzz）**不随包**——
+ *   Python 环境无法可靠内嵌，目标机需联网 `pip install`（离线场景见 README 的说明）。
  */
 import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { existsSync, readFileSync } from 'node:fs'
 import { spawn } from 'node:child_process'
-import { join, resolve } from 'node:path'
+import { join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)))
 const PKG_NAMES = ['core', 'knowledge', 'agents', 'skills', 'server', 'cli']
+
+/** 默认随包的最小向量模型（CPU 默认档，26MB）。 */
+const DEFAULT_MODEL = 'bge-small-zh-v1.5-q8_0.gguf'
+
+/**
+ * 运行时目录：**永远**不进通用「三方源码」拷贝，而是下面按需**精确**拷贝。
+ * 必须与 `--full-3rd` 解耦——否则 `--full-3rd` 会把 1.5GB 的 llama-runtime
+ * （含 95MB `build/` 与 1.3GB 大档模型）整棵吞进来，与「只带最小模型」直接冲突。
+ */
+const RUNTIME_DIRS = ['3rd/llama.cpp', '3rd/llama-runtime', '3rd/anydoc-runtime']
+
+/**
+ * 3rd 子模块里**与运行无关**的目录，随包时排除（`--full-3rd` 可全部保留）。
+ * 依据：全仓 grep 这些路径（packages / scripts / test / apps）**零引用**，
+ * 命中的只有代码注释里描述「测试样本出处」的文字。运行时真正需要的是
+ * `archify/archify/`（CLI 包本体）与 `graphify/graphify/`（Python 包本体）。
+ */
+const THIRD_PARTY_SLIM = [
+  '3rd/archify/docs', // 18MB 上游文档
+  '3rd/archify/examples', // 9.1MB 仓库级示例（注意：archify/archify/examples 保留，测试要用）
+  '3rd/archify/experiments', // 3.1MB
+  '3rd/archify/generated', // 1.7MB
+  '3rd/archify/benchmarks', // 580KB
+  '3rd/archify/archify.zip', // 1.3MB 打包好的发布 zip
+  '3rd/graphify/docs', // 1.4MB
+  '3rd/graphify/tools', // 2.0MB
+  '3rd/graphify/worked', // 4.3MB 上游跑过的样本语料
+  '3rd/graphify/tests', // 4.4MB
+]
 
 function log(msg) {
   process.stdout.write(`[package] ${msg}\n`)
@@ -49,6 +99,41 @@ async function exists(p) {
   } catch {
     return false
   }
+}
+
+/** 目录/文件字节数（递归）。 */
+async function sizeOf(p) {
+  try {
+    const s = await stat(p)
+    if (!s.isDirectory()) return s.size
+    let total = 0
+    for (const entry of await readdir(p, { withFileTypes: true })) {
+      total += await sizeOf(join(p, entry.name))
+    }
+    return total
+  } catch {
+    return 0
+  }
+}
+
+const mb = (bytes) => `${(bytes / 1048576).toFixed(1)} MB`
+
+/**
+ * 平台标识（进包名）。
+ * 与 Node 的 process.platform / process.arch 同构，便于目标机核对：
+ *   win32+x64 → win_x64     darwin+arm64 → mac_arm64     darwin+x64 → mac_x64
+ * 未收录的组合直接抛错——宁可不发包，也不发一个名字骗人的包。
+ */
+function platformToken() {
+  const os = { win32: 'win', darwin: 'mac', linux: 'linux' }[process.platform]
+  if (os === undefined) {
+    throw new Error(`未知平台 process.platform=${process.platform}——请先在 platformToken() 里登记`)
+  }
+  const arch = { x64: 'x64', arm64: 'arm64' }[process.arch]
+  if (arch === undefined) {
+    throw new Error(`未知架构 process.arch=${process.arch}——请先在 platformToken() 里登记`)
+  }
+  return `${os}_${arch}`
 }
 
 /**
@@ -120,20 +205,34 @@ function run(cmd, args, cwd) {
 
 /** 解析 CLI 参数。 */
 function parseArgs(argv) {
-  const out = { outDir: join(ROOT, 'dist'), skipBuild: false }
+  const out = { outDir: join(ROOT, 'dist'), skipBuild: false, models: 'small', full3rd: false }
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--out') out.outDir = resolve(argv[++i])
     else if (argv[i] === '--skip-build') out.skipBuild = true
+    else if (argv[i] === '--models') out.models = argv[++i]
+    else if (argv[i] === '--full-3rd') out.full3rd = true
+  }
+  if (out.models !== 'small' && out.models !== 'all') {
+    throw new Error(`--models 只接受 small|all，收到 ${out.models}`)
   }
   return out
+}
+
+/** 某个绝对路径相对仓库根是否落在排除清单里。 */
+function isSkipped(rel, full3rd) {
+  const lists = full3rd ? RUNTIME_DIRS : [...RUNTIME_DIRS, ...THIRD_PARTY_SLIM]
+  return lists.some((skip) => rel === skip || rel.startsWith(`${skip}/`))
 }
 
 async function main() {
   const args = parseArgs(process.argv.slice(2))
   const rootPkg = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf-8'))
   const version = rootPkg.version
-  const stageName = `prism-${version}`
+  const platform = platformToken()
+  const stageName = `prism-${version}_${platform}`
   const stageDir = join(args.outDir, stageName)
+
+  log(`版本 ${version} · 平台 ${platform}（process.platform=${process.platform} / arch=${process.arch}）`)
 
   // 1) 构建（默认；--skip-build 用现有 dist）
   if (!args.skipBuild) {
@@ -150,6 +249,30 @@ async function main() {
   if (missing.length > 0) {
     throw new Error(`构建产物缺失：${missing.join(', ')}（先跑 pnpm run build）`)
   }
+
+  // 2b) 运行时前置校验：既然承诺「解压即用」，缺件就必须**打包期**炸掉，
+  //     而不是等目标机跑到一半才发现。任何一项缺失都让本次打包失败。
+  //     文件名按平台折算：Windows 是 llama-server.exe，其余是 llama-server。
+  const binName = process.platform === 'win32' ? 'llama-server.exe' : 'llama-server'
+  const runtimeNeeded = [
+    ['llama 主二进制', join(ROOT, '3rd', 'llama-runtime', 'bin', binName)],
+    ['anydoc 原生绑定', join(ROOT, '3rd', 'anydoc-runtime', 'anydoc.js')],
+    ['最小向量模型', join(ROOT, '3rd', 'llama-runtime', 'models', DEFAULT_MODEL)],
+    // Vulkan 后端只在 Windows / Linux 上存在；macOS 走随包分发的 Metal。
+    ...(process.platform === 'win32' || process.platform === 'linux'
+      ? [['llama Vulkan 后端', join(ROOT, '3rd', 'llama-runtime', 'bin-vulkan', binName)]]
+      : []),
+  ]
+  const absent = runtimeNeeded
+    .filter(([, p]) => !existsSync(p))
+    .map(([label, p]) => `${label} → ${relative(ROOT, p).split(sep).join('/')}`)
+  if (absent.length > 0) {
+    throw new Error(
+      `运行时缺失，无法产出「解压即用」的平台包：\n  - ${absent.join('\n  - ')}\n` +
+        `先跑 \`pnpm run 3rd:setup\`（anydoc + embedding）再打包。`,
+    )
+  }
+  log(`运行时前置校验通过（${runtimeNeeded.map(([label]) => label).join(' / ')}）`)
 
   // 3) 清理 + 准备暂存目录
   await rm(stageDir, { recursive: true, force: true })
@@ -181,7 +304,6 @@ async function main() {
 
   // 5b) 物化**外部运行时依赖**：遍历各包 dependencies 的外部闭包（不含 devDependencies）。
   //     三方件现已全走 submodule，故此步通常为空；保留以兜住将来新增的外部 npm 依赖。
-  //     只带 dependencies 的运行时闭包，不含 devDependencies。
   const externalDeps = new Set()
   for (const name of PKG_NAMES) {
     const pkgDir = join(ROOT, 'packages', name)
@@ -201,34 +323,58 @@ async function main() {
   // 6) 控制台静态资源
   await cp(join(ROOT, 'apps', 'web', 'dist'), join(stageDir, 'apps', 'web', 'dist'), { recursive: true })
 
-  // 7) 第三方子模块（archify 自包含 CLI；graphify Python 源码）——解压即用需要它们的**源码**。
-  //    排除运行时/超大目录：
-  //    - 3rd/llama.cpp：C++ 源码，目标机用 `prism embedding install` 自行 clone/编译（源码 submodule 很大）
-  //    - 3rd/llama-runtime：本地编译的二进制 + 模型（1.5GB），由 install 脚本生成
-  //    - 3rd/anydoc-runtime：平台预编译 .node（目标机自行下载对应平台），由 setup-anydoc.mjs 生成
+  // 7) 三方**源码**（archify 自包含 CLI、graphify Python 包、anydoc JS 包装层来源）。
+  //    解压即用需要它们在场：目标机不跑 git submodule 也能直接调起这三个工具。
   await cp(join(ROOT, '3rd'), join(stageDir, '3rd'), {
     recursive: true,
     filter: (src) => {
-      if (src.includes('node_modules') || src.includes('__pycache__') || src.includes('.git')) return false
-      const top = src.split(/[/\\]3rd[/\\]/)[1]?.split(/[/\\]/)[0]
-      return top !== 'llama.cpp' && top !== 'llama-runtime' && top !== 'anydoc-runtime'
+      const rel = relative(ROOT, src).split(sep).join('/')
+      const segments = rel.split('/')
+      if (segments.some((s) => s === '.git' || s === 'node_modules' || s === '__pycache__')) return false
+      if (rel === '3rd') return true
+      return !isSkipped(rel, args.full3rd)
     },
   })
+  log(args.full3rd ? '三方源码已随包（--full-3rd：保留 3rd 子模块全部内容）' : '三方源码已随包（已排除 docs/examples/tests 等死重）')
 
-  // 7a) 随包发 **small 向量模型**（26MB，CPU 默认档）——解压即用，无需下载。
-  //     `large` 档（600MB）仍由 `prism embedding install` 按需下载（有 GPU 才装）。
-  //     这是「解压 → 开箱可用语义检索」的关键一步：没有它，目标机必须等下载完才能用向量。
-  const smallModel = join(ROOT, '3rd', 'llama-runtime', 'models', 'bge-small-zh-v1.5-q8_0.gguf')
-  if (existsSync(smallModel)) {
-    const destModels = join(stageDir, '3rd', 'llama-runtime', 'models')
-    await mkdir(destModels, { recursive: true })
-    await cp(smallModel, join(destModels, 'bge-small-zh-v1.5-q8_0.gguf'))
-    log(`随包发 small 向量模型（26MB）→ 解压即用`)
-  } else {
-    log(`⚠ 未找到 small 模型（${smallModel}）——跳过随包发；目标机需 prism embedding install 下载`)
+  // 7a) ★ 三方**运行时**（本平台）——「访问不了 git 也装得上」的关键。
+  //     llama-runtime 只取 bin / bin-vulkan / 指定模型；
+  //     build/（95MB 编译中间产物）与 llama-server.log 绝不入包。
+  const rtRoot = join(ROOT, '3rd', 'llama-runtime')
+  const rtDest = join(stageDir, '3rd', 'llama-runtime')
+  await mkdir(rtDest, { recursive: true })
+  for (const sub of ['bin', 'bin-vulkan']) {
+    if (!(await exists(join(rtRoot, sub)))) continue
+    await cp(join(rtRoot, sub), join(rtDest, sub), {
+      recursive: true,
+      filter: (src) => !src.endsWith('.log'),
+    })
+    const bytes = await sizeOf(join(rtDest, sub))
+    log(`  ★ ${sub.padEnd(11)} ${mb(bytes)}`)
+  }
+  // 模型：默认只带最小档；--models all 才带大档（各 600MB+）
+  const models = args.models === 'all'
+    ? ['bge-small-zh-v1.5-q8_0.gguf', 'bge-m3-Q8_0.gguf', 'Qwen3-Embedding-0.6B-Q8_0.gguf']
+    : [DEFAULT_MODEL]
+  const modelsDest = join(rtDest, 'models')
+  await mkdir(modelsDest, { recursive: true })
+  for (const model of models) {
+    const src = join(rtRoot, 'models', model)
+    if (!(await exists(src))) {
+      throw new Error(`模型缺失：${relative(ROOT, src)}（--models ${args.models} 要求它在场）`)
+    }
+    await cp(src, join(modelsDest, model))
+    log(`  ★ models/${model}  ${mb((await stat(src)).size)}`)
   }
 
-  // 7b) 三方件安装脚本（`prism embedding install` / anydoc 转换依赖；小文件，随包发）
+  // 7b) ★ anydoc 运行时（原生绑定 + JS 包装层）
+  await cp(join(ROOT, '3rd', 'anydoc-runtime'), join(stageDir, '3rd', 'anydoc-runtime'), {
+    recursive: true,
+    filter: (src) => !src.endsWith('.log'),
+  })
+  log(`  ★ anydoc-runtime ${mb(await sizeOf(join(stageDir, '3rd', 'anydoc-runtime')))}`)
+
+  // 7c) 三方件安装脚本（`prism embedding install` / anydoc 重装 / 换平台；小文件，随包发）
   //     setup-embedding 依赖 archive.mjs（解压 llama.cpp 预编译包）+ python.mjs（Windows 解压 zipfile 用）
   await mkdir(join(stageDir, 'scripts'), { recursive: true })
   for (const script of ['setup-embedding.mjs', 'setup-anydoc.mjs', 'archive.mjs', 'python.mjs']) {
@@ -262,6 +408,9 @@ async function main() {
         type: 'module',
         description: rootPkg.description,
         license: rootPkg.license,
+        // os / cpu 是 package.json 的标准字段：让工具链一眼看出这是**单平台**包
+        os: [process.platform],
+        cpu: [process.arch],
         engines: rootPkg.engines,
         bin: { prism: './bin/prism.js' },
         scripts: { '3rd:build': 'python -m pip install -q "tree-sitter>=0.23.0,<0.26" tree-sitter-python tree-sitter-typescript tree-sitter-javascript networkx numpy rapidfuzz' },
@@ -272,7 +421,29 @@ async function main() {
     'utf-8',
   )
 
-  // 10) 打 tarball（相对路径打包，解压得到 prism-<version>/ 目录）
+  // 9b) 清单：版本 / 平台 / 运行时实况 / 体积——目标机与支持人员据此核对包内容
+  const manifest = {
+    name: stageName,
+    version,
+    platform,
+    processPlatform: process.platform,
+    arch: process.arch,
+    nodeEngine: rootPkg.engines?.node,
+    runtime: {
+      llama: {
+        cpu: existsSync(join(rtDest, 'bin')) ? await sizeOf(join(rtDest, 'bin')) : 0,
+        vulkan: existsSync(join(rtDest, 'bin-vulkan')) ? await sizeOf(join(rtDest, 'bin-vulkan')) : 0,
+      },
+      anydoc: await sizeOf(join(stageDir, '3rd', 'anydoc-runtime')),
+      models,
+    },
+    /** graphify 的 Python 依赖不随包：目标机需 `python -m pip install`（见 README）。 */
+    externalPythonDeps: ['tree-sitter', 'tree-sitter-python', 'tree-sitter-typescript', 'tree-sitter-javascript', 'networkx', 'numpy', 'rapidfuzz'],
+    full3rd: args.full3rd,
+  }
+  await writeFile(join(stageDir, 'PRISM-MANIFEST.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf-8')
+
+  // 10) 打 tarball（相对路径打包，解压得到 prism-<version>_<platform>/ 目录）
   const tarball = join(args.outDir, `${stageName}.tgz`)
   await rm(tarball, { force: true })
   log('压缩中…')
@@ -280,21 +451,35 @@ async function main() {
   // 故以 outDir 为工作目录、只传相对文件名。
   await run('tar', ['-czf', `${stageName}.tgz`, stageName], args.outDir)
 
+  // 10b) 校验和（Release 附件：让下载方核对完整性）
+  const bytes = await readFile(tarball)
+  const sha256 = createHash('sha256').update(bytes).digest('hex')
+  const sumsPath = join(args.outDir, 'SHA256SUMS')
+  const prevSums = existsSync(sumsPath) ? readFileSync(sumsPath, 'utf-8') : ''
+  // 同名条目只保留最新一条（重打包同一版本时不会累积重复行）
+  const kept = prevSums
+    .split('\n')
+    .filter((line) => line.trim() !== '' && !line.trim().endsWith(`  ${stageName}.tgz`))
+  const nextSums = [...kept, `${sha256}  ${stageName}.tgz`].join('\n') + '\n'
+  await writeFile(sumsPath, nextSums, 'utf-8')
+
   const size = (await stat(tarball)).size
-  log(`完成: ${tarball}（${(size / 1024 / 1024).toFixed(1)} MB）`)
+  log(`完成: ${tarball}（${mb(size)}）`)
+  log(`sha256: ${sha256}`)
+  log(`校验和清单: ${sumsPath}`)
   log('')
-  log('解压即用：')
+  log('解压即用（无需 git / 无需联网）：')
   log(`  tar -xzf ${stageName}.tgz && cd ${stageName}`)
   log('  node bin/prism.js --version')
   log('  node bin/prism.js serve')
   log('')
-  log('注意：代码图谱需本机 Python ≥3.10 并安装依赖 → npm run 3rd:build')
+  log('注意：代码图谱需本机 Python ≥3.10 并安装依赖 → npm run 3rd:build（这一步需要联网）。')
 }
 
-/** 一键启动入口（ESM）：转发到 CLI，并做 Python 依赖预检。 */
+/** 一键启动入口（ESM）：转发到 CLI，并做运行时预检。 */
 const LAUNCHER = `#!/usr/bin/env node
 /**
- * Prism 一键启动入口（打包产物）。
+ * Prism 一键启动入口（打包产物，单平台自包含）。
  * 用法: node bin/prism.js <命令>   （如 serve / init / graph build …）
  */
 import { existsSync } from 'node:fs'
@@ -304,13 +489,19 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 const here = dirname(fileURLToPath(import.meta.url))
 const root = join(here, '..')
 
-// 代码图谱/知识导出依赖 graphify（submodule，需本机装 Python 依赖）
-if (!existsSync(join(root, '3rd', 'graphify', 'pyproject.toml'))) {
-  process.stderr.write('[prism] 警告: 未找到 3rd/graphify 子模块，代码图谱不可用（pnpm run 3rd:init）\\n')
+const has = (...rel) => existsSync(join(root, ...rel))
+
+// 代码图谱依赖 graphify（源码随包；Python 依赖需本机 pip 装）
+if (!has('3rd', 'graphify', 'pyproject.toml')) {
+  process.stderr.write('[prism] 警告: 未找到 3rd/graphify，代码图谱不可用（包可能不完整，建议重新解压）\\n')
 }
-// 文档转换依赖 anydoc 运行时（平台相关，未随包分发，需本机生成）
-if (!existsSync(join(root, '3rd', 'anydoc-runtime', 'anydoc.js'))) {
-  process.stderr.write('[prism] 提示: anydoc 运行时未安装，文档转换降级（node scripts/setup-anydoc.mjs）\\n')
+// 文档转换依赖 anydoc 原生绑定（平台专属，已随包）
+if (!has('3rd', 'anydoc-runtime', 'anydoc.js')) {
+  process.stderr.write('[prism] 警告: anydoc 运行时缺失，文档转换降级（重跑 node scripts/setup-anydoc.mjs）\\n')
+}
+// 向量检索依赖 llama-server（已随包）：CPU 档在 bin/，GPU 档在 bin-vulkan/
+if (!has('3rd', 'llama-runtime', 'bin') && !has('3rd', 'llama-runtime', 'bin-vulkan')) {
+  process.stderr.write('[prism] 警告: 未找到 llama 运行时，语义检索不可用（重跑 node scripts/setup-embedding.mjs）\\n')
 }
 
 // Windows 绝对路径必须转 file:// URL 才能被 ESM 加载器接受

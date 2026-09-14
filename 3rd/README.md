@@ -21,6 +21,26 @@ git submodule update --init --recursive   # 克隆后初始化（或用 git clon
 >
 > 安装：`pnpm run 3rd:setup`（anydoc + embedding 一次装好）；`3rd:check` 自检。
 
+### 发布时这些目录怎么处理（`pnpm run package`）
+
+发布包是**按平台自包含**的（`prism-<version>_<platform>.tgz`）：`llama-runtime/bin`、
+`llama-runtime/bin-vulkan`、`llama-runtime/models/bge-small-zh-v1.5-q8_0.gguf` 与
+`anydoc-runtime/` 会**随包分发**，目标机因此**不需要 git、不需要联网**即可跑通向量检索与文档转换。
+
+随包时排除（体积与平台无关的都不进）：
+
+| 排除项 | 体积 | 理由 |
+| :--- | :--- | :--- |
+| `3rd/llama.cpp` 源码 | 173MB | 只有 `setup-embedding.mjs --source` 的源码编译路径需要；运行时已随包 |
+| `3rd/llama-runtime/build` | 95MB | 本地编译的中间产物（CMakeCache/对象文件） |
+| `llama-runtime/models` 的大档 | 1.2GB | 默认只带最小档 `bge-small-zh`（26MB）；大档走 `--models all` 或目标机 `prism embedding install` |
+| `archify/{docs,examples,experiments,generated,benchmarks,archify.zip}` | ~34MB | 上游文档与仓库级示例，全仓**零引用**（`archify/archify/examples` 保留，测试要用） |
+| `graphify/{docs,tools,worked,tests}` | ~12MB | 同上，零引用 |
+
+> 三个运行时目录的**平台绑定**是分包的根本原因：llama 二进制与 anydoc `.node` 不可跨平台复用，
+> 所以 mac 版必须另出 `_mac_arm64` / `_mac_x64` 包。包内 `PRISM-MANIFEST.json` 记录了
+> 平台、运行时清单与体积，`SHA256SUMS` 供下载方校验。
+
 ## 为什么用 submodule 而不是 vendored 源码 / npm
 
 - **可升级、可审计**：锁定上游发布 tag，`git submodule update` 即可升级，不把第三方源码
