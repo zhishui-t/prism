@@ -108,7 +108,7 @@ prism/
 │   ├── skills/        # Prism 内置 Skill · 校验 · 安装到宿主 Skill 目录
 │   ├── server/        # HTTP API · MCP(35 工具) · Graphify/Archify/embedding 封装 · 控制台静态服务
 │   └── cli/           # prism 命令行（init/serve/doctor/kb/graph/arch/role/team/skill/task/harness/embedding/project/inject/audit）
-├── apps/web/          # React 控制台（7 页）
+├── apps/web/          # React 控制台（7 页 · 浅/深主题 · 中/英 · hash 深链）
 ├── 3rd/               # git submodule（锁定上游发布 tag，见 3rd/README.md）
 │   ├── archify/       # v2.16.0（自包含 Node CLI，免构建）
 │   ├── graphify/      # v0.9.57（Python，免构建）
@@ -166,7 +166,7 @@ prism kb conflicts                 # 层间同名冲突（检测 global<project<
 prism kb export --format obsidian  # 导出 Obsidian vault（借 Graphify）
 ```
 
-控制台「知识库」页内嵌星图可视化（点击节点下钻书内：总纲/知识图谱/架构图/条目）。
+控制台「知识库」页内嵌星图可视化（点击节点下钻主题：总纲/知识图谱/架构图/条目），可全屏沉浸（Esc 退出）。**界面口径**：`book`（书）是内部模型概念、不对外扩散——控制台不暴露该层级，只呈现 `项目 → 主题 → 知识`；按书维度的接口（如 `kb structure`）不受影响，仅前端不再展示。
 
 ### 4.3 代码图谱
 
