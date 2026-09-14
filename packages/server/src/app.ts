@@ -196,6 +196,8 @@ export async function createApp(options: AppOptions = {}): Promise<{
   router.add('GET', '/api/skills', people.skills)
   router.add('GET', '/api/skills/usage', people.skillUsage)
   router.add('GET', '/api/skills/effective', people.skillsEffective)
+  // 单技能详情必须注册在 usage/effective **之后**（路由器首个匹配即命中，:name 会吞掉它们）
+  router.add('GET', '/api/skills/:name', people.skill)
   router.add('POST', '/api/skills/install', people.skillInstall)
   router.add('POST', '/api/skills/uninstall', people.skillUninstall)
 

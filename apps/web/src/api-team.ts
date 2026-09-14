@@ -112,6 +112,20 @@ export interface SkillUsage {
   teams: string[]
 }
 
+/** 单个技能详情（GET /api/skills/:name）：正文 + 安装路径 + 引用方。 */
+export interface SkillDetail {
+  name: string
+  description: string
+  builtin: boolean
+  installed: boolean
+  /** 预期（或实际）安装目录：`<skills_dir>/<name>` */
+  path: string
+  roles: string[]
+  teams: string[]
+  /** SKILL.md 全文（含 frontmatter）；读不到为空串 */
+  content: string
+}
+
 /** 团队列表 + 受管 teams 目录（design-v4 §3.4：GET /api/teams 增只读 teamsDir）。 */
 export interface TeamsIndex {
   teams: TeamDefinition[]
@@ -261,6 +275,7 @@ export const teamApi = {
   team: (id: string) => request<TeamDefinition>(`/api/teams/${encodeURIComponent(id)}`),
   activate: (id: string) => request<TeamActivation>(`/api/teams/${encodeURIComponent(id)}/activate`),
   skills: () => request<PrismSkill[]>('/api/skills'),
+  skill: (name: string) => request<SkillDetail>(`/api/skills/${encodeURIComponent(name)}`),
   skillUsage: () => request<SkillUsage[]>('/api/skills/usage'),
 
   /** 新建团队（F-C2 → POST /api/teams，F-C3 落地）。 */

@@ -94,8 +94,25 @@ export interface GraphProject {
   scanned_sources?: number
 }
 
-/** 扫描历史记录（/api/kb/scan-history）。 */
-export interface ScanRecord {
+/**
+ * 图谱状态（/api/graph/status）。
+ *
+ * `graph_exists` 是**判定「有没有图谱」的依据**——`stale` 只表示「建过图但现在可能过期」
+ * （产物缺失时服务端也返回 stale:true）。历史 bug：前端只声明了 `{stale, detail}`，
+ * 于是未建图的项目被显示成「图谱可能已陈旧」，且 Studio 面板直接把 404 信封渲染出来。
+ */
+export interface GraphStatus {
+  project: string
+  root: string
+  graph_exists: boolean
+  built_at: string | null
+  changed_files: number
+  total_files: number
+  stale: boolean
+}
+
+
+/** 扫描历史记录（/api/kb/scan-history）。 */export interface ScanRecord {
   project: string
   root: string
   scanned_at: string
@@ -397,9 +414,7 @@ export const api = {
     }),
 
   graphStatus: (project: string) =>
-    request<{ stale: boolean; detail?: string }>(
-      `/api/graph/status?project=${encodeURIComponent(project)}`,
-    ),
+    request<GraphStatus>(`/api/graph/status?project=${encodeURIComponent(project)}`),
 
   tasks: (params?: { dag_id?: string; status?: string; session_id?: string }) => {
     const qs = new URLSearchParams()

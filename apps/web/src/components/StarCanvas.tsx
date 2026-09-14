@@ -1,13 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 /**
- * 星图画布（图书馆隐喻的底层）：可缩放、可平移的 SVG 视口。
+ * 星图画布（星图隐喻的底层）：可缩放、可平移的 SVG 视口。
  *
  * 设计要点：
  * - **纯 SVG + 手写变换**，零图形库（保持 Prism 零 UI 依赖）；
  * - 滚轮以光标为锚点缩放，拖拽平移；双击复位；
  * - 提供 `world → screen` 变换给上层绘制星体；
  * - 深空背景由上层 CSS 提供，这里只管坐标系与交互。
+ *
+ * 2026-09-14 修正（用户反馈「全屏之后显示不全」）：原先 viewBox 写死 `0 0 1000 620`，
+ * 容器比 1000:620 更宽时 `preserveAspectRatio="meet"` 只保证「装得下」，
+ * 于是左右（或上下）留出空带，而星云半径本来就超出视野 → 看起来被切掉。
+ * 现在用 ResizeObserver 实测容器尺寸，viewBox 与中心点都跟随容器，
+ * 并把「世界内容」按容器实际宽高做一次 fit —— 普通窗口与沉浸全屏用的是同一套逻辑。
  */
 
 export interface Viewport {
@@ -18,18 +24,23 @@ export interface Viewport {
   y: number
 }
 
+export interface Size {
+  w: number
+  h: number
+}
+
 export interface StarCanvasProps {
   /** 世界坐标系宽高（内容边界） */
   width: number
   height: number
   /** 初始视口（缺省自动适配） */
   initial?: Partial<Viewport>
-  /** 画布高度（CSS 像素），缺省 620 */
-  viewHeight?: number
   /** 渲染内容（世界坐标） */
   children: (viewport: Viewport) => React.ReactNode
   /** 视口变化回调（供上层显示缩放比例） */
   onViewportChange?: (viewport: Viewport) => void
+  /** 尺寸变化回调（供上层做命中测试 / 布局） */
+  onSizeChange?: (size: Size) => void
   /** 点击空白处（非星体）时回调 */
   onBackgroundClick?: () => void
 }
@@ -37,12 +48,15 @@ export interface StarCanvasProps {
 const MIN_K = 0.25
 const MAX_K = 8
 
+/** 兜底尺寸：首帧还没量到容器时用（避免 viewBox 为 0 导致整体不可见）。 */
+const FALLBACK: Size = { w: 1000, h: 620 }
+
 /** 适配视口：把世界内容居中铺满可视区。 */
-function fitViewport(width: number, height: number, viewHeight: number): Viewport {
-  // 世界坐标以画布中心为原点；视口为 1000×viewHeight。
+function fitViewport(width: number, height: number, size: Size): Viewport {
+  // 世界坐标以画布中心为原点；视口为 size.w × size.h（1 单位 = 1 CSS px）。
   // 取宽/高两个方向都能容纳的缩放，留 6% 边距，且不超过 1.6（小数据别过度放大）
   const pad = 0.94
-  const k = Math.min(1.6, Math.max(MIN_K, Math.min((1000 / width) * pad, (viewHeight / height) * pad)))
+  const k = Math.min(1.6, Math.max(MIN_K, Math.min((size.w / width) * pad, (size.h / height) * pad)))
   return { k, x: 0, y: 0 }
 }
 
@@ -50,21 +64,49 @@ export function StarCanvas({
   width,
   height,
   initial,
-  viewHeight = 620,
   children,
   onViewportChange,
+  onSizeChange,
   onBackgroundClick,
 }: StarCanvasProps) {
   const ref = useRef<SVGSVGElement | null>(null)
-  const [vp, setVp] = useState<Viewport>(() => ({ ...fitViewport(width, height, viewHeight), ...initial }))
+  const [size, setSize] = useState<Size>(FALLBACK)
+  const [vp, setVp] = useState<Viewport>(() => ({ ...fitViewport(width, height, FALLBACK), ...initial }))
   const drag = useRef<{ sx: number; sy: number; vx: number; vy: number; moved: boolean; onBody: boolean } | null>(null)
 
-  // 内容尺寸变化 → 重置视口（换层时自动适配）。
+  // 容器尺寸（含沉浸全屏切换、浏览器窗口缩放）——实测，不猜
+  useEffect(() => {
+    const el = ref.current
+    if (el === null) return
+    const measure = (): void => {
+      const rect = el.getBoundingClientRect()
+      if (rect.width <= 0 || rect.height <= 0) return
+      setSize((prev) =>
+        Math.abs(prev.w - rect.width) < 1 && Math.abs(prev.h - rect.height) < 1
+          ? prev
+          : { w: rect.width, h: rect.height },
+      )
+    }
+    measure()
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', measure)
+      return () => window.removeEventListener('resize', measure)
+    }
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  useEffect(() => {
+    onSizeChange?.(size)
+  }, [size, onSizeChange])
+
+  // 内容尺寸或画布尺寸变化 → 重置视口（换层 / 进退出沉浸时自动适配）。
   // 依赖刻意只含尺寸：initial 由调用方通过 key 控制（每次换层重挂载）。
   const initialRef = useRef(initial)
   useEffect(() => {
-    setVp({ ...fitViewport(width, height, viewHeight), ...initialRef.current })
-  }, [width, height, viewHeight])
+    setVp({ ...fitViewport(width, height, size), ...initialRef.current })
+  }, [width, height, size.w, size.h])
 
   useEffect(() => {
     onViewportChange?.(vp)
@@ -116,8 +158,8 @@ export function StarCanvas({
   }
 
   const reset = useCallback(() => {
-    setVp(fitViewport(width, height, viewHeight))
-  }, [width, height, viewHeight])
+    setVp(fitViewport(width, height, size))
+  }, [width, height, size])
 
   const transform = `translate(${vp.x * vp.k} ${vp.y * vp.k}) scale(${vp.k})`
 
@@ -125,7 +167,7 @@ export function StarCanvas({
     <svg
       ref={ref}
       className="star-canvas"
-      viewBox={`0 0 1000 ${viewHeight}`}
+      viewBox={`0 0 ${size.w} ${size.h}`}
       preserveAspectRatio="xMidYMid meet"
       onWheel={onWheel}
       onPointerDown={onPointerDown}
@@ -135,14 +177,14 @@ export function StarCanvas({
       onDoubleClick={reset}
       style={{ cursor: drag.current !== null ? 'grabbing' : 'grab', touchAction: 'none' }}
     >
-      <g transform={`translate(500 ${viewHeight / 2}) ${transform}`}>{children(vp)}</g>
+      <g transform={`translate(${size.w / 2} ${size.h / 2}) ${transform}`}>{children(vp)}</g>
     </svg>
   )
 }
 
 /** 供上层把世界坐标映射到屏幕（点击命中测试用）。 */
-export function worldToScreen(vp: Viewport, viewHeight: number, x: number, y: number): { x: number; y: number } {
-  return { x: 500 + (x + vp.x) * vp.k, y: viewHeight / 2 + (y + vp.y) * vp.k }
+export function worldToScreen(vp: Viewport, size: Size, x: number, y: number): { x: number; y: number } {
+  return { x: size.w / 2 + (x + vp.x) * vp.k, y: size.h / 2 + (y + vp.y) * vp.k }
 }
 
 /** 视口 Hook：给需要感知缩放的组件用。 */

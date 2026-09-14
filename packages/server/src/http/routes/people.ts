@@ -1,6 +1,7 @@
 import { listBuiltinSkills } from '@prism/skills'
 import { PrismError } from '@prism/core'
 import { existsSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { fail, ok, type Envelope } from '../envelope.js'
@@ -72,6 +73,7 @@ export function peopleRoutes(deps: PeopleDeps): {
   team: (ctx: RouteContext) => Promise<Envelope>
   teamActivate: (ctx: RouteContext) => Promise<Envelope>
   skills: (ctx: RouteContext) => Promise<Envelope>
+  skill: (ctx: RouteContext) => Promise<Envelope>
   skillUsage: (ctx: RouteContext) => Promise<Envelope>
   skillsEffective: (ctx: RouteContext) => Promise<Envelope>
   skillInstall: (ctx: RouteContext) => Promise<Envelope>
@@ -239,6 +241,48 @@ export function peopleRoutes(deps: PeopleDeps): {
     await skillsEffectiveRoute(ctx, deps, { teamsDir, rolesDir })
 
   /**
+   * 单个 Skill 详情（GET /api/skills/:name）——控制台「点行看详情」用。
+   *
+   * 正文来源两处：内置 Skill 取自 `@prism/skills` 的随包清单；只装在本地的 Skill
+   * 读 `<skills_dir>/<name>/SKILL.md`。**只读**：不写盘、不改装/卸。
+   * 注册顺序必须在 `/api/skills/usage`、`/api/skills/effective` **之后**（路由器首个匹配即命中）。
+   */
+  const skill = async (ctx: RouteContext): Promise<Envelope> => {
+    const name = ctx.params.name ?? ''
+    if (name === '') {
+      throw new PrismError('bad_request', '缺少 skill 名')
+    }
+    const skillsDir = harnessPaths(deps.harnessRoot, deps.home).skillsDir
+    const dir = join(skillsDir, name)
+    const installed = existsSync(join(dir, 'SKILL.md'))
+    const builtin = listBuiltinSkills().find((s) => s.name === name)
+
+    let content = builtin?.content ?? ''
+    if (!installed && builtin === undefined) {
+      throw new PrismError('not_found', `未知 Skill: ${name}（既不是内置，也没装在 ${skillsDir}）`)
+    }
+    if (content === '' && installed) {
+      try {
+        content = await readFile(join(dir, 'SKILL.md'), 'utf-8')
+      } catch {
+        content = ''
+      }
+    }
+
+    const [roleList, teamList] = await Promise.all([loadRoles(rolesDir), loadTeams(teamsDir)])
+    return ok({
+      name,
+      description: builtin?.description ?? frontmatterDescription(content),
+      builtin: builtin !== undefined,
+      installed,
+      path: dir,
+      roles: roleList.filter((r) => (r.skills ?? []).includes(name)).map((r) => r.name),
+      teams: teamList.filter((t) => (t.skills ?? []).includes(name)).map((t) => t.team_id),
+      content,
+    })
+  }
+
+  /**
    * Skill 写（v6.2 补齐）：`POST /api/skills/install` / `POST /api/skills/uninstall`。
    * 与 MCP `prism_skill_install|uninstall`、CLI `prism skill install|uninstall` 共用
    * `roles/skill-create.ts` 的单点——body 的 `skills_dir` **必填**，绝不复用 `dirs` 的默认宿主目录。
@@ -262,6 +306,7 @@ export function peopleRoutes(deps: PeopleDeps): {
     team,
     teamActivate,
     skills,
+    skill,
     skillUsage,
     skillsEffective,
     skillInstall,
@@ -356,4 +401,23 @@ async function skillsEffectiveRoute(
 async function createTeamRoute(ctx: RouteContext, rolesDir: string): Promise<Envelope> {
   const body = (await ctx.body()) as NewTeamBody
   return ok(await createTeamDefinition(body, rolesDir))
+}
+
+/**
+ * 从 SKILL.md 的 YAML frontmatter 里取 `description`（只装在本地的外部 Skill 用；
+ * 内置 Skill 的描述直接来自 `@prism/skills`）。取不到返回空串——不抛错，详情页降级显示。
+ */
+function frontmatterDescription(content: string): string {
+  const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(content.replace(/^\uFEFF/, ''))
+  if (match === null) return ''
+  for (const rawLine of (match[1] ?? '').split(/\r?\n/)) {
+    const line = rawLine.trim()
+    if (!line.startsWith('description:')) continue
+    let value = line.slice('description:'.length).trim()
+    if (value.length >= 2 && ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))) {
+      value = value.slice(1, -1)
+    }
+    return value
+  }
+  return ''
 }

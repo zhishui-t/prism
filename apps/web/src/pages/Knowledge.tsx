@@ -1,21 +1,23 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { api, type ArchDiagram, type CatalogEntry, type KbGraphEdge, type KbGraphNode, type KbGraphView, type SearchResult } from '../api.ts'
 import { StarCanvas, seededRandom, useStarfield, type Viewport } from '../components/StarCanvas.tsx'
 import { State } from '../components/State.tsx'
 import { useAsync } from '../components/useAsync.ts'
+import { t as tr, useT, type DictKey } from '../i18n.ts'
 
 /**
- * 知识库 = 图书馆（星图隐喻）
+ * 知识库（星图）
  *
- * **尺度无关（用户裁决 2026-09-08）**：远处看，书柜/书/模块/条目都是同样的光点；
+ * **尺度无关（用户裁决 2026-09-08）**：远处看，主题/模块/条目都是同样的光点；
  * 点开就放大一层，露出内部。**层级由数据决定，代码不预设深度**。
  *
  * 实现：不再硬编码「一级/二级/三级」，而是一个有序的 **scope 路径**
- * （`layer → owner → book → module → 条目`）。每个节点点开 = 路径延长一段，
- * 直到没有更细的分组为止。项目规模不同，自然呈现不同深度：
- *   - 简单项目：书 → 条目（两级）
- *   - 微服务项目：项目(书柜) → 服务(书) → 章节 → 条目（多级）
+ * （`layer → owner → module → 条目`）。每个节点点开 = 路径延长一段，
+ * 直到没有更细的分组为止。项目规模不同，自然呈现不同深度。
+ *
+ * 2026-09-14（用户裁决）：**不再出现「书」这一层**——它是 Prism 的内部概念（目录条目的
+ * `book` 字段仍在数据里，用于产物归属），但对外的导航只有「范围 → 归属 → 主题 → 条目」。
  *
  * 视觉语言：深空背景 + 星点 + 辉光；所有层级的节点都是星体，表现一致。
  */
@@ -35,29 +37,45 @@ const TYPE_COLOR: Record<string, string> = {
   other: '#8b93a7',
 }
 
-const TYPE_LABEL: Record<string, string> = {
-  rule: '规则',
-  doc: '文档',
-  guide: '指南',
-  pitfall: '坑',
-  pattern: '模式',
-  diagram: '图表',
-  summary: '摘要',
-  other: '其他',
+const TYPE_LABEL_KEY: Record<string, DictKey> = {
+  rule: 'knowledge.type.rule',
+  doc: 'knowledge.type.doc',
+  guide: 'knowledge.type.guide',
+  pitfall: 'knowledge.type.pitfall',
+  pattern: 'knowledge.type.pattern',
+  diagram: 'knowledge.type.diagram',
+  summary: 'knowledge.type.summary',
+  other: 'knowledge.type.other',
 }
 
-const LAYER_LABEL: Record<string, string> = { global: '全局', project: '项目', role: '专家' }
+const LAYER_LABEL_KEY: Record<string, DictKey> = {
+  global: 'knowledge.layer.global',
+  project: 'knowledge.layer.project',
+  role: 'knowledge.layer.role',
+}
+
+/** 类型名 → 界面语言（认不出原样显示，不隐藏未知值）。 */
+function typeLabel(type: string): string {
+  const key = TYPE_LABEL_KEY[type]
+  return key === undefined ? type : tr(key)
+}
+
+/** 范围名 → 界面语言（认不出原样显示）。 */
+function layerLabel(value: string): string {
+  const key = LAYER_LABEL_KEY[value]
+  return key === undefined ? value : tr(key)
+}
 
 /**
  * 作用域路径：当前所在的位置。空数组 = 最外层（全部）。
- * 每一段是「按哪个维度分组的哪个值」，顺序固定为 layer → owner → book → module。
+ * 每一段是「按哪个维度分组的哪个值」，顺序固定为 layer → owner → module。
  */
 type ScopeSegment = { dim: ScopeDim; value: string; label: string }
-type ScopeDim = 'layer' | 'owner' | 'book' | 'module'
+type ScopeDim = 'layer' | 'owner' | 'module'
 type Scope = ScopeSegment[]
 
 /** 维度顺序（决定下钻路径）。 */
-const DIM_ORDER: ScopeDim[] = ['layer', 'owner', 'book', 'module']
+const DIM_ORDER: ScopeDim[] = ['layer', 'owner', 'module']
 
 /** 某条目录条目在给定维度上的值。 */
 function valueOf(entry: CatalogEntry, dim: ScopeDim): string {
@@ -66,8 +84,6 @@ function valueOf(entry: CatalogEntry, dim: ScopeDim): string {
       return entry.layer
     case 'owner':
       return entry.owner ?? ''
-    case 'book':
-      return entry.book
     case 'module':
       return entry.module
   }
@@ -75,8 +91,8 @@ function valueOf(entry: CatalogEntry, dim: ScopeDim): string {
 
 /** 维度的展示名（面包屑用）。 */
 function dimLabel(dim: ScopeDim, value: string): string {
-  if (dim === 'layer') return LAYER_LABEL[value] ?? value
-  if (dim === 'module') return value === '' ? '待归类' : value
+  if (dim === 'layer') return layerLabel(value)
+  if (dim === 'module') return value === '' ? tr('knowledge.uncategorized') : value
   return value
 }
 
@@ -91,15 +107,46 @@ function remainingDims(scope: Scope): ScopeDim[] {
   return DIM_ORDER.filter((d) => !used.has(d))
 }
 
-export function KnowledgePage() {
+export function KnowledgePage({
+  sel,
+  onSelect,
+}: {
+  /** 当前选中的条目（来自 hash 深链） */
+  sel?: string
+  onSelect?: (id: string | undefined) => void
+} = {}) {
+  const t = useT()
   // scope 路径（空 = 顶层）。下钻 = 追加一段；返回 = 截断。
   const [scope, setScope] = useState<Scope>([])
-  const [selectedId, setSelectedId] = useState<string>('')
+  /** 沉浸（整屏星图）：Esc 退出。切换时 StarCanvas 会实测容器尺寸并重新适配。 */
+  const [immersive, setImmersive] = useState(false)
 
   const catalog = useAsync(() => api.kbCatalog({ limit: 1000 }), [])
   const stats = useAsync(() => api.kbStats(), [])
   // 全图边表（条目图谱画关系线用；catalog 本身不带边）
   const graph = useAsync(() => api.kbGraph({ limit: 500 }), [])
+
+  const selectedId = sel ?? ''
+
+  useEffect(() => {
+    if (!immersive) return
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setImmersive(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [immersive])
+
+  // 深链进来的条目：把 scope 展开到它所在的层（刷新 / 分享链接也能直接定位）
+  const deepLinked = useRef('')
+  useEffect(() => {
+    const id = sel ?? ''
+    if (id === '' || id === deepLinked.current || catalog.data === undefined) return
+    const entry = catalog.data.find((e) => e.id === id)
+    if (entry === undefined) return
+    deepLinked.current = id
+    setScope(scopeOf(entry))
+  }, [sel, catalog.data])
 
   return (
     <div className="library">
@@ -107,45 +154,36 @@ export function KnowledgePage() {
         <div className="row" style={{ justifyContent: 'space-between' }}>
           <div>
             <h2 className="page-title" style={{ marginBottom: 2 }}>
-              知识库
+              {t('knowledge.title')}
             </h2>
-            <div className="small muted">
-              每个光点都可以点开——近处是书，再近是模块与条目。滚轮缩放，拖拽平移，双击空白返回上一层。
-            </div>
+            <div className="small muted">{t('knowledge.desc')}</div>
           </div>
           <div className="row" style={{ gap: 10 }}>
             {stats.data && (
               <>
-                <Stat label="条目" value={stats.data.entries} />
-                <Stat label="书" value={stats.data.books} />
+                <Stat label={t('knowledge.stat.entries')} value={stats.data.entries} />
                 {Object.entries(stats.data.layers)
                   .filter(([, v]) => v > 0)
                   .map(([k, v]) => (
-                    <Stat key={k} label={LAYER_LABEL[k] ?? k} value={v} />
+                    <Stat key={k} label={layerLabel(k)} value={v} />
                   ))}
               </>
             )}
           </div>
         </div>
 
-        <Breadcrumb scope={scope} onNavigate={setScope} />
+        <Breadcrumb
+          scope={scope}
+          onNavigate={(s) => {
+            setScope(s)
+            onSelect?.(undefined)
+          }}
+        />
         <SearchBox
           onPick={(entry) => {
-            // 命中后直接跳到该条目所在的书/模块，并选中它
-            const next: Scope = [
-              { dim: 'layer', value: entry.layer, label: LAYER_LABEL[entry.layer] ?? entry.layer },
-              ...(entry.owner !== undefined && entry.owner !== ''
-                ? [{ dim: 'owner' as const, value: entry.owner, label: entry.owner }]
-                : []),
-              { dim: 'book', value: entry.book, label: entry.book },
-              {
-                dim: 'module',
-                value: entry.module,
-                label: entry.module === '' ? '待归类' : entry.module,
-              },
-            ]
-            setScope(next)
-            setSelectedId(entry.id)
+            // 命中后直接跳到该条目所在的层，并选中它
+            setScope(scopeOf(entry))
+            onSelect?.(entry.id)
           }}
         />
       </header>
@@ -156,22 +194,40 @@ export function KnowledgePage() {
             entries={catalog.data}
             allEdges={graph.data?.edges ?? []}
             scope={scope}
-            onScopeChange={setScope}
+            onScopeChange={(s) => {
+              setScope(s)
+              onSelect?.(undefined)
+            }}
             selectedId={selectedId}
-            onSelect={setSelectedId}
+            onSelect={(id) => onSelect?.(id === '' ? undefined : id)}
+            immersive={immersive}
+            onToggleImmersive={() => setImmersive((prev) => !prev)}
           />
         )}
       </State>
 
-      {/* 下钻到书/模块后：该层级的知识图谱 + 关联架构图（图谱归属到书内，不再是一级页） */}
-      {scope.length > 0 && (
-        <ScopePanel scope={scope} entries={catalog.data ?? []} />
-      )}
+      {/* 下钻到主题后：该层级的知识图谱 + 关联架构图（图谱归属到主题内，不再是一级页） */}
+      {scope.length > 0 && <ScopePanel scope={scope} entries={catalog.data ?? []} />}
 
       {/* 层间冲突（B2）：有才显示，避免空面板占位 */}
-      <ConflictPanel onSelect={setSelectedId} />
+      <ConflictPanel onSelect={(id) => onSelect?.(id)} />
     </div>
   )
+}
+
+/** 条目 → 它所在的 scope 路径（深链与检索共用）。 */
+function scopeOf(entry: CatalogEntry | SearchResult): Scope {
+  return [
+    { dim: 'layer', value: entry.layer, label: layerLabel(entry.layer) },
+    ...(entry.owner !== undefined && entry.owner !== ''
+      ? [{ dim: 'owner' as const, value: entry.owner, label: entry.owner }]
+      : []),
+    {
+      dim: 'module',
+      value: entry.module,
+      label: entry.module === '' ? tr('knowledge.uncategorized') : entry.module,
+    },
+  ]
 }
 
 function Stat({ label, value }: { label: string; value: number }) {
@@ -185,10 +241,11 @@ function Stat({ label, value }: { label: string; value: number }) {
 
 /** 面包屑 = scope 路径。点任意一段回到那一层；「全部」回到顶层。 */
 function Breadcrumb({ scope, onNavigate }: { scope: Scope; onNavigate: (s: Scope) => void }) {
+  const t = useT()
   return (
     <nav className="crumbs">
       <button className={`crumb${scope.length === 0 ? ' active' : ''}`} onClick={() => onNavigate([])}>
-        ◎ 全部
+        ◎ {t('knowledge.crumb.all')}
       </button>
       {scope.map((seg, i) => (
         <span key={`${seg.dim}:${seg.value}`} className="row" style={{ gap: 0 }}>
@@ -210,6 +267,7 @@ function Breadcrumb({ scope, onNavigate }: { scope: Scope; onNavigate: (s: Scope
  * 只提示不阻断；可逐条标记已处理。
  */
 function ConflictPanel({ onSelect }: { onSelect: (id: string) => void }) {
+  const t = useT()
   const conflicts = useAsync(() => api.kbConflicts(), [])
   const [busy, setBusy] = useState('')
   const [hidden, setHidden] = useState(false)
@@ -231,21 +289,20 @@ function ConflictPanel({ onSelect }: { onSelect: (id: string) => void }) {
     <div className="card" style={{ marginTop: 12 }}>
       <div className="row" style={{ justifyContent: 'space-between' }}>
         <h3 style={{ margin: 0 }}>
-          层间冲突 <span className="small muted">（{list.length}）</span>
+          {t('knowledge.conflicts')} <span className="small muted">（{list.length}）</span>
         </h3>
-        <button onClick={() => setHidden(true)}>收起</button>
+        <button onClick={() => setHidden(true)}>{t('knowledge.conflict.collapse')}</button>
       </div>
       <div className="small muted" style={{ margin: '6px 0 10px' }}>
-        同名条目跨层共存且高层未声明 <span className="mono">overrides</span>。
-        Prism 只记录不阻断——如需以高层为准，请在高层条目里显式声明覆盖，然后标记已处理。
+        {t('knowledge.conflict.note')}
       </div>
       <table>
         <thead>
           <tr>
-            <th style={{ width: 130 }}>高层条目</th>
-            <th style={{ width: 130 }}>低层条目</th>
-            <th style={{ width: 90 }}>类型</th>
-            <th style={{ width: 150 }}>发现时间</th>
+            <th style={{ width: 130 }}>{t('knowledge.conflict.high')}</th>
+            <th style={{ width: 130 }}>{t('knowledge.conflict.low')}</th>
+            <th style={{ width: 90 }}>{t('knowledge.conflict.kind')}</th>
+            <th style={{ width: 150 }}>{t('knowledge.conflict.detected')}</th>
             <th style={{ width: 90 }} />
           </tr>
         </thead>
@@ -266,7 +323,7 @@ function ConflictPanel({ onSelect }: { onSelect: (id: string) => void }) {
               <td className="small muted">{c.detected_at.replace('T', ' ').slice(0, 19)}</td>
               <td>
                 <button onClick={() => void resolve(c.id)} disabled={busy === c.id}>
-                  {busy === c.id ? '处理中…' : '标记已处理'}
+                  {busy === c.id ? t('knowledge.conflict.resolving') : t('knowledge.conflict.resolve')}
                 </button>
               </td>
             </tr>
@@ -278,10 +335,11 @@ function ConflictPanel({ onSelect }: { onSelect: (id: string) => void }) {
 }
 
 /**
- * 检索框（C2）：命中后直接定位到条目的书/模块（跳转 + 选中）。
+ * 检索框（C2）：命中后直接定位到条目所在的层（跳转 + 选中）。
  * 用「防抖 + 显式回车」避免每次击键都打服务端；无命中给出明确提示（不静默）。
  */
 function SearchBox({ onPick }: { onPick: (entry: SearchResult) => void }) {
+  const t = useT()
   const [q, setQ] = useState('')
   const [results, setResults] = useState<SearchResult[] | null>(null)
   const [loading, setLoading] = useState(false)
@@ -305,7 +363,7 @@ function SearchBox({ onPick }: { onPick: (entry: SearchResult) => void }) {
       <div className="row" style={{ gap: 8 }}>
         <input
           type="search"
-          placeholder="检索知识（回车）…"
+          placeholder={t('knowledge.searchPlaceholder')}
           value={q}
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={(e) => {
@@ -314,7 +372,7 @@ function SearchBox({ onPick }: { onPick: (entry: SearchResult) => void }) {
           style={{ flex: 1, maxWidth: 420 }}
         />
         <button onClick={() => void run()} disabled={loading}>
-          {loading ? '检索中…' : '检索'}
+          {loading ? t('knowledge.search.running') : t('common.search')}
         </button>
         {results !== null && (
           <button
@@ -323,14 +381,14 @@ function SearchBox({ onPick }: { onPick: (entry: SearchResult) => void }) {
               setResults(null)
             }}
           >
-            清除
+            {t('knowledge.search.clear')}
           </button>
         )}
       </div>
       {results !== null && (
         <div style={{ marginTop: 8 }}>
           {results.length === 0 ? (
-            <div className="small muted">知识库没有匹配「{q}」的条目</div>
+            <div className="small muted">{t('knowledge.search.none', { q })}</div>
           ) : (
             <ul className="rel-list">
               {results.map((r) => (
@@ -357,6 +415,8 @@ function GalaxyView({
   onScopeChange,
   selectedId,
   onSelect,
+  immersive,
+  onToggleImmersive,
 }: {
   entries: CatalogEntry[]
   allEdges: KbGraphEdge[]
@@ -364,7 +424,11 @@ function GalaxyView({
   onScopeChange: (s: Scope) => void
   selectedId: string
   onSelect: (id: string) => void
+  /** 沉浸（整屏）：容器尺寸变了，StarCanvas 会重新适配视口 */
+  immersive: boolean
+  onToggleImmersive: () => void
 }) {
+  const t = useT()
   // 按 scope 切出当前要展示的星体集合
   const { bodies, edges, backTarget, hub } = useMemo(
     () => buildBodies(entries, allEdges, scope),
@@ -374,10 +438,18 @@ function GalaxyView({
   const [vp, setVp] = useState<Viewport>({ k: 1, x: 0, y: 0 })
 
   return (
-    <div className="star-wrap">
+    <div className={`star-wrap${immersive ? ' immersive' : ''}`}>
       <div className="star-hint mono small">
-        缩放 {Math.round(vp.k * 100)}% · {bodies.length} 个光点
-        {backTarget !== null && <span> · 双击空白返回上一层</span>}
+        {t('knowledge.canvasHint', { k: Math.round(vp.k * 100), n: bodies.length })}
+        {backTarget !== null && <span> · {t('knowledge.backHint')}</span>}
+      </div>
+      <div className="star-tools">
+        {backTarget !== null && (
+          <button onClick={() => onScopeChange(backTarget)}>{t('common.backToTop')}</button>
+        )}
+        <button onClick={onToggleImmersive} aria-pressed={immersive}>
+          {immersive ? t('knowledge.exitImmersive') : t('knowledge.immersive')}
+        </button>
       </div>
       <StarCanvas
         width={WORLD_W}
@@ -397,7 +469,7 @@ function GalaxyView({
               ))}
             </g>
 
-            {/* 顶层：图书馆本体星云；下钻后：当前位置作为中心星云 */}
+            {/* 顶层：整体星云；下钻后：当前位置作为中心星云 */}
             {scope.length === 0 && <LibraryNebula />}
             {hub !== null && <HubNebula hub={hub} />}
 
@@ -455,17 +527,23 @@ interface Body {
 }
 
 /**
- * 图书馆本体：一团巨大的星云（走进图书馆的第一眼）。
- * 中心辉光 + 多层半透明环 + 旋臂点尘，各「书」的星系在其内部环绕。
+ * 顶层星云：一团巨大的星云（走进知识库的第一眼）。
+ * 中心辉光 + 多层半透明环 + 旋臂点尘，各主题的星系在其内部环绕。
  * 纯装饰、不拦截事件（pointer-events: none）。
+ *
+ * 半径一律取 **世界尺寸的比例**（原来写死 640×430 > 世界半宽 600/半高 350，
+ * 会被 SVG 视口裁掉一圈——用户看到的「显示不全」）。
  */
+const NEBULA_RX = WORLD_W * 0.48
+const NEBULA_RY = WORLD_H * 0.48
+
 function LibraryNebula() {
   const dust = useMemo(() => {
     const rand = seededRandom(77123)
     return Array.from({ length: 160 }, () => {
       const angle = rand() * Math.PI * 2
       // 旋臂形态：半径越小越密
-      const radius = Math.pow(rand(), 0.62) * 520
+      const radius = Math.pow(rand(), 0.62) * (NEBULA_RX * 0.9)
       const jitter = (rand() - 0.5) * 90
       return {
         x: Math.cos(angle) * radius + jitter,
@@ -492,17 +570,17 @@ function LibraryNebula() {
       </defs>
 
       {/* 外晕 */}
-      <ellipse cx={0} cy={0} rx={640} ry={430} fill="url(#lib-halo)" />
+      <ellipse cx={0} cy={0} rx={NEBULA_RX} ry={NEBULA_RY} fill="url(#lib-halo)" />
       {/* 核心 */}
-      <ellipse cx={0} cy={0} rx={430} ry={290} fill="url(#lib-core)" />
+      <ellipse cx={0} cy={0} rx={NEBULA_RX * 0.67} ry={NEBULA_RY * 0.67} fill="url(#lib-core)" />
       {/* 内层环（星云层次感） */}
-      <ellipse cx={0} cy={0} rx={300} ry={200} fill="#5b8cff" opacity={0.05} />
-      <ellipse cx={0} cy={0} rx={180} ry={120} fill="#8fb3ff" opacity={0.07} />
+      <ellipse cx={0} cy={0} rx={NEBULA_RX * 0.47} ry={NEBULA_RY * 0.47} fill="#5b8cff" opacity={0.05} />
+      <ellipse cx={0} cy={0} rx={NEBULA_RX * 0.28} ry={NEBULA_RY * 0.28} fill="#8fb3ff" opacity={0.07} />
       {/* 旋臂点尘 */}
       {dust.map((d, i) => (
         <circle key={i} cx={d.x} cy={d.y} r={d.r} fill="#cfe0ff" opacity={d.o} />
       ))}
-      {/* 星云中心不写字（用户要求不显示「图书馆」）；书数量见左上角提示条 */}
+      {/* 星云中心不写字（用户要求不显示中心标题）；统计见左上角提示条 */}
     </g>
   )
 }
@@ -511,7 +589,7 @@ function LibraryNebula() {
  * 把目录条目折叠成当前层级的星系。
  * 位置用**确定性环形布局**（无随机，每次渲染稳定）。
  */
-/** 当前层级的中心（书 / 模块）：画成星云中心，下级围绕它环绕。 */
+/** 当前层级的中心（主题）：画成星云中心，下级围绕它环绕。 */
 interface Hub {
   label: string
   sublabel: string
@@ -558,7 +636,7 @@ function buildBodies(
         .map((e) => ({
           id: e.id,
           label: e.title,
-          sublabel: `${TYPE_LABEL[e.type] ?? e.type} · 入${e.in_degree}/出${e.out_degree}`,
+          sublabel: `${typeLabel(e.type)} · ${tr('knowledge.degrees', { i: e.in_degree, o: e.out_degree })}`,
           count: 1,
           color: TYPE_COLOR[e.type] ?? '#8b93a7',
         })),
@@ -617,7 +695,7 @@ function wrapLabel(label: string, maxChars = 14): string[] {
   return [first, `${rest.slice(0, maxChars - 1)}…`]
 }
 
-/** 当前层级中心星云：把「书 / 模块」画成中心，下级在内部环绕（保留层级感）。 */
+/** 当前层级中心星云：把「主题」画成中心，下级在内部环绕（保留层级感）。 */
 function HubNebula({ hub }: { hub: Hub }) {
   const dust = useMemo(() => {
     const rand = seededRandom(9911)
@@ -646,7 +724,7 @@ function HubNebula({ hub }: { hub: Hub }) {
       {dust.map((d, i) => (
         <circle key={i} cx={d.x} cy={d.y} r={d.r} fill="#cfe0ff" opacity={d.o} />
       ))}
-      {/* 中心标识：书/模块名放在星云顶部，避开内部星体（曾经挤在正中会被星体压住） */}
+      {/* 中心标识：位置名放在星云顶部，避开内部星体（曾经挤在正中会被星体压住） */}
       <text x={0} y={-WORLD_H / 2 + 62} textAnchor="middle" fontSize={17} fill="#dbe6ff" opacity={0.94}>
         {hub.label}
       </text>
@@ -667,9 +745,9 @@ function HubNebula({ hub }: { hub: Hub }) {
 }
 
 /** 星系色板（按排序后位置分配，保证同层不撞色且稳定）。 */
-const BOOK_PALETTE = ['#5b8cff', '#35c46b', '#e0c23a', '#a06bff', '#3ac0c4', '#e06ba0', '#ff6b6b', '#e08a3a', '#7c8cff', '#4fd1c5']
+const BODY_PALETTE = ['#5b8cff', '#35c46b', '#e0c23a', '#a06bff', '#3ac0c4', '#e06ba0', '#ff6b6b', '#e08a3a', '#7c8cff', '#4fd1c5']
 function paletteAt(index: number): string {
-  return BOOK_PALETTE[index % BOOK_PALETTE.length]!
+  return BODY_PALETTE[index % BODY_PALETTE.length]!
 }
 
 /**
@@ -831,7 +909,7 @@ function dedupeRelations(
 /**
  * 当前位置的详情：知识图谱 + 关联架构图。
  *
- * 用户裁决（2026-09-10）：知识图谱、架构图谱**属于书内部**，不再是一级菜单。
+ * 用户裁决（2026-09-10）：知识图谱、架构图谱**属于当前位置内部**，不再是一级菜单。
  * 按当前 scope 过滤图谱与产物（scope 里有什么维度就传什么维度）。
  */
 function ScopePanel({
@@ -841,19 +919,19 @@ function ScopePanel({
   scope: Scope
   entries: CatalogEntry[]
 }) {
+  const t = useT()
   const [tab, setTab] = useState<'graph' | 'arch' | 'entries'>('graph')
   const [preview, setPreview] = useState<ArchDiagram | undefined>(undefined)
   // 架构图面板的子标签：预览 | IR | 元数据（knowledge-base.md §384）
   const [archTab, setArchTab] = useState<'preview' | 'ir' | 'meta'>('preview')
 
   const scopeLabel = scope.map((s) => s.label).join(' / ')
-  // scope → 服务端过滤参数（只传 scope 里出现过的维度）
+  // scope → 服务端过滤参数（只传 scope 里出现过的维度；`book` 是对外不暴露的内部维度，不传）
   const scopeParams = useMemo(() => {
-    const out: { layer?: string; owner?: string; book?: string; module?: string } = {}
+    const out: { layer?: string; owner?: string; module?: string } = {}
     for (const seg of scope) {
       if (seg.dim === 'layer') out.layer = seg.value
       else if (seg.dim === 'owner') out.owner = seg.value
-      else if (seg.dim === 'book') out.book = seg.value
       else out.module = seg.value
     }
     return out
@@ -869,11 +947,10 @@ function ScopePanel({
   // 该层级的条目（diagram 类型用于「架构图」标签）
   const scoped = entries.filter((e) => inScope(e, scope))
   const diagrams = scoped.filter((e) => e.type === 'diagram')
-  // 产物按当前作用域过滤（book/module 有则传）
+  // 产物按当前作用域过滤（module 有则传）
   const archAssets = useAsync(
     () =>
       api.archDiagrams({
-        ...(scopeParams.book !== undefined ? { book: scopeParams.book } : {}),
         ...(scopeParams.module !== undefined ? { module: scopeParams.module } : {}),
       }),
     [scopeKey],
@@ -894,17 +971,17 @@ function ScopePanel({
     <div className="card scope-panel">
       <div className="row" style={{ justifyContent: 'space-between' }}>
         <h3 style={{ margin: 0 }}>
-          当前位置 <span className="mono small muted">{scopeLabel}</span>
+          {t('knowledge.scope.current')} <span className="mono small muted">{scopeLabel}</span>
         </h3>
         <div className="row" style={{ gap: 6 }}>
           <button className={tab === 'graph' ? 'primary' : ''} onClick={() => setTab('graph')}>
-            知识图谱
+            {t('knowledge.tab.graph')}
           </button>
           <button className={tab === 'arch' ? 'primary' : ''} onClick={() => setTab('arch')}>
-            架构图
+            {t('knowledge.tab.arch')}
           </button>
           <button className={tab === 'entries' ? 'primary' : ''} onClick={() => setTab('entries')}>
-            条目（{scoped.length}）
+            {t('knowledge.entriesCount', { n: scoped.length })}
           </button>
         </div>
       </div>
@@ -921,28 +998,27 @@ function ScopePanel({
         <div style={{ marginTop: 12 }}>
           {/* 该层级的 diagram 条目：点击即选中对应产物 */}
           <div className="small muted" style={{ marginBottom: 6 }}>
-            diagram 条目（{diagrams.length}）
+            {t('knowledge.diagramEntries', { n: diagrams.length })}
           </div>
           {diagrams.length === 0 ? (
             <div className="empty">
-              当前位置还没有 <span className="mono">type: diagram</span> 条目。
+              {t('knowledge.noDiagram')}
               <div className="small muted" style={{ marginTop: 6 }}>
-                用{' '}
                 <span className="mono">
                   prism arch render &lt;type&gt; &lt;ir.json&gt;
-                  {scopeParams.book !== undefined ? ` --book ${scopeParams.book}` : ''}
                   {scopeParams.module !== undefined ? ` --module ${scopeParams.module}` : ''}
-                </span>{' '}
-                渲染后，产物会自动归到这里。
+                </span>
+                {' '}
+                {t('knowledge.noDiagramHint')}
               </div>
             </div>
           ) : (
             <table>
               <thead>
                 <tr>
-                  <th style={{ width: 160 }}>条目</th>
-                  <th>标题</th>
-                  <th style={{ width: 100 }}>标签</th>
+                  <th style={{ width: 160 }}>{t('knowledge.stat.entries')}</th>
+                  <th>{t('knowledge.meta.title')}</th>
+                  <th style={{ width: 100 }}>{t('knowledge.tags')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -957,15 +1033,13 @@ function ScopePanel({
             </table>
           )}
 
-          {/* 已渲染产物（Archify）：按当前书/模块过滤 */}
+          {/* 已渲染产物（Archify）：按当前范围（主题）过滤 */}
           <div className="small muted" style={{ margin: '14px 0 6px' }}>
-            已渲染产物（Archify）· 归属本书 {archAssets.data?.length ?? 0} 个
+            {t('knowledge.arch.rendered', { n: archAssets.data?.length ?? 0 })}
           </div>
           <State loading={archAssets.loading} error={archAssets.error}>
             {(archAssets.data?.length ?? 0) === 0 ? (
-              <div className="small muted">
-                （这里还没有渲染产物。加 <span className="mono">--book {scopeParams.book ?? '<书>'}</span> 渲染即可归到此处）
-              </div>
+              <div className="small muted">{t('knowledge.arch.noneHint')}</div>
             ) : (
               <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
                 {archAssets.data?.map((d) => (
@@ -978,7 +1052,7 @@ function ScopePanel({
                     }}
                     title={d.title ?? d.name}
                   >
-                    {TYPE_LABEL_DIAGRAM[d.type] ?? d.type} · {d.title ?? d.name}
+                    {diagramLabel(d.type)} · {d.title ?? d.name}
                   </button>
                 ))}
               </div>
@@ -989,9 +1063,13 @@ function ScopePanel({
             <div style={{ marginTop: 12 }}>
               {/* 子标签：预览 | IR | 元数据（knowledge-base.md §384） */}
               <div className="row" style={{ gap: 6, marginBottom: 8 }}>
-                {(['preview', 'ir', 'meta'] as const).map((t) => (
-                  <button key={t} className={archTab === t ? 'primary' : ''} onClick={() => setArchTab(t)}>
-                    {t === 'preview' ? '预览' : t === 'ir' ? 'IR' : '元数据'}
+                {(['preview', 'ir', 'meta'] as const).map((tabKey) => (
+                  <button key={tabKey} className={archTab === tabKey ? 'primary' : ''} onClick={() => setArchTab(tabKey)}>
+                    {tabKey === 'preview'
+                      ? t('knowledge.arch.tab.preview')
+                      : tabKey === 'ir'
+                        ? t('knowledge.arch.tab.ir')
+                        : t('knowledge.arch.tab.meta')}
                   </button>
                 ))}
                 <a
@@ -1001,13 +1079,13 @@ function ScopePanel({
                   className="small"
                   style={{ marginLeft: 'auto', alignSelf: 'center' }}
                 >
-                  新窗口打开 ↗
+                  {t('common.openNewWindow')} ↗
                 </a>
               </div>
 
               {archTab === 'preview' && (
                 <div className="iframe-wrap">
-                  <iframe title={`架构图 ${preview.name}`} src={previewUrl} />
+                  <iframe title={`${t('knowledge.tab.arch')} ${preview.name}`} src={previewUrl} />
                 </div>
               )}
               {archTab === 'ir' && <ArchIrView type={preview.type} name={preview.name} mode="ir" />}
@@ -1022,10 +1100,10 @@ function ScopePanel({
           <table>
             <thead>
               <tr>
-                <th style={{ width: 150 }}>条目</th>
-                <th>标题</th>
-                <th style={{ width: 90 }}>类型</th>
-                <th style={{ width: 150 }}>模块</th>
+                <th style={{ width: 150 }}>{t('knowledge.stat.entries')}</th>
+                <th>{t('knowledge.meta.title')}</th>
+                <th style={{ width: 90 }}>{t('knowledge.entryType')}</th>
+                <th style={{ width: 150 }}>{t('knowledge.module')}</th>
               </tr>
             </thead>
             <tbody>
@@ -1035,7 +1113,7 @@ function ScopePanel({
                   <td>{e.title}</td>
                   <td>
                     <span className="tag" style={{ color: TYPE_COLOR[e.type] }}>
-                      {TYPE_LABEL[e.type] ?? e.type}
+                      {typeLabel(e.type)}
                     </span>
                   </td>
                   <td className="small muted">{e.module === '' ? '_inbox' : e.module}</td>
@@ -1050,22 +1128,29 @@ function ScopePanel({
 }
 
 /** 五类图的界面标签（产物按钮用）。 */
-const TYPE_LABEL_DIAGRAM: Record<string, string> = {
-  architecture: '架构图',
-  sequence: '时序图',
-  lifecycle: '生命周期图',
-  dataflow: '数据流图',
-  workflow: '工作流图',
+const DIAGRAM_LABEL_KEY: Record<string, DictKey> = {
+  architecture: 'knowledge.diagram.architecture',
+  sequence: 'knowledge.diagram.sequence',
+  lifecycle: 'knowledge.diagram.lifecycle',
+  dataflow: 'knowledge.diagram.dataflow',
+  workflow: 'knowledge.diagram.workflow',
+}
+
+/** 图类型 → 界面语言（认不出原样显示）。 */
+function diagramLabel(type: string): string {
+  const key = DIAGRAM_LABEL_KEY[type]
+  return key === undefined ? type : tr(key)
 }
 
 /** 产物的 IR 源 / 元数据视图（IR 是源、HTML 是派生，两者都在这里可查）。 */
 function ArchIrView({ type, name, mode }: { type: string; name: string; mode: 'ir' | 'meta' }) {
+  const t = useT()
   const data = useAsync(() => api.archIr(type, name), [type, name])
   return (
     <State loading={data.loading} error={data.error}>
       {data.data && mode === 'ir' ? (
         data.data.ir === null ? (
-          <div className="empty small">该产物没有 IR 源文件（可能是早期渲染的）</div>
+          <div className="empty small">{t('knowledge.ir.missing')}</div>
         ) : (
           <pre className="entry-body mono small" style={{ maxHeight: 480, overflow: 'auto' }}>
             {JSON.stringify(data.data.ir, null, 2)}
@@ -1074,19 +1159,18 @@ function ArchIrView({ type, name, mode }: { type: string; name: string; mode: 'i
       ) : null}
       {data.data && mode === 'meta' ? (
         data.data.meta === null ? (
-          <div className="empty small">该产物没有元数据（早期渲染的产物没有 sidecar）</div>
+          <div className="empty small">{t('knowledge.meta.missing')}</div>
         ) : (
           <table>
             <tbody>
               {[
-                ['类型', TYPE_LABEL_DIAGRAM[data.data.meta.type] ?? data.data.meta.type],
-                ['文件', data.data.meta.name],
-                ['标题', data.data.meta.title ?? '—'],
-                ['归属', data.data.meta.book ?? '（未归属）'],
-                ['模块', data.data.meta.module ?? '—'],
-                ['Archify 版本', data.data.meta.archify_version],
-                ['IR 哈希', data.data.meta.ir_hash],
-                ['渲染时间', data.data.meta.created_at.replace('T', ' ').slice(0, 19)],
+                [t('knowledge.meta.type'), diagramLabel(data.data.meta.type)],
+                [t('knowledge.meta.file'), data.data.meta.name],
+                [t('knowledge.meta.title'), data.data.meta.title ?? '—'],
+                [t('knowledge.meta.module'), data.data.meta.module ?? '—'],
+                [t('knowledge.meta.archify'), data.data.meta.archify_version],
+                [t('knowledge.meta.hash'), data.data.meta.ir_hash],
+                [t('knowledge.meta.created'), data.data.meta.created_at.replace('T', ' ').slice(0, 19)],
               ].map(([k, v]) => (
                 <tr key={k}>
                   <td className="small muted" style={{ width: 120 }}>
@@ -1103,10 +1187,11 @@ function ArchIrView({ type, name, mode }: { type: string; name: string; mode: 'i
   )
 }
 
-/** 书/模块内的紧凑图谱：SVG 力导向近似（环形 + 连线），不占满屏。 */
+/** 当前位置内的紧凑图谱：SVG 力导向近似（环形 + 连线），不占满屏。 */
 function MiniGraph({ view }: { view: KbGraphView }) {
+  const t = useT()
   if (view.nodes.length === 0) {
-    return <div className="empty">该范围内还没有关系边（条目可能都是孤立的）</div>
+    return <div className="empty">{t('knowledge.graphEmpty')}</div>
   }
   const W = 640
   const H = 320
@@ -1167,6 +1252,7 @@ function MiniGraph({ view }: { view: KbGraphView }) {
 
 /** 条目详情面板：正文 + 版本历史（F-B4）+ 元数据 + 关系（含双链邻居）。 */
 function EntryPanel({ id, onClose, onSelect }: { id: string; onClose: () => void; onSelect: (id: string) => void }) {
+  const t = useT()
   const [tab, setTab] = useState<'body' | 'versions'>('body')
   /** undefined = 最新版（与既有行为一致）；有值 = 查看该历史版次。 */
   const [version, setVersion] = useState<number | undefined>(undefined)
@@ -1194,17 +1280,15 @@ function EntryPanel({ id, onClose, onSelect }: { id: string; onClose: () => void
 
   /** 软删（可恢复）：二次确认，避免误点。历史版不提供软删。 */
   const doRemove = async () => {
-    if (!window.confirm(`软删条目「${entry.data?.title ?? id}」？
-
-条目将标记为 deprecated（保留可恢复），不再出现在检索与图谱中。`)) {
+    if (!window.confirm(t('knowledge.entry.confirmRemove', { title: entry.data?.title ?? id }))) {
       return
     }
     setRemoving(true)
     try {
       const result = await api.kbRemove(id)
-      setNote(`已软删（被 ${result.references} 条边引用）；关闭面板后从视图消失`)
+      setNote(t('knowledge.entry.removed', { n: result.references }))
     } catch (error) {
-      setNote(`删除失败：${error instanceof Error ? error.message : String(error)}`)
+      setNote(t('knowledge.entry.removeFailed', { msg: error instanceof Error ? error.message : String(error) }))
     } finally {
       setRemoving(false)
     }
@@ -1219,14 +1303,14 @@ function EntryPanel({ id, onClose, onSelect }: { id: string; onClose: () => void
   return (
     <aside className="entry-panel">
       <div className="row" style={{ justifyContent: 'space-between', marginBottom: 10 }}>
-        <strong>条目详情</strong>
+        <strong>{t('knowledge.entry.detail')}</strong>
         <div className="row" style={{ gap: 6 }}>
           {entry.data !== undefined && entry.data.status === 'active' && !viewingHistory && (
-            <button onClick={() => void doRemove()} disabled={removing} title="软删（可恢复）">
-              {removing ? '删除中…' : '软删'}
+            <button onClick={() => void doRemove()} disabled={removing} title={t('knowledge.entry.softDeleteTitle')}>
+              {removing ? t('knowledge.entry.softDeleting') : t('knowledge.entry.softDelete')}
             </button>
           )}
-          <button onClick={onClose}>关闭</button>
+          <button onClick={onClose}>{t('common.close')}</button>
         </div>
       </div>
       {note !== '' && (
@@ -1238,7 +1322,7 @@ function EntryPanel({ id, onClose, onSelect }: { id: string; onClose: () => void
       {/* 标签栏（沿用 ScopePanel 的 tab 约定：选中 = button.primary） */}
       <div className="row" style={{ gap: 6, marginBottom: 10 }}>
         <button className={tab === 'body' ? 'primary' : ''} aria-pressed={tab === 'body'} onClick={() => setTab('body')}>
-          正文
+          {t('knowledge.entry.body')}
         </button>
         <button
           className={tab === 'versions' ? 'primary' : ''}
@@ -1246,7 +1330,9 @@ function EntryPanel({ id, onClose, onSelect }: { id: string; onClose: () => void
           onClick={() => setTab('versions')}
         >
           {/* 未加载前不显示数字，避免闪一个假数字 */}
-          {versions.data !== undefined ? `版本 (${list.length})` : '版本'}
+          {versions.data !== undefined
+            ? t('knowledge.entry.versionsCount', { n: list.length })
+            : t('knowledge.entry.versions')}
         </button>
       </div>
 
@@ -1254,15 +1340,17 @@ function EntryPanel({ id, onClose, onSelect }: { id: string; onClose: () => void
         <>
           {entry.data !== undefined && entry.error !== undefined && (
             <div className="error" role="alert" style={{ marginBottom: 8 }}>
-              {version !== undefined ? `切换到 v${version} 失败：${entry.error}` : `请求失败：${entry.error}`}{' '}
+              {version !== undefined
+                ? t('knowledge.entry.switchFailed', { n: version, msg: entry.error })
+                : t('knowledge.err.request', { msg: entry.error })}{' '}
               <button className="rel-link" onClick={entry.reload}>
-                重试
+                {t('common.retry')}
               </button>
             </div>
           )}
           {entry.data !== undefined && entry.loading && (
             <div className="small muted" style={{ marginBottom: 6 }}>
-              加载中…
+              {t('common.loading')}
             </div>
           )}
           {entry.data === undefined ? (
@@ -1274,20 +1362,19 @@ function EntryPanel({ id, onClose, onSelect }: { id: string; onClose: () => void
                 {viewingHistory && (
                   <>
                     {' '}
-                    <span className="tag">历史版本</span>
+                    <span className="tag">{t('knowledge.entry.history')}</span>
                   </>
                 )}
               </div>
               <h3 style={{ margin: '4px 0 10px', fontSize: 16 }}>{entry.data.title}</h3>
               <div className="row" style={{ gap: 6, marginBottom: 10 }}>
                 <span className="tag" style={{ color: TYPE_COLOR[entry.data.type] }}>
-                  {TYPE_LABEL[entry.data.type] ?? entry.data.type}
+                  {typeLabel(entry.data.type)}
                 </span>
-                <span className="tag">{LAYER_LABEL[entry.data.layer] ?? entry.data.layer}</span>
-                <span className="tag">{entry.data.book}</span>
+                <span className="tag">{layerLabel(entry.data.layer)}</span>
                 {entry.data.module !== '' && <span className="tag">{entry.data.module}</span>}
                 <span className={`tag${entry.data.risk === 'high' ? ' err' : entry.data.risk === 'medium' ? ' warn' : ''}`}>
-                  risk {entry.data.risk}
+                  {t('knowledge.entry.risk', { level: entry.data.risk })}
                 </span>
               </div>
               <pre className="entry-body">{entry.data.content}</pre>
@@ -1295,7 +1382,7 @@ function EntryPanel({ id, onClose, onSelect }: { id: string; onClose: () => void
               {neighbors.data && neighbors.data.edges.length > 0 && (
                 <>
                   <div className="small muted" style={{ margin: '12px 0 6px' }}>
-                    关系（{neighbors.data.edges.length}）
+                    {t('knowledge.entry.relations', { n: neighbors.data.edges.length })}
                   </div>
                   <ul className="rel-list">
                     {dedupeRelations(neighbors.data.edges, id).map((r) => (
@@ -1304,7 +1391,7 @@ function EntryPanel({ id, onClose, onSelect }: { id: string; onClose: () => void
                         <button
                           className="rel-link"
                           onClick={() => onSelect(r.other)}
-                          title="查看该条目"
+                          title={t('knowledge.entry.viewEntry')}
                         >
                           {r.other}
                         </button>
@@ -1316,8 +1403,8 @@ function EntryPanel({ id, onClose, onSelect }: { id: string; onClose: () => void
 
               {entry.data.tags.length > 0 && (
                 <div className="row" style={{ gap: 4, marginTop: 10 }}>
-                  {entry.data.tags.map((t) => (
-                    <span key={t} className="tag small">#{t}</span>
+                  {entry.data.tags.map((tag) => (
+                    <span key={tag} className="tag small">#{tag}</span>
                   ))}
                 </div>
               )}
@@ -1330,12 +1417,12 @@ function EntryPanel({ id, onClose, onSelect }: { id: string; onClose: () => void
         <>
           <State loading={versions.loading} error={versions.error}>
             {list.length === 0 ? (
-              <div className="empty">没找到该条目的版本记录。条目可能已从库中移除。</div>
+              <div className="empty">{t('knowledge.entry.none')}</div>
             ) : list.length === 1 ? (
               <div className="empty">
-                此条目只有 1 个版本（当前 v{list[0].version}）。
+                {t('knowledge.entry.one', { n: list[0].version })}
                 <div className="small muted" style={{ marginTop: 6 }}>
-                  有新版本时这里会出现历史。
+                  {t('knowledge.entry.oneHint')}
                 </div>
               </div>
             ) : (
@@ -1346,15 +1433,15 @@ function EntryPanel({ id, onClose, onSelect }: { id: string; onClose: () => void
                     className={`list-row${v.is_latest ? '' : ' muted'}`}
                     style={{ borderLeft: `3px solid ${v.is_latest ? 'var(--accent)' : 'transparent'}` }}
                     onClick={() => openVersion(v.version)}
-                    title={`查看 v${v.version} 正文`}
+                    title={t('knowledge.entry.viewVersion', { n: v.version })}
                   >
                     <span className="mono" style={{ minWidth: 34 }}>
                       v{v.version}
                     </span>
-                    {v.is_latest && <span className="tag ok">当前</span>}
+                    {v.is_latest && <span className="tag ok">{t('knowledge.entry.current')}</span>}
                     <span className={`tag${STATUS_TAG[v.status] ?? ''}`}>{v.status}</span>
                     {entry.data !== undefined && entry.data.version === v.version && (
-                      <span className="tag">查看中</span>
+                      <span className="tag">{t('knowledge.entry.viewing')}</span>
                     )}
                     <span className="list-main small muted" style={{ textAlign: 'right' }}>
                       {fmtTime(v.updated_at)}
@@ -1364,12 +1451,12 @@ function EntryPanel({ id, onClose, onSelect }: { id: string; onClose: () => void
               </div>
             )}
             <div className="small muted" style={{ marginTop: 10 }}>
-              版本来自条目文件；索引流水请用 <span className="mono">prism kb scan-history</span>
+              {t('knowledge.entry.versionsFrom')}
             </div>
           </State>
           {versions.error !== undefined && (
             <div className="row" style={{ marginTop: 8 }}>
-              <button onClick={versions.reload}>重试</button>
+              <button onClick={versions.reload}>{t('common.retry')}</button>
             </div>
           )}
         </>

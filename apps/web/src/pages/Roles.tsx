@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import {
   ROLE_COLOR_OPTIONS,
@@ -14,7 +14,8 @@ import {
 import { EffectiveSkills } from '../components/EffectiveSkills.tsx'
 import { State } from '../components/State.tsx'
 import { useAsync } from '../components/useAsync.ts'
-import type { NavTarget } from '../nav.ts'
+import { Drawer, PageHead, Pane, StatusTag, firstSentence } from '../components/ui.tsx'
+import { useT } from '../i18n.ts'
 
 const COLOR_MAP: Record<string, string> = {
   red: '#e05555',
@@ -27,7 +28,7 @@ const COLOR_MAP: Record<string, string> = {
   cyan: '#3ac0c4',
 }
 
-/** 知识层（与服务端 `role-create.ts` 的 `KNOWLEDGE_LAYERS` 同口径）。 */
+/** 知识范围（与服务端 `role-create.ts` 的 `KNOWLEDGE_LAYERS` 同口径）。 */
 const LAYERS: Array<{ value: KnowledgeBinding['layers'][number]; label: string }> = [
   { value: 'global', label: 'global 全局' },
   { value: 'project', label: 'project 项目' },
@@ -38,29 +39,35 @@ const LAYERS: Array<{ value: KnowledgeBinding['layers'][number]; label: string }
 const ROLE_ID_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/
 
 /**
- * 角色页：角色库列表 + 详情（核心第一原则 / 边界 / 能力 / 知识绑定 / 有效 Skill）
- * + 增删改（v5：`new` / `edit` / `rm` 与 CLI、MCP 同名同位，见 `packages/cli/src/commands/role.ts`）。
+ * 角色页：左列表 + 右详情。
+ *
+ * 2026-09-14 重构：原先是一张 5 列宽表，**描述列是大段白文**（每行 3–5 行），
+ * 名称只是一个按钮，详情渲染在**表格下方**——点完还得往下找，用户反馈「一堆信息、没重点」。
+ * 现在：列表行 = 角色名 + 一句话职责（两行截断）+ 状态标签；详情在主从右侧，
+ * 核心第一原则置顶高亮，职责/边界分栏，能力与知识绑定成标签，正文折叠在最后。
+ *
+ * 增删改与 CLI/MCP 同名同位（`new` / `edit` / `rm`），表单在抽屉里打开。
  */
 export function RolesPage({
-  nav,
-  onOpenSkills,
+  sel,
+  onSelect,
+  onOpenUsageSkills,
 }: {
-  /** 跨页跳转意图（有效集反向视图 → 本页展开指定角色） */
-  nav?: NavTarget
-  onOpenSkills?: () => void
+  /** 当前展开的角色（来自 hash 深链） */
+  sel?: string
+  onSelect?: (name: string) => void
+  /** 跳到技能页看反向视图 */
+  onOpenUsageSkills?: () => void
 } = {}) {
+  const t = useT()
   const roles = useAsync(() => teamApi.roles(), [])
-  const [selected, setSelected] = useState<string>('')
   const [formOpen, setFormOpen] = useState(false)
   const [banner, setBanner] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
+  const [filter, setFilter] = useState('')
 
-  // 从「技能 → 使用情况」跳进来时展开目标角色
-  useEffect(() => {
-    if (nav?.role !== undefined && nav.role !== '') setSelected(nav.role)
-  }, [nav])
-
+  const selected = sel ?? ''
   const detail = useAsync(
-    () => (selected ? teamApi.role(selected) : Promise.resolve(undefined)),
+    () => (selected !== '' ? teamApi.role(selected) : Promise.resolve(undefined)),
     [selected],
   )
 
@@ -70,136 +77,152 @@ export function RolesPage({
   /** 写操作统一出口：刷新列表 + 置提示条（成功保留详情，删除后收起）。 */
   const afterWrite = (kind: 'ok' | 'err', text: string, opts: { close?: boolean; keep?: string } = {}) => {
     setBanner({ kind, text })
-    if (opts.close === true) setSelected('')
     roles.reload()
     detail.reload()
-    if (opts.keep !== undefined) setSelected(opts.keep)
+    if (opts.close === true) onSelect?.('')
+    if (opts.keep !== undefined) onSelect?.(opts.keep)
   }
+
+  const keyword = filter.trim().toLowerCase()
+  const shown =
+    keyword === ''
+      ? list
+      : list.filter(
+          (r) => r.name.toLowerCase().includes(keyword) || r.description.toLowerCase().includes(keyword),
+        )
+
+  useEffect(() => {
+    // 列表刷新后，深链指向的角色已不存在 → 收起详情（不留空壳）
+    if (selected !== '' && roles.data !== undefined && !list.some((r) => r.name === selected)) {
+      onSelect?.('')
+    }
+  }, [roles.data, selected, list, onSelect])
 
   return (
     <>
-      <div className="row" style={{ justifyContent: 'space-between' }}>
-        <h2 className="page-title">角色</h2>
+      <PageHead title={t('roles.title')} sub={t('roles.desc')}>
         <button
           className="primary"
           onClick={() => {
             setFormOpen(true)
             setBanner(null)
           }}
-          disabled={formOpen}
         >
-          新建角色
+          {t('roles.new')}
         </button>
-      </div>
-      <p className="page-desc">
-        角色是决策契约：核心第一原则决定冲突时牺牲什么；能力用白名单，知识绑到层与书。
-      </p>
+      </PageHead>
 
-      <div className="card">
-        <h3>角色库</h3>
-        {banner !== null && (
-          <div className="row" style={{ gap: 8, marginBottom: 10 }}>
-            <span className={`tag ${banner.kind === 'ok' ? 'ok' : 'err'}`}>
-              {banner.kind === 'ok' ? '已完成' : '失败'}
-            </span>
-            <span className="small">{banner.text}</span>
-          </div>
-        )}
-        <State
-          loading={roles.loading}
-          error={roles.error}
-          empty={!roles.loading && !roles.error && list.length === 0}
-          emptyText="还没有角色。点右上角「新建角色」，或用 prism role new <name> 生成骨架。"
-        >
-          {/* v5 / T-5：角色库 5 列表在小屏（375px，内容区 351px）会挤压溢出——
-              套上既有 `.table-scroll`（styles.css:270-272）横向滚动兜底。
-              另给「描述」列一个 minWidth：固定列宽合计 570px 已超过 `.table-scroll table`
-              的 min-width:560px，若不给描述列下限，浏览器会把描述压到「一字一行」
-              （375px 实测截图 v5-375-roles.png 复现过）。给下限后表格内在宽 ~790px，
-              由容器横向滚动承载，描述保持可读。 */}
-          <div className="table-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th style={{ width: 170 }}>角色</th>
-                  <th style={{ minWidth: 220 }}>描述</th>
-                  <th style={{ width: 160 }}>能力（Skill 白名单）</th>
-                  <th style={{ width: 130 }}>知识绑定</th>
-                  <th style={{ width: 110 }}>校验</th>
-                </tr>
-              </thead>
-              <tbody>
-                {list.map((r) => (
-                  <tr key={r.name}>
-                    <td>
-                      <button
-                        className="nav-item"
-                        style={{ padding: 0, color: COLOR_MAP[r.color ?? ''] ?? 'var(--accent)' }}
-                        onClick={() => {
-                          setSelected(r.name)
-                          setBanner(null)
-                        }}
-                      >
-                        {r.name}
-                      </button>
-                      {r.installed !== undefined && (
-                        <div>
-                          <span className={`tag${r.installed ? ' ok' : ' warn'}`} title="宿主 agents 目录里是否有该角色定义">
-                            {r.installed ? '已装' : '未装'}
-                          </span>
-                        </div>
-                      )}
-                    </td>
-                    <td className="small">{r.description}</td>
-                    <td className="mono small muted">
-                      {r.skills.length ? r.skills.join(', ') : '—'}
-                    </td>
-                    <td className="small muted">
-                      {(r.knowledge?.layers ?? []).join('/') || '—'}
-                      {r.knowledge?.books?.length ? ` (${r.knowledge.books.join(', ')})` : ''}
-                    </td>
-                    <td>
-                      <IssueBadge issues={r.issues} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </State>
-      </div>
-
-      {formOpen && (
-        <NewRoleForm
-          existingNames={list.map((r) => r.name)}
-          defaultRolesDir={rolesDir}
-          onCancel={() => setFormOpen(false)}
-          onCreated={(name, path) => {
-            setFormOpen(false)
-            afterWrite('ok', `${name} 已写入 ${path}`, { keep: name })
-          }}
-        />
+      {banner !== null && (
+        <div className="banner">
+          <StatusTag kind={banner.kind === 'ok' ? 'ok' : 'err'}>
+            {banner.kind === 'ok' ? t('common.save') : t('status.failed')}
+          </StatusTag>
+          <span className="small">{banner.text}</span>
+        </div>
       )}
 
-      {selected !== '' && (
-        <RoleDetail
-          name={selected}
-          detail={detail.data}
-          loading={detail.loading}
-          error={detail.error}
-          rolesDir={rolesDir}
-          onClose={() => setSelected('')}
-          onOpenSkills={onOpenSkills}
-          onSaved={(text) => afterWrite('ok', text, { keep: selected })}
-          onDeleted={(text) => afterWrite('ok', text, { close: true })}
-          onFailed={(text) => afterWrite('err', text, { keep: selected })}
-        />
+      <State
+        loading={roles.loading}
+        error={roles.error}
+        empty={!roles.loading && !roles.error && list.length === 0}
+        emptyText={t('roles.empty')}
+      >
+        <div className="md">
+          <div className="md-list">
+            <div style={{ padding: '4px 4px 8px' }}>
+              <input
+                style={{ width: '100%' }}
+                placeholder={t('roles.filterPlaceholder')}
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+              />
+            </div>
+            {shown.length === 0 && (
+              <div className="small muted" style={{ padding: '8px 10px' }}>
+                {t('common.empty')}
+              </div>
+            )}
+            {shown.map((role) => (
+              <button
+                key={role.name}
+                className={`md-row${selected === role.name ? ' sel' : ''}`}
+                onClick={() => {
+                  onSelect?.(role.name)
+                  setBanner(null)
+                }}
+              >
+                <span className="t">
+                  <span className="dot" style={{ background: COLOR_MAP[role.color ?? ''] ?? 'var(--accent)' }} />
+                  {role.name}
+                </span>
+                <span className="s">{firstSentence(role.description, 76)}</span>
+                <span className="tags">
+                  <StatusTag kind={role.installed === false ? 'warn' : 'ok'}>
+                    {role.installed === false ? t('common.notInstalled') : t('common.installed')}
+                  </StatusTag>
+                  <IssueBadge issues={role.issues} />
+                </span>
+              </button>
+            ))}
+          </div>
+
+          <div className="md-detail">
+            {selected === '' ? (
+              <Pane>
+                <div className="small muted">{t('roles.selectHint')}</div>
+              </Pane>
+            ) : (
+              <RoleDetail
+                name={selected}
+                detail={detail.data}
+                loading={detail.loading}
+                error={detail.error}
+                rolesDir={rolesDir}
+                onOpenUsage={onOpenUsageSkills}
+                onEdit={() => setFormOpen(true)}
+                onDeleted={(text) => afterWrite('ok', text, { close: true })}
+              />
+            )}
+          </div>
+        </div>
+      </State>
+
+      {formOpen && (
+        <Drawer
+          title={
+            selected !== '' ? `${t('roles.form.edit')} · ${selected}` : t('roles.form.new')
+          }
+          onClose={() => setFormOpen(false)}
+        >
+          {selected !== '' && detail.data !== undefined ? (
+            <RoleEditForm
+              role={detail.data}
+              defaultRolesDir={rolesDir}
+              onCancel={() => setFormOpen(false)}
+              onSaved={(text) => {
+                setFormOpen(false)
+                afterWrite('ok', text, { keep: selected })
+              }}
+              onFailed={(text) => afterWrite('err', text, { keep: selected })}
+            />
+          ) : (
+            <NewRoleForm
+              existingNames={list.map((r) => r.name)}
+              defaultRolesDir={rolesDir}
+              onCancel={() => setFormOpen(false)}
+              onCreated={(name, path) => {
+                setFormOpen(false)
+                afterWrite('ok', `${name} → ${path}`, { keep: name })
+              }}
+            />
+          )}
+        </Drawer>
       )}
     </>
   )
 }
 
-/* ==================== 角色详情（读 + 编辑 + 删除） ==================== */
+/* ==================== 角色详情（读 + 删除入口） ==================== */
 
 function RoleDetail({
   name,
@@ -207,33 +230,36 @@ function RoleDetail({
   loading,
   error,
   rolesDir,
-  onClose,
-  onOpenSkills,
-  onSaved,
+  onOpenUsage,
+  onEdit,
   onDeleted,
-  onFailed,
 }: {
   name: string
   detail: RoleDefinition | undefined
   loading: boolean
   error: string | undefined
-  /** 受管 roles 目录（只读，来自 GET /api/roles）——删除/编辑的 `roles_dir` 缺省值 */
   rolesDir: string | undefined
-  onClose: () => void
-  onOpenSkills?: () => void
-  onSaved: (text: string) => void
+  onOpenUsage?: () => void
+  onEdit: () => void
   onDeleted: (text: string) => void
-  onFailed: (text: string) => void
 }) {
-  const [editing, setEditing] = useState(false)
+  const t = useT()
   const [confirming, setConfirming] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [delError, setDelError] = useState('')
   /** `null` = 跟随父级给的默认目录；一旦用户动过就固化为自己的值（可清空）。 */
   const [dirOverride, setDirOverride] = useState<string | null>(null)
+  /** 正文默认折叠——列表页要「有重点」，长正文按需展开。 */
+  const [showBody, setShowBody] = useState(false)
 
   const dirValue = dirOverride ?? rolesDir ?? ''
   const effectiveDir = dirValue.trim()
+
+  useEffect(() => {
+    setConfirming(false)
+    setDelError('')
+    setShowBody(false)
+  }, [name])
 
   const onDelete = async () => {
     if (effectiveDir === '') {
@@ -252,155 +278,211 @@ function RoleDetail({
     }
   }
 
+  const duties = useMemo(() => splitSection(detail?.body ?? '', ['职责']), [detail?.body])
+  const bounds = useMemo(() => splitSection(detail?.body ?? '', ['边界（禁止）', '边界']), [detail?.body])
+
   return (
-    <div className="card">
-      <div className="row" style={{ justifyContent: 'space-between' }}>
-        <h3>
-          角色详情 <span className="mono small muted">{name}</span>
-        </h3>
-        <div className="row">
-          {!editing && detail !== undefined && (
-            <button className="primary" onClick={() => setEditing(true)}>
-              编辑
-            </button>
-          )}
-          {!editing && detail !== undefined && (
-            <button
-              onClick={() => {
-                setConfirming((prev) => !prev)
-                setDelError('')
-              }}
-              disabled={deleting}
-            >
-              {confirming ? '取消删除' : '删除'}
-            </button>
-          )}
-          <button onClick={onClose}>关闭</button>
-        </div>
-      </div>
-
-      {confirming && !editing && (
-        <div className="card" style={{ background: 'var(--panel-2)', marginBottom: 12, borderLeft: '3px solid var(--err)' }}>
-          <div className="small" style={{ marginBottom: 8 }}>
-            <strong>删除是不可逆的硬删</strong>：会直接删掉宿主目录里的 <span className="mono">{name}.md</span>
-            （兼容形态 <span className="mono">{name}/AGENTS.md</span> 一并删）。服务端要求显式给出目录。
-          </div>
-          <label className="field" htmlFor="rd-dir">
-            <span className="label">角色目录（roles_dir，必填）</span>
-            <input
-              id="rd-dir"
-              value={dirValue}
-              placeholder={rolesDir ?? '如 D:\\prism-home\\agents'}
-              disabled={deleting}
-              onChange={(e) => setDirOverride(e.target.value)}
-            />
-            {rolesDir === undefined && (
-              <span className="small muted">
-                未从 <span className="mono">GET /api/roles</span> 拿到默认目录 → 必须手动填写。
-              </span>
+    <>
+      <Pane
+        head={
+          <div className="pane-head">
+            <h3 className="mono" style={{ color: COLOR_MAP[detail?.color ?? ''] ?? 'var(--tx)' }}>
+              {name}
+            </h3>
+            {detail?.installed !== undefined && (
+              <StatusTag kind={detail.installed ? 'ok' : 'warn'}>
+                {detail.installed ? t('common.installed') : t('common.notInstalled')}
+              </StatusTag>
             )}
-          </label>
-          {delError !== '' && (
-            <div className="error" role="alert" style={{ marginTop: 8 }}>
-              {delError}
-            </div>
-          )}
-          <div className="form-actions" style={{ marginTop: 10 }}>
-            <button onClick={() => setConfirming(false)} disabled={deleting}>
-              取消
-            </button>
-            <button className="primary" onClick={() => void onDelete()} disabled={deleting || effectiveDir === ''}>
-              {deleting ? '删除中…' : '确认删除'}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {editing && detail !== undefined ? (
-        <RoleEditForm
-          role={detail}
-          defaultRolesDir={rolesDir}
-          onCancel={() => setEditing(false)}
-          onSaved={(text) => {
-            setEditing(false)
-            onSaved(text)
-          }}
-          onFailed={onFailed}
-        />
-      ) : (
-        <State loading={loading} error={error}>
-          {detail && (
-            <>
-              <div
-                style={{
-                  background: 'var(--panel-2)',
-                  borderLeft: `3px solid ${COLOR_MAP[detail.color ?? ''] ?? 'var(--accent)'}`,
-                  padding: '10px 14px',
-                  borderRadius: 8,
-                  marginBottom: 12,
+            <IssueBadge issues={detail?.issues} />
+            <span className="spacer">
+              {detail !== undefined && (
+                <button className="primary" onClick={onEdit}>
+                  {t('common.edit')}
+                </button>
+              )}
+              <button
+                onClick={() => {
+                  setConfirming((prev) => !prev)
+                  setDelError('')
                 }}
+                disabled={deleting}
               >
-                <div className="small muted" style={{ marginBottom: 4 }}>
-                  核心第一原则
+                {t('common.delete')}
+              </button>
+            </span>
+          </div>
+        }
+      >
+        <State loading={loading} error={error}>
+          {detail !== undefined && (
+            <>
+              <h4>{t('roles.principle')}</h4>
+              <div className="highlight">
+                <div style={{ fontWeight: 600 }}>
+                  {detail.principle !== '' ? detail.principle : t('roles.principleMissing')}
                 </div>
-                <div style={{ fontWeight: 600 }}>{detail.principle || '（缺失）'}</div>
               </div>
-              <div className="row" style={{ marginBottom: 10 }}>
-                {detail.model && <span className="tag">model: {detail.model}</span>}
-                {detail.thoughtLevel && <span className="tag">思考: {detail.thoughtLevel}</span>}
-                {detail.sourcePath && (
-                  <span className="tag small">来源: {detail.sourcePath}</span>
+
+              {detail.description !== '' && (
+                <>
+                  <h4>{t('common.description')}</h4>
+                  <div className="small">{detail.description}</div>
+                </>
+              )}
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: 14 }}>
+                <div>
+                  <h4>{t('roles.duties')}</h4>
+                  {duties.length === 0 ? (
+                    <div className="small muted">—</div>
+                  ) : (
+                    <ul className="lines">
+                      {duties.map((line) => (
+                        <li key={line}>{line}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+                <div>
+                  <h4>{t('roles.bounds')}</h4>
+                  {bounds.length === 0 ? (
+                    <div className="small muted">—</div>
+                  ) : (
+                    <ul className="lines">
+                      {bounds.map((line) => (
+                        <li key={line}>{line}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </div>
+
+              <h4>{t('roles.capabilities')}</h4>
+              <div className="chips">
+                {(detail.skills ?? []).length === 0 ? (
+                  <span className="small muted">—</span>
+                ) : (
+                  detail.skills?.map((s) => <StatusTag key={s}>{s}</StatusTag>)
                 )}
               </div>
-              {(detail.issues?.length ?? 0) > 0 && (
-                <div className="card" style={{ background: 'var(--panel-2)', marginBottom: 12 }}>
-                  <h3 style={{ marginTop: 0 }}>校验问题</h3>
-                  <table>
-                    <thead>
-                      <tr>
-                        <th style={{ width: 70 }}>级别</th>
-                        <th style={{ width: 170 }}>代码</th>
-                        <th>说明</th>
+
+              <h4>{t('roles.knowledgeScope')}</h4>
+              <div className="chips">
+                {(detail.knowledge?.layers ?? []).length === 0 ? (
+                  <span className="small muted">—</span>
+                ) : (
+                  detail.knowledge?.layers.map((l) => <StatusTag key={l}>{l}</StatusTag>)
+                )}
+              </div>
+
+              <h4>{t('roles.issues')}</h4>
+              {(detail.issues?.length ?? 0) === 0 ? (
+                <StatusTag kind="ok">{t('common.valid')}</StatusTag>
+              ) : (
+                <table>
+                  <thead>
+                    <tr>
+                      <th style={{ width: 70 }}>{t('roles.issueLevel')}</th>
+                      <th style={{ width: 170 }}>{t('roles.issueCode')}</th>
+                      <th>{t('roles.issueDetail')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {detail.issues?.map((issue, i) => (
+                      <tr key={`${issue.code}-${i}`}>
+                        <td>
+                          <StatusTag kind={issue.level === 'error' ? 'err' : 'warn'}>{issue.level}</StatusTag>
+                        </td>
+                        <td className="mono small">{issue.code}</td>
+                        <td className="small">{issue.message}</td>
                       </tr>
-                    </thead>
-                    <tbody>
-                      {detail.issues?.map((issue, i) => (
-                        <tr key={`${issue.code}-${i}`}>
-                          <td>
-                            <span className={`tag ${issue.level === 'error' ? 'err' : 'warn'}`}>
-                              {issue.level}
-                            </span>
-                          </td>
-                          <td className="mono small">{issue.code}</td>
-                          <td className="small">{issue.message}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                    ))}
+                  </tbody>
+                </table>
               )}
-              {/* F-D2 有效集（正向视图）：正文上方；与技能页「使用情况」互链 */}
-              <EffectiveSkills key={name} role={name} roleFixed onOpenUsage={onOpenSkills} />
-              <pre
-                className="mono"
-                style={{
-                  whiteSpace: 'pre-wrap',
-                  background: 'var(--panel-2)',
-                  padding: 12,
-                  borderRadius: 8,
-                  margin: 0,
-                  maxHeight: 360,
-                  overflow: 'auto',
-                }}
-              >
-                {detail.body}
-              </pre>
+
+              <h4>{t('common.body')}</h4>
+              <button onClick={() => setShowBody((prev) => !prev)}>
+                {showBody ? t('common.close') : `${detail.body.length} chars`}
+              </button>
+              {showBody && <pre className="entry-body" style={{ marginTop: 10 }}>{detail.body}</pre>}
             </>
           )}
         </State>
+      </Pane>
+
+      {/* F-D2 有效集（正向视图）：与技能页「使用情况」互链 */}
+      {detail !== undefined && (
+        <Pane>
+          <EffectiveSkills key={name} role={name} roleFixed onOpenUsage={onOpenUsage} />
+        </Pane>
       )}
-    </div>
+
+      {confirming && (
+        <Pane>
+          <div className="danger-zone">
+            <div className="small" style={{ marginBottom: 8 }}>
+              <strong>删除是不可逆的硬删</strong>：会直接删掉宿主目录里的 <span className="mono">{name}.md</span>
+              （兼容形态 <span className="mono">{name}/AGENTS.md</span> 一并删）。服务端要求显式给出目录。
+            </div>
+            <label className="field" htmlFor="rd-dir">
+              <span className="label">角色目录（roles_dir，必填）</span>
+              <input
+                id="rd-dir"
+                value={dirValue}
+                placeholder={rolesDir ?? '如 D:\\prism-home\\agents'}
+                disabled={deleting}
+                onChange={(e) => setDirOverride(e.target.value)}
+              />
+            </label>
+            {delError !== '' && (
+              <div className="error" role="alert" style={{ marginTop: 8 }}>
+                {delError}
+              </div>
+            )}
+            <div className="form-actions" style={{ marginTop: 10 }}>
+              <button onClick={() => setConfirming(false)} disabled={deleting}>
+                {t('common.cancel')}
+              </button>
+              <button className="primary" onClick={() => void onDelete()} disabled={deleting || effectiveDir === ''}>
+                {deleting ? t('common.deleting') : t('common.confirmDelete')}
+              </button>
+            </div>
+          </div>
+        </Pane>
+      )}
+    </>
   )
+}
+
+/**
+ * 从角色正文里抠出某个二级小节的要点（职责 / 边界）。
+ * 角色正文是自由 Markdown，这里只做**尽力而为**的抽取：找不到就返回空数组，
+ * 详情页仍有完整正文可看，不因抽取失败丢信息。
+ */
+function splitSection(body: string, headings: string[]): string[] {
+  const lines = body.replace(/\r\n/g, '\n').split('\n')
+  const out: string[] = []
+  let active = false
+  for (const line of lines) {
+    const heading = /^#{2,4}\s*(.+?)\s*$/.exec(line)
+    if (heading !== null) {
+      active = headings.some((h) => (heading[1] ?? '').startsWith(h))
+      continue
+    }
+    if (!active) continue
+    const bullet = /^\s*[-*+]\s+(.+)$/.exec(line)
+    if (bullet !== null) {
+      out.push((bullet[1] ?? '').replace(/\*\*/g, '').trim())
+      continue
+    }
+    const text = line.trim()
+    // 小节里的普通段落（非空、非代码围栏）也算一条
+    if (text !== '' && !text.startsWith('```') && !text.startsWith('|')) out.push(text)
+    if (out.length >= 8) break
+  }
+  return out
 }
 
 /* ==================== 新建 / 修改角色（共用字段 UI） ==================== */
@@ -411,7 +493,11 @@ interface RoleFormValues {
   /** 能力白名单（逗号分隔） */
   skills: string
   layers: string[]
-  /** 知识书（逗号分隔） */
+  /**
+   * 知识「书」绑定（逗号分隔）。
+   * 2026-09-14：界面上**不再展示**这一层（用户裁决「不显示这一层」），
+   * 但表单里保留该值并在提交时**原样透传**，避免编辑一次就静默清空既有绑定。
+   */
   books: string
   color: string
   model: string
@@ -458,11 +544,14 @@ function RoleFields({
   nameReadOnly: boolean
   bodyHint: string
 }) {
+  const t = useT()
   return (
     <>
       <div className="form-grid">
         <label className="field" htmlFor="rf-name">
-          <span className="label">角色名（kebab-case{nameReadOnly ? '，不可改' : '，必填'}）</span>
+          <span className="label">
+            {t('roles.form.name')}（kebab-case{nameReadOnly ? '，不可改' : '，必填'}）
+          </span>
           <input
             id="rf-name"
             value={v.name}
@@ -479,7 +568,7 @@ function RoleFields({
           )}
         </label>
         <label className="field" htmlFor="rf-color">
-          <span className="label">角色色</span>
+          <span className="label">{t('roles.form.color')}</span>
           <select
             id="rf-color"
             value={v.color}
@@ -495,7 +584,7 @@ function RoleFields({
           </select>
         </label>
         <label className="field" htmlFor="rf-description" style={{ gridColumn: '1 / -1' }}>
-          <span className="label">描述（派遣决策依据：职责 + 适用于 + 不适用于）</span>
+          <span className="label">{t('roles.form.description')}</span>
           <textarea
             id="rf-description"
             rows={2}
@@ -510,7 +599,7 @@ function RoleFields({
 
       <div className="form-grid" style={{ marginTop: 10 }}>
         <label className="field" htmlFor="rf-skills">
-          <span className="label">能力（Skill 白名单，逗号分隔）</span>
+          <span className="label">{t('roles.form.skills')}</span>
           <input
             id="rf-skills"
             value={v.skills}
@@ -520,21 +609,10 @@ function RoleFields({
           />
           <span className="small muted">留空 = 未声明能力（校验给 warning，不是 error）。</span>
         </label>
-        <label className="field" htmlFor="rf-books">
-          <span className="label">知识书（books，逗号分隔；可选）</span>
-          <input
-            id="rf-books"
-            value={v.books}
-            placeholder="prism-overview, team-definition"
-            disabled={submitting}
-            onChange={(e) => set('books', e.target.value)}
-          />
-          <span className="small muted">省略 = 该层全部。</span>
-        </label>
       </div>
 
       <div style={{ marginTop: 10 }}>
-        <span className="label small">知识层（layers，至少 1 个）</span>
+        <span className="label small">{t('roles.form.layers')}</span>
         <div className="row" style={{ gap: 6, marginTop: 4 }}>
           {LAYERS.map((l) => {
             const on = v.layers.includes(l.value)
@@ -576,9 +654,9 @@ function RoleFields({
             onChange={(e) => set('thoughtLevel', e.target.value)}
           >
             <option value="">（不变 / 缺省）</option>
-            {THOUGHT_LEVELS.map((t) => (
-              <option key={t} value={t}>
-                {t}
+            {THOUGHT_LEVELS.map((t2) => (
+              <option key={t2} value={t2}>
+                {t2}
               </option>
             ))}
           </select>
@@ -586,10 +664,10 @@ function RoleFields({
       </div>
 
       <label className="field" htmlFor="rf-body" style={{ marginTop: 10 }}>
-        <span className="label">正文（Markdown）</span>
+        <span className="label">{t('roles.form.body')}</span>
         <textarea
           id="rf-body"
-          rows={8}
+          rows={10}
           className="mono"
           value={v.body}
           placeholder={bodyHint}
@@ -614,6 +692,7 @@ function NewRoleForm({
   onCancel: () => void
   onCreated: (name: string, path: string) => void
 }) {
+  const t = useT()
   const [v, setV] = useState<RoleFormValues>(() => ({ ...EMPTY_FORM(['global', 'project']), rolesDir: defaultRolesDir ?? '' }))
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [alert, setAlert] = useState('')
@@ -647,11 +726,10 @@ function NewRoleForm({
     setAlert('')
 
     const skills = csv(v.skills)
-    const books = csv(v.books)
     const input: RoleWriteInput = {
       name: v.name.trim(),
       roles_dir: v.rolesDir.trim(),
-      knowledge: { layers: v.layers as KnowledgeBinding['layers'], ...(books.length > 0 ? { books } : {}) },
+      knowledge: { layers: v.layers as KnowledgeBinding['layers'] },
       ...(v.description.trim() !== '' ? { description: v.description.trim() } : {}),
       ...(skills.length > 0 ? { skills } : {}),
       ...(v.color !== '' ? { color: v.color as RoleColor } : {}),
@@ -676,20 +754,7 @@ function NewRoleForm({
   const canSubmit = !submitting && v.rolesDir.trim() !== '' && v.name.trim() !== '' && v.layers.length > 0
 
   return (
-    <div className="card">
-      <div className="row" style={{ justifyContent: 'space-between' }}>
-        <h3 style={{ margin: 0 }}>新建角色</h3>
-        <button onClick={onCancel} disabled={submitting}>
-          取消
-        </button>
-      </div>
-      <div className="row" style={{ gap: 6, marginTop: 8, marginBottom: 10 }}>
-        <span className="tag">1 身份</span>
-        <span className="tag">2 能力与知识</span>
-        <span className="tag">3 正文</span>
-        <span className="tag">4 提交</span>
-      </div>
-
+    <div>
       {alert !== '' && (
         <div className="error" role="alert" tabIndex={-1} ref={alertRef} style={{ marginBottom: 12 }}>
           {alert}
@@ -706,7 +771,7 @@ function NewRoleForm({
       />
 
       <label className="field" htmlFor="rf-rolesDir" style={{ marginTop: 10 }}>
-        <span className="label">写入目录（roles_dir，必填；写真实宿主前请确认）</span>
+        <span className="label">{t('roles.form.dir')}</span>
         <input
           id="rf-rolesDir"
           value={v.rolesDir}
@@ -714,31 +779,16 @@ function NewRoleForm({
           disabled={submitting}
           onChange={(e) => set('rolesDir', e.target.value)}
         />
-        {defaultRolesDir === undefined ? (
-          <span className="small muted">
-            未从 <span className="mono">GET /api/roles</span> 拿到默认目录（服务端未返回 rolesDir）→ 请手动填写。
-          </span>
-        ) : (
-          <span className="small muted">
-            默认取自服务端受管目录，可改；Prism 不会回落到宿主默认目录。落盘为<strong>宿主原生形态</strong>：
-            frontmatter 只含宿主白名单字段，skills / 知识绑定落在正文小节。
-          </span>
-        )}
+        <span className="small muted">{t('roles.form.dirHint')}</span>
         {errors.rolesDir !== undefined && <span className="err-text">{errors.rolesDir}</span>}
       </label>
 
       <div className="form-actions" style={{ marginTop: 14 }}>
-        <button
-          onClick={() => {
-            setErrors({})
-            setAlert('')
-          }}
-          disabled={submitting}
-        >
-          重置
+        <button onClick={onCancel} disabled={submitting}>
+          {t('common.cancel')}
         </button>
         <button className="primary" onClick={() => void submit()} disabled={!canSubmit}>
-          {submitting ? '创建中…' : '创建角色'}
+          {submitting ? t('common.saving') : t('roles.new')}
         </button>
       </div>
     </div>
@@ -759,6 +809,7 @@ function RoleEditForm({
   onSaved: (text: string) => void
   onFailed: (text: string) => void
 }) {
+  const t = useT()
   /** 初始快照（不随父级刷新而变，供 diff 用）。 */
   const [initial] = useState<RoleFormValues>(() => ({
     name: role.name,
@@ -797,6 +848,7 @@ function RoleEditForm({
       fields.push('skills')
     }
     const layersChanged = v.layers.join(',') !== init.layers.join(',')
+    // books 界面上不展示，但值随快照带入 → 不变即不提交；只有知识层改动时才带上原值透传
     if (layersChanged || v.books !== init.books) {
       const books = csv(v.books)
       patch.knowledge = { layers: v.layers as KnowledgeBinding['layers'], ...(books.length > 0 ? { books } : {}) }
@@ -825,7 +877,7 @@ function RoleEditForm({
   const submit = async () => {
     if (v.layers.length === 0) {
       setErrors({ layers: '至少选 1 个知识层' })
-      setAlert('知识层至少留 1 个（要清空请用删除 + 新建）')
+      setAlert('知识范围至少留 1 个（要清空请用删除 + 新建）')
       return
     }
     setErrors({})
@@ -853,13 +905,8 @@ function RoleEditForm({
 
   return (
     <div>
-      <div className="row" style={{ justifyContent: 'space-between', marginBottom: 8 }}>
-        <h3 style={{ margin: 0 }}>
-          编辑角色 <span className="mono small muted">{role.name}</span>
-        </h3>
-        <span className="small muted">
-          只提交改动过的字段；正文不重排，未知 frontmatter 键原样保留。
-        </span>
+      <div className="small muted" style={{ marginBottom: 10 }}>
+        只提交改动过的字段；正文不重排，未知 frontmatter 键原样保留。
       </div>
 
       {alert !== '' && (
@@ -878,7 +925,7 @@ function RoleEditForm({
       />
 
       <label className="field" htmlFor="ref-rolesDir" style={{ marginTop: 10 }}>
-        <span className="label">角色目录（roles_dir，必填）</span>
+        <span className="label">{t('roles.form.dir')}</span>
         <input
           id="ref-rolesDir"
           value={v.rolesDir}
@@ -886,19 +933,14 @@ function RoleEditForm({
           disabled={submitting}
           onChange={(e) => set('rolesDir', e.target.value)}
         />
-        {defaultRolesDir === undefined && (
-          <span className="small muted">
-            未从 <span className="mono">GET /api/roles</span> 拿到默认目录 → 必须手动填写。
-          </span>
-        )}
       </label>
 
       <div className="form-actions" style={{ marginTop: 14 }}>
         <button onClick={onCancel} disabled={submitting}>
-          取消
+          {t('common.cancel')}
         </button>
         <button className="primary" onClick={() => void submit()} disabled={submitting || v.rolesDir.trim() === ''}>
-          {submitting ? '保存中…' : '保存修改'}
+          {submitting ? t('common.saving') : t('common.save')}
         </button>
       </div>
     </div>

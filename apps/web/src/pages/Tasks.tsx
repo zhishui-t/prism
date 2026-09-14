@@ -3,22 +3,41 @@ import { useState } from 'react'
 import { api, type TaskRow } from '../api.ts'
 import { State } from '../components/State.tsx'
 import { useAsync } from '../components/useAsync.ts'
+import { EmptyBlock, PageHead, Pane, StatCards, StatusTag } from '../components/ui.tsx'
+import { t as tr, useT, type DictKey } from '../i18n.ts'
 
-const STATUS_COLORS: Record<string, string> = {
-  WAITING: 'var(--muted)',
-  BLOCKED: 'var(--warn)',
-  RUNNING: 'var(--accent)',
-  COMPLETED: 'var(--ok)',
-  AWAITING_FEEDBACK: 'var(--warn)',
-  REVISION_RUNNING: 'var(--accent)',
-  CLOSED: 'var(--ok)',
-  FAILED: 'var(--err)',
-  BANNED: 'var(--err)',
-  LOOP_TERMINATED: 'var(--err)',
-  INTERRUPTED: 'var(--warn)',
-  CANCELLED: 'var(--muted)',
-  SKIPPED: 'var(--muted)',
-  COOLDOWN: 'var(--warn)',
+/**
+ * 状态 → 颜色 + 界面词条。
+ *
+ * 2026-09-14 重构：状态原先直接吐 `COMPLETED` / `WAITING` 这种大写枚举，
+ * 界面上和中文混在一起（用户反馈「大字英文」）。现在统一用 `StatusTag` + 本地化文案，
+ * **枚举原名保留在 title 里**——对照日志 / CLI 输出时仍能一眼认出来。
+ */
+const STATUS: Record<string, { color: string; key: DictKey; tone: 'ok' | 'warn' | 'err' | 'info' }> = {
+  WAITING: { color: 'var(--muted)', key: 'tasks.st.WAITING', tone: 'info' },
+  BLOCKED: { color: 'var(--warn)', key: 'tasks.st.BLOCKED', tone: 'warn' },
+  RUNNING: { color: 'var(--accent)', key: 'tasks.st.RUNNING', tone: 'info' },
+  COMPLETED: { color: 'var(--ok)', key: 'tasks.st.COMPLETED', tone: 'ok' },
+  AWAITING_FEEDBACK: { color: 'var(--warn)', key: 'tasks.st.AWAITING_FEEDBACK', tone: 'warn' },
+  REVISION_RUNNING: { color: 'var(--accent)', key: 'tasks.st.REVISION_RUNNING', tone: 'info' },
+  CLOSED: { color: 'var(--ok)', key: 'tasks.st.CLOSED', tone: 'ok' },
+  FAILED: { color: 'var(--err)', key: 'tasks.st.FAILED', tone: 'err' },
+  BANNED: { color: 'var(--err)', key: 'tasks.st.BANNED', tone: 'err' },
+  LOOP_TERMINATED: { color: 'var(--err)', key: 'tasks.st.LOOP_TERMINATED', tone: 'err' },
+  INTERRUPTED: { color: 'var(--warn)', key: 'tasks.st.INTERRUPTED', tone: 'warn' },
+  CANCELLED: { color: 'var(--muted)', key: 'tasks.st.CANCELLED', tone: 'info' },
+  SKIPPED: { color: 'var(--muted)', key: 'tasks.st.SKIPPED', tone: 'info' },
+  COOLDOWN: { color: 'var(--warn)', key: 'tasks.st.COOLDOWN', tone: 'warn' },
+}
+
+/** 状态枚举 → 界面文案（未知值原样显示，不隐藏）。 */
+function statusLabel(status: string): string {
+  const meta = STATUS[status]
+  return meta === undefined ? status : tr(meta.key)
+}
+
+function statusColor(status: string): string {
+  return STATUS[status]?.color ?? 'var(--muted)'
 }
 
 /**
@@ -26,138 +45,141 @@ const STATUS_COLORS: Record<string, string> = {
  * 依赖图用纯 SVG 渲染（最长依赖路径分层）。
  */
 export function TasksPage() {
+  const t = useT()
   const [statusFilter, setStatusFilter] = useState('')
   const tasks = useAsync(() => api.tasks({ status: statusFilter || undefined }), [statusFilter])
   const stats = useAsync(() => api.taskStats(), [])
 
   return (
     <>
-      <h2 className="page-title">任务中心</h2>
-      <p className="page-desc">
-        被动台账：任务与依赖由执行方回报，Prism 只记录、可视化、审计。
-      </p>
+      <PageHead title={t('tasks.title')} sub={t('tasks.desc')}>
+        <button
+          onClick={() => {
+            tasks.reload()
+            stats.reload()
+          }}
+        >
+          {t('common.refresh')}
+        </button>
+      </PageHead>
 
-      <div className="card">
-        <div className="row" style={{ justifyContent: 'space-between' }}>
-          <h3 style={{ margin: 0 }}>台账概览</h3>
-          <button
-            onClick={() => {
-              tasks.reload()
-              stats.reload()
-            }}
-          >
-            刷新
-          </button>
-        </div>
+      <Pane title={t('tasks.ledger')}>
         <State loading={stats.loading} error={stats.error}>
           {stats.data && (
-            <div className="row" style={{ gap: 10, flexWrap: 'wrap', marginTop: 10 }}>
-              <span className="tag">任务 {stats.data.total}</span>
-              <span className="tag">DAG {stats.data.dags}</span>
-              {Object.entries(stats.data.by_status)
-                .sort()
-                .map(([status, count]) => (
-                  <span
-                    key={status}
-                    className="tag small"
-                    style={{ color: STATUS_COLORS[status] ?? 'var(--muted)' }}
-                  >
-                    {status} {count}
-                  </span>
-                ))}
-            </div>
+            <>
+              <StatCards
+                items={[
+                  { label: t('tasks.total'), value: stats.data.total },
+                  { label: t('tasks.dag'), value: stats.data.dags },
+                ]}
+              />
+              <div className="chips" style={{ marginTop: 10 }}>
+                {Object.entries(stats.data.by_status)
+                  .sort()
+                  .map(([status, count]) => (
+                    <StatusTag
+                      key={status}
+                      kind={STATUS[status]?.tone ?? 'info'}
+                      title={status}
+                    >
+                      {statusLabel(status)} {count}
+                    </StatusTag>
+                  ))}
+              </div>
+            </>
           )}
         </State>
-      </div>
+      </Pane>
 
-      <div className="card">
-        <div className="row">
-          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-            <option value="">全部状态</option>
-            {Object.keys(STATUS_COLORS).map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
-          <span className="small muted">
-            共 {tasks.data?.length ?? 0} 条
-          </span>
-        </div>
-      </div>
-
-      <State
-        loading={tasks.loading}
-        error={tasks.error}
-        empty={!tasks.loading && !tasks.error && (tasks.data?.length ?? 0) === 0}
-        emptyText="暂无任务台账记录（执行方经 prism_task_report 回报后出现）"
-      >
-        <div className="card">
-          <h3>任务列表</h3>
-          <table>
-            <thead>
-              <tr>
-                <th style={{ width: 150 }}>任务 ID</th>
-                <th>描述</th>
-                <th style={{ width: 130 }}>状态</th>
-                <th style={{ width: 110 }}>执行者</th>
-                <th style={{ width: 150 }}>依赖</th>
-              </tr>
-            </thead>
-            <tbody>
-              {tasks.data?.map((t) => (
-                <tr key={t.id}>
-                  <td className="mono small">{t.id}</td>
-                  <td>{t.description}</td>
-                  <td>
-                    <span
-                      className="tag"
-                      style={{ color: STATUS_COLORS[t.status] ?? 'var(--muted)' }}
-                    >
-                      {t.status}
-                    </span>
-                  </td>
-                  <td className="mono small muted">{t.assigned_agent ?? '—'}</td>
-                  <td className="mono small muted">
-                    {t.dependencies.length ? t.dependencies.join(', ') : '—'}
-                  </td>
-                </tr>
+      <Pane>
+        <div className="row" style={{ justifyContent: 'space-between', marginBottom: 10 }}>
+          <div className="row" style={{ gap: 8 }}>
+            <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+              <option value="">{t('tasks.filterPlaceholder')}</option>
+              {Object.keys(STATUS).map((s) => (
+                <option key={s} value={s}>
+                  {statusLabel(s)}
+                </option>
               ))}
-            </tbody>
-          </table>
+            </select>
+            <span className="small muted">{t('tasks.count', { n: tasks.data?.length ?? 0 })}</span>
+          </div>
+          <h3 style={{ margin: 0 }}>{t('tasks.list')}</h3>
         </div>
 
-        {tasks.data && tasks.data.length > 0 && (
-          <div className="card">
-            <h3>依赖图</h3>
-            <DagChart tasks={tasks.data} />
+        <State
+          loading={tasks.loading}
+          error={tasks.error}
+          empty={!tasks.loading && !tasks.error && (tasks.data?.length ?? 0) === 0}
+          emptyText={`${t('tasks.empty')} ${t('tasks.emptyHint')}`}
+        >
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th style={{ width: 150 }}>{t('tasks.col.id')}</th>
+                  <th>{t('tasks.col.desc')}</th>
+                  <th style={{ width: 130 }}>{t('tasks.col.status')}</th>
+                  <th style={{ width: 110 }}>{t('tasks.col.executor')}</th>
+                  <th style={{ width: 150 }}>{t('tasks.col.deps')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tasks.data?.map((task) => (
+                  <tr key={task.id}>
+                    <td className="mono small">{task.id}</td>
+                    <td>{task.description}</td>
+                    <td>
+                      <StatusTag kind={STATUS[task.status]?.tone ?? 'info'} title={task.status}>
+                        {statusLabel(task.status)}
+                      </StatusTag>
+                    </td>
+                    <td className="mono small muted">{task.assigned_agent ?? t('tasks.executorNone')}</td>
+                    <td className="mono small muted">
+                      {task.dependencies.length ? task.dependencies.join(', ') : t('tasks.executorNone')}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
-        )}
-      </State>
+        </State>
+      </Pane>
+
+      {tasks.data && tasks.data.length > 0 && (
+        <Pane title={t('tasks.dag.title')}>
+          {tasks.data.every((task) => task.dependencies.length === 0) ? (
+            <EmptyBlock title={t('tasks.dagEmpty')} />
+          ) : (
+            <DagChart tasks={tasks.data} />
+          )}
+        </Pane>
+      )}
     </>
   )
 }
 
 /** 最长依赖路径分层 + 贝塞尔边的极简 DAG 渲染。 */
 function DagChart({ tasks }: { tasks: TaskRow[] }) {
-  const byId = new Map(tasks.map((t) => [t.id, t]))
+  const t = useT()
+  const byId = new Map(tasks.map((task) => [task.id, task]))
   const level = new Map<string, number>()
 
   const depth = (id: string, seen: Set<string> = new Set()): number => {
     if (level.has(id)) return level.get(id)!
     if (seen.has(id)) return 0
     seen.add(id)
-    const t = byId.get(id)
-    const deps = t?.dependencies.filter((d) => byId.has(d)) ?? []
+    const task = byId.get(id)
+    const deps = task?.dependencies.filter((d) => byId.has(d)) ?? []
     const d = deps.length === 0 ? 0 : Math.max(...deps.map((x) => depth(x, seen))) + 1
     level.set(id, d)
     return d
   }
-  for (const t of tasks) depth(t.id)
+  for (const task of tasks) depth(task.id)
 
   const maxLevel = Math.max(0, ...level.values())
   const cols = Array.from({ length: maxLevel + 1 }, (_, i) =>
-    tasks.filter((t) => level.get(t.id) === i),
+    tasks.filter((task) => level.get(task.id) === i),
   )
 
   const NODE_W = 150
@@ -171,8 +193,8 @@ function DagChart({ tasks }: { tasks: TaskRow[] }) {
 
   const pos = new Map<string, { x: number; y: number }>()
   cols.forEach((col, ci) => {
-    col.forEach((t, ri) => {
-      pos.set(t.id, {
+    col.forEach((task, ri) => {
+      pos.set(task.id, {
         x: PAD + ci * (NODE_W + GAP_X),
         y: PAD + ri * (NODE_H + GAP_Y) + (maxRows - col.length) * ((NODE_H + GAP_Y) / 2),
       })
@@ -180,18 +202,18 @@ function DagChart({ tasks }: { tasks: TaskRow[] }) {
   })
 
   return (
-    <svg className="dag-svg" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="任务依赖图">
+    <svg className="dag-svg" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={t('tasks.dag.title')}>
       <defs>
         <marker id="dag-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
           <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--muted)" />
         </marker>
       </defs>
-      {tasks.flatMap((t) =>
-        t.dependencies
-          .filter((d) => pos.has(d) && pos.has(t.id))
+      {tasks.flatMap((task) =>
+        task.dependencies
+          .filter((d) => pos.has(d) && pos.has(task.id))
           .map((d) => {
             const a = pos.get(d)!
-            const b = pos.get(t.id)!
+            const b = pos.get(task.id)!
             const x1 = a.x + NODE_W
             const y1 = a.y + NODE_H / 2
             const x2 = b.x - 4
@@ -199,7 +221,7 @@ function DagChart({ tasks }: { tasks: TaskRow[] }) {
             const mx = (x1 + x2) / 2
             return (
               <path
-                key={`${d}->${t.id}`}
+                key={`${d}->${task.id}`}
                 d={`M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`}
                 fill="none"
                 stroke="var(--muted)"
@@ -209,10 +231,10 @@ function DagChart({ tasks }: { tasks: TaskRow[] }) {
             )
           }),
       )}
-      {tasks.map((t) => {
-        const p = pos.get(t.id)!
+      {tasks.map((task) => {
+        const p = pos.get(task.id)!
         return (
-          <g key={t.id}>
+          <g key={task.id}>
             <rect
               x={p.x}
               y={p.y}
@@ -220,7 +242,7 @@ function DagChart({ tasks }: { tasks: TaskRow[] }) {
               height={NODE_H}
               rx={7}
               fill="var(--panel)"
-              stroke={STATUS_COLORS[t.status] ?? 'var(--border)'}
+              stroke={statusColor(task.status)}
               strokeWidth={1.5}
             />
             <text
@@ -230,10 +252,10 @@ function DagChart({ tasks }: { tasks: TaskRow[] }) {
               fontSize={11.5}
               fontFamily="var(--mono)"
             >
-              {t.id.length > 18 ? `${t.id.slice(0, 17)}…` : t.id}
+              {task.id.length > 18 ? `${task.id.slice(0, 17)}…` : task.id}
             </text>
-            <text x={p.x + 10} y={p.y + 31} fill={STATUS_COLORS[t.status] ?? 'var(--muted)'} fontSize={10.5}>
-              {t.status}
+            <text x={p.x + 10} y={p.y + 31} fill={statusColor(task.status)} fontSize={10.5}>
+              {statusLabel(task.status)}
             </text>
           </g>
         )
