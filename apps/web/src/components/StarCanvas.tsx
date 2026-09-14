@@ -14,6 +14,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
  * 于是左右（或上下）留出空带，而星云半径本来就超出视野 → 看起来被切掉。
  * 现在用 ResizeObserver 实测容器尺寸，viewBox 与中心点都跟随容器，
  * 并把「世界内容」按容器实际宽高做一次 fit —— 普通窗口与沉浸全屏用的是同一套逻辑。
+ *
+ * 2026-09-14 二次修正（用户反馈「光点太大还能不能拖，节点一多看不清」）：
+ * 原先**落在星体上按下时不启动平移**（为避免与星体 click 打架），可星体辉光半径是核心的
+ * 2.1 倍、密集时几乎铺满画布 → 用户按哪儿都「拖不动」。现改为：
+ * - **任意位置按下都能拖**，靠 3px 位移阈值区分「点击」与「拖拽」；
+ * - 拖拽过（位移超阈值）就吃掉随后的 `click`，避免拖完误触发下钻/选中；
+ * - 画布元素上统一 `setPointerCapture`，指针移出子元素也不丢拖动。
  */
 
 export interface Viewport {
@@ -27,6 +34,14 @@ export interface Viewport {
 export interface Size {
   w: number
   h: number
+}
+
+/** 命令式入口：给画布外的缩放按钮用（滚轮之外的显式操作）。 */
+export interface StarCanvasControls {
+  /** 以画布中心为锚点缩放（factor > 1 放大）。 */
+  zoomBy: (factor: number) => void
+  /** 复位为「适配内容」的视口。 */
+  reset: () => void
 }
 
 export interface StarCanvasProps {
@@ -43,10 +58,14 @@ export interface StarCanvasProps {
   onSizeChange?: (size: Size) => void
   /** 点击空白处（非星体）时回调 */
   onBackgroundClick?: () => void
+  /** 承接命令式缩放/复位（可选）。 */
+  controls?: React.MutableRefObject<StarCanvasControls | null>
 }
 
 const MIN_K = 0.25
 const MAX_K = 8
+/** 位移阈值（CSS px）：小于它算「点击」，超过它算「拖拽」。 */
+const DRAG_THRESHOLD = 3
 
 /** 兜底尺寸：首帧还没量到容器时用（避免 viewBox 为 0 导致整体不可见）。 */
 const FALLBACK: Size = { w: 1000, h: 620 }
@@ -68,11 +87,15 @@ export function StarCanvas({
   onViewportChange,
   onSizeChange,
   onBackgroundClick,
+  controls,
 }: StarCanvasProps) {
   const ref = useRef<SVGSVGElement | null>(null)
   const [size, setSize] = useState<Size>(FALLBACK)
   const [vp, setVp] = useState<Viewport>(() => ({ ...fitViewport(width, height, FALLBACK), ...initial }))
+  const [dragging, setDragging] = useState(false)
   const drag = useRef<{ sx: number; sy: number; vx: number; vy: number; moved: boolean; onBody: boolean } | null>(null)
+  /** 拖拽过之后要吃掉的那一次 click（否则「拖动视图」会误触发星体下钻）。 */
+  const swallowClick = useRef(false)
 
   // 容器尺寸（含沉浸全屏切换、浏览器窗口缩放）——实测，不猜
   useEffect(() => {
@@ -134,32 +157,61 @@ export function StarCanvas({
 
   const onPointerDown = (e: React.PointerEvent<SVGSVGElement>): void => {
     if (e.button !== 0) return
-    // 命中星体时不启动平移（否则星体的 click 会被 backgroundClick 抵消/触发两次）
-    const onBody = (e.target as Element).closest?.('.star-body') !== null
+    // 落在星体上的按下**也**启动平移；点击与拖拽靠 DRAG_THRESHOLD 区分，
+    // 这样光点再密也不会「按哪儿都拖不动」。
+    const onBody = (e.target as Element).closest?.('.star-body') != null
     drag.current = { sx: e.clientX, sy: e.clientY, vx: vp.x, vy: vp.y, moved: false, onBody }
-    if (!onBody) (e.target as Element).setPointerCapture?.(e.pointerId)
+    // 空白处按下立即捕获；**星体上要等确认是拖拽再捕获**——先捕获会把随后的
+    // `click` 重定向到画布元素，星体的 onClick 就再也收不到（点不动 = 无法下钻）。
+    if (!onBody) ref.current?.setPointerCapture?.(e.pointerId)
   }
 
   const onPointerMove = (e: React.PointerEvent<SVGSVGElement>): void => {
     const d = drag.current
-    if (d === null || d.onBody) return
-    const dx = (e.clientX - d.sx) / vp.k
-    const dy = (e.clientY - d.sy) / vp.k
-    if (Math.abs(e.clientX - d.sx) > 3 || Math.abs(e.clientY - d.sy) > 3) d.moved = true
-    setVp({ k: vp.k, x: d.vx + dx, y: d.vy + dy })
+    if (d === null) return
+    const dx = e.clientX - d.sx
+    const dy = e.clientY - d.sy
+    if (!d.moved) {
+      if (Math.abs(dx) < DRAG_THRESHOLD && Math.abs(dy) < DRAG_THRESHOLD) return
+      d.moved = true
+      setDragging(true)
+      // 此刻已确定是拖拽（不是点击）→ 补上捕获，拖出画布也不丢事件
+      if (d.onBody) ref.current?.setPointerCapture?.(e.pointerId)
+    }
+    setVp({ k: vp.k, x: d.vx + dx / vp.k, y: d.vy + dy / vp.k })
   }
 
   const onPointerUp = (e: React.PointerEvent<SVGSVGElement>): void => {
     const d = drag.current
     drag.current = null
-    if (d !== null && !d.onBody) (e.target as Element).releasePointerCapture?.(e.pointerId)
+    setDragging(false)
+    if (ref.current?.hasPointerCapture?.(e.pointerId) === true) ref.current.releasePointerCapture(e.pointerId)
+    if (d === null) return
+    // 拖拽过 → 吃掉随后那一次 click（否则「拖动视图」会误触发下钻/选中）
+    if (d.moved) {
+      swallowClick.current = true
+      return
+    }
     // 未拖动且起点不在星体上 → 视为点击空白（返回上一层/关闭详情）
-    if (d !== null && !d.moved && !d.onBody) onBackgroundClick?.()
+    if (!d.onBody) onBackgroundClick?.()
   }
 
   const reset = useCallback(() => {
     setVp(fitViewport(width, height, size))
   }, [width, height, size])
+
+  /** 以画布中心为锚点缩放：世界原点恒映射到画布中心，故 x/y 不变、只改 k。 */
+  const zoomBy = useCallback((factor: number) => {
+    setVp((prev) => ({ k: Math.min(MAX_K, Math.max(MIN_K, prev.k * factor)), x: prev.x, y: prev.y }))
+  }, [])
+
+  useEffect(() => {
+    if (controls === undefined) return
+    controls.current = { zoomBy, reset }
+    return () => {
+      controls.current = null
+    }
+  }, [controls, zoomBy, reset])
 
   const transform = `translate(${vp.x * vp.k} ${vp.y * vp.k}) scale(${vp.k})`
 
@@ -174,8 +226,15 @@ export function StarCanvas({
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerLeave={onPointerUp}
+      onPointerCancel={onPointerUp}
       onDoubleClick={reset}
-      style={{ cursor: drag.current !== null ? 'grabbing' : 'grab', touchAction: 'none' }}
+      onClickCapture={(e) => {
+        if (!swallowClick.current) return
+        swallowClick.current = false
+        e.stopPropagation()
+        e.preventDefault()
+      }}
+      style={{ cursor: dragging ? 'grabbing' : 'grab', touchAction: 'none' }}
     >
       <g transform={`translate(${size.w / 2} ${size.h / 2}) ${transform}`}>{children(vp)}</g>
     </svg>

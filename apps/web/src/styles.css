@@ -283,6 +283,13 @@ tr:last-child td { border-bottom: 0; }
   font-size: 12px;
 }
 .star-tools button:hover { color: #e6e9ef; }
+.star-tools .tool-sep {
+  align-self: center;
+  width: 1px;
+  height: 18px;
+  margin: 0 2px;
+  background: var(--border);
+}
 
 .star-canvas {
   display: block;

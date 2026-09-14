@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { api, type ArchDiagram, type CatalogEntry, type KbGraphEdge, type KbGraphNode, type KbGraphView, type SearchResult } from '../api.ts'
-import { StarCanvas, seededRandom, useStarfield, type Viewport } from '../components/StarCanvas.tsx'
+import { StarCanvas, seededRandom, useStarfield, type StarCanvasControls, type Viewport } from '../components/StarCanvas.tsx'
 import { State } from '../components/State.tsx'
 import { useAsync } from '../components/useAsync.ts'
 import { t as tr, useT, type DictKey } from '../i18n.ts'
@@ -436,6 +436,8 @@ function GalaxyView({
   )
   const stars = useStarfield(220, WORLD_W, WORLD_H)
   const [vp, setVp] = useState<Viewport>({ k: 1, x: 0, y: 0 })
+  /** 命令式缩放入口：滚轮之外再给一组显式按钮（节点一多，光靠滚轮不好对准）。 */
+  const controls = useRef<StarCanvasControls | null>(null)
 
   return (
     <div className={`star-wrap${immersive ? ' immersive' : ''}`}>
@@ -444,6 +446,10 @@ function GalaxyView({
         {backTarget !== null && <span> · {t('knowledge.backHint')}</span>}
       </div>
       <div className="star-tools">
+        <button onClick={() => controls.current?.zoomBy(1 / 1.25)}>{t('knowledge.zoomOut')}</button>
+        <button onClick={() => controls.current?.reset()}>{t('knowledge.zoomFit')}</button>
+        <button onClick={() => controls.current?.zoomBy(1.25)}>{t('knowledge.zoomIn')}</button>
+        <span className="tool-sep" aria-hidden="true" />
         {backTarget !== null && (
           <button onClick={() => onScopeChange(backTarget)}>{t('common.backToTop')}</button>
         )}
@@ -454,6 +460,7 @@ function GalaxyView({
       <StarCanvas
         width={WORLD_W}
         height={WORLD_H}
+        controls={controls}
         onViewportChange={setVp}
         onBackgroundClick={() => {
           if (backTarget !== null) onScopeChange(backTarget)
@@ -765,7 +772,11 @@ function ringLayout(
   // 可用半径：世界的一半再留出标签边距
   const maxR = Math.min(WORLD_W, WORLD_H) / 2 - 110
   const bodies: Body[] = []
-  const starR = (count: number): number => 18 + Math.min(38, Math.sqrt(count) * 12)
+  // 核心半径：随条目数缓慢增长（√count），并**随同屏节点数收敛**——
+  // 节点一多就自动变小，否则辉光互相糊成一片。原为 `18 + min(38, √count*12)`
+  // （核心 18~56、辉光可达 117），用户反馈「光点太大、节点一多看不清」。
+  const shrink = n <= 8 ? 1 : Math.max(0.58, 1 - (n - 8) * 0.022)
+  const starR = (count: number): number => (7 + Math.min(15, Math.sqrt(count) * 3.6)) * shrink
 
   if (n === 1) {
     bodies.push(bodyOf(items[0]!, 0, 0, starR(items[0]!.count)))
@@ -773,12 +784,14 @@ function ringLayout(
   }
 
   if (n <= 8) {
-    // 环绕半径：收在中心星云内（星云 rx=430），且避开中心文字区域
-    const radius = maxR * 0.66
+    // 环绕半径：收在中心星云内（星云 rx=430），且避开中心文字区域。
+    // 2026-09-14：由 0.66 提到 0.80——光点缩小后原半径显得「挤在中间一小团」，
+    // 拉开后节点间距更大（maxR*0.80 ≈ 192 世界单位，仍远小于星云 rx 576、世界半高 350）。
+    const radius = maxR * 0.8
     if (n === 2) {
-      // 两个星系水平并排，间距取可用半径的 0.78（再远会超出星云视觉范围）
-      bodies.push(bodyOf(items[0]!, -radius * 0.78, 0, starR(items[0]!.count)))
-      bodies.push(bodyOf(items[1]!, radius * 0.78, 0, starR(items[1]!.count)))
+      // 两个星系水平并排，间距取可用半径的 1.0（原先 0.78 偏挤）
+      bodies.push(bodyOf(items[0]!, -radius, 0, starR(items[0]!.count)))
+      bodies.push(bodyOf(items[1]!, radius, 0, starR(items[1]!.count)))
       return bodies
     }
     // 单环：起始角 -90°（顶部）顺时针；椭圆压扁贴合星云形状
@@ -830,6 +843,7 @@ function bodyOf(
 
 /** 星系：辉光 + 核心 + 标签。 */
 function StarBody({ body, selected, onClick }: { body: Body; selected: boolean; onClick: () => void }) {
+  const lines = wrapLabel(body.label)
   return (
     <g
       className="star-body"
@@ -839,9 +853,9 @@ function StarBody({ body, selected, onClick }: { body: Body; selected: boolean; 
         onClick()
       }}
     >
-      {/* 辉光 */}
-      <circle cx={body.x} cy={body.y} r={body.r * 2.1} fill={body.color} opacity={selected ? 0.28 : 0.14} />
-      <circle cx={body.x} cy={body.y} r={body.r * 1.35} fill={body.color} opacity={0.22} />
+      {/* 辉光：倍数由 2.1 / 1.35 收到 1.65 / 1.18——光点本体缩小，密集时不再糊成一片 */}
+      <circle cx={body.x} cy={body.y} r={body.r * 1.65} fill={body.color} opacity={selected ? 0.3 : 0.15} />
+      <circle cx={body.x} cy={body.y} r={body.r * 1.18} fill={body.color} opacity={0.22} />
       {/* 核心 */}
       <circle
         cx={body.x}
@@ -852,13 +866,13 @@ function StarBody({ body, selected, onClick }: { body: Body; selected: boolean; 
         strokeWidth={2}
       />
       {/* 标签：放在辉光之外（否则被光晕糊住），最多两行完整显示，字号随长度自适应 */}
-      {wrapLabel(body.label).map((line, li) => (
+      {lines.map((line, li) => (
         <text
           key={li}
           x={body.x}
-          y={body.y + body.r * 1.55 + 16 + li * 16}
+          y={body.y + body.r * 1.65 + 14 + li * 14}
           textAnchor="middle"
-          fontSize={body.label.length > 14 ? 12 : 13.5}
+          fontSize={body.label.length > 14 ? 11.5 : 12.5}
           fill="#eef1f7"
           stroke="#0a0c11"
           strokeWidth={3.5}
@@ -871,9 +885,9 @@ function StarBody({ body, selected, onClick }: { body: Body; selected: boolean; 
       {body.sublabel !== undefined && (
         <text
           x={body.x}
-          y={body.y + body.r * 1.55 + 16 + wrapLabel(body.label).length * 16}
+          y={body.y + body.r * 1.65 + 14 + lines.length * 14}
           textAnchor="middle"
-          fontSize={10.5}
+          fontSize={10}
           fill="#9aa3b5"
           stroke="#0a0c11"
           strokeWidth={3}
@@ -883,6 +897,9 @@ function StarBody({ body, selected, onClick }: { body: Body; selected: boolean; 
           {body.sublabel}
         </text>
       )}
+      {/* 透明命中区（刻意放最后）：核心缩小后仍要「点得到」，半径下限 20 世界单位。
+          放在最后是为了不破坏 CSS 里 `.star-body:hover circle:first-child` 的辉光高亮。 */}
+      <circle cx={body.x} cy={body.y} r={Math.max(body.r * 2, 20)} fill="transparent" />
     </g>
   )
 }
