@@ -44,7 +44,7 @@ Prism 是本机的**研发效能控制面**：知识库、知识图谱、代码�
 | 派发子代理前组装上下文 | \`prism_context_pack\`（按角色知识绑定 + 预算） | [references/knowledge.md](references/knowledge.md) |
 | 知识之间的引用关系 / 找关联条目 | \`prism_kb_graph\` | [references/knowledge.md](references/knowledge.md) |
 | 谁调用谁 / 影响面 / 最短路径 | \`prism_graph_query/path/affected/explain/god-nodes\` | [references/graph.md](references/graph.md) |
-| 画架构图 / 时序图 / 数据流图 | \`prism arch render\`（CLI） | [references/arch.md](references/arch.md) |
+| 画架构图 / 时序图 / 数据流图 | **你来产 IR**：\`prism arch schema <type>\` 取契约 → 你生成 IR → \`prism arch validate\` → \`render\`；工作流图直接 \`prism arch from-team <team_id>\` | [references/arch.md](references/arch.md) |
 | 派团队干活 | 先 \`prism_team_activate\` 看 dispatch，再派发 | [references/team.md](references/team.md) |
 | 导入项目文档（二进制） | \`prism_kb_convert\`（→Markdown）→ 你提炼 → \`prism_kb_deposit\` | [references/import.md](references/import.md) |
 | 批量导入整个项目文档 | \`prism_kb_import\`（扫目录建引用索引） | [references/import.md](references/import.md) |
@@ -123,7 +123,12 @@ prism serve --port 7777            # 起 HTTP 服务 + 控制台
 > \`prism_kb_enrich\` 把你的 LLM 产出（摘要/标签/实体）回写进库（Prism 不调 LLM、不审核）。
 >
 > **MCP 与 CLI 的分工**：需要结构化调用（宿主 agent 用）优先 MCP；一次性/交互式操作（人在终端用）
-> 走 CLI。架构图渲染（\`prism arch render\`）只有 CLI/HTTP，没有 MCP 工具。
+> 走 CLI。架构图谱全线（\`prism arch types|schema|validate|render|from-team\`）只有 CLI/HTTP，**没有 MCP 工具**。
+>
+> ⚠ **别让用户手写架构图 JSON**：五类图里只有 \`workflow\` 是从团队定义**自动派生**的
+> （\`prism arch from-team <team_id>\`，IR 是纯函数产物）；其余四类（architecture / sequence /
+> lifecycle / dataflow）的 IR 要**宿主你来生成**——先 \`prism arch schema <type>\` 取契约，
+> 用你的能力把图谱数据映射成 IR，再 validate/render。详见 [references/arch.md](references/arch.md)。
 
 ## 6. CLI 速查
 
@@ -136,7 +141,7 @@ prism kb     import/sync/search/get/tree/stats/graph/path/remove/conflicts/resol
 prism graph  build/query/path/explain/affected/god-nodes/summary/export/status
 prism inject <项目根> [--team <id>] [--remove]  把 Prism 指引写进项目 AGENTS.md 标记块
 prism project add/list/show/remove          项目台账（登记后 kb sync 可扫）
-prism arch   types/validate/render             # 架构图谱（五类图）
+prism arch   types/schema/validate/render/from-team  # 架构图谱（五类图；schema 取契约、from-team 自动出工作流图）
 prism role   list/show/new/edit/rm/validate/render [--source <dir>]
 prism team   list/show/new/edit/rm/validate/render/activate [--source <dir>] [--roles-dir <dir>]
 prism skill  list/install/update/uninstall/validate/effective
@@ -489,24 +494,39 @@ prism task graph d1
 
 引擎：**Archify**（vendored 子工程，MIT）。IR 是源、HTML 是派生。
 
-## 五类图
+## 五类图 —— 以及 IR 由谁产（最容易踩空的一节）
 
-| type | 数据来源 |
-| :--- | :--- |
-| \`architecture\` | 模块聚类 + 依赖边 → 组件/边界/连接 |
-| \`sequence\` | CALLS 边 + flows → 参与者/消息 |
-| \`lifecycle\` | 状态机 → 泳道/状态/转移 |
-| \`dataflow\` | 数据读写边 → 阶段/节点/流转 |
-| \`workflow\` | 团队 DAG 工作流 → 泳道/节点/边 |
+| type | 数据来源 | IR 谁产 | 怎么产 |
+| :--- | :--- | :--- | :--- |
+| \`workflow\` | 团队 DAG 工作流定义 | **Prism 自动** | \`prism arch from-team <team_id>\` 一键派生，**零手写** |
+| \`architecture\` | 代码图谱模块聚类 + 依赖边 | **宿主（你）** | 取图数据 → 按 \`architecture.schema.json\` 生成 IR |
+| \`sequence\` | CALLS 边 + flows | **宿主（你）** | 同上（\`sequence.schema.json\`） |
+| \`lifecycle\` | 状态机（如任务 14 态 32 转移） | **宿主（你）** | 同上（\`lifecycle.schema.json\`） |
+| \`dataflow\` | 数据读写 / 存储边 | **宿主（你）** | 同上（\`dataflow.schema.json\`） |
+
+> **IR 是派生视图，不是用户要写的东西**（红线 R7）。除 \`workflow\` 外，其余四类**由宿主从
+> Prism 的图谱数据生成**：先 \`prism arch schema <type>\` 取契约，再用你的能力把数据映射成 IR，
+> 最后交给 validate/render。**不要回头让用户手写 JSON**——那是 Prism 该替你消掉的机械活。
 
 ## 用法
 
 \`\`\`bash
 prism arch types                              # 列出五类
+prism arch from-team core-dev                 # 工作流图：由团队定义直接派生（最省事的一条路）
+prism arch schema architecture                # 取 IR 的 JSON Schema（宿主生成 IR 的依据）
+prism arch schema common                      # 公共 $defs（各类 IR 会 $ref 引用到）
 prism arch validate architecture ir.json      # 校验 IR（schema + 布局）
 prism arch render architecture ir.json        # 渲染自包含 HTML
 prism arch render architecture ir.json --book order-platform --module order   # 归到书/模块
 \`\`\`
+
+**宿主生成四类图的推荐链路**（每一步都可单独跑，便于定位）：
+
+1. 取数据：\`prism_graph_query / summary / path\` 等（**子图，别读全图**）——模块聚类、CALLS 边、状态转移、数据读写边；
+2. 取契约：\`prism arch schema <type>\`（不确定公共字段时再 \`prism arch schema common\`）；
+3. 生成 \`ir.json\`；
+4. \`prism arch validate <type> ir.json\`——**不过就修，绝不产出坏图**；
+5. \`prism arch render <type> ir.json --book <书> --module <模块>\`。
 
 **产物归属**：\`--book/--module\` 把产物归到知识库的书/模块下，渲染时同时写
 \`<name>.meta.json\`（作用域 + archify 版本 + IR 哈希 + 标题）。界面在
@@ -519,6 +539,12 @@ prism arch render architecture ir.json --book order-platform --module order   # 
 - \`architecture\` 组件类型枚举：\`frontend/backend/database/cloud/security/messagebus/external\`；
 - 组件需显式 \`pos: [x,y]\` + \`size: [w,h]\`（或用 \`layout.mode: grid\` + \`cols\`）；
 - 校验不通过**不会产出坏图**（\`archify_validation_failed\`）。
+- **完整契约以 \`prism arch schema <type>\` 为准**——上面的枚举只是速记；schema 里还有
+  \`meta.legend/views\`、\`quality_profile\` 等可选字段，别凭记忆写。
+
+⚠ **节点文本不换行**：label / sublabel 超宽即判非法（量级 \`label≤14\`、\`sublabel≤22\` 字符）。
+不要靠「加宽节点」硬塞——会触发自动布线的横向错位与穿线。正解是**收敛文本**
+（缩写、中文名 slug 化，如 \`队长\` → \`leader\`）。
 
 ## HTTP 等价
 

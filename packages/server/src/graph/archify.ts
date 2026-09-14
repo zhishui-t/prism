@@ -92,15 +92,45 @@ function normalizeExecPath(path: string): string {
 }
 
 /**
- * 仓库内 archify 子模块入口。
+ * 仓库内 archify 子工程的发行根。
  *
- * 布局（上游 tt-a1i/archify 仓库结构）：`3rd/archify/archify/bin/archify.mjs`
- * （submodule 根 = 上游 repo 根，CLI 在其 `archify/` 子目录内）。
+ * 布局（上游 tt-a1i/archify 仓库结构）：`3rd/archify/archify/...`
+ * （submodule 根 = 上游 repo 根，CLI 与 schema 在其 `archify/` 子目录内）。
  * 发行根经 `repoRoot` **向上查找**（兼容 `packages/` 与打包后的 `node_modules/@prism/`）。
  */
+function archifyRoot(): string {
+  return repoRoot(import.meta.url, 8) ?? fileURLToPath(new URL('../../../../', import.meta.url))
+}
+
+/** 仓库内 archify 子模块入口 `3rd/archify/archify/bin/archify.mjs`。 */
 export function vendoredArchifyEntry(): string {
-  const root = repoRoot(import.meta.url, 8) ?? fileURLToPath(new URL('../../../../', import.meta.url))
-  return join(root, '3rd', 'archify', 'archify', 'bin', 'archify.mjs')
+  return join(archifyRoot(), '3rd', 'archify', 'archify', 'bin', 'archify.mjs')
+}
+
+/** 可查询的 IR schema 键：五类图 + `common`（被各类 `$ref` 引用的公共定义）。 */
+export const ARCHIFY_SCHEMA_KEYS = [...ARCHIFY_DIAGRAM_TYPES, 'common'] as const
+export type ArchifySchemaKey = (typeof ARCHIFY_SCHEMA_KEYS)[number]
+
+/**
+ * 读某类图的 IR **JSON Schema**。
+ *
+ * 存在的理由：五类图里只有 `workflow` 有生成器（`buildTeamWorkflowIr`，见 F-C4），
+ * 其余四类的 IR 必须由**宿主**按契约产出。宿主 agent 若拿不到 schema，
+ * 就只能回头让用户手写 JSON——这与「IR 是派生视图」（R7）相悖。
+ * 有了它，宿主可以自主完成「取数据 → 生成 IR → validate → render」整条链路。
+ *
+ * @param key 五类图之一，或 `common`（公共 $defs；生成时按需读取）
+ */
+export async function readArchifySchema(key: string): Promise<unknown> {
+  if (!ARCHIFY_SCHEMA_KEYS.includes(key as ArchifySchemaKey)) {
+    throw new PrismError('bad_request', `未知 schema: ${key}`, { allowed: ARCHIFY_SCHEMA_KEYS })
+  }
+  const path = join(archifyRoot(), '3rd', 'archify', 'archify', 'schemas', `${key}.schema.json`)
+  try {
+    return JSON.parse(await readFile(path, 'utf-8')) as unknown
+  } catch {
+    throw new PrismError('archify_missing', `找不到 IR schema: ${path}（确认 3rd/archify 子工程完整）`)
+  }
 }
 
 /**

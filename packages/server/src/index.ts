@@ -168,6 +168,8 @@ export {
   validateDiagram,
   renderDiagram,
   vendoredArchifyEntry,
+  ARCHIFY_SCHEMA_KEYS,
+  readArchifySchema,
   artifactMetaPath,
   artifactStat,
   irHash,
@@ -177,6 +179,7 @@ export {
   writeArtifactMeta,
   type ArchifyArtifactMeta,
   type ArchifyDiagramType,
+  type ArchifySchemaKey,
   type ArchifyValidation,
   type RenderResult,
 } from './graph/archify.js'

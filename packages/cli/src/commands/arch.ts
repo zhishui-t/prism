@@ -13,8 +13,10 @@ import { buildTeamWorkflowIr } from '@prism/agents'
 import { prismPaths, isPrismError } from '@prism/core'
 import {
   ARCHIFY_DIAGRAM_TYPES,
+  ARCHIFY_SCHEMA_KEYS,
   ARCHIFY_TYPE_LABELS,
   loadTeam,
+  readArchifySchema,
   renderDiagram,
   validateDiagram,
   writeArtifactMeta,
@@ -36,10 +38,13 @@ export async function runArch(ctx: CommandContext, args: string[], values: ArgVa
         return await archRender(ctx, rest, values)
       case 'from-team':
         return await archFromTeam(ctx, rest, values)
+      case 'schema':
+        return await archSchema(ctx, rest)
       default:
         ctx.stderr(
-          `用法: prism arch <types|validate|render|from-team> ...\n` +
+          `用法: prism arch <types|schema|validate|render|from-team> ...\n` +
             `  types                                   列出五类图\n` +
+            `  schema <type|common>                    打印 IR 的 JSON Schema（宿主据此生成 IR）\n` +
             `  validate <type> <ir.json>               校验 IR（schema + 布局）\n` +
             `  render <type> <ir.json> [--out <html>] [--book <书>] [--module <模块>]\n` +
             `                                          渲染为自包含 HTML；--book/--module 把产物归到书内\n` +
@@ -70,6 +75,23 @@ function archTypes(ctx: CommandContext): number {
   for (const type of ARCHIFY_DIAGRAM_TYPES) {
     ctx.stdout(`${type.padEnd(14)} ${ARCHIFY_TYPE_LABELS[type]}`)
   }
+  return 0
+}
+
+/**
+ * `prism arch schema <type|common>`：打印 IR 的 JSON Schema。
+ *
+ * 供**宿主**（拿不到 vendored 目录内部路径）按契约生成 IR——五类图里只有 workflow
+ * 有内置生成器，其余四类要靠这条路径自助产出，而不是让用户手写 JSON。
+ */
+async function archSchema(ctx: CommandContext, args: string[]): Promise<number> {
+  const key = args[0]
+  if (key === undefined) {
+    ctx.stderr(`错误 [bad_request] 缺少类型（可选: ${ARCHIFY_SCHEMA_KEYS.join('/')}）`)
+    return 1
+  }
+  const schema = await readArchifySchema(key)
+  ctx.stdout(ctx.json ? JSON.stringify({ ok: true, value: schema }) : JSON.stringify(schema, null, 2))
   return 0
 }
 
