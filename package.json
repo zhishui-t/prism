@@ -9,8 +9,9 @@
     "node": ">=22.5.0"
   },
   "scripts": {
+    "postinstall": "git submodule update --init --recursive 2>/dev/null || true",
     "typecheck": "pnpm -r typecheck",
-    "build": "pnpm -r build",
+    "build": "node scripts/ensure-3rd.mjs && pnpm -r build",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint .",
