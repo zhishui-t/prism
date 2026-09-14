@@ -1,7 +1,7 @@
 import { createInterface } from 'node:readline'
 
-import { access } from 'node:fs/promises'
-import { join } from 'node:path'
+import { access, mkdir, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
   AuditLog,
@@ -12,7 +12,14 @@ import {
   TaskLedger,
   type PrismPersistence,
 } from '@prism/core'
-import { ensureHarnessPluginsLoaded } from '@prism/agents'
+import {
+  buildArchitectureIr,
+  buildDataflowIr,
+  buildSequenceIr,
+  buildTaskLifecycleIr,
+  buildTeamWorkflowIr,
+  ensureHarnessPluginsLoaded,
+} from '@prism/agents'
 import { listBuiltinSkills } from '@prism/skills'
 
 import {
@@ -45,12 +52,14 @@ import {
 } from '../roles/index.js'
 import {
   runGraphify,
+  readCodeGraph,
   graphPath as queryGraphPath,
   graphExplain as queryGraphExplain,
   graphAffected as queryGraphAffected,
   graphGodNodes as queryGraphGodNodes,
   graphSummary as queryGraphSummary,
 } from '../graph/graphify.js'
+import { renderDiagram } from '../graph/archify.js'
 import { inspectGraphStatus, ProjectRegistry } from '../graph/registry.js'
 import { mergeProjectGraphs, type MergeProjectInput } from '../graph/merge.js'
 import { convertFileToMarkdown } from '../kb/convert-file.js'
@@ -574,6 +583,94 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
   const teamActivate = async (args: Record<string, unknown>): Promise<unknown> => {
     const team = await requireTeam(args.team_id)
     return await activateTeam(team, { rolesDir, targetDir: hostPaths.agentsDir })
+  }
+
+  /** archify 五类图（与 CLI `arch from-*` 同一批纯函数生成器）。 */
+  const ARCH_DIAGRAM_TYPES = ['workflow', 'architecture', 'sequence', 'lifecycle', 'dataflow'] as const
+
+  /**
+   * `prism_arch_generate`：**五类图的统一派生入口**（CLI `arch from-team|from-graph|from-state` 的 MCP 版）。
+   *
+   * 分工与 CLI 完全一致：读盘（registry / graph.json）在 server，派生 IR 在
+   * `@prism/agents` 的**纯函数**生成器，最后交给 vendored archify 渲染。
+   * 宿主/用户**一行 IR 都不用写**——这正是红线 R7「IR 是派生视图」的落地方式。
+   *
+   * 与 CLI 的唯一差别：不写产物 sidecar（`*.meta.json` 在 `@prism/cli`，server 不反向依赖它），
+   * 只落 HTML + `*.ir.json`；需要入库/溯源时走 CLI。
+   */
+  const archGenerate = async (args: Record<string, unknown>): Promise<unknown> => {
+    const type = asString(args.type)
+    if (type === undefined || !(ARCH_DIAGRAM_TYPES as readonly string[]).includes(type)) {
+      throw new Error(`prism_arch_generate 的 type 必须是 ${ARCH_DIAGRAM_TYPES.join(' / ')}`)
+    }
+
+    let ir: unknown
+    let name: string
+    let scope: Record<string, unknown> = {}
+
+    if (type === 'workflow') {
+      const teamId = asString(args.team)
+      if (teamId === undefined) throw new Error('prism_arch_generate 生成 workflow 需要 { team }')
+      const team = await loadTeam(teamsDir, teamId, { rolesDir })
+      if (team === null) throw new Error(teamNotFoundMessage(teamsDir, teamId))
+      name = teamId
+      scope = { team_id: teamId }
+      ir = buildTeamWorkflowIr(team)
+    } else if (type === 'lifecycle') {
+      name = 'task-state-machine'
+      ir = buildTaskLifecycleIr(asString(args.title) !== undefined ? { title: asString(args.title)! } : {})
+    } else {
+      const projectName = asString(args.project)
+      if (projectName === undefined) throw new Error(`prism_arch_generate 生成 ${type} 需要 { project }`)
+      const info = await requireProjectRoot(projectName)
+      const graph = await readCodeGraph(info.root)
+      const top = typeof args.top === 'number' ? args.top : undefined
+      const limit = typeof args.limit === 'number' ? args.limit : undefined
+      name = projectName
+      scope = { project: info.project, root: info.root }
+      const title = asString(args.title) ?? `${info.project} · ${type}`
+      if (type === 'architecture') {
+        ir = buildArchitectureIr(graph, {
+          title,
+          ...(top !== undefined ? { maxComponents: top } : {}),
+          ...(limit !== undefined ? { maxConnections: limit } : {}),
+        })
+      } else if (type === 'sequence') {
+        ir = buildSequenceIr(graph, {
+          title,
+          ...(top !== undefined ? { maxParticipants: top } : {}),
+          ...(limit !== undefined ? { maxMessages: limit } : {}),
+        })
+      } else {
+        ir = buildDataflowIr(graph, {
+          title,
+          ...(top !== undefined ? { maxComponents: top } : {}),
+          ...(limit !== undefined ? { maxFlows: limit } : {}),
+        })
+      }
+    }
+
+    const explicitOut = asString(args.out)
+    const htmlPath = explicitOut ?? join(prismPaths(deps.home).home, 'archify', type, `${name}.html`)
+    await mkdir(dirname(htmlPath), { recursive: true })
+    // 渲染前 archify 会先校验；不过直接抛 → 不产出坏图
+    const rendered = await renderDiagram(type, ir, htmlPath, {
+      ...(deps.graphifyEnv !== undefined ? { env: deps.graphifyEnv } : {}),
+      ...(deps.graphifyTimeoutMs !== undefined ? { timeoutMs: deps.graphifyTimeoutMs } : {}),
+    })
+    const irPath = htmlPath.replace(/\.html$/i, '.ir.json')
+    await writeFile(irPath, `${JSON.stringify(ir, null, 2)}\n`, 'utf-8')
+
+    const meta = (ir as { meta?: { title?: string; subtitle?: string } }).meta ?? {}
+    return {
+      type,
+      ...scope,
+      html: rendered.htmlPath,
+      ir: irPath,
+      bytes: rendered.bytes,
+      title: meta.title,
+      subtitle: meta.subtitle,
+    }
   }
 
   const tools: McpTool[] = [
@@ -1132,6 +1229,25 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
         required: ['projects'],
       },
       call: graphMerge,
+    },
+    {
+      name: 'prism_arch_generate',
+      description:
+        '派生并渲染 archify 架构图（五类：workflow / architecture / sequence / lifecycle / dataflow），返回 HTML 与 IR 路径。IR 全部由 Prism 内置纯函数生成器派生——调用方不需要写任何 IR。workflow 需 { team }；architecture/sequence/dataflow 需 { project }（已注册且已建图）；lifecycle 无需入参（源自 @prism/core 的任务状态机常量）。生成器在数据不足时会**明确报错而不是造图**（如图谱没有跨文件 calls 边 → 无法画时序图；所有源文件同目录 → 无法分层画依赖流向）。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          type: { enum: ['workflow', 'architecture', 'sequence', 'lifecycle', 'dataflow'] },
+          team: { type: 'string', description: 'type=workflow 时的团队 id' },
+          project: { type: 'string', description: 'type=architecture|sequence|dataflow 时的已建图项目名' },
+          title: { type: 'string', description: '可选：覆盖图标题' },
+          top: { type: 'integer', minimum: 1, description: '可选：组件/参与者上限' },
+          limit: { type: 'integer', minimum: 1, description: '可选：连线/消息上限' },
+          out: { type: 'string', description: '可选：覆盖 HTML 产物路径（默认 <PRISM_HOME>/archify/<type>/<name>.html）' },
+        },
+        required: ['type'],
+      },
+      call: archGenerate,
     },
     {
       name: 'prism_role_list',

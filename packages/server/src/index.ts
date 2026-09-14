@@ -126,6 +126,7 @@ export {
   vendoredGraphifyDir,
   vendoredGraphifyVersion,
   defaultGraphPath,
+  readCodeGraph,
   graphQuery,
   graphPath,
   graphExplain,

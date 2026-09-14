@@ -5,6 +5,7 @@ import { delimiter, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { PrismError, repoRoot } from '@prism/core'
+import type { CodeGraph } from '@prism/agents'
 
 /** 建图默认超时（design.md §4：300s）。 */
 export const DEFAULT_GRAPHIFY_TIMEOUT_MS = 300_000
@@ -535,8 +536,36 @@ export async function graphSummary(
   }
 }
 
-// ===== 导出命令封装（graphify export <format>） =====
+/**
+ * 读 Graphify 图谱产物（`<root>/graphify-out/graph.json`）并**原样**返回。
+ *
+ * 读盘归 server，派生归 `@prism/agents` 的纯函数生成器——这条分工让生成器
+ * 保持「零 IO、零时钟、零随机」，从而 `ir_hash` 才有意义（红线 R7）。
+ *
+ * 只做 JSON 解析，不做结构校验：字段缺失由生成器按各自口径降级处理
+ * （Graphify 各版本字段并不齐，实测见 `graph-ir.ts` 文件头）。
+ *
+ * @throws PrismError `not_found` 图谱不存在；`bad_request` 产物不可解析。
+ */
+export async function readCodeGraph(root: string): Promise<CodeGraph> {
+  const path = defaultGraphPath(root)
+  let raw: string
+  try {
+    raw = await readFile(path, 'utf-8')
+  } catch {
+    throw new PrismError('not_found', `图谱不存在: ${path}（先建图: prism graph build）`, { path })
+  }
+  try {
+    return JSON.parse(raw) as CodeGraph
+  } catch (error) {
+    throw new PrismError('bad_request', `图谱产物不可解析: ${path}`, {
+      path,
+      cause: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
 
+// ===== 导出命令封装（graphify export <format>） =====
 /** graphify 支持的导出格式（Python 版 export 子命令）。 */
 export const GRAPHIFY_EXPORT_FORMATS = [
   'obsidian',

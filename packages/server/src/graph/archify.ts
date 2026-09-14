@@ -349,7 +349,9 @@ export async function renderDiagram(
     if (!info) {
       throw new PrismError('archify_failed', `archify render 未产出文件: ${outPath}`, { type })
     }
-    return { htmlPath: outPath, bytes: 0, stdout: result.stdout }
+    // 真实字节数（此字段曾恒为 0；调用方要看产物是否落盘、有多大，不能给假值）
+    const { size } = await stat(outPath)
+    return { htmlPath: outPath, bytes: size, stdout: result.stdout }
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
