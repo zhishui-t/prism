@@ -263,13 +263,23 @@ deposited_by:               # 落库来源记录（非审核）
 
 **五类图与 IR 规格**（已从 `tt-a1i/archify` 仓库 schema 核准）：
 
-| diagram_type | 结构数组（item 必填） | Prism 数据源 | 生成方式 |
-| :--- | :--- | :--- | :--- |
-| `architecture` | `components[id,type,label]` / `boundaries[kind,label,wraps]` / `connections[from,to]` | 代码图谱模块聚类 + 依赖边 | **确定性，零 LLM** |
-| `sequence` | `participants[id,type,label]` / `messages[from,to,y,label]` | 代码图谱 `CALLS` 边 + Graphify `flows` | **确定性，零 LLM** |
-| `lifecycle` | `lanes[id,label]` / `states[id,type,label,lane,col]` / `transitions[from,to]` | 任务状态机（14 态 32 转移）等 | **确定性，零 LLM** |
-| `dataflow` | `stages[label]` / `nodes[id,type,label,stage,row]` / `flows[from,to,label]` | 图谱数据读写/存储边 | 半确定性（复杂语义走队列） |
-| `workflow` | `lanes[id,label]` / `nodes[id,lane,col,type,label]` / `edges[from,to]` | 团队 DAG 工作流定义 | 半确定性（业务语义走队列） |
+| diagram_type | 结构数组（item 必填） | Prism 数据源 | 生成方式 | 生成器实况（2026-09-14 核对） |
+| :--- | :--- | :--- | :--- | :--- |
+| `architecture` | `components[id,type,label]` / `boundaries[kind,label,wraps]` / `connections[from,to]` | 代码图谱模块聚类 + 依赖边 | **确定性，零 LLM** | ⏳ **未实现**——IR 需手写或宿主生成 |
+| `sequence` | `participants[id,type,label]` / `messages[from,to,y,label]` | 代码图谱 `CALLS` 边 + Graphify `flows` | **确定性，零 LLM** | ⏳ **未实现**——同上 |
+| `lifecycle` | `lanes[id,label]` / `states[id,type,label,lane,col]` / `transitions[from,to]` | 任务状态机（14 态 32 转移）等 | **确定性，零 LLM** | ⏳ **未实现**——同上 |
+| `dataflow` | `stages[label]` / `nodes[id,type,label,stage,row]` / `flows[from,to,label]` | 图谱数据读写/存储边 | 半确定性（复杂语义走队列） | ⏳ **未实现**——同上 |
+| `workflow` | `lanes[id,label]` / `nodes[id,lane,col,type,label]` / `edges[from,to]` | 团队 DAG 工作流定义 | 半确定性（业务语义走队列） | ✅ **已实现**：`prism arch from-team <team_id>` |
+
+> **⚠ 表格最后一列的读法（2026-09-14 更新）**：上表「Prism 数据源 / 生成方式」是 **D11 的设计蓝图**，
+> 不等于已实现。当前**只有 `workflow` 一类有生成器**（`buildTeamWorkflowIr`，agents 包，
+> **纯函数**：零 IO / 零时钟 / 零随机，同输入必同字节——否则 sidecar 的 `ir_hash` 失去意义）。
+> 其余四类的 IR **目前需手写**（或由宿主 LLM 按 `3rd/archify/archify/schemas/*.schema.json` 生成），
+> 再走 `prism arch validate <type> <ir.json>` → `prism arch render <type> <ir.json>`。
+> 补生成器时请同时更新本列，别让「全自动」继续停留在蓝图口径。
+>
+> **IR 是派生视图（红线 R7）**：团队定义才是真相；`arch from-team` 每次重生成，不把 IR 当手改的源。
+> 产物三件套 = `*.html`（渲染）+ `*.ir.json`（IR 源）+ `*.meta.json`（sidecar：作用域/版本/`ir_hash`）。
 
 **关键字段**：
 
@@ -410,6 +420,31 @@ uploaded → converting → converted → previewing → active
 
 **边界**：Prism 不调 LLM、不做审核——宿主产出结果后直付回写（确定性写入）。
 无队列、无预算、无积压（原 §12.5 已废）。
+
+### 6.6 项目扫描的范围过滤（2026-09-14：接入 `.gitignore`）
+
+`prism kb sync` / MCP `prism_kb_import` 走同一套 `scanProject`，逐层 walk 时按**三道**过滤：
+
+| 顺序 | 过滤 | 说明 |
+| :--- | :--- | :--- |
+| 1 | 扩展名白名单 | `@prism/knowledge` 的 `isSupported`；不支持的格式**不读入内存** |
+| 2 | 内置目录名 `DEFAULT_IGNORE_DIRS` | 18 个通用名（`.git` / `.prism` / `node_modules` / `dist` / `build` / `out` / `target` / `.next` / `.nuxt` / `coverage` / `.venv` / `venv` / `__pycache__` / `graphify-out` / `.cache` / `.idea` / `.vscode` / `vendor`），**任意层级**生效 |
+| 3 | 项目根 `.gitignore` | 本次新增。见下 |
+
+**`.gitignore` 的口径**：
+
+- 只读**项目根**这一处（子目录里的多级 `.gitignore` **有意不做**——收益小、要先递归才发现）；
+- 覆盖常用语义：注释 / 空行 / 行尾空格、`!` 取反、尾部 `/` 仅目录、含 `/` 锚定根、
+  `*`（不跨 `/`）/ `?` / `[...]` / `**`；
+- **不覆盖**：`.git/info/exclude`、`core.excludesFile`（全局）、`--no-index` 等——需要时用 `ignoreDirs` 追加；
+- 实现是**自研纯函数**（`packages/server/src/kb/gitignore.ts`，零外部依赖）：`packages/server` 的运行时不引第三方 npm 包；
+- 报告新增 `ignored_dirs: string[]`（**不递归展开**）+ `ignored_files: number`。文件计数**在扩展名过滤之后**统计——
+  只有「本来会被扫」的文件才算被 `.gitignore` 挡掉，否则 `.log` 这类本就不支持的扩展名会虚增数字；
+- 关掉：`ScanOptions.respectGitignore: false` / MCP `respect_gitignore: false`。
+
+> **红线澄清**：`scan.ts` 原写「不读 git」，指的是**不介入版本控制**——不执行 `git` 命令、不读 `.git/`、
+> 不问分支与提交（对应 R8）。`.gitignore` 只是一个普通文本清单，描述「哪些路径不算项目内容」，
+> 属于**扫描范围**问题，不构成越界。
 
 ---
 

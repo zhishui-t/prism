@@ -15,6 +15,7 @@
 > **v6 CLI 命令面统一（2026-09-12）**：role/team 统一为增删改查——`role init` / `team init` 更名 `new`，新增 `edit|rm`（team 另有 `render`）；**移除** `role install|import`、`team install`（装配语义移除，角色/团队直接住宿主目录，见 `harness-adapters.md` 顶部）。§1 树已按 v5 体例标注。
 > **v6.1 参数契约统一（2026-09-12）**：读写两侧的**目录键名一律 snake_case 且同名**——`GET /api/roles` → `{ roles, roles_dir }`、`GET /api/teams` → `{ teams, teams_dir }`（旧 camel `rolesDir`/`teamsDir` 前端仍兼容，但它已不是契约）；`prism_role_list` 的 `agents_dir` 更名为 `roles_dir`（zcode 遗留名，与写参数不同名会让宿主回填失败）。`prism_team_new` / `POST /api/teams` 新增**可选** `roles_dir`（成员角色校验用；缺省才回落默认角色库）。
 > **v7 控制台交互重构（2026-09-14）**：新增 `GET /api/skills/:name`（单技能详情，控制台「点行看详情」用）。**注册顺序是硬约束**——必须排在 `/api/skills/usage`、`/api/skills/effective` **之后**，因为路由器首个匹配即命中，`:name` 会把这两条静态路由吞掉。**界面口径（非接口变更）**：`book`（书）是知识库的**内部模型概念，不对外扩散**——控制台不再暴露该层级，知识库界面只呈现 `项目 → 主题 → 知识`；`GET|POST /api/kb/book-structure` 等按书维度的接口**保持不变**，仅前端不再展示，`--book` 亦不再出现在界面提示文案里。
+> **v8 扫描范围接入 `.gitignore`（2026-09-14）**：`prism kb sync` 与 MCP `prism_kb_import` 默认读**项目根 `.gitignore`**，跳过其中忽略的目录/文件——此前只按内置的 18 个通用目录名（`DEFAULT_IGNORE_DIRS`）过滤，**项目自定义的忽略一律不生效**。报告新增 `ignored_dirs: string[]`（不递归展开）与 `ignored_files: number`（**在扩展名过滤之后**计数，只有「本来会被扫」的文件才算被挡掉）；MCP 工具加可选 `respect_gitignore`（默认 `true`）。只读根这一处 `.gitignore`，**不读** `.git/info/exclude` 与全局 `core.excludesFile`。明细见 `knowledge-base.md §6.6`。
 > **已废弃**：工作队列（`prism_work_*` 工具、`work` 命令、`/api/work/*`）——见 `work-queue.md` 顶部；下方 §1 的 `work` 分组与 §2.5 已失效。同理 `uninit` / `harness detect` / `skill sync` 均未实现。
 
 ---
@@ -156,7 +157,7 @@ prism
 | `prism_kb_get` | 取单条（可指定版次；返回 `deposited_by` / `provenance`） |
 | `prism_kb_deposit` | 落库（宿主说落就落；可带团队沉淀策略） |
 | `prism_kb_convert` | 文档转 Markdown（**不落库**，零 LLM/零网络） |
-| `prism_kb_import` | 扫描项目目录建「引用型」索引 |
+| `prism_kb_import` | 扫描项目目录建「引用型」索引（默认读项目根 `.gitignore` 并跳过其中路径；`respect_gitignore:false` 关闭。返回含 `ignored_dirs`/`ignored_files`） |
 | `prism_kb_enrich` | 宿主产出的富化结果回写（零 LLM） |
 | `prism_kb_graph` | 查询知识图谱（邻域/概览；relations 过滤） |
 | `prism_kb_tree` | 浏览 层→书→模块 结构 |
