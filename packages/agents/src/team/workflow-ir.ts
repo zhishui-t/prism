@@ -23,6 +23,7 @@
  * 中文角色名（`队长`）与实例记号（`dev-1#2`）都不能直接当 id，故统一 slug 化。
  */
 
+import { assertArchifyId, fitUnits } from '../arch/text.js'
 import type { TeamDefinition, WorkflowStage } from '../types.js'
 import { stripInstanceMarker } from './validate.js'
 
@@ -71,50 +72,6 @@ export interface WorkflowIrNode {
  * 同列多阶段会被合并成一条 phase 标签，故截断在合并之后进行。
  */
 const TEXT_LIMITS = { label: 14, sublabel: 22, phase: 16 } as const
-
-/**
- * 宽字符判定（CJK / 全角 / 星平面）。
- *
- * 与 archify `shared/utils.mjs:textUnits` 的 `FULLWIDTH_RE` **同口径的保守近似**：
- * 列出的区段与原正则一致；不在列表内的一律按窄字符（1）计。
- * 采用「只多不少」的星平面规则（>0xFFFF → 2），使未知码点只会得到更宽的估算，
- * 不会把超限文本误判为可放。
- */
-function isWideCodePoint(codePoint: number): boolean {
-  return (
-    codePoint > 0xffff ||
-    (codePoint >= 0x1100 && codePoint <= 0x115f) ||
-    (codePoint >= 0x2e80 && codePoint <= 0xa4cf) ||
-    (codePoint >= 0xa960 && codePoint <= 0xa97c) ||
-    (codePoint >= 0xac00 && codePoint <= 0xd7a3) ||
-    (codePoint >= 0xf900 && codePoint <= 0xfaff) ||
-    (codePoint >= 0xfe10 && codePoint <= 0xfe19) ||
-    (codePoint >= 0xfe30 && codePoint <= 0xfe6f) ||
-    (codePoint >= 0xff01 && codePoint <= 0xff60) ||
-    (codePoint >= 0xffe0 && codePoint <= 0xffe6)
-  )
-}
-
-/** 文本占位宽度（单位数）。 */
-function textUnits(text: string): number {
-  let units = 0
-  for (const ch of text) units += isWideCodePoint(ch.codePointAt(0) ?? 0) ? 2 : 1
-  return units
-}
-
-/** 超限则按单位截断并以 `…` 结尾（省略号占 1 单位）；不超限原样返回。 */
-function fitUnits(text: string, maxUnits: number): string {
-  if (textUnits(text) <= maxUnits) return text
-  const out: string[] = []
-  let units = 0
-  for (const ch of text) {
-    const cost = isWideCodePoint(ch.codePointAt(0) ?? 0) ? 2 : 1
-    if (units + cost > maxUnits - 1) break // 留 1 单位给省略号
-    out.push(ch)
-    units += cost
-  }
-  return `${out.join('').trimEnd()}…`
-}
 
 export interface WorkflowIrEdge {
   from: string
@@ -197,12 +154,6 @@ function fallbackLaneId(index: number): string {
   return `role-${index}`
 }
 
-function assertId(id: string): void {
-  if (!/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(id)) {
-    throw new Error(`内部错误：生成的 id 不合 archify schema：${id}`)
-  }
-}
-
 /** 按 order 稳定排序（order 相同时保留输入顺序，保证同输入同输出）。 */
 function sortStages(stages: readonly WorkflowStage[]): WorkflowStage[] {
   return stages
@@ -240,7 +191,7 @@ export function buildTeamWorkflowIr(team: TeamDefinition): WorkflowIr {
       while (usedLaneIds.has(fallbackLaneId(n))) n++
       id = fallbackLaneId(n)
     }
-    assertId(id)
+    assertArchifyId(id)
     usedLaneIds.add(id)
     laneIdOf.set(key, id)
     lanes.push({ id, label: key })
@@ -272,7 +223,7 @@ export function buildTeamWorkflowIr(team: TeamDefinition): WorkflowIr {
       let id = `s${stage.order}-${laneId}`
       let suffix = 2
       while (usedNodeIds.has(id)) id = `s${stage.order}-${laneId}-${suffix++}`
-      assertId(id)
+      assertArchifyId(id)
       usedNodeIds.add(id)
       nodeIds.push(id)
       // 文本一律过 `fitUnits`：阶段名/产出物是**团队定义的自由文本**，长度不可控，
@@ -318,7 +269,7 @@ export function buildTeamWorkflowIr(team: TeamDefinition): WorkflowIr {
   }
   for (const col of [...phasesByCol.keys()].sort((a, b) => a - b)) {
     const id = `phase-${col}`
-    assertId(id)
+    assertArchifyId(id)
     // 阶段头标签的画布宽是**定值**（见 TEXT_LIMITS.phase）→ 合并后必须收敛。
     phases.push({
       id,

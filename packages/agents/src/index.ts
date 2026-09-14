@@ -80,6 +80,59 @@ export type {
   WorkflowIrPhase,
   WorkflowNodeType,
 } from './team/workflow-ir.js'
+
+// archify IR 生成器（F-C4 后续）：文本度量 + 四类图的纯函数派生
+export {
+  ARCHIFY_ID_RE,
+  isWideCodePoint,
+  textUnits,
+  fitUnits,
+  assertArchifyId,
+  slugToken,
+  allocateId,
+  stableTop,
+} from './arch/text.js'
+export type { ArchifyComponentType, ArchifyMeta } from './arch/types.js'
+export {
+  normalizeGraph,
+  makeRegionOf,
+  commonDirPrefix,
+  isTestFile,
+  inferComponentType,
+  dataflowStageOf,
+  DATAFLOW_STAGES,
+  buildArchitectureIr,
+  buildSequenceIr,
+  buildDataflowIr,
+} from './arch/graph-ir.js'
+export type {
+  CodeGraph,
+  CodeGraphNode,
+  CodeGraphEdge,
+  NormalizedGraph,
+  ArchitectureIr,
+  ArchitectureIrComponent,
+  ArchitectureIrBoundary,
+  ArchitectureIrConnection,
+  ArchitectureIrOptions,
+  SequenceIr,
+  SequenceIrParticipant,
+  SequenceIrMessage,
+  SequenceIrOptions,
+  DataflowIr,
+  DataflowIrNode,
+  DataflowIrFlow,
+  DataflowIrOptions,
+} from './arch/graph-ir.js'
+export { buildTaskLifecycleIr, TASK_LIFECYCLE_CELLS } from './arch/lifecycle-ir.js'
+export type {
+  LifecycleIr,
+  LifecycleIrLane,
+  LifecycleIrState,
+  LifecycleIrTransition,
+  LifecycleIrOptions,
+  LifecycleStateType,
+} from './arch/lifecycle-ir.js'
 export { activateTeam } from './team/activate.js'
 export type { ActivateTeamOptions } from './team/activate.js'
 export { renderZcodeTeam, teamMarker, hasTeamMarker } from './team/render.js'
