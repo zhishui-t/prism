@@ -59,7 +59,10 @@ pnpm test:e2e      # 全链路：CLI → 服务 → HTTP API → 控制台
 ## 打包冒烟
 
 ```bash
-pnpm run package   # → dist/prism-<version>.tgz
+pnpm run package       # → dist/prism-<version>_<platform>.tgz（含本平台三方运行时 + 最小向量模型）
+pnpm run test:package  # 发行冒烟：打包 → 解压 → 在解压环境验证能力（21 项）
 ```
 
-解压后 `node bin/prism.js --version` 应输出版本号（验证 workspace 依赖已物化、无符号链接残留）。
+产物按平台命名（`_win_x64` / `_mac_arm64` / `_mac_x64`），同级还会写 `SHA256SUMS`。
+解压后 `node bin/prism.js --version` 应输出版本号（验证 workspace 依赖已物化、无符号链接残留），
+`node bin/prism.js doctor` 应三方件全 ok——**且无需先跑任何 `setup-*` 安装脚本**。

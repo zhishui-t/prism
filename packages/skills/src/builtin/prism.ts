@@ -662,7 +662,7 @@ prism serve --port 7777
 ## 打包
 
 \`\`\`bash
-pnpm run package      # → dist/prism-<version>.tgz（解压即用，无需 pnpm install）
+pnpm run package      # → dist/prism-<version>_<platform>.tgz（按平台分，含三方运行时 + 最小向量模型，解压即用）
 \`\`\`
 `,
   },

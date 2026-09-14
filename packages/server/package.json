@@ -1,6 +1,6 @@
 {
   "name": "@prism/server",
-  "version": "0.1.0",
+  "version": "0.1.0-alpha",
   "private": true,
   "type": "module",
   "description": "Prism HTTP 服务（零框架 node:http）+ stdio MCP：知识库 / 代码图谱 / 任务台账 / Studio 静态托管",

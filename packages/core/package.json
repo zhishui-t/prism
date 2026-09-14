@@ -1,6 +1,6 @@
 {
   "name": "@prism/core",
-  "version": "0.1.0",
+  "version": "0.1.0-alpha",
   "private": true,
   "type": "module",
   "description": "Prism 内核：任务状态机、SQLite 持久化、审计、熔断与循环保护",

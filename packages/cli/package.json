@@ -1,6 +1,6 @@
 {
   "name": "@prism/cli",
-  "version": "0.1.0",
+  "version": "0.1.0-alpha",
   "private": true,
   "type": "module",
   "description": "Prism CLI：init / serve / doctor / kb / graph / role / team / skill（node:util.parseArgs，零框架）",

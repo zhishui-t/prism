@@ -1,6 +1,6 @@
 {
   "name": "@prism/knowledge",
-  "version": "0.1.0",
+  "version": "0.1.0-alpha",
   "private": true,
   "type": "module",
   "description": "Prism 知识库核心：分层存储（文件为真相）+ FTS5 bigram 中文检索 + 版次制落库",

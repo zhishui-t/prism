@@ -54,8 +54,9 @@ pnpm run 3rd:setup     # 下 anydoc 平台二进制 + llama.cpp 编译/模型（
 pnpm run 3rd:init      # = git submodule update --init --recursive
 ```
 
-> `anydoc`（文档转 Markdown）与向量化运行时是**平台相关**的，不进仓库也不随包分发，
-> 由 `3rd:setup` 在目标机按自身平台生成（见 [3rd/README.md](./3rd/README.md)）。
+> `anydoc`（文档转 Markdown）与向量化运行时是**平台相关**的：**源码**由 submodule 引入，
+> **二进制**在开发机由 `3rd:setup` 按本机平台生成（见 [3rd/README.md](./3rd/README.md)）；
+> 发布时二者都会**随平台包分发**（§2.5），目标机因此不需要额外下载。
 
 ### 2.3 接入宿主
 
@@ -84,16 +85,46 @@ prism embedding models      # 三档模型一览（small/default/large）
 ### 2.5 打包部署
 
 ```bash
-pnpm run package       # 产出 dist/prism-<version>.tgz
+pnpm run package       # 产出 dist/prism-<version>_<platform>.tgz
+pnpm run test:package  # 发行冒烟：打包 → 解压 → 在解压环境验证能力
 ```
 
-解压即用，无需重新安装依赖（目标机首次跑 `prism embedding install` 生成向量运行时）：
+产物**按平台分别发布**——包内自带本平台的三方运行时与最小向量模型：
+
+| 包名示例 | 含的运行时 |
+| :--- | :--- |
+| `prism-0.1.0-alpha_win_x64.tgz` | `llama-server.exe`（CPU 自编译 + Vulkan 预编译）、`anydoc.<platform>.node` |
+| `prism-0.1.0-alpha_mac_arm64.tgz` | `llama-server`（Metal 随包分发）、`anydoc.darwin-arm64.node` |
+
+**为什么要分平台**：llama 二进制与 anydoc 原生绑定都**不可跨平台复用**，所以 mac 版必须另出一个
+`_mac_arm64` / `_mac_x64` 包。`os` / `cpu` 字段已写进包内 `package.json`，包名也带平台后缀。
+
+**解压即用，无需 git、无需联网**（目标机不再需要 `git submodule update`，也不会去 GitHub 下载）：
 
 ```bash
-tar -xzf dist/prism-0.1.0.tgz && cd prism-0.1.0
-node bin/prism.js --version
+tar -xzf dist/prism-0.1.0-alpha_win_x64.tgz && cd prism-0.1.0-alpha_win_x64
+node bin/prism.js --version   # prism 0.1.0-alpha
+node bin/prism.js doctor      # 三方件 + 向量运行时一次自检
 node bin/prism.js serve
 ```
+
+包内含：应用与 CLI、控制台静态资源、`3rd/archify` 与 `3rd/graphify` 源码（免构建）、
+`3rd/llama-runtime/{bin,bin-vulkan,models/bge-small-zh-v1.5-q8_0.gguf}`、
+`3rd/anydoc-runtime/`、宿主适配器示例，以及 `PRISM-MANIFEST.json`（版本/平台/运行时清单）
+与 `SHA256SUMS`（校验和）。
+
+**不随包、需目标机自理的两项**：
+
+- **大档向量模型**（`bge-m3` / `Qwen3-Embedding`，各 600MB+）：默认只带最小档
+  `bge-small-zh-v1.5`（26MB，512 维，CPU）。要更大档位跑
+  `prism embedding install --tier default|large`（需联网），或打包加 `--models all`。
+- **graphify 的 Python 依赖**（`tree-sitter` 系列 + `networkx` / `numpy` / `rapidfuzz`）：
+  Python 环境无法可靠内嵌，目标机需 `pnpm run 3rd:build`（即 `python -m pip install`）。
+  **未装时只有代码图谱降级，知识库检索与文档转换照常可用。**
+
+为控制体积，打包排除了 `3rd/llama.cpp` 源码（173MB，只有「源码编译」路径需要）与
+`3rd/llama-runtime/build` 编译中间产物（95MB），以及 3rd 子模块里与运行无关的
+docs/examples/tests（约 46MB）。`--full-3rd` 可保留 3rd 子模块的全部内容。
 
 ---
 
