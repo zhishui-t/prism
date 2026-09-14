@@ -843,6 +843,8 @@ async function kbSync(ctx: CommandContext, args: string[], values: ArgValues): P
       missing: report.missing,
       unreadable: report.unreadable,
       truncated: report.truncated,
+      ignored_dirs: report.ignored_dirs,
+      ignored_files: report.ignored_files,
     })
   }
 
@@ -856,6 +858,15 @@ async function kbSync(ctx: CommandContext, args: string[], values: ArgValues): P
     `  发现 ${report.discovered} 个可处理文件 → 新建 ${report.created} · 更新 ${report.updated} · 未变 ${report.unchanged} · 跳过 ${report.skipped}`,
   )
   if (report.truncated) ctx.stdout('  ⚠ 已达文件数上限，结果被截断（可调 --max-files 或分批扫描）')
+  if (report.ignored_dirs.length > 0 || report.ignored_files > 0) {
+    const parts: string[] = []
+    if (report.ignored_dirs.length > 0) {
+      const shown = report.ignored_dirs.slice(0, 5).join('、')
+      parts.push(`${report.ignored_dirs.length} 个目录（${shown}${report.ignored_dirs.length > 5 ? ' …' : ''}）`)
+    }
+    if (report.ignored_files > 0) parts.push(`${report.ignored_files} 个文件`)
+    ctx.stdout(`  按 .gitignore 忽略: ${parts.join(' + ')}`)
+  }
   if (report.unreadable.length > 0) {
     ctx.stdout(`  ⚠ ${report.unreadable.length} 个目录不可读（已跳过）：${report.unreadable.slice(0, 3).join('；')}`)
   }

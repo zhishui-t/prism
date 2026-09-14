@@ -780,6 +780,11 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
           book: { type: 'string', description: '书（默认取项目名）' },
           module: { type: 'string', description: '模块（默认按目录推断）' },
           dry_run: { type: 'boolean', description: '只报告不落库（默认 false）' },
+          respect_gitignore: {
+            type: 'boolean',
+            description:
+              '是否读项目根 .gitignore 并跳过其中忽略的路径（默认 true）。置 false 只按内置目录名过滤',
+          },
         },
         required: ['path', 'owner'],
       },
@@ -798,6 +803,9 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
           owner,
           ...(asString(args.book) !== undefined ? { book: asString(args.book)! } : {}),
           ...(asString(args.module) !== undefined ? { module: asString(args.module)! } : {}),
+          ...(typeof args.respect_gitignore === 'boolean'
+            ? { respectGitignore: args.respect_gitignore }
+            : {}),
         })
         return {
           root: report.root,
@@ -808,6 +816,8 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
           skipped: report.skipped,
           truncated: report.truncated,
           missing: report.missing,
+          ignored_dirs: report.ignored_dirs,
+          ignored_files: report.ignored_files,
           dry_run: dryRun,
         }
       },

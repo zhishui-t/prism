@@ -209,3 +209,73 @@ describe('孤儿索引检测', () => {
     kb.close()
   })
 })
+
+/** 扫描范围：读项目根 `.gitignore`（2026-09-14 用户诉求「被忽略的文件夹要真的忽略掉」）。 */
+describe('扫描尊重 .gitignore', () => {
+  it('默认读根 .gitignore：忽略其中的目录与文件，并计数上报', async () => {
+    const { scanProject } = await import('../../server/src/kb/scan.js')
+    const root = await makeProject({
+      '.gitignore': '# 构建与私有\n\ngenerated/\nprivate.md\n',
+      'README.md': '# 项目\n\n说明。',
+      'docs/rules.md': '# 规则\n\n禁止吞异常。',
+      'generated/out.md': '# 构建产物\n\n不该被索引。',
+      'generated/deep/nested.md': '# 更深一层',
+      'private.md': '# 私有\n\n不该被索引。',
+      'node_modules/x.md': '# 依赖\n\n内置忽略仍然生效。',
+    })
+    const home = await makeTempDir('prism-gitignore-')
+    const kb = makeKb(home)
+
+    const report = await scanProject(kb, { root, owner: 'p', book: 'p' })
+    expect(report.discovered).toBe(2) // README.md + docs/rules.md
+    expect(report.ignored_dirs).toEqual(['generated'])
+    expect(report.ignored_files).toBe(1) // private.md
+    kb.close()
+  })
+
+  it('`!` 取反可把文件捞回来', async () => {
+    const { scanProject } = await import('../../server/src/kb/scan.js')
+    const root = await makeProject({
+      '.gitignore': 'notes/*.md\n!notes/keep.md\n',
+      'notes/skip.md': '# 跳过',
+      'notes/keep.md': '# 保留',
+    })
+    const home = await makeTempDir('prism-gitignore-neg-')
+    const kb = makeKb(home)
+
+    const report = await scanProject(kb, { root, owner: 'p', book: 'p' })
+    expect(report.discovered).toBe(1)
+    expect(report.files.map((f) => f.rel)).toContain('notes/keep.md')
+    expect(report.ignored_files).toBe(1)
+    kb.close()
+  })
+
+  it('respectGitignore: false → 只按内置目录名过滤，.gitignore 不生效', async () => {
+    const { scanProject } = await import('../../server/src/kb/scan.js')
+    const root = await makeProject({
+      '.gitignore': 'generated/\n',
+      'README.md': '# 项目',
+      'generated/out.md': '# 产物',
+    })
+    const home = await makeTempDir('prism-nogi-')
+    const kb = makeKb(home)
+
+    const report = await scanProject(kb, { root, owner: 'p', book: 'p', respectGitignore: false })
+    expect(report.discovered).toBe(2)
+    expect(report.ignored_dirs).toEqual([])
+    kb.close()
+  })
+
+  it('无 .gitignore → 行为与从前一致（零忽略）', async () => {
+    const { scanProject } = await import('../../server/src/kb/scan.js')
+    const root = await makeProject({ 'a.md': '# A', 'b/c.md': '# C' })
+    const home = await makeTempDir('prism-nogifile-')
+    const kb = makeKb(home)
+
+    const report = await scanProject(kb, { root, owner: 'p', book: 'p' })
+    expect(report.discovered).toBe(2)
+    expect(report.ignored_dirs).toEqual([])
+    expect(report.ignored_files).toBe(0)
+    kb.close()
+  })
+})

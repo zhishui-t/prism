@@ -359,6 +359,8 @@ tr:last-child td { border-bottom: 0; }
 /* 既有宽表在小屏的横向滚动兜底（新界面本身不用宽表） */
 .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .table-scroll table { min-width: 560px; }
+/* 一格里放多个标签（如扫描历史的「忽略 / 孤儿 / 不可读」） */
+.flag-row { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
 
 /* 表单单元：标签 + 控件 + 字段级错误文案 */
 .field { display: flex; flex-direction: column; gap: 6px; }

@@ -124,6 +124,10 @@ export interface GraphStatus {
   missing: string[]
   unreadable: string[]
   truncated: boolean
+  /** 被 `.gitignore` 忽略的目录（旧记录缺省） */
+  ignored_dirs?: string[]
+  /** 被 `.gitignore` 忽略的文件数（旧记录缺省） */
+  ignored_files?: number
 }
 
 /** 层间冲突（/api/kb/conflicts）。 */

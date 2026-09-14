@@ -36,6 +36,10 @@ export interface ScanRecord {
   unreadable: string[]
   /** 是否被文件数上限截断 */
   truncated: boolean
+  /** 被 `.gitignore` 忽略的目录（相对路径）。2026-09-14 起写入；旧记录缺省 */
+  ignored_dirs?: string[]
+  /** 被 `.gitignore` 忽略的文件数。2026-09-14 起写入；旧记录缺省 */
+  ignored_files?: number
 }
 
 /** 扫描历史（按项目分文件？不——单文件 + 查询时过滤，量级可控）。 */

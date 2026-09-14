@@ -96,6 +96,13 @@ export {
   type ScanReport,
   type ScannedFile,
 } from './kb/scan.js'
+// `.gitignore` 解析（扫描范围过滤；纯函数，零外部依赖）
+export {
+  createGitignoreMatcher,
+  GitignoreMatcher,
+  parseGitignore,
+  type GitignoreRule,
+} from './kb/gitignore.js'
 // 文档转换（anydoc 封装；MCP prism_kb_convert / CLI 用）
 export {
   convertFileToMarkdown,

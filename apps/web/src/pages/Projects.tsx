@@ -170,11 +170,27 @@ function ScanFlags({ record }: { record: ScanRecord }) {
   if (record.missing.length > 0) flags.push(t('projects.scanHistory.orphan', { n: record.missing.length }))
   if (record.unreadable.length > 0) flags.push(t('projects.scanHistory.unreadable', { n: record.unreadable.length }))
   if (record.truncated) flags.push(t('projects.scanHistory.truncated'))
-  if (flags.length === 0) return <span className="muted">—</span>
+
+  const ignoredDirs = record.ignored_dirs ?? []
+  const ignoredFiles = record.ignored_files ?? 0
+  const ignoredParts: string[] = []
+  if (ignoredDirs.length > 0) ignoredParts.push(t('projects.scanHistory.ignoredDirs', { n: ignoredDirs.length }))
+  if (ignoredFiles > 0) ignoredParts.push(t('projects.scanHistory.ignoredFiles', { n: ignoredFiles }))
+
+  if (flags.length === 0 && ignoredParts.length === 0) return <span className="muted">—</span>
   return (
-    <StatusTag kind="warn" title={record.missing.join(', ')}>
-      {flags.join(' · ')}
-    </StatusTag>
+    <div className="flag-row">
+      {ignoredParts.length > 0 && (
+        <StatusTag kind="info" title={ignoredDirs.join('\n')}>
+          {ignoredParts.join(' · ')}
+        </StatusTag>
+      )}
+      {flags.length > 0 && (
+        <StatusTag kind="warn" title={record.missing.join(', ')}>
+          {flags.join(' · ')}
+        </StatusTag>
+      )}
+    </div>
   )
 }
 

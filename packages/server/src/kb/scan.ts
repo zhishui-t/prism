@@ -2,13 +2,19 @@
  * 项目知识扫描器（A3，design-knowledge-model-v1 §4）。
  *
  * 职责边界（红线）：
- * - **只读项目文件**——不写项目目录、不读 git、不判断提交；
+ * - **只读项目文件**——不写项目目录、**不碰 `.git/`**、不跑 git 命令、不判断提交；
  * - **零 LLM**——格式转换是机械的（anydoc），语义抽取交给工作队列；
  * - **引用型只索引**——项目文件是真相，Prism 不复制、不做版次。
  *
+ * 关于 `.gitignore`（2026-09-14）：扫描**读项目根的 `.gitignore` 文本文件**，把其中
+ * 忽略的目录/文件一并跳过。这不违反上面「不读 git」——该红线约束的是**不介入版本控制**
+ * （不执行 git 命令、不读 `.git/`、不问分支与提交）；`.gitignore` 只是一个普通的文本
+ * 清单，描述「哪些路径不算项目内容」，属于**扫描范围**问题。可用
+ * `respectGitignore: false` 关掉。
+ *
  * 扫描流程：
- *   遍历目录 → 过滤扩展名/忽略目录 → 逐个转 Markdown → 算源哈希 →
- *   kb.index()（created/updated/unchanged）→ 可选入队富化任务。
+ *   遍历目录 → 过滤扩展名 / 硬编码忽略目录 / `.gitignore` 忽略 → 逐个转 Markdown →
+ *   算源哈希 → kb.index()（created/updated/unchanged）→ 可选入队富化任务。
  */
 
 import { createHash } from 'node:crypto'
@@ -16,6 +22,8 @@ import { readFile, readdir, stat } from 'node:fs/promises'
 import { basename, extname, join, relative, sep } from 'node:path'
 
 import { isSupported, type KnowledgeService } from '@prism/knowledge'
+
+import { createGitignoreMatcher, type GitignoreMatcher } from './gitignore.js'
 
 /** 默认忽略的目录名（构建产物、依赖、版本控制内部等）。 */
 export const DEFAULT_IGNORE_DIRS = [
@@ -50,6 +58,11 @@ export interface ScanOptions {
   module?: string
   /** 额外忽略的目录名 */
   ignoreDirs?: string[]
+  /**
+   * 是否读项目根的 `.gitignore` 并跳过其中忽略的路径（默认 `true`）。
+   * 置 `false` 时只按 `DEFAULT_IGNORE_DIRS` + `ignoreDirs` 过滤。
+   */
+  respectGitignore?: boolean
   /** 单文件大小上限（字节），默认 8MB——超大文件跳过（可能是二进制资源） */
   maxFileBytes?: number
   /** 最多扫描文件数（护栏），默认 2000 */
@@ -92,6 +105,10 @@ export interface ScanReport {
   missing: string[]
   /** 不可读的目录（权限/占用等），显式报告不静默 */
   unreadable: string[]
+  /** 被 `.gitignore` 忽略的目录（相对路径；**不递归展开**，进了就不再往下走） */
+  ignored_dirs: string[]
+  /** 被 `.gitignore` 忽略的文件数（只计数——目录已挡在前面，通常量很小） */
+  ignored_files: number
 }
 
 /** 检测「索引里存在但源文件已不在」的引用型条目（按 book/owner 限定范围）。 */
@@ -168,6 +185,22 @@ export function makeDryRunKb(real: KnowledgeService): KnowledgeService {
 }
 
 /**
+ * 读项目根的 `.gitignore`（不存在/不可读/无规则 → `null`）。
+ *
+ * 只读**根**这一处：多级 `.gitignore` 叠加（子目录内的）有意不做——覆盖面收益小，
+ * 而「哪些子目录有自己的 .gitignore」本身要递归才发现。需要时走 `ignoreDirs`。
+ */
+async function loadGitignore(root: string): Promise<GitignoreMatcher | null> {
+  try {
+    const text = await readFile(join(root, '.gitignore'), 'utf-8')
+    const matcher = createGitignoreMatcher(text)
+    return matcher.size > 0 ? matcher : null
+  } catch {
+    return null
+  }
+}
+
+/**
  * 扫描项目目录并建「引用型」索引。
  *
  * @param kb 知识服务（需实现 index）
@@ -197,7 +230,11 @@ export async function scanProject(kb: KnowledgeService, options: ScanOptions): P
     truncated: false,
     missing: [],
     unreadable: [],
+    ignored_dirs: [],
+    ignored_files: 0,
   }
+
+  const gitignore = options.respectGitignore === false ? null : await loadGitignore(root)
 
   const candidates: string[] = []
   const unreadable: string[] = []
@@ -222,11 +259,27 @@ export async function scanProject(kb: KnowledgeService, options: ScanOptions): P
       const abs = join(dir, entry.name)
       if (entry.isDirectory()) {
         if (ignore.has(entry.name)) continue
+        if (gitignore !== null) {
+          const rel = relative(root, abs).split(sep).join('/')
+          if (gitignore.ignores(rel, true)) {
+            report.ignored_dirs.push(rel)
+            continue
+          }
+        }
         await walk(abs)
         continue
       }
       if (!entry.isFile()) continue
+      // 先过扩展名：只有「本来会被扫」的文件才算「被 .gitignore 挡掉」，
+      // 否则 `.log` 这类本就不支持的扩展名会虚增忽略计数
       if (!isSupported(entry.name)) continue
+      if (gitignore !== null) {
+        const rel = relative(root, abs).split(sep).join('/')
+        if (gitignore.ignores(rel, false)) {
+          report.ignored_files++
+          continue
+        }
+      }
       candidates.push(abs)
     }
   }
