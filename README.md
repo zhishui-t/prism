@@ -16,7 +16,7 @@ AI 编码团队跑起来后，会反复遇到四个问题：
 | :--- | :--- |
 | 规范、红线散落在各个文档里，agent 读不到 | **知识库**：层→书→模块→条目，中文全文检索 + 向量混合召回，MCP 拉取 |
 | 代码结构没人说得清，改一处不知道影响哪 | **代码图谱**：tree-sitter AST 建图，零 token；路径/影响面查询 |
-| 架构图靠人画，画完就过期 | **架构图谱**：五类图由 JSON-IR 自动渲染，IR 是源、HTML 是派生 |
+| 架构图靠人画，画完就过期 | **架构图谱**：五类图 IR **全自动派生**（团队定义 / 代码图谱 / 任务状态机），IR 是源、HTML 是派生 |
 | 专家角色、团队工作流每次口头交代 | **角色/团队定义**：决策契约 + 固定工作流 + 沉淀规则，装进宿主目录 |
 
 关键约束（都来自实际踩坑）：
@@ -187,25 +187,29 @@ prism graph status myproj                       # 陈旧检测（manifest 哈希
 
 ### 4.4 架构图谱
 
-用 **Archify**（子模块，MIT v2.16.0）把 JSON-IR 渲染成自包含 HTML。五类图及其 IR 来源：
+用 **Archify**（子模块，MIT v2.16.0）把 JSON-IR 渲染成自包含 HTML。五类图的 IR **全部由 Prism 自动派生**（agents 包纯函数，零 IO / 零时钟 / 零随机）：
 
-| 类型 | 数据来源 | IR 由谁产 |
+| 类型 | 数据来源 | 入口 |
 | :--- | :--- | :--- |
-| `workflow` | 团队 DAG 工作流 → 泳道/节点/边 | **自动**：`prism arch from-team <team_id>`（纯函数派生，零手写） |
-| `architecture` | 模块聚类 + 依赖边 → 组件/边界/连接 | 宿主按 `arch schema architecture` 的契约生成 |
-| `sequence` | CALLS 边 + Graphify flows → 参与者/消息 | 宿主按 `arch schema sequence` 生成 |
-| `lifecycle` | 状态机（如 14 态任务机）→ 泳道/状态/转移 | 宿主按 `arch schema lifecycle` 生成 |
-| `dataflow` | 数据读写边 → 阶段/节点/流转 | 宿主按 `arch schema dataflow` 生成 |
+| `workflow` | 团队 DAG 工作流 → 泳道/节点/边 | `prism arch from-team <team_id>` |
+| `architecture` | 已注册项目的代码图谱（社区聚类 + 依赖边） | `prism arch from-graph architecture <project>` |
+| `sequence` | 代码图谱的**跨文件 calls 边** | `prism arch from-graph sequence <project>` |
+| `lifecycle` | Prism 任务状态机（14 态 36 转移） | `prism arch from-state` |
+| `dataflow` | 代码图谱目录角色分层 + 跨层依赖边（口径 = 依赖流向） | `prism arch from-graph dataflow <project>` |
 
 ```bash
 prism arch types                              # 列出五类
 prism arch from-team core-dev                 # 工作流图：由团队定义一键派生
-prism arch schema architecture                # 取 IR 的 JSON Schema（宿主生成 IR 的契约；公共定义用 schema common）
-prism arch validate architecture ir.json      # 校验 IR（schema + 布局）
+prism arch from-graph architecture mini-snake # 架构图：由代码图谱派生（--top/--limit 控制规模）
+prism arch from-state                         # 生命周期图：由任务状态机派生
+prism arch schema architecture                # 契约核对/排障用（公共定义用 schema common）
+prism arch validate architecture ir.json      # 校验一个现成 IR（schema + 布局）
 prism arch render architecture ir.json --out out.html
 ```
 
-IR 是源、HTML 是派生，两者都可作为 `type: diagram` 条目沉淀。**IR 是派生视图（R7）**：`workflow` 由团队定义自动生成；其余四类由**宿主**按 `arch schema` 的契约把图谱数据映射成 IR——**不是让用户手写 JSON**。
+MCP 等价：`prism_arch_generate { type, team?, project? }`（`workflow` 传 `team`，`architecture|sequence|dataflow` 传 `project`，`lifecycle` 无入参）。
+
+IR 是源、HTML 是派生，两者都可作为 `type: diagram` 条目沉淀。**IR 是派生视图（R7）**：五类图都由**既有真相**（团队定义 / 代码图谱 / 任务状态机）纯函数派生，**宿主与用户都不产 IR**；`prism arch schema` 只作契约核对。真实图谱上可能**有理由地拒画**（同目录扁平仓库无处分层、图谱无跨文件 calls 边、层数不足两级）——报错并说明理由，不产出坏图。
 
 ### 4.5 角色与团队
 
@@ -304,7 +308,7 @@ prism
 └── task       list | show | graph | register | report | stats
 ```
 
-**MCP 工具 46 个**：知识库 17 · 代码图谱 8 · 角色/团队/技能 17 · 任务台账 3 · 上下文包 1（`tools/list` 实测）。
+**MCP 工具 47 个**：知识库 17 · 代码图谱 8 · 架构图谱 1 · 角色/团队/技能 17 · 任务台账 3 · 上下文包 1（`tools/list` 实测）。
 
 ---
 

@@ -9,7 +9,7 @@
 > 本文下方仍是 2026-09-09 的讨论稿；以下为**当前实现增量**，与下方冲突时以本节与 `README.md` 为准：
 >
 > **新增 CLI**：`team new <id>`（建队脚手架 + 自动校验 + 写守卫；v6 由 `team init` 更名）、`kb structure show|generate|freeze`（书结构：总纲/模块清单/固化/继承）、`kb versions <id>`（条目版次历史）、`kb deposit`（按团队沉淀策略落库）、`skill effective --role [--team]`（Skill 有效集）、`task report --deposit`（终态沉淀建议 + 一步落库）。
-> **新增 MCP 工具**（4）：`prism_kb_versions`、`prism_kb_book_structure`、`prism_skill_effective`、`prism_team_create`（v6 更名 `prism_team_new`）——**工具总数以 `tools/list` 实测为准**（v4 由 31 增至 35；v5 多项目图谱合并（F-C2）再增至 36；**v6 角色/团队补齐增删改，36 → 43**；**v6.2 补 MCP Skill 写入口 `skill_list|install|uninstall`，43 → 46**）。
+> **新增 MCP 工具**（4）：`prism_kb_versions`、`prism_kb_book_structure`、`prism_skill_effective`、`prism_team_create`（v6 更名 `prism_team_new`）——**工具总数以 `tools/list` 实测为准**（v4 由 31 增至 35；v5 多项目图谱合并（F-C2）再增至 36；**v6 角色/团队补齐增删改，36 → 43**；**v6.2 补 MCP Skill 写入口 `skill_list|install|uninstall`，43 → 46**；**v10 架构图谱接 MCP `prism_arch_generate`，46 → 47**）。
 > **新增/变更 HTTP**：`GET /api/kb/versions/:id`、`GET|POST /api/kb/book-structure`、`GET /api/skills/effective?role=&team=`、`POST /api/teams`（`teams_dir` 必填、无 env 回落）、`GET /api/teams` 增只读目录字段、`GET /api/kb/context-pack` 增 `layers/books/symbols/max_excerpt_chars`。
 > **v6 写路由补齐（2026-09-12）**：`POST /api/roles`、`PATCH|DELETE /api/roles/:name`、`PATCH|DELETE /api/teams/:id`；`GET /api/roles` 返回体由裸数组改为 `{ roles, … }`（与 `/api/teams` **同形**）。写路径的 `roles_dir` / `teams_dir` **必填**。
 > **v6 CLI 命令面统一（2026-09-12）**：role/team 统一为增删改查——`role init` / `team init` 更名 `new`，新增 `edit|rm`（team 另有 `render`）；**移除** `role install|import`、`team install`（装配语义移除，角色/团队直接住宿主目录，见 `harness-adapters.md` 顶部）。§1 树已按 v5 体例标注。
@@ -17,8 +17,21 @@
 > **v7 控制台交互重构（2026-09-14）**：新增 `GET /api/skills/:name`（单技能详情，控制台「点行看详情」用）。**注册顺序是硬约束**——必须排在 `/api/skills/usage`、`/api/skills/effective` **之后**，因为路由器首个匹配即命中，`:name` 会把这两条静态路由吞掉。**界面口径（非接口变更）**：`book`（书）是知识库的**内部模型概念，不对外扩散**——控制台不再暴露该层级，知识库界面只呈现 `项目 → 主题 → 知识`；`GET|POST /api/kb/book-structure` 等按书维度的接口**保持不变**，仅前端不再展示，`--book` 亦不再出现在界面提示文案里。
 > **v8 扫描范围接入 `.gitignore`（2026-09-14）**：`prism kb sync` 与 MCP `prism_kb_import` 默认读**项目根 `.gitignore`**，跳过其中忽略的目录/文件——此前只按内置的 18 个通用目录名（`DEFAULT_IGNORE_DIRS`）过滤，**项目自定义的忽略一律不生效**。报告新增 `ignored_dirs: string[]`（不递归展开）与 `ignored_files: number`（**在扩展名过滤之后**计数，只有「本来会被扫」的文件才算被挡掉）；MCP 工具加可选 `respect_gitignore`（默认 `true`）。只读根这一处 `.gitignore`，**不读** `.git/info/exclude` 与全局 `core.excludesFile`。明细见 `knowledge-base.md §6.6`。
 > **v9 架构图 IR 契约可得（2026-09-14）**：新增 `prism arch schema <type|common>`——打印 Archify 的 IR JSON Schema（`$defs` 走 `common`）。动因：五类图只有 `workflow` 有生成器（`prism arch from-team <team_id>`，IR 是纯函数产物），其余四类（`architecture` / `sequence` / `lifecycle` / `dataflow`）的 IR 要由**宿主按契约生成**；此前宿主取不到 schema（只能翻 `3rd/archify/archify/schemas/`，打包后连路径都摸不到），于是回头让用户手写 JSON——与 R7「IR 是派生视图」相悖。**没有 MCP 等价工具**（架构图谱全线只有 CLI/HTTP）。同步补齐 `prism` Skill：`references/arch.md` 增「IR 由谁产」表与宿主生成链路，SKILL.md 快速判定表与 CLI 速查一并更新。
+> **v10 五类图全自动派生（2026-09-14，本版取代 v9 的「宿主手搓」口径）**：v9 只是把「让用户写 JSON」降级成「让宿主按 schema 写 JSON」，**机械活还在** —— 与 R7 只差半步。本版把 `architecture` / `sequence` / `lifecycle` / `dataflow` 四类也做进 Prism，IR 一律由**纯函数从既有真相派生**，宿主与用户都不再产 IR。数据源与入口：
 >
-> **已废弃**：工作队列（`prism_work_*` 工具、`work` 命令、`/api/work/*`）——见 `work-queue.md` 顶部；下方 §1 的 `work` 分组与 §2.5 已失效。同理 `uninit` / `harness detect` / `skill sync` 均未实现。
+> | type | 数据源 | 入口 |
+> | :--- | :--- | :--- |
+> | `workflow` | 团队 DAG 工作流定义 | `prism arch from-team <team_id>`（原有） |
+> | `architecture` | 已注册项目的代码图谱（社区聚类 + 依赖边） | `prism arch from-graph architecture <project>` |
+> | `sequence` | 代码图谱的跨文件 CALLS 边 | `prism arch from-graph sequence <project>` |
+> | `dataflow` | 代码图谱的目录角色分层 + 跨层依赖边 | `prism arch from-graph dataflow <project>` |
+> | `lifecycle` | Prism 任务状态机（14 态 36 转移） | `prism arch from-state` |
+>
+> 新增 CLI 子命令 `from-graph`（`--out/--top/--limit`）与 `from-state`（`--out/--title`）；新增 MCP `prism_arch_generate`（统一入口，按 `type` 分派，见 §2.3）。`prism arch schema` **保留但降级**——从「生成 IR 的依据」变为「核对/调试契约」。
+> **两处口径说明**（都不是缺陷，是有理由的拒画或改名）：① `dataflow` 图谱里**没有 reads/writes 边**，无法画真正的数据读写流，故改口径为**依赖流向视图**（按目录角色分层 + 依赖边跨层流动，层次压缩后只留命中层）；② 生成器在真实图谱上**可能明确拒画**并给出理由（同目录扁平仓库无处分层、图谱无跨文件 CALLS 边、层数不足两级），此时报错而非产出坏图。派生逻辑硬约束见 `knowledge-base.md §4.4`。
+> **渲染器踩坑已被生成器吸收**（不再要求使用者知道）：节点文本不换行需自收敛、连线侧向契约（给了 `via` 即跳过 `endpoint-side-direction` 校验）、`edge-through-node` 无法靠命名通道避让（唯一解是自给 `via`）、标签默认落线段中点常压节点（需自定 `labelAt`）、各类最短段阈值（architecture 24px / dataflow 34px / lifecycle 32px）、同层节点净空 10px。生成器内部用「Hanan 网格 + Dijkstra（折点优先）」正交布线自动解这些约束。
+>
+> **已废弃**：工作队列（`prism_work_*` 工具、`work` 命令、`/api/work/*`）——见 `work-queue.md` 顶部；下方 §1 的 `work` 分组与 §2.7 已失效。同理 `uninit` / `harness detect` / `skill sync` 均未实现。
 
 ---
 
@@ -97,10 +110,12 @@ prism
 │
 ├── arch                    架构图谱（Archify 子工程）
 │   ├── types               列出五类图
-│   ├── schema <type|common>        IR 的 JSON Schema（宿主据此生成 IR；没有 MCP 等价工具）
+│   ├── schema <type|common>        IR 的 JSON Schema（IR 是全自动派生，schema 只作核对/调试）
 │   ├── validate <type> <ir.json>   校验 IR（schema + 布局）
 │   ├── render <type> <ir.json>     渲染为自包含 HTML（--book/--module 归到书内）
-│   └── from-team <team_id>         由团队定义自动派生工作流图（IR 是纯函数产物，零手写）
+│   ├── from-team <team_id>         由团队定义自动派生工作流图（IR 是纯函数产物，零手写）
+│   ├── from-graph <type> <project> 由代码图谱派生 architecture|sequence|dataflow（--top/--limit）
+│   └── from-state [--title <t>]    由 Prism 任务状态机派生生命周期图（14 态 36 转移）
 │
 ├── graph                   代码图谱（Python 版 graphify）
 │   ├── build <project>     建图（graphify <root> + cluster-only --no-label，零 LLM）
@@ -139,13 +154,16 @@ prism
 
 ## 2. MCP 工具清单
 
-> **v6.2 取齐说明**（2026-09-12）：工具总数 = **46**（`packages/server/src/mcp/server.ts` 内
+> **v6.2 取齐说明**（2026-09-12）：工具总数 = **47**（`packages/server/src/mcp/server.ts` 内
 > `name: 'prism_*'` 逐条计数）。v4 由 31 增至 35；v5 多项目图谱合并（F-C2）新增 `prism_graph_merge`
 > （代码图谱 7 → 8）到 **36**；v6 把「角色 / 团队」补齐成**增删改查**（`new|edit|rm` 在 CLI / HTTP / MCP
 > 三入口**同名同位**）——新增 `prism_role_new|edit|rm`、`prism_team_list|edit|rm|render` 共 7 个，
 > 并把 `prism_team_create` **更名**为 `prism_team_new`（团队与角色对称）到 **43**；
 > v6.2 补上 **Skill 写入口**（`prism_skill_list|install|uninstall`）——此前宿主 agent
 > 无法经 MCP 装 Skill，是接口审查中唯一确认的**真能力缺口**，补齐后 skill 装/卸三入口齐。
+> **v10 架构图谱接 MCP**：新增 `prism_arch_generate`（五类图统一入口）到 **47**，架构图谱
+> 从「CLI-only」升级为**双入口**；同时四类图（architecture / sequence / lifecycle / dataflow）
+> 的 IR 由「宿主按 schema 手搓」改为 **Prism 纯函数派生**，`prism arch schema` 降级为核对/调试用途。
 > 下文原文缺漏的工具已在各节补齐；
 > `❌ 未实现` = 全仓 grep 0 命中、**从未存在**的工具。
 >
@@ -188,7 +206,17 @@ prism
 | `prism_graph_status` | 陈旧状态（原文漏列） |
 | `prism_graph_merge` | 多项目图谱合并（v5 / F-C2 新增） |
 
-### 2.3 团队与角色（13）
+### 2.3 架构图谱（1）
+
+> **v10 新增**：架构图谱此前只有 CLI/HTTP，**没有 MCP 工具**——宿主在会话里拿到图谱数据后
+> 无法直接出图，只能反过来指导用户去敲 CLI。补 `prism_arch_generate` 一个统一入口即可闭环
+> （五类图共用；IR 全部由 Prism 纯函数派生，宿主不再产 IR）。
+
+| 工具 | 作用 |
+| :--- | :--- |
+| `prism_arch_generate` | 由 `type` 分派生成五类图并落盘 —— `workflow`（需 `team`）、`architecture`/`sequence`/`dataflow`（需已注册 `project`）、`lifecycle`（无入参）。返回 `{ type, html, ir, bytes, title, subtitle }`（可选 `out` 指定落点，缺省落 `<PRISM_HOME>/archify/<type>/<name>.html`） |
+
+### 2.4 团队与角色（13）
 
 > **v6**：补齐增删改——`new|edit|rm` 与 CLI（`prism role|team new|edit|rm`）、
 > HTTP（`POST|PATCH|DELETE /api/roles[/:name]`、`POST|PATCH|DELETE /api/teams[/:id]`）**同名同位**。
@@ -226,13 +254,13 @@ prism
 > 其余不对称属**取舍**——文档不应把它们描述成「三入口全等」。
 > 三入口真正严格对齐的是**动词与落盘语义**：`new|edit|rm` ↔ `POST|PATCH|DELETE`，同一实现单点。
 
-### 2.4 上下文（1）
+### 2.5 上下文（1）
 
 | 工具 | 作用 |
 | :--- | :--- |
 | `prism_context_pack` | 生成带预算的上下文包（v4 增 `layers/books/symbols/max_excerpt_chars`） |
 
-### 2.5 Skill（4）
+### 2.6 Skill（4）
 
 | 工具 | 作用 |
 | :--- | :--- |
@@ -241,7 +269,7 @@ prism
 | `prism_skill_install` | 安装内置 Skill 到显式 `skills_dir`（人写的同名 Skill 不覆盖，写 `.prism-new` 供对比；v6.2 新增） |
 | `prism_skill_uninstall` | 卸载 Skill（**只删 Prism 产物**；人写的保留并记入 `kept`；v6.2 新增） |
 
-### 2.6 工作队列 ⚠ 已废弃（0）
+### 2.7 工作队列 ⚠ 已废弃（0）
 
 | 工具 | 作用 |
 | :--- | :--- |
@@ -249,7 +277,7 @@ prism
 | `prism_work_claim` | 认领  ❌ 未实现 |
 | `prism_work_complete` | 回填  ❌ 未实现 |
 
-### 2.7 任务台账（3）
+### 2.8 任务台账（3）
 
 | 工具 | 作用 |
 | :--- | :--- |
@@ -257,7 +285,7 @@ prism
 | `prism_task_report` | 回报状态（可一步沉淀） |
 | `prism_task_status` | 查询状态 |
 
-### 2.8 宿主声明 / 会话 ❌ 未实现（0）
+### 2.9 宿主声明 / 会话 ❌ 未实现（0）
 
 | 工具 | 作用 |
 | :--- | :--- |

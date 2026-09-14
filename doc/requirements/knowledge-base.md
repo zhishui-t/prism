@@ -35,7 +35,7 @@
 | D8 | 设计公理 | **分类分层给定位、图谱联系给发现**，两套正交系统（图书馆隐喻） |
 | D9 | 书与 Graphify 语料粒度 | **一本书一个语料**；模块级/书级图谱是边表的过滤视图 |
 | D10 | Archify 分发 | **vendor 进仓库**：CLI 自包含零运行时依赖，按路径调用 |
-| D11 | 图表自动生成范围 | ~~五类图全自动~~ **实况（2026-09-14）**：仅 `workflow` 有生成器（`arch from-team`，纯函数）；其余四类由宿主按 `arch schema <type>` 取契约生成（§4.4） |
+| D11 | 图表自动生成范围 | **五类图全自动已落地（2026-09-14）**：五类图 IR 一律由 agents 包纯函数派生（`arch from-team` / `arch from-graph` / `arch from-state`），宿主与用户都不产 IR；`arch schema` 降级为核对/调试（§4.4） |
 | D12 | 中文检索实现 | **bigram 切分 + unicode61**（trigram 检索不了两字中文词，实测修正） |
 
 ---
@@ -263,27 +263,44 @@ deposited_by:               # 落库来源记录（非审核）
 
 **五类图与 IR 规格**（已从 `tt-a1i/archify` 仓库 schema 核准）：
 
-| diagram_type | 结构数组（item 必填） | Prism 数据源 | 生成方式 | 生成器实况（2026-09-14 核对） |
+| diagram_type | 结构数组（item 必填） | Prism 数据源 | 生成方式 | 生成器实况（2026-09-14 收口） |
 | :--- | :--- | :--- | :--- | :--- |
-| `architecture` | `components[id,type,label]` / `boundaries[kind,label,wraps]` / `connections[from,to]` | 代码图谱模块聚类 + 依赖边 | **确定性，零 LLM** | ⏳ **无生成器**——IR 由宿主按 `prism arch schema architecture` 取契约产出 |
-| `sequence` | `participants[id,type,label]` / `messages[from,to,y,label]` | 代码图谱 `CALLS` 边 + Graphify `flows` | **确定性，零 LLM** | ⏳ **无生成器**——IR 由宿主按 `prism arch schema <type>` 取契约产出 |
-| `lifecycle` | `lanes[id,label]` / `states[id,type,label,lane,col]` / `transitions[from,to]` | 任务状态机（14 态 32 转移）等 | **确定性，零 LLM** | ⏳ **无生成器**——IR 由宿主按 `prism arch schema <type>` 取契约产出 |
-| `dataflow` | `stages[label]` / `nodes[id,type,label,stage,row]` / `flows[from,to,label]` | 图谱数据读写/存储边 | 半确定性（复杂语义走队列） | ⏳ **无生成器**——IR 由宿主按 `prism arch schema <type>` 取契约产出 |
-| `workflow` | `lanes[id,label]` / `nodes[id,lane,col,type,label]` / `edges[from,to]` | 团队 DAG 工作流定义 | 半确定性（业务语义走队列） | ✅ **已实现**：`prism arch from-team <team_id>` |
+| `architecture` | `components[id,type,label]` / `boundaries[kind,label,wraps]` / `connections[from,to]` | 代码图谱模块聚类 + 依赖边 | **确定性，零 LLM** | ✅ **已实现**：`prism arch from-graph architecture <project>`（`buildArchitectureIr`） |
+| `sequence` | `participants[id,type,label]` / `messages[from,to,y,label]` | 代码图谱跨文件 `calls` 边 | **确定性，零 LLM** | ✅ **已实现**：`prism arch from-graph sequence <project>`（`buildSequenceIr`） |
+| `lifecycle` | `lanes[id,label]` / `states[id,type,label,lane,col]` / `transitions[from,to]` | 任务状态机（14 态 **36 转移**） | **确定性，零 LLM** | ✅ **已实现**：`prism arch from-state`（`buildTaskLifecycleIr`，36 条全保留） |
+| `dataflow` | `stages[label]` / `nodes[id,type,label,stage,row]` / `flows[from,to,label]` | 代码图谱目录角色分层 + 跨层依赖边（**改口径**，见下） | **确定性，零 LLM** | ✅ **已实现**：`prism arch from-graph dataflow <project>`（`buildDataflowIr`） |
+| `workflow` | `lanes[id,label]` / `nodes[id,lane,col,type,label]` / `edges[from,to]` | 团队 DAG 工作流定义 | 半确定性（业务语义走队列） | ✅ **已实现**：`prism arch from-team <team_id>`（`buildTeamWorkflowIr`） |
 
-> **⚠ 表格最后一列的读法（2026-09-14 更新）**：上表「Prism 数据源 / 生成方式」是 **D11 的设计蓝图**，
-> 不等于已实现。当前**只有 `workflow` 一类有生成器**（`buildTeamWorkflowIr`，agents 包，
-> **纯函数**：零 IO / 零时钟 / 零随机，同输入必同字节——否则 sidecar 的 `ir_hash` 失去意义）。
-> 其余四类的 IR **由宿主按契约产出**：`prism arch schema <type>`（可选 `common`）取 JSON Schema，
-> 用宿主能力把图谱数据映射成 IR，再走 `prism arch validate <type> <ir.json>` →
-> `prism arch render <type> <ir.json>`。
+> **⚠ 表格最后一列的读法（2026-09-14 收口 —— 五类图全部落地）**：上表「Prism 数据源 / 生成方式」是
+> **D11 的设计蓝图**。**2026-09-14 起五类图全部有生成器**，且全部是同一种东西：agents 包里的
+> **纯函数**（零 IO / 零时钟 / 零随机，同输入必同字节——否则 sidecar 的 `ir_hash` 失去意义）。
+> 读盘归 `@prism/server`（`readCodeGraph` / `ProjectRegistry`），派生归 `@prism/agents`，分层不混。
 >
-> **这不是「让用户手写 JSON」**——IR 是派生视图（R7），机械映射是宿主该消掉的活；
-> `arch schema` 这个口子就是为了让宿主拿得到契约（否则它只能翻 vendored 目录，打包后连路径都摸不到）。
-> 补生成器时请同时更新本列，别让「全自动」继续停留在蓝图口径。
+> **入口一览**：
+> - CLI：`arch from-team <team_id>` / `arch from-graph <architecture|sequence|dataflow> <project>` / `arch from-state`
+> - MCP：`prism_arch_generate`（统一入口，按 `type` 分派；`workflow` 传 `team`，三类图谱传 `project`，`lifecycle` 无入参）
+> - HTTP：`POST /api/arch/from-team`（另有通用 `POST /api/arch/render` 收已算好的 IR）
 >
-> **IR 是派生视图（红线 R7）**：团队定义才是真相；`arch from-team` 每次重生成，不把 IR 当手改的源。
-> 产物三件套 = `*.html`（渲染）+ `*.ir.json`（IR 源）+ `*.meta.json`（sidecar：作用域/版本/`ir_hash`）。
+> `prism arch schema <type>` **保留但降级**：从「生成 IR 的依据」变成「核对/调试契约」。
+> 手工产 IR 的路径（validate → render 收 `ir.json`）仍在，供排障或特殊形状使用，但**不是常规流程**。
+>
+> **两处口径说明（都不是缺陷）**：
+> 1. **`dataflow` 改口径为「依赖流向视图」**：实测四种真实图谱（httpx / karpathy-repos / mixed-corpus /
+>    rsl-siege-manager）的关系全集 = `contains / imports / imports_from / method / re_exports / calls /
+>    uses / inherits / rationale_for`——**没有 reads/writes 类边**，画不出真正的数据读写流。
+>    故按**目录角色分层**（入口 / 前端 / 后端 / 数据 / 脚本 / 测试）+ **依赖边跨层流动**建图，
+>    口径写进 `meta.subtitle`。层次压缩后**只保留命中层**（保持原相对顺序）；命中层 < 2 时**明确拒画**。
+> 2. **真实图谱上「有理由的拒画」是预期行为**：同目录扁平仓库（无处分层）、图谱无跨文件 `calls` 边
+>    （sequence 无话可说）、层数不足两级（dataflow）——此时**报错并给出理由**，绝不产出坏图。
+>
+> **生成器已内化渲染器硬约束**（使用者不必再知道这些）：节点文本不换行须自收敛、连线侧向是**方向契约**
+> 而非位置（给了 `via` 即跳过 `endpoint-side-direction`）、`edge-through-node` **无法靠命名通道避让**
+> （唯一解是自给 `via`）、标签默认落线段中点常会压节点（须自定 `labelAt`）、各类最短段阈值
+> （architecture 24px / dataflow 34px / lifecycle 32px / workflow 28px）、同层节点净空 10px。
+> 内部用「Hanan 网格 + Dijkstra（折点优先，`cost = bends * 1e6 + length` 严格字典序）」正交布线自动求解。
+>
+> **IR 是派生视图（红线 R7）**：团队定义 / 代码图谱 / 任务状态机才是真相；生成器每次重跑，不把 IR
+> 当手改的源。产物三件套 = `*.html`（渲染）+ `*.ir.json`（IR 源）+ `*.meta.json`（sidecar：作用域/版本/`ir_hash`）。
 
 **关键字段**：
 

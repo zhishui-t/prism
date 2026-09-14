@@ -1757,6 +1757,54 @@ async function main() {
         archHttpBad.status === 404 && String(archHttpBad.body?.error?.code ?? '') === 'not_found',
         `status=${archHttpBad.status}`,
       )
+
+      // ---------- F-C4-v10 五类图全自动派生（from-state 双入口 + from-graph 错误面）----------
+      const lifeHtml = join(archOut, 'lifecycle.html')
+      const lifeArgs = ['arch', 'from-state', '--out', lifeHtml, '--json']
+      const lifeCli = await cli(lifeArgs, env)
+      const lifeCliV = jparse(lifeCli).value ?? {}
+      const lifeIrPath = join(archOut, 'lifecycle.ir.json')
+      let lifeTransitionCount = -1
+      try {
+        const parsed = JSON.parse(await readFile(lifeIrPath, 'utf-8'))
+        lifeTransitionCount = Array.isArray(parsed?.transitions) ? parsed.transitions.length : -1
+      } catch {
+        lifeTransitionCount = -1
+      }
+      check(
+        '20.19 F-C4-v10 CLI arch from-state → 生命周期图三件套齐备（14 态 36 转移全保留）',
+        lifeCli.code === 0 &&
+          lifeCliV.type === 'lifecycle' &&
+          lifeTransitionCount === 36 &&
+          (await fileExists(lifeHtml)) &&
+          (await fileExists(join(archOut, 'lifecycle.meta.json'))),
+        `code=${lifeCli.code} transitions=${lifeTransitionCount}`,
+      )
+      const lifeIrFirst = await readFile(lifeIrPath, 'utf-8')
+      await cli(lifeArgs, env)
+      const lifeIrSecond = await readFile(lifeIrPath, 'utf-8')
+      check(
+        '20.20 F-C4-v10 lifecycle IR 是纯函数派生物：两次生成逐字节一致（幂等）',
+        lifeIrFirst === lifeIrSecond && !/created_at|updated_at/.test(lifeIrFirst),
+        `bytes=${lifeIrFirst.length}`,
+      )
+      const graphBad = await cli(['arch', 'from-graph', 'architecture', 'no-such-project', '--json'], env)
+      check(
+        '20.21 F-C4-v10 from-graph 未注册项目 → 明确失败（不静默产出空图）',
+        graphBad.code !== 0,
+        `code=${graphBad.code}`,
+      )
+      const mcpArchTool = mcpTools.find((t) => t.name === 'prism_arch_generate')
+      const mcpArchV =
+        mcpArchTool !== undefined ? await mcpArchTool.call({ type: 'lifecycle' }) : {}
+      check(
+        '20.22 F-C4-v10 MCP prism_arch_generate 统一入口可调（lifecycle 无入参）',
+        mcpArchTool !== undefined &&
+          mcpArchV.type === 'lifecycle' &&
+          typeof mcpArchV.html === 'string' &&
+          (await fileExists(mcpArchV.html)),
+        `html=${mcpArchV.html ?? 'n/a'}`,
+      )
     }
 
     // ===== 9. 真实宿主零污染 =====
