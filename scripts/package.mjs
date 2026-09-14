@@ -30,6 +30,7 @@
  *   tarball 不携带 Python 环境，bin/prism.js 启动时会检测并给出提示。
  */
 import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -214,10 +215,25 @@ async function main() {
     },
   })
 
+  // 7a) 随包发 **small 向量模型**（26MB，CPU 默认档）——解压即用，无需下载。
+  //     `large` 档（600MB）仍由 `prism embedding install` 按需下载（有 GPU 才装）。
+  //     这是「解压 → 开箱可用语义检索」的关键一步：没有它，目标机必须等下载完才能用向量。
+  const smallModel = join(ROOT, '3rd', 'llama-runtime', 'models', 'bge-small-zh-v1.5-q8_0.gguf')
+  if (existsSync(smallModel)) {
+    const destModels = join(stageDir, '3rd', 'llama-runtime', 'models')
+    await mkdir(destModels, { recursive: true })
+    await cp(smallModel, join(destModels, 'bge-small-zh-v1.5-q8_0.gguf'))
+    log(`随包发 small 向量模型（26MB）→ 解压即用`)
+  } else {
+    log(`⚠ 未找到 small 模型（${smallModel}）——跳过随包发；目标机需 prism embedding install 下载`)
+  }
+
   // 7b) 三方件安装脚本（`prism embedding install` / anydoc 转换依赖；小文件，随包发）
+  //     setup-embedding 依赖 archive.mjs（解压 llama.cpp 预编译包）+ python.mjs（Windows 解压 zipfile 用）
   await mkdir(join(stageDir, 'scripts'), { recursive: true })
-  for (const script of ['setup-embedding.mjs', 'setup-anydoc.mjs']) {
-    await cp(join(ROOT, 'scripts', script), join(stageDir, 'scripts', script))
+  for (const script of ['setup-embedding.mjs', 'setup-anydoc.mjs', 'archive.mjs', 'python.mjs']) {
+    const src = join(ROOT, 'scripts', script)
+    if (existsSync(src)) await cp(src, join(stageDir, 'scripts', script))
   }
 
   // 8) 文档与许可
