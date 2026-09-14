@@ -1,6 +1,6 @@
 {
   "name": "prism",
-  "version": "0.1.0-alpha",
+  "version": "0.1.0-alpha.2",
   "private": true,
   "type": "module",
   "description": "Prism（棱镜）—— 企业级智能研发效能平台：CLI + 控制台，内置知识库 / 知识图谱 / 代码图谱 / 架构图谱 / 专家 Agent / Agent-Team / Skill 分层",
@@ -22,6 +22,7 @@
     "3rd:init": "git submodule update --init --recursive",
     "3rd:setup": "node scripts/setup-anydoc.mjs && node scripts/setup-embedding.mjs",
     "package": "node scripts/package.mjs",
+    "deploy": "node scripts/deploy.mjs",
     "release": "node scripts/release.mjs",
     "test:e2e": "node test/run-e2e.mjs",
     "test:package": "node scripts/smoke-package.mjs"

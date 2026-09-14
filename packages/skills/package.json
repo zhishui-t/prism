@@ -1,6 +1,6 @@
 {
   "name": "@prism/skills",
-  "version": "0.1.0-alpha",
+  "version": "0.1.0-alpha.2",
   "private": true,
   "type": "module",
   "description": "Prism Skill 管理：内置 skill（prism 元 skill）+ SKILL.md 校验 + 安装（冲突策略见 design-v3 §5）",
