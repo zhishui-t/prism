@@ -48,7 +48,7 @@
 prism
 ├── init                    接入初始化（注册 MCP + 复制 Skill + 建目录骨架）
 ├── uninit                  撤销接入  ❌ 未实现
-├── serve                   启动服务（控制台 + MCP HTTP）
+├── serve                   控制台（HTTP API + web UI）：前台起；--ensure 后台幂等 / --check 查状态 / --stop 停
 ├── doctor                  环境自检（ZCode 探测、目录、权限、版本）
 │
 ├── harness
@@ -312,6 +312,14 @@ prism
 > MCP 传输**只实现了 stdio**（`packages/server/src/mcp/server.ts:1314/1358`，
 > `node dist/mcp/server.js`），**无 `/mcp` HTTP 端点**（`packages/server/src/app.ts:140-141` 只注册了
 > `/studio/:project`）；Studio 静态路由**已实现**（`http/routes/studio.ts:55`）。
+>
+> **v11（2026-09-14）宿主拉起机制**：既然 MCP 只有 stdio，**接入就不需要「开机自启」**——
+> 宿主启动时自己 spawn `node dist/mcp/server.js`，宿主退出即结束。常见的「重启后 Prism 不启动」
+> 不是缺自启，而是**注册路径漂了**（部署目录被清理，或指到了开发布局 `packages/server/dist/…`）。
+> 故部署落点改为**恒定路径** `<PRISM_HOME>/runtime/`（`pnpm run deploy`）——升级只换目录内容，
+> **注册不需要动**。控制台（HTTP + web UI）是另一件事，它需要常驻，靠两条路：
+> **MCP 启动时顺带 `ensure` 拉起**（`serve --ensure`，幂等，`PRISM_SERVE_AUTOSTART=0` 可关）
+> + **登录自启**（`deploy` 装进启动文件夹的 `PrismConsole.vbs`）。
 
 | # | 问题 | 状态 |
 | :--- | :--- | :--- |

@@ -57,13 +57,27 @@ Prism 是本机的**研发效能控制面**：知识库、知识图谱、代码�
 \`\`\`bash
 prism init --harness-root <宿主根>   # ①探测 ②建骨架 ③装本 Skill ④写 MCP 注册 ⑤提示重启
 prism doctor                       # 自检：Node 版本 / 目录 / DB / graphify / 端口
-prism serve --port 7777            # 起 HTTP 服务 + 控制台
+prism serve --ensure               # 后台幂等起控制台（已在跑则复用）；--check 看状态 / --stop 停它
 \`\`\`
 
 **验收标准**（\`prism doctor\` 应全绿）：
 - Node ≥ 22.5；\`PRISM_HOME\`（默认 \`~/.prism\`）可写；
 - \`graphify\` 可调用（\`3rd/graphify\` 或 PATH）；
 - MCP 注册已写入宿主配置；Skill 已装到 \`skills_dir\`。
+
+> **「重启后 Prism 不启动」怎么解（最容易走偏的一节）**
+>
+> Prism 接进宿主用的是 **MCP 的 stdio 形态**（注册里是 \`command: node\` + \`args: [server.js]\`）：
+> **宿主启动时自己拉起这个进程，宿主退出它自动结束**——**所以本来就不需要配开机自启**。
+> 真正的常见故障是**注册指向的路径失效**（部署目录被清理，或指到了开发布局
+> \`packages/server/dist/…\` 而包里实际是 \`node_modules/@prism/server/dist/…\`）→ 宿主永远拉不起来。
+> 修法就一条：\`pnpm run deploy\` —— 把包装到**恒定路径** \`<PRISM_HOME>/runtime/\` 并校正注册；
+> 之后升级只换目录内容，**注册路径永不变**。
+>
+> 控制台（web UI，默认 127.0.0.1:7777）是**另一回事**——它要常驻，有两条路：
+> **① 宿主启动时 MCP 顺带 \`ensure\` 拉起**（零配置）；**② 登录自启**（\`deploy\` 会装进启动文件夹）。
+> 关掉自动拉起：\`PRISM_SERVE_AUTOSTART=0\`；换端口：\`PRISM_SERVE_PORT=<n>\`；
+> 查状态 / 停止：\`prism serve --check\` / \`prism serve --stop\`。
 
 **装完必须重启宿主**——MCP 工具与 Skill 在会话启动时加载，当前会话看不到。
 **首次建图**：\`prism graph build <项目根> --name <项目名>\`（Python graphify，零 LLM）。
@@ -139,7 +153,7 @@ prism serve --port 7777            # 起 HTTP 服务 + 控制台
 
 \`\`\`
 prism init [--harness-root <宿主根>] [--yes]     # 接入：注册 MCP + 装 Skill + 建骨架
-prism serve [--port 7777]                     # HTTP API + 控制台
+prism serve [--port 7777]|--ensure|--check|--stop  # 控制台：前台 / 后台幂等 / 查状态 / 停
 prism doctor                                   # 环境自检
 prism harness list | show                      # 运行时宿主适配器
 prism kb     import/sync/search/get/tree/stats/graph/path/remove/conflicts/resolve/export/reindex
@@ -606,7 +620,7 @@ prism_arch_generate { type: 'lifecycle' }
 \`\`\`bash
 prism init --harness-root <宿主根>    # ①探测 ②建骨架 ③装 Skill ④写 MCP 注册 ⑤提示重启
 prism doctor                        # 环境自检（Node/目录/DB/graphify/embedding/端口）
-prism serve --port 7777             # HTTP API + 控制台（只读控制面）
+prism serve --ensure                # 后台幂等起控制台（只读控制面）
 \`\`\`
 
 **写守卫**：目标为默认宿主目录且未显式指定 → 拒绝（\`guard_required\`）；加 \`--yes\` 或显式 \`--harness-root\`。
@@ -653,17 +667,31 @@ skills_dir: ~/.zcode/skills
 ## 服务与控制台
 
 \`\`\`bash
-prism serve --port 7777
+prism serve              # 前台起（Ctrl+C 停）
+prism serve --ensure     # 后台幂等起（已在跑则复用）——宿主启动与登录自启走的就是这条
+prism serve --check      # 查状态（退出码 0=在跑 / 1=没跑）
+prism serve --stop       # 停掉后台那份
 \`\`\`
+
+> \`--ensure\` 是**幂等**的：多处并发调用（宿主 + 登录自启 + 手工）只有第一次真起服务，其余复用。
+> 端口被**非 Prism** 程序占用时会明确拒绝，不会把别人的服务当成自己的。
+> 日志 \`<PRISM_HOME>/state/serve-<port>.log\`；状态记录 \`<PRISM_HOME>/state/serve-<port>.json\`。
+> 关掉宿主自动拉起：\`PRISM_SERVE_AUTOSTART=0\`。
 
 控制台页面：知识库 / 代码图谱 / 角色 / 团队 / 技能 / 任务中心 / 项目台账。
 （知识图谱与架构图谱**没有一级页**——它们归入「知识库 → 点开一本书 → 详情面板」。）
 
-## 打包
+## 打包与部署
 
 \`\`\`bash
-pnpm run package      # → dist/prism-<version>_<platform>.tgz（按平台分，含三方运行时 + 最小向量模型，解压即用）
+pnpm run package      # → dist/prism-<version>_<platform>.tgz（按平台分，含三方运行时 + 最小向量模型）
+pnpm run deploy       # 装到 <PRISM_HOME>/runtime/ + 校正宿主 MCP 注册 + 装登录自启
+pnpm run release      # 发 GitHub Release（复用本机 git 凭据，无需手工造 PAT）
 \`\`\`
+
+> **deploy 的落点是恒定路径**（\`<PRISM_HOME>/runtime/\`，不含版本号）——专门用来根治
+> 「升级或清理之后 MCP 注册变成死路径、宿主拉不起来」。升级流程固定为
+> \`pnpm run package && pnpm run deploy\`，**注册不需要动**。
 `,
   },
 ]

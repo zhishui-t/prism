@@ -87,6 +87,7 @@ prism embedding models      # 三档模型一览（small/default/large）
 ```bash
 pnpm run package       # 产出 dist/prism-<version>_<platform>.tgz
 pnpm run test:package  # 发行冒烟：打包 → 解压 → 在解压环境验证能力
+pnpm run deploy        # 装到 <PRISM_HOME>/runtime/ + 校正宿主 MCP 注册 + 装登录自启
 ```
 
 产物**按平台分别发布**——包内自带本平台的三方运行时与最小向量模型：
@@ -105,8 +106,23 @@ pnpm run test:package  # 发行冒烟：打包 → 解压 → 在解压环境验
 tar -xzf dist/prism-0.1.0-alpha_win_x64.tgz && cd prism-0.1.0-alpha_win_x64
 node bin/prism.js --version   # prism 0.1.0-alpha
 node bin/prism.js doctor      # 三方件 + 向量运行时一次自检
-node bin/prism.js serve
+node bin/prism.js serve --ensure   # 后台起控制台（--check 看状态 / --stop 停它）
 ```
+
+**装到本机并接上宿主**只需一条命令（推荐，取代手工解压 + 手改注册）：
+
+```bash
+pnpm run deploy
+```
+
+它做四件事：解包到**恒定路径** `~/.prism/runtime/`（不含版本号 → 升级只换目录内容，**MCP 注册不用动**）、
+自检 `bin/prism.js --version`（跑不起来自动回滚）、校正宿主 MCP 注册、把登录自启装进「启动文件夹」。
+
+> **关于「重启后 Prism 不启动」**：Prism 接宿主走的是 **MCP 的 stdio 形态**——宿主启动时自己拉起、
+> 宿主退出时自动结束，**本来就不需要开机自启**。真正会出问题的是**注册指向的路径失效**
+> （部署目录被清理，或指到了开发布局 `packages/server/dist/…`）。`deploy` 用恒定路径就是为根治它。
+> 控制台（web UI，默认 `127.0.0.1:7777`）需要常驻，靠两条路：**宿主启动时 MCP 顺带 `ensure` 拉起**
+> （零配置）+ **登录自启**（`deploy` 装的启动项）。关掉自动拉起：`PRISM_SERVE_AUTOSTART=0`。
 
 包内含：应用与 CLI、控制台静态资源、`3rd/archify` 与 `3rd/graphify` 源码（免构建）、
 `3rd/llama-runtime/{bin,bin-vulkan,models/bge-small-zh-v1.5-q8_0.gguf}`、
@@ -137,7 +153,7 @@ prism/
 │   ├── knowledge/     # 层→书→模块→条目 · FTS5(bigram)+向量混合检索 · 版次制 · 知识图谱边表 · reindex
 │   ├── agents/        # 角色/团队定义解析校验渲染 · harness 适配器 + 运行期插件 · 目录解析
 │   ├── skills/        # Prism 内置 Skill · 校验 · 安装到宿主 Skill 目录
-│   ├── server/        # HTTP API · MCP(46 工具) · Graphify/Archify/embedding 封装 · 控制台静态服务
+│   ├── server/        # HTTP API · MCP(47 工具) · Graphify/Archify/embedding 封装 · 控制台静态服务
 │   └── cli/           # prism 命令行（init/serve/doctor/kb/graph/arch/role/team/skill/task/harness/embedding/project/inject/audit）
 ├── apps/web/          # React 控制台（7 页 · 浅/深主题 · 中/英 · hash 深链）
 ├── 3rd/               # git submodule（锁定上游发布 tag，见 3rd/README.md）

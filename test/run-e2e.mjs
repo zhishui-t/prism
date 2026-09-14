@@ -12,6 +12,7 @@
  */
 import { spawn } from 'node:child_process'
 import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { createServer as createHttpServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -20,6 +21,10 @@ const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)))
 const CLI = join(ROOT, 'packages', 'cli', 'dist', 'index.js')
 const REAL_ZCODE = join(process.env.USERPROFILE ?? process.env.HOME ?? '', '.zcode', 'agents')
 const PORT = 7798
+// 段 21：`serve --ensure` 用的端口（与进程内 server 的 7798 错开，避免互相抢端口）。
+const SERVE_PORT = 7801
+// 段 21.8 用：故意占住它，验证「端口被别的程序占用」时明确拒绝。
+const SERVE_SQUAT_PORT = 7802
 
 const KEEP = process.argv.includes('--keep')
 
@@ -1805,6 +1810,152 @@ async function main() {
           (await fileExists(mcpArchV.html)),
         `html=${mcpArchV.html ?? 'n/a'}`,
       )
+    }
+
+    // ===== 21. serve 后台幂等拉起（--ensure / --check / --stop；v11 宿主按需启动机制） =====
+    // 覆盖「宿主用的时候自动拉起来」的**人工入口**：MCP server 启动时调的就是同一套
+    // `ensureServe`，两条路共用实现，故这里验的是同一份逻辑。
+    {
+      const jparse = (res) => {
+        try {
+          return JSON.parse(res.stdout)
+        } catch {
+          return {}
+        }
+      }
+      const fileExists = async (p) => {
+        try {
+          await readFile(p)
+          return true
+        } catch {
+          return false
+        }
+      }
+      const serve = (extra) => cli(['serve', '--port', String(SERVE_PORT), '--home', home, ...extra], env)
+      const base21 = `http://127.0.0.1:${SERVE_PORT}`
+      const stateFile = join(home, 'state', `serve-${SERVE_PORT}.json`)
+      const logFile = join(home, 'state', `serve-${SERVE_PORT}.log`)
+
+      try {
+        // 21.1 未运行：`--check` 的**退出码就是结论**（脚本/宿主靠它判断，不解析文本）
+        const before = await serve(['--check', '--json'])
+        const beforeV = jparse(before).value ?? {}
+        check(
+          '21.1 serve --check 未运行 → rc=1 + alive=false（退出码即结论）',
+          before.code === 1 && beforeV.alive === false,
+          `rc=${before.code} alive=${String(beforeV.alive)}`,
+        )
+
+        // 21.2 --ensure：后台拉起（detached，父进程退出不影响它）
+        const first = await serve(['--ensure'])
+        check(
+          '21.2 serve --ensure 后台拉起成功（rc=0 + 报出 URL 与日志路径）',
+          first.code === 0 && first.stdout.includes('已在后台启动控制台') && first.stdout.includes(base21),
+          first.stderr.trim().slice(0, 160) || first.stdout.trim().slice(0, 160),
+        )
+
+        // 21.3 不信 CLI 的一面之词：直接 HTTP 探活，确认后台进程真的在服务
+        const health21 = await fetchJson(`${base21}/api/health`)
+        check(
+          '21.3 后台进程真的在服务（/api/health 信封 ok + version 为字符串）',
+          health21.status === 200 && health21.body.ok === true && typeof health21.body.value.version === 'string',
+          `status=${health21.status} version=${String(health21.body?.value?.version)}`,
+        )
+
+        // 21.4 复探：rc=0，且 CLI 报的 version 与 HTTP 同源
+        const after = await serve(['--check', '--json'])
+        const afterV = jparse(after).value ?? {}
+        check(
+          '21.4 serve --check 在跑 → rc=0 且 version 与 HTTP /api/health 同源',
+          after.code === 0 && afterV.alive === true && afterV.version === health21.body.value.version,
+          `rc=${after.code} version=${String(afterV.version)}`,
+        )
+
+        // 21.5 状态/日志落盘：`--stop` 靠这份 pid 记录定位进程（不扫端口杀进程）
+        let rec = {}
+        try {
+          rec = JSON.parse(await readFile(stateFile, 'utf-8'))
+        } catch {
+          rec = {}
+        }
+        const logWritten = await fileExists(logFile)
+        check(
+          '21.5 状态文件含 pid/host/port/startedAt + 日志文件已建',
+          typeof rec.pid === 'number' &&
+            rec.host === '127.0.0.1' &&
+            rec.port === SERVE_PORT &&
+            typeof rec.startedAt === 'string' &&
+            logWritten,
+          `pid=${String(rec.pid)} log=${logWritten}`,
+        )
+
+        // 21.6 幂等：已在跑则**复用**——多宿主 / 计划任务并发调用是安全的
+        const again = await serve(['--ensure'])
+        check(
+          '21.6 serve --ensure 幂等：已在跑 → 复用（不重复拉进程）',
+          again.code === 0 && again.stdout.includes('已在运行') && !again.stdout.includes('已在后台启动'),
+          again.stdout.trim().slice(0, 140),
+        )
+        const health22 = await fetchJson(`${base21}/api/health`)
+        check(
+          '21.7 幂等后仍是同一个服务（版本未变，没被重启）',
+          health22.status === 200 && health22.body.value.version === health21.body.value.version,
+        )
+
+        // 21.8 端口被**别的程序**占用 → 明确拒绝：既不误判成自己的服务，也不去杀它
+        // 用一个「回 200 但不是 Prism 信封」的真 HTTP 服务来占位——必须是能正常收发的
+        // HTTP 服务：裸 TCP server 在探测方断开时会抛 ECONNRESET，把 e2e 进程整个带崩。
+        const squatter = createHttpServer((_req, res) => {
+          res.writeHead(200, { 'content-type': 'application/json' })
+          res.end('{"service":"someone-else"}')
+        })
+        squatter.on('clientError', (_err, socket) => socket.destroy())
+        await new Promise((resolveListen, rejectListen) => {
+          squatter.once('error', rejectListen)
+          squatter.listen(SERVE_SQUAT_PORT, '127.0.0.1', () => {
+            squatter.off('error', rejectListen)
+            squatter.on('error', () => undefined) // 探测方的中途断开不算用例失败
+            resolveListen()
+          })
+        })
+        try {
+          const refused = await cli(['serve', '--ensure', '--port', String(SERVE_SQUAT_PORT), '--home', home], env)
+          check(
+            '21.8 serve --ensure 撞上非 Prism 占用 → rc=1 + serve_ensure_failed（不误杀、不静默换端口）',
+            refused.code === 1 &&
+              refused.stderr.includes('serve_ensure_failed') &&
+              refused.stderr.includes('其他程序'),
+            refused.stderr.trim().slice(0, 170),
+          )
+        } finally {
+          // close() 会等 keep-alive 连接自己超时 → 先强制断开，否则收尾会挂住
+          squatter.closeAllConnections()
+          await new Promise((resolveClose) => squatter.close(resolveClose))
+        }
+
+        // 21.9 --stop：停掉 + 清状态记录 + 复查确已停止
+        const stopped = await serve(['--stop'])
+        const afterStop = await serve(['--check', '--json'])
+        check(
+          '21.9 serve --stop 停掉后台控制台（rc=0 + 清状态文件 + 复查 rc=1）',
+          stopped.code === 0 &&
+            stopped.stdout.includes('已停止后台控制台') &&
+            afterStop.code === 1 &&
+            !(await fileExists(stateFile)),
+          `rc=${stopped.code} recheck=${afterStop.code} stateExists=${await fileExists(stateFile)}`,
+        )
+
+        // 21.10 边界：没有记录时 --stop 不成功也不误杀（只认自己写的 pid）
+        const stopAgain = await serve(['--stop'])
+        check(
+          '21.10 serve --stop 边界：无记录 → rc=1 + 说明原因（不扫端口杀进程）',
+          stopAgain.code === 1 && stopAgain.stdout.includes('未停止'),
+          stopAgain.stdout.trim().slice(0, 150),
+        )
+      } finally {
+        // 无论断言成败都收尾：detached 子进程若漏停，会跨轮残留并污染后续运行
+        await serve(['--stop']).catch(() => undefined)
+      }
     }
 
     // ===== 9. 真实宿主零污染 =====
