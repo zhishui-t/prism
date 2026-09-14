@@ -1,3 +1,6 @@
+import { readFile } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
+
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { startServer } from '../src/app.js'
@@ -35,7 +38,12 @@ describe('kb 路由（注入内存桩，不依赖 @prism/knowledge）', () => {
     const body = (await res.json()) as { ok: boolean; value: Record<string, unknown> }
     expect(res.status).toBe(200)
     expect(body.ok).toBe(true)
-    expect(body.value.version).toBe('0.1.0')
+    // 版本必须等于**本包真实版本**——不要写死字面量：升版本（含 RC/alpha 后缀）时
+    // 写死的断言会红，而这条断言本意是「健康检查能报出版本」，不是「版本号恒为某值」。
+    const ownVersion = JSON.parse(
+      await readFile(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf-8'),
+    ).version as string
+    expect(body.value.version).toBe(ownVersion)
     expect(body.value.home).toBe(home)
     expect(Number(body.value.uptime)).toBeGreaterThanOrEqual(0)
   })

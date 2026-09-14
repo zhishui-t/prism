@@ -1,6 +1,7 @@
 import { createInterface } from 'node:readline'
 
 import { access, mkdir, writeFile } from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
@@ -1663,6 +1664,21 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
   })
 }
 
+/** 本包版本：读自身 package.json（MCP `initialize` 的 serverInfo 用）。
+ *  曾经硬编码 '0.1.0'，发版后与真实版本脱节——宿主据此做的版本判断会失真。
+ *  开发态（src/mcp/）与打包态（node_modules/@prism/server/dist/mcp/）到
+ *  package.json 的相对层级一致，都是上两级。 */
+const SERVER_VERSION = ((): string => {
+  try {
+    const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf-8')) as {
+      version?: string
+    }
+    return pkg.version ?? '0.0.0'
+  } catch {
+    return '0.0.0'
+  }
+})()
+
 /** 处理单条 JSON-RPC 请求（纯函数式，便于测试）。 */
 export async function handleRpcRequest(request: JsonRpcRequest, tools: McpTool[]): Promise<JsonRpcResponse | null> {
   const id = request.id ?? null
@@ -1685,7 +1701,7 @@ export async function handleRpcRequest(request: JsonRpcRequest, tools: McpTool[]
         protocolVersion:
           typeof request.params?.protocolVersion === 'string' ? request.params.protocolVersion : '2024-11-05',
         capabilities: { tools: {} },
-        serverInfo: { name: 'prism-mcp', version: '0.1.0' },
+        serverInfo: { name: 'prism-mcp', version: SERVER_VERSION },
       })
     case 'ping':
       return respond({})

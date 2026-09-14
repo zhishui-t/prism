@@ -1,3 +1,6 @@
+import { readFile } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
+
 import { describe, expect, it } from 'vitest'
 
 import { createMcpTools, handleRpcRequest } from '../src/mcp/server.js'
@@ -29,6 +32,12 @@ describe('MCP stdio（手写 JSON-RPC，design.md §4 最小 5 工具 + design-v
         capabilities: { tools: {} },
       },
     })
+    // serverInfo.version 必须是**本包真实版本**（曾硬编码 '0.1.0'，发版即脱节）
+    const ownVersion = JSON.parse(
+      await readFile(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf-8'),
+    ).version as string
+    const info = (res?.result as { serverInfo?: { version?: string } }).serverInfo
+    expect(info?.version).toBe(ownVersion)
   })
 
   it('tools/list → 固定 47 个工具（kb 17 + graph 8 + arch 1 + 角色/团队/技能/上下文 18 + task 3；v5 增 graph_merge；v6 角色/团队补齐增删改 + team_create→team_new；v6.2 skill 写入口；v10 arch_generate）', async () => {
