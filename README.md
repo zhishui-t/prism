@@ -187,23 +187,25 @@ prism graph status myproj                       # 陈旧检测（manifest 哈希
 
 ### 4.4 架构图谱
 
-用 **Archify**（子模块，MIT v2.16.0）把 JSON-IR 渲染成自包含 HTML。五类图：
+用 **Archify**（子模块，MIT v2.16.0）把 JSON-IR 渲染成自包含 HTML。五类图及其 IR 来源：
 
-| 类型 | 数据来源 |
-| :--- | :--- |
-| `architecture` | 模块聚类 + 依赖边 → 组件/边界/连接 |
-| `sequence` | CALLS 边 + Graphify flows → 参与者/消息 |
-| `lifecycle` | 状态机（如 14 态任务机）→ 泳道/状态/转移 |
-| `dataflow` | 数据读写边 → 阶段/节点/流转 |
-| `workflow` | 团队 DAG 工作流 → 泳道/节点/边 |
+| 类型 | 数据来源 | IR 由谁产 |
+| :--- | :--- | :--- |
+| `workflow` | 团队 DAG 工作流 → 泳道/节点/边 | **自动**：`prism arch from-team <team_id>`（纯函数派生，零手写） |
+| `architecture` | 模块聚类 + 依赖边 → 组件/边界/连接 | 宿主按 `arch schema architecture` 的契约生成 |
+| `sequence` | CALLS 边 + Graphify flows → 参与者/消息 | 宿主按 `arch schema sequence` 生成 |
+| `lifecycle` | 状态机（如 14 态任务机）→ 泳道/状态/转移 | 宿主按 `arch schema lifecycle` 生成 |
+| `dataflow` | 数据读写边 → 阶段/节点/流转 | 宿主按 `arch schema dataflow` 生成 |
 
 ```bash
-prism arch types
-prism arch validate architecture ir.json
+prism arch types                              # 列出五类
+prism arch from-team core-dev                 # 工作流图：由团队定义一键派生
+prism arch schema architecture                # 取 IR 的 JSON Schema（宿主生成 IR 的契约；公共定义用 schema common）
+prism arch validate architecture ir.json      # 校验 IR（schema + 布局）
 prism arch render architecture ir.json --out out.html
 ```
 
-IR 是源、HTML 是派生，两者都可作为 `type: diagram` 条目沉淀。
+IR 是源、HTML 是派生，两者都可作为 `type: diagram` 条目沉淀。**IR 是派生视图（R7）**：`workflow` 由团队定义自动生成；其余四类由**宿主**按 `arch schema` 的契约把图谱数据映射成 IR——**不是让用户手写 JSON**。
 
 ### 4.5 角色与团队
 

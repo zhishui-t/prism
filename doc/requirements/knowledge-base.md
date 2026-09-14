@@ -35,7 +35,7 @@
 | D8 | 设计公理 | **分类分层给定位、图谱联系给发现**，两套正交系统（图书馆隐喻） |
 | D9 | 书与 Graphify 语料粒度 | **一本书一个语料**；模块级/书级图谱是边表的过滤视图 |
 | D10 | Archify 分发 | **vendor 进仓库**：CLI 自包含零运行时依赖，按路径调用 |
-| D11 | 图表自动生成范围 | **五类图全自动**（能确定性推导的零 LLM；语义类由宿主直付，见顶部修订） |
+| D11 | 图表自动生成范围 | ~~五类图全自动~~ **实况（2026-09-14）**：仅 `workflow` 有生成器（`arch from-team`，纯函数）；其余四类由宿主按 `arch schema <type>` 取契约生成（§4.4） |
 | D12 | 中文检索实现 | **bigram 切分 + unicode61**（trigram 检索不了两字中文词，实测修正） |
 
 ---
@@ -265,17 +265,21 @@ deposited_by:               # 落库来源记录（非审核）
 
 | diagram_type | 结构数组（item 必填） | Prism 数据源 | 生成方式 | 生成器实况（2026-09-14 核对） |
 | :--- | :--- | :--- | :--- | :--- |
-| `architecture` | `components[id,type,label]` / `boundaries[kind,label,wraps]` / `connections[from,to]` | 代码图谱模块聚类 + 依赖边 | **确定性，零 LLM** | ⏳ **未实现**——IR 需手写或宿主生成 |
-| `sequence` | `participants[id,type,label]` / `messages[from,to,y,label]` | 代码图谱 `CALLS` 边 + Graphify `flows` | **确定性，零 LLM** | ⏳ **未实现**——同上 |
-| `lifecycle` | `lanes[id,label]` / `states[id,type,label,lane,col]` / `transitions[from,to]` | 任务状态机（14 态 32 转移）等 | **确定性，零 LLM** | ⏳ **未实现**——同上 |
-| `dataflow` | `stages[label]` / `nodes[id,type,label,stage,row]` / `flows[from,to,label]` | 图谱数据读写/存储边 | 半确定性（复杂语义走队列） | ⏳ **未实现**——同上 |
+| `architecture` | `components[id,type,label]` / `boundaries[kind,label,wraps]` / `connections[from,to]` | 代码图谱模块聚类 + 依赖边 | **确定性，零 LLM** | ⏳ **无生成器**——IR 由宿主按 `prism arch schema architecture` 取契约产出 |
+| `sequence` | `participants[id,type,label]` / `messages[from,to,y,label]` | 代码图谱 `CALLS` 边 + Graphify `flows` | **确定性，零 LLM** | ⏳ **无生成器**——IR 由宿主按 `prism arch schema <type>` 取契约产出 |
+| `lifecycle` | `lanes[id,label]` / `states[id,type,label,lane,col]` / `transitions[from,to]` | 任务状态机（14 态 32 转移）等 | **确定性，零 LLM** | ⏳ **无生成器**——IR 由宿主按 `prism arch schema <type>` 取契约产出 |
+| `dataflow` | `stages[label]` / `nodes[id,type,label,stage,row]` / `flows[from,to,label]` | 图谱数据读写/存储边 | 半确定性（复杂语义走队列） | ⏳ **无生成器**——IR 由宿主按 `prism arch schema <type>` 取契约产出 |
 | `workflow` | `lanes[id,label]` / `nodes[id,lane,col,type,label]` / `edges[from,to]` | 团队 DAG 工作流定义 | 半确定性（业务语义走队列） | ✅ **已实现**：`prism arch from-team <team_id>` |
 
 > **⚠ 表格最后一列的读法（2026-09-14 更新）**：上表「Prism 数据源 / 生成方式」是 **D11 的设计蓝图**，
 > 不等于已实现。当前**只有 `workflow` 一类有生成器**（`buildTeamWorkflowIr`，agents 包，
 > **纯函数**：零 IO / 零时钟 / 零随机，同输入必同字节——否则 sidecar 的 `ir_hash` 失去意义）。
-> 其余四类的 IR **目前需手写**（或由宿主 LLM 按 `3rd/archify/archify/schemas/*.schema.json` 生成），
-> 再走 `prism arch validate <type> <ir.json>` → `prism arch render <type> <ir.json>`。
+> 其余四类的 IR **由宿主按契约产出**：`prism arch schema <type>`（可选 `common`）取 JSON Schema，
+> 用宿主能力把图谱数据映射成 IR，再走 `prism arch validate <type> <ir.json>` →
+> `prism arch render <type> <ir.json>`。
+>
+> **这不是「让用户手写 JSON」**——IR 是派生视图（R7），机械映射是宿主该消掉的活；
+> `arch schema` 这个口子就是为了让宿主拿得到契约（否则它只能翻 vendored 目录，打包后连路径都摸不到）。
 > 补生成器时请同时更新本列，别让「全自动」继续停留在蓝图口径。
 >
 > **IR 是派生视图（红线 R7）**：团队定义才是真相；`arch from-team` 每次重生成，不把 IR 当手改的源。

@@ -16,6 +16,8 @@
 > **v6.1 参数契约统一（2026-09-12）**：读写两侧的**目录键名一律 snake_case 且同名**——`GET /api/roles` → `{ roles, roles_dir }`、`GET /api/teams` → `{ teams, teams_dir }`（旧 camel `rolesDir`/`teamsDir` 前端仍兼容，但它已不是契约）；`prism_role_list` 的 `agents_dir` 更名为 `roles_dir`（zcode 遗留名，与写参数不同名会让宿主回填失败）。`prism_team_new` / `POST /api/teams` 新增**可选** `roles_dir`（成员角色校验用；缺省才回落默认角色库）。
 > **v7 控制台交互重构（2026-09-14）**：新增 `GET /api/skills/:name`（单技能详情，控制台「点行看详情」用）。**注册顺序是硬约束**——必须排在 `/api/skills/usage`、`/api/skills/effective` **之后**，因为路由器首个匹配即命中，`:name` 会把这两条静态路由吞掉。**界面口径（非接口变更）**：`book`（书）是知识库的**内部模型概念，不对外扩散**——控制台不再暴露该层级，知识库界面只呈现 `项目 → 主题 → 知识`；`GET|POST /api/kb/book-structure` 等按书维度的接口**保持不变**，仅前端不再展示，`--book` 亦不再出现在界面提示文案里。
 > **v8 扫描范围接入 `.gitignore`（2026-09-14）**：`prism kb sync` 与 MCP `prism_kb_import` 默认读**项目根 `.gitignore`**，跳过其中忽略的目录/文件——此前只按内置的 18 个通用目录名（`DEFAULT_IGNORE_DIRS`）过滤，**项目自定义的忽略一律不生效**。报告新增 `ignored_dirs: string[]`（不递归展开）与 `ignored_files: number`（**在扩展名过滤之后**计数，只有「本来会被扫」的文件才算被挡掉）；MCP 工具加可选 `respect_gitignore`（默认 `true`）。只读根这一处 `.gitignore`，**不读** `.git/info/exclude` 与全局 `core.excludesFile`。明细见 `knowledge-base.md §6.6`。
+> **v9 架构图 IR 契约可得（2026-09-14）**：新增 `prism arch schema <type|common>`——打印 Archify 的 IR JSON Schema（`$defs` 走 `common`）。动因：五类图只有 `workflow` 有生成器（`prism arch from-team <team_id>`，IR 是纯函数产物），其余四类（`architecture` / `sequence` / `lifecycle` / `dataflow`）的 IR 要由**宿主按契约生成**；此前宿主取不到 schema（只能翻 `3rd/archify/archify/schemas/`，打包后连路径都摸不到），于是回头让用户手写 JSON——与 R7「IR 是派生视图」相悖。**没有 MCP 等价工具**（架构图谱全线只有 CLI/HTTP）。同步补齐 `prism` Skill：`references/arch.md` 增「IR 由谁产」表与宿主生成链路，SKILL.md 快速判定表与 CLI 速查一并更新。
+>
 > **已废弃**：工作队列（`prism_work_*` 工具、`work` 命令、`/api/work/*`）——见 `work-queue.md` 顶部；下方 §1 的 `work` 分组与 §2.5 已失效。同理 `uninit` / `harness detect` / `skill sync` 均未实现。
 
 ---
@@ -95,8 +97,10 @@ prism
 │
 ├── arch                    架构图谱（Archify 子工程）
 │   ├── types               列出五类图
+│   ├── schema <type|common>        IR 的 JSON Schema（宿主据此生成 IR；没有 MCP 等价工具）
 │   ├── validate <type> <ir.json>   校验 IR（schema + 布局）
-│   └── render <type> <ir.json>     渲染为自包含 HTML
+│   ├── render <type> <ir.json>     渲染为自包含 HTML（--book/--module 归到书内）
+│   └── from-team <team_id>         由团队定义自动派生工作流图（IR 是纯函数产物，零手写）
 │
 ├── graph                   代码图谱（Python 版 graphify）
 │   ├── build <project>     建图（graphify <root> + cluster-only --no-label，零 LLM）
