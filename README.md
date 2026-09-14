@@ -106,7 +106,7 @@ prism/
 │   ├── knowledge/     # 层→书→模块→条目 · FTS5(bigram)+向量混合检索 · 版次制 · 知识图谱边表 · reindex
 │   ├── agents/        # 角色/团队定义解析校验渲染 · harness 适配器 + 运行期插件 · 目录解析
 │   ├── skills/        # Prism 内置 Skill · 校验 · 安装到宿主 Skill 目录
-│   ├── server/        # HTTP API · MCP(35 工具) · Graphify/Archify/embedding 封装 · 控制台静态服务
+│   ├── server/        # HTTP API · MCP(46 工具) · Graphify/Archify/embedding 封装 · 控制台静态服务
 │   └── cli/           # prism 命令行（init/serve/doctor/kb/graph/arch/role/team/skill/task/harness/embedding/project/inject/audit）
 ├── apps/web/          # React 控制台（7 页 · 浅/深主题 · 中/英 · hash 深链）
 ├── 3rd/               # git submodule（锁定上游发布 tag，见 3rd/README.md）
