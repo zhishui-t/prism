@@ -71,6 +71,7 @@ import { loadKnowledgeService } from '../kb/wiring.js'
 import { buildContextPack } from '../kb/context-pack.js'
 import { buildDepositSuggestions } from '../tasks/deposit-suggestions.js'
 import { writeEnrichment } from '../kb/enrich-writeback.js'
+import { DEFAULT_SERVE_PORT, ensureServe } from '../serve-control.js'
 
 /**
  * MCP stdio 服务（design.md §4 最小集 + design-v3 §3.4 P6 增量，手写 JSON-RPC 2.0）：
@@ -1761,6 +1762,27 @@ function asPositiveInt(value: unknown): number | undefined {
 }
 
 /**
+ * 宿主启动时**顺带把控制台拉起来** —— 这就是「harness 用的时候自动拉起来」。
+ *
+ * 三条纪律（违反任何一条都会把 MCP 弄坏）：
+ * 1. **不 await**：ensure 最长等 30s 就绪，阻塞启动会让宿主连接超时 → fire-and-forget；
+ * 2. **不写 stdout**：stdout 是 JSON-RPC 通道，输出污染即协议损坏 → 只写 stderr；
+ * 3. **失败不致命**：控制台起不来只影响 UI，MCP 工具照常可用 → 全部 catch。
+ *
+ * 关闭：`PRISM_SERVE_AUTOSTART=0`；换端口：`PRISM_SERVE_PORT=<n>`。
+ */
+function autostartConsole(home: string): void {
+  if (process.env['PRISM_SERVE_AUTOSTART'] === '0') return
+  const port = Number(process.env['PRISM_SERVE_PORT'] ?? DEFAULT_SERVE_PORT)
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) return
+  void ensureServe({ home, host: '127.0.0.1', port }).catch((error: unknown) => {
+    process.stderr.write(
+      `[prism-mcp] 控制台自动拉起失败（不影响 MCP 工具）: ${error instanceof Error ? error.message : String(error)}\n`,
+    )
+  })
+}
+
+/**
  * stdio 传输：逐行读 JSON-RPC，逐行写响应（启动 MCP：`node dist/mcp/server.js`）。
  *
  * **先加载 harness 插件再建工具**：适配器（含插件提供的）要在 `createMcpTools` 里被
@@ -1777,6 +1799,7 @@ export function runMcpStdio(options: { home?: string; harnessRoot?: string } = {
 
 /** 建立工具并开始服务（插件已加载后调用）。 */
 function serveMcpStdio(home: string, options: { harnessRoot?: string }): void {
+  autostartConsole(home)
   const tools = createMcpTools({ home, harnessRoot: options.harnessRoot })
   const input = createInterface({ input: process.stdin })
   const write = (response: JsonRpcResponse | null): void => {

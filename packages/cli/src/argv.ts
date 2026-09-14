@@ -51,7 +51,9 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
 用法：
   prism --version
   prism init [--home <PRISM_HOME>] [--harness-root <路径>] [--force]   接入初始化（五步）
-  prism serve [--port 7777] [--host <h>]   启动 HTTP 服务（控制台 + API）
+  prism serve [--port 7777] [--host <h>]   启动 HTTP 服务（控制台 + API；前台阻塞，Ctrl+C 停）
+  prism serve --ensure [--port 7777]       幂等确保**后台**运行：已在跑则复用，否则拉起（宿主按需启动用它）
+  prism serve --check | --stop             查看后台服务状态 / 停止它
   prism doctor [--port 7777]               环境自检
   prism role list [--source <dir>]         列出角色（默认 roles_dir，见下）
   prism role show <name>                   查看角色定义
@@ -142,6 +144,12 @@ const CLI_OPTIONS = {
   force: { type: 'boolean' },
   port: { type: 'string' },
   host: { type: 'string' },
+  /** `serve --ensure`：幂等确保控制台在跑——已在跑则复用，否则**后台**拉起（宿主按需启动靠它） */
+  ensure: { type: 'boolean' },
+  /** `serve --check`：只报告控制台状态，不做任何改变（给脚本/宿主探测用，退出码即结论） */
+  check: { type: 'boolean' },
+  /** `serve --stop`：停止由 `--ensure` 拉起的后台控制台 */
+  stop: { type: 'boolean' },
   layer: { type: 'string' },
   owner: { type: 'string' },
   book: { type: 'string' },
@@ -256,6 +264,10 @@ export type ArgValues = {
   force?: boolean
   port?: string
   host?: string
+  /** `serve --ensure` / `--check` / `--stop`（见 CLI_OPTIONS 同名项） */
+  ensure?: boolean
+  check?: boolean
+  stop?: boolean
   layer?: string
   owner?: string
   book?: string

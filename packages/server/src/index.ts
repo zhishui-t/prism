@@ -6,6 +6,25 @@
 // 应用与启动
 export { createApp, startServer, type AppOptions, type AppHandle } from './app.js'
 
+// 控制台（HTTP serve）的按需拉起 / 状态 / 停止——CLI `serve --ensure|--check|--stop`
+// 与宿主启动时的 MCP 共用同一套实现（幂等；只认 Prism 自己的 /api/health）
+export {
+  ensureServe,
+  probeServe,
+  stopServe,
+  serveStatePath,
+  serveLogPath,
+  backgroundServeEntry,
+  backgroundServeArgv,
+  DEFAULT_SERVE_PORT,
+  type ServeStatus,
+  type ServeRecord,
+  type EnsureServeOptions,
+  type EnsureServeResult,
+  type StopServeResult,
+  type ServeLauncher,
+} from './serve-control.js'
+
 // 信封与错误码（跨流契约 design.md §4）
 export { ERROR_CODES, ok, fail, toEnvelope, type Envelope, type ErrorCode } from './http/envelope.js'
 
