@@ -40,6 +40,32 @@ function die(msg) {
   process.exit(1)
 }
 
+/**
+ * 取 GitHub token：先看环境变量，再回落到 git 的凭据管理器。
+ *
+ * 回落那条路是为了免去「为了发一次 Release 再去手工造一个 PAT」——既然本机已经能
+ * `git push`，就说明 github.com 的授权早已存在，`git credential fill` 能把它交回来。
+ * 全程只取用、不打印（日志里只出现来源名）。
+ */
+function resolveToken() {
+  const env = process.env['GITHUB_TOKEN'] ?? process.env['GH_TOKEN']
+  if (env !== undefined && env !== '') return { token: env, from: '环境变量 GITHUB_TOKEN' }
+  try {
+    const out = execFileSync('git', ['credential', 'fill'], {
+      input: 'protocol=https\nhost=github.com\n\n',
+      encoding: 'utf8',
+      timeout: 30_000,
+      // 非交互：需要弹窗登录时宁可失败，也不要卡在等待输入上。
+      env: { ...process.env, GCM_INTERACTIVE: 'never', GIT_TERMINAL_PROMPT: '0' },
+    })
+    const m = /^password=(.+)$/m.exec(out)
+    if (m) return { token: m[1].trim(), from: 'git 凭据管理器' }
+  } catch {
+    /* 取不到就返回 null，由调用方给出可操作的报错 */
+  }
+  return null
+}
+
 /** 平台标识，与 scripts/package.mjs 的 platformToken() 同口径。 */
 function platformToken() {
   const os = { win32: 'win', darwin: 'mac', linux: 'linux' }[process.platform]
@@ -173,10 +199,15 @@ async function main() {
   }
 
   // ===== 4. 正式发布 =====
-  const token = process.env['GITHUB_TOKEN'] ?? process.env['GH_TOKEN']
-  if (token === undefined || token === '') {
-    die('缺少 GITHUB_TOKEN（或 GH_TOKEN）。\n  示例: GITHUB_TOKEN=ghp_xxx node scripts/release.mjs')
+  const auth = resolveToken()
+  if (auth === null) {
+    die(
+      '缺凭据：环境变量 GITHUB_TOKEN / GH_TOKEN 未设，且本机 git 凭据管理器里也没有 github.com 的授权。\n' +
+        '  示例: GITHUB_TOKEN=ghp_xxx node scripts/release.mjs',
+    )
   }
+  const token = auth.token
+  log(`凭据来源：${auth.from}`)
 
   let release = null
   try {
