@@ -382,6 +382,15 @@ async function main() {
     if (existsSync(src)) await cp(src, join(stageDir, 'scripts', script))
   }
 
+  // 7c) assets/（vis-network 等离线化资源——studio 路由此目录代理，缺了代码图谱就是黑屏）
+  //     缺失即 throw：静默跳过会让发行版少了 vendored 资源，只在运行时以「代码图谱黑屏」暴露。
+  const assetsSrc = join(ROOT, 'assets')
+  if (!(await exists(assetsSrc))) {
+    throw new Error(`assets/ 缺失：${relative(ROOT, assetsSrc)}（studio 的 vendor 路由依赖它，缺了代码图谱会黑屏）`)
+  }
+  await cp(assetsSrc, join(stageDir, 'assets'), { recursive: true })
+  log(`  ★ assets/ ${mb(await sizeOf(join(stageDir, 'assets')))}`)
+
   // 8) 文档与许可
   for (const file of ['README.md', 'AGENTS.md', 'LICENSE']) {
     if (await exists(join(ROOT, file))) await cp(join(ROOT, file), join(stageDir, file))

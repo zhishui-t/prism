@@ -29,7 +29,8 @@ const NAV: Array<{ key: PageKey; label: DictKey; group?: DictKey }> = [
  * 控制台外壳：顶栏（品牌 · 导航 · 主题/语言）+ 页面。
  *
  * 导航状态全部来自 hash（`route.ts`）——刷新、分享链接、前进后退都保留位置；
- * 页面通过 `sel` 收「该展开哪个实体」，通过 `onSelect` 回写 hash。
+ * 支持深链的页面（knowledge / roles / teams / skills）通过 `sel` 收「该展开哪个实体」，
+ * 通过 `onSelect` 回写 hash（graph / projects / tasks 无实体深链）。
  */
 export function Shell() {
   const route = useRoute()
@@ -79,7 +80,9 @@ export function Shell() {
         {route.page === 'knowledge' && (
           <KnowledgePage
             sel={route.sel}
-            onSelect={(id) => navigate(id === undefined ? { page: 'knowledge' } : { page: 'knowledge', sel: id })}
+            onSelect={(id) =>
+              navigate(id === undefined || id === '' ? { page: 'knowledge' } : { page: 'knowledge', sel: id })
+            }
           />
         )}
         {route.page === 'graph' && <CodeGraphPage />}
@@ -87,8 +90,9 @@ export function Shell() {
         {route.page === 'roles' && (
           <RolesPage
             sel={route.sel}
-            onSelect={(name) => navigate({ page: 'roles', sel: name })}
-            onOpenUsageSkills={() => navigate({ page: 'skills' })}
+            onSelect={(name) =>
+              navigate(name === undefined || name === '' ? { page: 'roles' } : { page: 'roles', sel: name })
+            }
           />
         )}
         {route.page === 'teams' && (

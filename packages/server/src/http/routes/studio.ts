@@ -3,7 +3,7 @@ import { readFile, stat } from 'node:fs/promises'
 import { extname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { PrismError } from '@prism/core'
+import { PrismError, repoRoot } from '@prism/core'
 
 import { fail, sendJson } from '../envelope.js'
 import { ProjectRegistry } from '../../graph/registry.js'
@@ -43,8 +43,22 @@ export const MIME_TYPES: Record<string, string> = MIME
  */
 const VENDOR_PREFIX = 'vendor/'
 const VIS_NETWORK_FILE = 'vis-network.min.js'
-/** 仓库根 assets/（src 与 dist 同深度：…/http/routes → 上 5 级 = 仓库根）。 */
-const PRISM_ASSETS_DIR = fileURLToPath(new URL('../../../../../assets', import.meta.url))
+
+/**
+ * Prism 自有 assets/ 目录（与 graphify/archify 同一口径）。
+ *
+ * 发行根经 `repoRoot` **向上查找**（含 `3rd/` 或 `packages/` 的目录）——不能写死相对
+ * 层级：开发态 `packages/server/dist/http/routes/`（上 5 级到根），打包物化后是
+ * `node_modules/@prism/server/dist/http/routes/`（**也是 5 级，但落到 `node_modules/assets`**，
+ * 而 package.mjs 把资源放在发行根 `<root>/assets/`）→ 写死会让 vendored 路由 404、代码图谱黑屏。
+ *
+ * 抽成纯函数（入参 `metaUrl`）以便在临时目录里造两种布局做回归测试——
+ * 见 `packages/server/test/studio-assets.test.ts`。
+ */
+export function resolveAssetsDir(metaUrl: string): string {
+  const root = repoRoot(metaUrl, 8) ?? fileURLToPath(new URL('../../../../../', metaUrl))
+  return join(root, 'assets')
+}
 /** HTML 中需改写的外部脚本标签（与 graphify exporters/html.py 的引用一致）。 */
 const CDN_SCRIPT_RE = /<script\s+src="https:\/\/unpkg\.com\/vis-network@[^"]+"[^>]*><\/script>/g
 
@@ -63,7 +77,7 @@ export function studioRoute(registry: ProjectRegistry) {
         sendJson(ctx.res, 404, fail('not_found', `未知 vendored 资源: ${name}`))
         return
       }
-      const file = join(PRISM_ASSETS_DIR, VIS_NETWORK_FILE)
+      const file = join(resolveAssetsDir(import.meta.url), VIS_NETWORK_FILE)
       try {
         const buf = await readFile(file)
         ctx.res.writeHead(200, {

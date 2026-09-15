@@ -89,7 +89,8 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
                  显式给出即等同 --harness-root，不再需要 --yes）
   --roles-dir <dir> team 子命令专有：成员校验用的角色库（对齐 MCP team_new|edit 的 roles_dir）
   prism kb import <file.md> [--layer --owner --book --module]
-  prism kb sync <项目名|项目根> [--owner --book --module] [--dry-run]   扫描项目文档建引用索引
+  prism kb sync <项目名|项目根> [--owner --book --module] [--ignore-dirs <a,b>] [--dry-run]
+                                           扫描项目文档建引用索引（--ignore-dirs 按目录名匹配任意层级，重复出现取最后一个）
   prism kb search <query> [--layer --book --limit]
   prism kb get <id[@version]>
   prism kb tree [--layer]
@@ -198,6 +199,7 @@ const CLI_OPTIONS = {
   top: { type: 'string' },
   format: { type: 'string' },
   'dry-run': { type: 'boolean' },
+  'ignore-dirs': { type: 'string' },
   remove: { type: 'boolean' },
   hard: { type: 'boolean' },
   audit_type: { type: 'string' },
@@ -314,6 +316,7 @@ export type ArgValues = {
   top?: string
   format?: string
   'dry-run'?: boolean
+  'ignore-dirs'?: string
   remove?: boolean
   hard?: boolean
   visibility?: string

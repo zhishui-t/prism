@@ -223,6 +223,15 @@ async function main() {
     // 子模块的 .git 指针文件不该进包（否则目标机看到「残缺仓库」会困惑）
     const stray = await findStrayGit(dist)
     check('7.7 无 .git 残留', stray === null, stray ?? '')
+
+    // 7.8 assets/ 离线化资源必须落在**发行根**：studio 的 vendor 路由
+    //     （GET /studio/:project/vendor/vis-network.min.js）代理此目录。打包物化后
+    //     `node_modules/@prism/server/dist/http/routes/` 上溯 5 级会落到
+    //     `node_modules/assets`（不存在）→ 代码图谱黑屏；故 server 侧改走 repoRoot 向上查找。
+    //     局限：本脚本尚无「起 HTTP server」的能力，这里只能做**结构断言**（资源在根、
+    //     错误落点不存在），路由级 200 断言待 server 能力具备后补。
+    check('7.8 vendored assets 在发行根', existsSync(join(dist, 'assets', 'vis-network.min.js')))
+    check('7.9 node_modules/ 下无 assets（写死相对层级的错误落点）', !existsSync(join(dist, 'node_modules', 'assets')))
   } catch (error) {
     // 前置步骤失败（如打包失败）→ 直接中止后续，但**仍要出汇总**（不抛裸异常）
     process.stdout.write(`\n中止: ${error instanceof Error ? error.message : String(error)}\n`)

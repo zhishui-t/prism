@@ -1,0 +1,15 @@
+# Graphify 建图排除（graphify 优先读此文件；无它才回落 .gitignore）
+# 三方 submodule 是上游源码（llama.cpp 数百万行 C++），不是 Prism 自己的代码——
+# 建图只关心 packages/ apps/ scripts/ test/。
+3rd/
+
+# 构建产物与依赖
+node_modules/
+dist/
+coverage/
+
+# 运行时状态与本仓自身的工作产物
+.prism/
+.agent-team/
+.zcode/
+graphify-out/

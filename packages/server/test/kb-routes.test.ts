@@ -93,6 +93,30 @@ describe('kb 路由（注入内存桩，不依赖 @prism/knowledge）', () => {
     expect(statsBody.value.entries).toBe(1)
   })
 
+  // DEF-01 回归：catalog 上限必须与知识服务 clamp 及 MCP `prism_kb_catalog`（maximum: 5000）
+  // 同口径。控制台知识库页固定请求 `limit=5000`，HTTP 面若仍卡 1000 会整页 400。
+  it('GET /api/kb/catalog?limit=5000 → 200（上限对齐 service/MCP）', async () => {
+    const res = await fetch(`${base}/api/kb/catalog?limit=5000`)
+    const body = (await res.json()) as { ok: boolean; value: Array<{ id: string }> }
+    expect(res.status).toBe(200)
+    expect(body.ok).toBe(true)
+    expect(body.value.map((e) => e.id)).toContain('kb-perf')
+  })
+
+  it('GET /api/kb/catalog?limit=5001 → bad_request（仍受上限约束）', async () => {
+    const res = await fetch(`${base}/api/kb/catalog?limit=5001`)
+    const body = (await res.json()) as { error: { code: string } }
+    expect(res.status).toBe(400)
+    expect(body.error.code).toBe('bad_request')
+  })
+
+  it('GET /api/kb/search?limit=5000 → bad_request（search 上限仍为 1000，不被 catalog 放宽）', async () => {
+    const res = await fetch(`${base}/api/kb/search?q=x&limit=5000`)
+    const body = (await res.json()) as { error: { code: string } }
+    expect(res.status).toBe(400)
+    expect(body.error.code).toBe('bad_request')
+  })
+
   it('POST /api/kb/deposit → {id,version,path}', async () => {
     const res = await fetch(`${base}/api/kb/deposit`, {
       method: 'POST',

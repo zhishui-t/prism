@@ -9,6 +9,10 @@ import { buildContextPack } from '../../kb/context-pack.js'
 import { depositWithPolicy, type DepositRequest } from '../../kb/deposit-entry.js'
 import { loadRole, loadTeam, teamNotFoundMessage } from '../../roles/index.js'
 
+/** `limit` 上限，逐个对齐 MCP schema 的 `maximum`（search=1000、catalog=5000）。 */
+const SEARCH_LIMIT_MAX = 1000
+const CATALOG_LIMIT_MAX = 5000
+
 /**
  * kb 路由工厂：注入知识服务端口（真实服务运行时装载；测试注入内存桩）。
  *
@@ -48,7 +52,7 @@ export function kbRoutes(
     const layers = parseLayers(ctx.query.get('layers'))
     // B3：visibility 过滤（opt-in，不传即不过滤）
     const visibilities = parseLayers(ctx.query.get('visibilities'))
-    const limit = parseLimit(ctx.query.get('limit'))
+    const limit = parseLimit(ctx.query.get('limit'), SEARCH_LIMIT_MAX)
     const results = await (
       await getKb()
     ).search({
@@ -97,7 +101,10 @@ export function kbRoutes(
     const owner = ctx.query.get('owner')?.trim() || undefined
     const book = ctx.query.get('book')?.trim() || undefined
     const limitRaw = ctx.query.get('limit')
-    const limit = limitRaw !== null && limitRaw !== '' ? parseLimit(limitRaw) : null
+    // 上限 5000 与知识服务 clamp（`service.ts` catalog：`Math.min(..., 5000)`）及 MCP
+    // `prism_kb_catalog`（`maximum: 5000`）同口径——此前 HTTP 面误用 search 的 1000 上限，
+    // 控制台整页 `limit=5000` 直接 400（DEF-01）。
+    const limit = limitRaw !== null && limitRaw !== '' ? parseLimit(limitRaw, CATALOG_LIMIT_MAX) : null
     const visibilities = parseLayers(ctx.query.get('visibilities'))
     const entries = await (await getKb()).catalog({
       ...(layer !== null ? { layer } : {}),
@@ -465,13 +472,19 @@ function parseLayer(raw: string | null): Layer | null {
   return raw as Layer
 }
 
-function parseLimit(raw: string | null): number | null {
+/**
+ * limit 查询参数（省略 → null；上限 `max`）。
+ *
+ * **两个面口径不同，不可共用同一个上限**：`prism_kb_search` 与 `prism_kb_catalog`
+ * 在 MCP schema 里的 `maximum` 分别是 1000 / 5000，故调用方须显式传 `max`。
+ */
+function parseLimit(raw: string | null, max: number): number | null {
   if (raw === null || raw.trim() === '') {
     return null
   }
   const value = Number(raw)
-  if (!Number.isInteger(value) || value <= 0 || value > 1000) {
-    throw new PrismError('bad_request', `limit 必须为 1~1000 的整数: ${raw}`)
+  if (!Number.isInteger(value) || value <= 0 || value > max) {
+    throw new PrismError('bad_request', `limit 必须为 1~${max} 的整数: ${raw}`)
   }
   return value
 }

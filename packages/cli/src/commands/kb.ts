@@ -772,7 +772,7 @@ async function kbExport(ctx: CommandContext, args: string[], values: ArgValues):
 }
 
 /**
- * `prism kb sync <项目名|项目根> [--book] [--module] [--dry-run]`
+ * `prism kb sync <项目名|项目根> [--book] [--module] [--ignore-dirs <a,b>] [--dry-run]`
  *
  * 扫描项目文档建「引用型」索引（design-knowledge-model-v1 §4）：
  * - 参数是已登记的项目名 → 从台账取根目录并回写扫描时间；是路径 → 直接扫（需 --owner）；
@@ -783,7 +783,7 @@ async function kbSync(ctx: CommandContext, args: string[], values: ArgValues): P
   const target = args[0]
   if (target === undefined) {
     ctx.stderr(
-      '用法: prism kb sync <项目名|项目根> [--owner <名>] [--book <书>] [--module <模块>] [--dry-run]',
+      '用法: prism kb sync <项目名|项目根> [--owner <名>] [--book <书>] [--module <模块>] [--ignore-dirs <a,b>] [--dry-run]',
     )
     return 1
   }
@@ -814,6 +814,15 @@ async function kbSync(ctx: CommandContext, args: string[], values: ArgValues): P
 
   const dryRun = values['dry-run'] === true
   const realKb = await getKb(ctx)
+  // --ignore-dirs <a,b>：额外忽略的目录名（vendored 三方源码/生成目录等；
+  // submodule 是 git 跟踪的、.gitignore 挡不住，需要显式排除）
+  const ignoreDirs =
+    values['ignore-dirs'] !== undefined
+      ? String(values['ignore-dirs'])
+          .split(',')
+          .map((d) => d.trim())
+          .filter((d) => d !== '')
+      : undefined
   const report = await scanProject(
     dryRun ? makeDryRunKb(realKb) : realKb,
     {
@@ -822,6 +831,7 @@ async function kbSync(ctx: CommandContext, args: string[], values: ArgValues): P
       owner,
       ...(values.book !== undefined ? { book: String(values.book) } : {}),
       ...(values.module !== undefined ? { module: String(values.module) } : {}),
+      ...(ignoreDirs !== undefined ? { ignoreDirs } : {}),
     },
   )
 

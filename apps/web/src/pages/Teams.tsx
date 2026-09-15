@@ -399,18 +399,35 @@ function TeamDetail({
           {detail.workflow.length === 0 ? (
             <div className="small muted">—</div>
           ) : (
-            <div className="flow">
+            <div className="workflow-flow">
               {detail.workflow.map((stage, i) => (
-                <span key={stage.order} style={{ display: 'contents' }}>
-                  {i > 0 && <span className="sep">→</span>}
-                  <span className="stage" title={stage.done}>
-                    <span className="n">
-                      {stage.order} · {modeLabel(t, stage.mode)}
-                    </span>
-                    <div>{stage.stage}</div>
-                    <span className="r">{stage.roles.join(' + ')}</span>
-                  </span>
-                </span>
+                <div key={stage.order} style={{ display: 'contents' }}>
+                  {i > 0 && <div className="flow-arrow" />}
+                  <div className="flow-stage">
+                    <div className="stage-num">{stage.order}</div>
+                    <div className="stage-body">
+                      <div className="stage-name">
+                        {stage.stage}
+                        <span style={{ fontWeight: 400, fontSize: 11, color: 'var(--muted)', marginLeft: 8 }}>
+                          {modeLabel(t, stage.mode)}
+                        </span>
+                      </div>
+                      <div className="stage-info">
+                        {stage.input} → {stage.output}
+                      </div>
+                      <div className="stage-roles">
+                        {stage.roles.map((r) => (
+                          <span key={r} className="stage-role">{r}</span>
+                        ))}
+                      </div>
+                      {stage.reflow && stage.reflow !== '—' && (
+                        <div style={{ fontSize: 11, color: 'var(--warn)', marginTop: 2 }}>
+                          ↩ {stage.reflow}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
               ))}
             </div>
           )}
