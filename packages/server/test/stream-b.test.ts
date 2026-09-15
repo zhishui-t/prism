@@ -382,91 +382,6 @@ describe('流 B：server 增量（F-B1/B2/B4/D2/E2/E3）', () => {
     expect(props['source']?.properties?.['kind']?.enum).toContain('task')
   })
 
-  // ---------------------------------------------------------------- F-E3
-  it('F-E3 CLOSED → deposit_suggestions；COMPLETED → 仅 deposit_hint=await_close', async () => {
-    await callTool(tools, 'prism_task_register', {
-      dag_id: 'DAG-E3',
-      session_id: 's-1',
-      team_id: 'core-dev',
-      project_id: 'prism',
-      version: 'adhoc',
-      difficulty: 'normal',
-      tasks: [{ id: 'T-E3', description: '制定接口规范（规范类沉淀）', stage: '设计' }],
-    })
-
-    const running = (await callTool(tools, 'prism_task_report', {
-      task_id: 'T-E3',
-      to_status: 'RUNNING',
-      by: 'tester',
-    })) as Record<string, unknown>
-    expect(running['deposit_suggestions']).toBeUndefined()
-    expect(running['deposit_hint']).toBeUndefined()
-
-    const completed = (await callTool(tools, 'prism_task_report', {
-      task_id: 'T-E3',
-      to_status: 'COMPLETED',
-      by: 'tester',
-    })) as Record<string, unknown>
-    expect(completed['deposit_hint']).toBe('await_close')
-    expect(completed['deposit_suggestions']).toBeUndefined()
-
-    await callTool(tools, 'prism_task_report', { task_id: 'T-E3', to_status: 'AWAITING_FEEDBACK', by: 'tester' })
-    const closed = (await callTool(tools, 'prism_task_report', {
-      task_id: 'T-E3',
-      to_status: 'CLOSED',
-      by: 'tester',
-    })) as { deposit_suggestions?: Array<{ kind: string; layer: string; priority: string; reason: string; require_note: boolean }> }
-    expect(closed.deposit_suggestions).toBeDefined()
-    const suggestion = closed.deposit_suggestions![0]!
-    expect(suggestion.kind).toBe('rule')
-    expect(suggestion.layer).toBe('global')
-    expect(suggestion.priority).toBe('high')
-    expect(suggestion.require_note).toBe(true)
-    expect(suggestion.reason).toContain('团队规则')
-  })
-
-  it('F-E3 无团队（team_id 不在 teams 目录）→ 不返回该字段', async () => {
-    await callTool(tools, 'prism_task_register', {
-      dag_id: 'DAG-E3B',
-      session_id: 's-1',
-      team_id: 'ghost-team',
-      project_id: 'prism',
-      version: 'adhoc',
-      difficulty: 'normal',
-      tasks: [{ id: 'T-E3B', description: '随便写点', stage: '开发' }],
-    })
-    for (const status of ['RUNNING', 'COMPLETED', 'AWAITING_FEEDBACK'] as const) {
-      await callTool(tools, 'prism_task_report', { task_id: 'T-E3B', to_status: status, by: 'tester' })
-    }
-    const closed = (await callTool(tools, 'prism_task_report', {
-      task_id: 'T-E3B',
-      to_status: 'CLOSED',
-      by: 'tester',
-    })) as Record<string, unknown>
-    expect(closed['deposit_suggestions']).toBeUndefined()
-  })
-
-  it('F-E3 团队 enabled=false → CLOSED 也不返回建议清单', async () => {
-    await callTool(tools, 'prism_task_register', {
-      dag_id: 'DAG-E3C',
-      session_id: 's-1',
-      team_id: 'no-deposit',
-      project_id: 'prism',
-      version: 'adhoc',
-      difficulty: 'normal',
-      tasks: [{ id: 'T-E3C', description: '规范类', stage: '开发' }],
-    })
-    for (const status of ['RUNNING', 'COMPLETED', 'AWAITING_FEEDBACK'] as const) {
-      await callTool(tools, 'prism_task_report', { task_id: 'T-E3C', to_status: status, by: 'tester' })
-    }
-    const closed = (await callTool(tools, 'prism_task_report', {
-      task_id: 'T-E3C',
-      to_status: 'CLOSED',
-      by: 'tester',
-    })) as Record<string, unknown>
-    expect(closed['deposit_suggestions']).toBeUndefined()
-  })
-
   // ---------------------------------------------------------------- F-C3（MCP 面）
   it('F-C3 MCP prism_team_new 与 HTTP POST /api/teams 同实现（同校验同落盘）', async () => {
     const writeDir = join(tmp, 'mcp-teams')
@@ -500,13 +415,5 @@ describe('流 B：server 增量（F-B1/B2/B4/D2/E2/E3）', () => {
       teams_dir: writeDir,
     })
     expect(dup).toContain('id_conflict')
-  })
-
-  it('F-E3 prism_task_report 的工具描述声明两种完成态口径（宿主可见）', async () => {
-    const response = await handleRpcRequest(rpc(1, 'tools/list'), tools)
-    const list = (response?.result as { tools: Array<{ name: string; description: string }> }).tools
-    const report = list.find((t) => t.name === 'prism_task_report')!
-    expect(report.description).toContain('deposit_suggestions')
-    expect(report.description).toContain('await_close')
   })
 })

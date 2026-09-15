@@ -127,14 +127,6 @@ prism
 │   ├── summary             图谱规模统计
 │   └── status              陈旧状态
 │
-├── task
-│   ├── list [--dag --status]   任务台账（被动记录）
-│   ├── show <task>             任务详情
-│   ├── graph <dag>             依赖图（文本）
-│   ├── register --dag <id> --file <dag.json>   批量登记 DAG（不触发执行）
-│   ├── report <task> --to <S> --by <who>       状态回报（状态机校验；--deposit 一步沉淀）
-│   └── stats                   台账统计
-│
 ├── work                    ⚠ 已废弃（v4：工作队列移除，富化改宿主直付——见 work-queue.md 顶部）
 │   ├── pending [--kind]    列出待办工作（拉取式）
 │   ├── enqueue --kind <k> --payload <json>  入队
@@ -154,7 +146,7 @@ prism
 
 ## 2. MCP 工具清单
 
-> **v6.2 取齐说明**（2026-09-12）：工具总数 = **47**（`packages/server/src/mcp/server.ts` 内
+> **v6.2 取齐说明**（2026-09-12）：工具总数 = **44**（`packages/server/src/mcp/server.ts` 内
 > `name: 'prism_*'` 逐条计数）。v4 由 31 增至 35；v5 多项目图谱合并（F-C2）新增 `prism_graph_merge`
 > （代码图谱 7 → 8）到 **36**；v6 把「角色 / 团队」补齐成**增删改查**（`new|edit|rm` 在 CLI / HTTP / MCP
 > 三入口**同名同位**）——新增 `prism_role_new|edit|rm`、`prism_team_list|edit|rm|render` 共 7 个，
@@ -166,6 +158,8 @@ prism
 > 的 IR 由「宿主按 schema 手搓」改为 **Prism 纯函数派生**，`prism arch schema` 降级为核对/调试用途。
 > 下文原文缺漏的工具已在各节补齐；
 > `❌ 未实现` = 全仓 grep 0 命中、**从未存在**的工具。
+> **任务中心（任务台账）整体移除**：`prism_task_register|report|status` 三工具随任务中心
+> 一并删除（第七轮 F2），**47 → 44**。
 >
 > **口径已入守卫**：本文件与 `README.md` 的「总数 + 分组小计」由
 > `packages/server/test/tool-surface-drift.test.ts` 对着 `createMcpTools` 实测锁定——
@@ -277,15 +271,7 @@ prism
 | `prism_work_claim` | 认领  ❌ 未实现 |
 | `prism_work_complete` | 回填  ❌ 未实现 |
 
-### 2.8 任务台账（3）
-
-| 工具 | 作用 |
-| :--- | :--- |
-| `prism_task_register` | 批量登记 DAG |
-| `prism_task_report` | 回报状态（可一步沉淀） |
-| `prism_task_status` | 查询状态 |
-
-### 2.9 宿主声明 / 会话 ❌ 未实现（0）
+### 2.8 宿主声明 / 会话 ❌ 未实现（0）
 
 | 工具 | 作用 |
 | :--- | :--- |

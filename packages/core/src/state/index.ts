@@ -19,17 +19,3 @@ export {
   type ReactivationResult,
   type UnblockResult,
 } from './task-state-machine.js'
-export {
-  newAttemptToken,
-  applyAttemptGuardedWrite,
-  TASK_STALE_REVISION,
-  type AttemptGuard,
-  type AttemptWritePatch,
-} from './attempt-token.js'
-export {
-  writeScope,
-  normalizeWriteScopes,
-  scopesOverlap,
-  scopeSetsOverlap,
-  parseWriteScopes,
-} from './write-scope.js'

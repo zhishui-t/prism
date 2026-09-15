@@ -58,7 +58,7 @@ export interface PeopleDeps {
  *   server 若仍读 <home> 会出现控制台与 CLI 数据源分裂）
  * - 角色/团队返回携带 issues（校验结果），供 F12 页面展示
  * - /api/teams/:id/activate 返回 TeamActivation（dispatch 仅由 installed 推导，P8）
- * - /api/skills 返回内置 PrismSkill[]；/api/skills/effective 返回有效集（F-D2）
+ * - /api/skills 返回 `{ skills: PrismSkill[], skills_dir }`；/api/skills/effective 返回有效集（F-D2）
  * - 读路由一律只读；写路由（`POST|PATCH|DELETE /api/roles[/:name]`、`/api/teams[/:id]`）只写 body
  *   显式给出的 `roles_dir` / `teams_dir`，**绝不复用** `dirs` 的默认宿主目录（写路径不得回落）。
  * - v6.1：读返回的目录字段统一为 snake_case（`roles_dir` / `teams_dir`），与写参数同名。
@@ -193,7 +193,16 @@ export function peopleRoutes(deps: PeopleDeps): {
     })
   }
 
-  const skills = async (): Promise<Envelope> => ok(listBuiltinSkills())
+  /**
+   * 内置 Skill 清单：`GET /api/skills`。
+   *
+   * v7（第七轮 §6.3）**响应增 `skills_dir`**——与 MCP `prism_skill_list` 返回形状对齐，
+   * 供控制台「安装 / 卸载」表单回填目标目录（服务端 `POST /api/skills/install|uninstall`
+   * 的 body 里 `skills_dir` **必填**，绝不复用默认宿主目录）。
+   * 容器由**裸数组**改为对象：只加字段、不丢信息（`skills` 仍是原数组）。
+   */
+  const skills = async (): Promise<Envelope> =>
+    ok({ skills: listBuiltinSkills(), skills_dir: dirs.skillsDir })
 
   /**
    * 技能使用视图（team-definition.md §6.3 合并公式）：

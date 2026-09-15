@@ -3,12 +3,11 @@ import { describe, expect, it, vi } from 'vitest'
 import { applyDepositPolicy, type DepositPolicy, type PolicyDepositInput, type TeamDefinition } from '@prism/agents'
 
 import { depositWithPolicy } from '../src/kb/deposit-entry.js'
-import { buildDepositSuggestions, inferDepositKinds } from '../src/tasks/deposit-suggestions.js'
 import type { DepositInput } from '../src/kb/port.js'
 import { MemoryKb } from './helpers.js'
 
 /**
- * F-E3 沉淀建议清单（纯函数，零 LLM）+ F-E2 共用落库入口（策略单点）。
+ * F-E2 共用落库入口（策略单点）+ 两包 deposit 契约的镜像形状一致性检查。
  */
 
 /**
@@ -68,97 +67,6 @@ const policy = (over: Partial<DepositPolicy> = {}): DepositPolicy => ({
 /** 团队定义桩（只用到 deposit 字段）。 */
 const teamWith = (deposit: DepositPolicy): TeamDefinition =>
   ({ team_id: 't', name: 't', description: '', default: false, members: [], skills: [], knowledge: { layers: ['global'] }, deposit, arbitration: [], rework_limit: 2, workflow: [], body: '' }) as TeamDefinition
-
-describe('inferDepositKinds（确定性关键词映射）', () => {
-  it('命中已知关键词 → 保序返回（pitfall 优先于 rule）', () => {
-    expect(inferDepositKinds('修复登录 bug，并补充规范')).toEqual(['pitfall', 'rule'])
-  })
-
-  it('大小写不敏感（英文关键词）', () => {
-    expect(inferDepositKinds('PATTERN 复用')).toEqual(['pattern'])
-  })
-
-  it('空输入 / 无关键词 → 空数组', () => {
-    expect(inferDepositKinds('')).toEqual([])
-    expect(inferDepositKinds('   \n  ')).toEqual([])
-    expect(inferDepositKinds('平平无奇的描述')).toEqual([])
-  })
-
-  it('同类型只出现一次（多个关键词命中同一类型）', () => {
-    expect(inferDepositKinds('踩坑：这个陷阱是教训')).toEqual(['pitfall'])
-  })
-})
-
-describe('buildDepositSuggestions', () => {
-  it('enabled=false → 空（不打扰）', () => {
-    expect(buildDepositSuggestions({ policy: policy({ enabled: false, rules: [{ match: { type: 'rule' }, set: {} }] }) })).toEqual([])
-  })
-
-  it('团队无规则 → 空（不打扰）', () => {
-    expect(buildDepositSuggestions({ policy: policy({ rules: [] }), description: '规范' })).toEqual([])
-  })
-
-  it('match{type:rule} + 任务含「规范」→ kind=rule/layer=global/priority=high，reason 可解释', () => {
-    const suggestions = buildDepositSuggestions({
-      policy: policy({ rules: [{ match: { type: 'rule' }, set: { layer: 'global', priority: 'high' } }] }),
-      stage: '设计',
-      description: '制定接口命名规范',
-    })
-    expect(suggestions).toEqual([
-      { kind: 'rule', layer: 'global', priority: 'high', reason: '团队规则 match{type:rule}', require_note: true },
-    ])
-  })
-
-  it('match{tags:[security]} 命中描述里的标签 → 采用 set，kind 回落到 default_type', () => {
-    const suggestions = buildDepositSuggestions({
-      policy: policy({ rules: [{ match: { tags: ['security'] }, set: { layer: 'global', priority: 'high' } }] }),
-      description: '补充 security 相关约定',
-    })
-    expect(suggestions).toHaveLength(1)
-    expect(suggestions[0]).toMatchObject({ kind: 'pitfall', layer: 'global', priority: 'high' })
-    expect(suggestions[0]!.reason).toBe('团队规则 match{tags:security}')
-  })
-
-  it('组合键（type+tags）必须同时满足；不满足则回落默认配置一条', () => {
-    const p = policy({
-      rules: [{ match: { type: 'rule', tags: ['security'] }, set: { layer: 'global' } }],
-    })
-    const hit = buildDepositSuggestions({ policy: p, description: '规范 security 红线' })
-    expect(hit[0]).toMatchObject({ kind: 'rule', layer: 'global' })
-    const miss = buildDepositSuggestions({ policy: p, description: '规范（但没有那个标签）' })
-    expect(miss[0]!.reason).toBe('团队默认配置（default_type/default_layer）')
-  })
-
-  it('match{layer:...} 在「任务行」上下文不可判定 → 不猜，回落默认配置', () => {
-    const suggestions = buildDepositSuggestions({
-      policy: policy({ rules: [{ match: { layer: 'global' }, set: { priority: 'high' } }] }),
-      description: '规范',
-    })
-    expect(suggestions[0]!.reason).toBe('团队默认配置（default_type/default_layer）')
-    expect(suggestions[0]!.priority).toBe('medium')
-  })
-
-  it('多规则命中 → 按 kind|layer 去重（不堆重复建议）', () => {
-    const suggestions = buildDepositSuggestions({
-      policy: policy({
-        rules: [
-          { match: { type: 'rule' }, set: { layer: 'global' } },
-          { match: { type: 'rule', tags: [] }, set: { layer: 'global', priority: 'high' } },
-        ],
-      }),
-      description: '规范',
-    })
-    expect(suggestions).toHaveLength(1)
-  })
-
-  it('命中明确类型（bug → pitfall）而规则只覆盖 rule → 回落默认配置时带上推断类型', () => {
-    const suggestions = buildDepositSuggestions({
-      policy: policy({ rules: [{ match: { type: 'rule' }, set: { layer: 'global' } }] }),
-      description: '修复一个 bug',
-    })
-    expect(suggestions[0]).toMatchObject({ kind: 'pitfall', layer: 'project', priority: 'medium' })
-  })
-})
 
 describe('depositWithPolicy（F-E2 共用入口）', () => {
   it('无 team_id → 直传落库，且不触碰团队加载器', async () => {

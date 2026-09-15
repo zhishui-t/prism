@@ -129,14 +129,6 @@ export {
   type ConvertFileResult,
 } from './kb/convert-file.js'
 
-// 任务完成 → 沉淀建议清单（F-E3：只建议不落库；CLI `task report` 与 MCP 共用）
-export {
-  buildDepositSuggestions,
-  inferDepositKinds,
-  type DepositSuggestion,
-  type DepositSuggestionInput,
-} from './tasks/deposit-suggestions.js'
-
 // 图谱
 export {
   resolveGraphifyCommand,

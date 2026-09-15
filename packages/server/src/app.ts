@@ -12,7 +12,6 @@ import { kbRoutes } from './http/routes/kb.js'
 import { defaultGraphifyRunner, graphRoutes, type GraphDeps } from './http/routes/graph.js'
 import { studioRoute } from './http/routes/studio.js'
 import { consoleRoute, resolveWebDistDir } from './http/routes/console.js'
-import { taskRoutes } from './http/routes/tasks.js'
 import { peopleRoutes } from './http/routes/people.js'
 import { resolveDirsFromHome } from './roles/index.js'
 import { archRoutes } from './http/routes/arch.js'
@@ -153,14 +152,6 @@ export async function createApp(options: AppOptions = {}): Promise<{
   router.add('GET', '/api/arch/ir/:type/:file', arch.ir)
   router.add('GET', '/api/arch/preview/:type/:file', arch.preview)
 
-  const tasks = taskRoutes(home)
-  router.add('GET', '/api/tasks', tasks.list)
-  router.add('GET', '/api/tasks/stats', tasks.stats)
-  router.add('POST', '/api/tasks/register', tasks.register)
-  router.add('POST', '/api/tasks/report', tasks.report)
-  router.add('GET', '/api/tasks/:id', tasks.get)
-  router.add('GET', '/api/dags/:id', tasks.dag)
-
   // 角色 / 团队 / 技能（design-v3 §3.4 F11：数据源由激活适配器推导）
   // 只读 GET + 唯一的写路由 POST /api/teams（F-C3：只写 body 显式 teams_dir）
   const people = peopleRoutes({
@@ -219,7 +210,6 @@ export async function createApp(options: AppOptions = {}): Promise<{
     })
   })
   server.on('close', () => {
-    tasks.close()
     // F-T1：知识服务持有的 SQLite 句柄必须随服务释放——否则 Windows 上
     // `<home>/state/*.db(-wal|-shm)` 仍被占用，临时目录删不掉、e2e 残留静默堆积
     // （实测：修前 `D:\tmp\prism-e2e-*` 已积累 97 个）。只关自己创建的那个实例，

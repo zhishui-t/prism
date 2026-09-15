@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import { isPrismError, PrismError } from '@prism/core'
 
-/** design.md §4 固定错误码集合（工作队列已移除，其护栏码一并删除）。 */
+/** design.md §4 固定错误码集合（工作队列与任务域均已移除，其护栏码一并删除）。 */
 export const ERROR_CODES = [
   'bad_request',
   'not_found',
@@ -13,7 +13,6 @@ export const ERROR_CODES = [
   'graphify_timeout',
   'build_in_progress',
   'invalid_status_transition',
-  'task_stale_revision',
   'archify_missing',
   'archify_failed',
   'archify_timeout',
@@ -46,7 +45,6 @@ const ERROR_STATUS: Record<ErrorCode, number> = {
   graphify_timeout: 504,
   build_in_progress: 409,
   invalid_status_transition: 409,
-  task_stale_revision: 409,
   archify_missing: 500,
   archify_failed: 500,
   archify_timeout: 504,

@@ -1,0 +1,12 @@
+# code_ok_v7 —— 第七轮代码检视门禁通过
+
+- 审核人：reviewer（ZCode 评审席）；交叉验证经 WorkBuddy deepseek-v4.1-flash / effort max（复检 3 专项批），全部 B/MAJOR 级发现经审核人本人读码二次确认
+- 时间戳：2026-09-16T06:35+08:00（复检收口）
+- 对象：工作区未提交改动（F2 删任务中心·后端域 + F1 前端整体重设计 + people.ts skills_dir 一行）及修复轮（B1 + M1-M4 + MINOR 3/7/8/9/11/12/13）
+- 覆盖项：B1 books 数据丢失（闭环 + 端到端探针，含事实勘误：丢失真实面=frontmatter 形态）｜M1 Esc 浮层栈+焦点圈闭（StrictMode 叠开实测）｜M2 safeDecode 双包（畸形 % 不再白屏）｜M3 closeForm 单一出口 + loading 守卫（三断场景各带回归）｜M4 isSelMiss 判据（not_found 抛错路径覆盖核实）｜MINOR 7 项（O(n²) 上界 128KB 11.8s→3.4ms、断点删除、守卫接线含假绿真修、XSS 负例、身份守卫、README 页数）
+- 验证：pnpm typecheck / lint / build 全绿；pnpm exec vitest run apps/web/test → 10 文件 94/94 passed；pnpm test 全量 1010 passed / 2 failed（role-parse 宿主环境依赖，F3 范围）/ 2 skipped；工作区无探针残留
+- 结论：**通过**（上轮驳回项全部闭环），放行规格验证（F3）
+- 遗留（均不阻塞，详见 .agent-team/code-review-v7.md 复检记录节）：
+  1. [债务·单独立项] CLI `prism role edit --layers/--books` 单给一项吞另一项（packages/cli/src/commands/role.ts:193-198，HEAD 既存、非本轮改动面，数据丢失类）——请队长派修+补测试
+  2. [F3] MINOR×3：reload 失败清选中 / notFound 吞错误原文 / overlay 容器持焦 Tab 不圈闭；NIT×3（注释类）
+  3. [F3] role-parse 2 条环境依赖测试改造为环境无关；MINOR-7 残余样例数字按复检口径勘误

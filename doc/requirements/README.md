@@ -28,7 +28,6 @@
 | `cross-platform.md` | 平台支持：Windows / macOS 一线、Linux 尽力；平台差异的 4 类与唯一真相源 |
 | `code-graph.md` | 代码图谱：用 Graphify 工具/页面，产物放项目根 |
 | ~~`work-queue.md`~~ | **已废弃**（工作队列移除；富化改宿主直付，见该文顶部） |
-| `task-center.md` | 任务中心：被动台账、依赖图、回报协议 |
 | `cli-mcp-surface.md` | CLI 与 MCP 完整命令面 |
 | `model-negotiation.md` | 边界声明：Prism 不参与子 agent 管理与模型选择 |
 
@@ -98,12 +97,11 @@
 | 31 | 产物放 **`<项目根>/graphify-out/`**（Python 版 graphify） |
 | 32 | 默认零 token 建图（全量 `--code-only`；`--no-description` 在 Python 版不存在，见 `code-graph.md` 裁决 D1） |
 
-### 2.7 工作队列与台账
+### 2.7 工作队列
 
 | # | 决策 |
 | :--- | :--- |
 | 33 | 工作队列**拉取式**，claim 用 attempt token 防重复 |
-| 34 | 任务中心**被动台账**，复用 14 态状态机 |
 
 ---
 
@@ -121,7 +119,6 @@
 | knowledge-injection | 上下文包默认预算 |
 | code-graph | 建图触发（仅手动/团队启用自动）、多项目图谱合并 |
 | ~~work-queue~~ | 已废弃（队列移除） |
-| task-center | 是否批量登记、实时推送方式 |
 | cli-mcp-surface | MCP 传输（stdio/HTTP） |
 
 ---
@@ -141,17 +138,17 @@
 
 ```
 prism/
-├── packages/core/          # 14 态状态机 + SQLite（单写队列/WAL）+ 审计 + 熔断 + HarnessAdapter + 工作队列 + 任务台账
+├── packages/core/          # 14 态状态机 + SQLite（单写队列/WAL）+ 审计 + 熔断 + HarnessAdapter + 工作队列
 ├── packages/knowledge/     # 层→书→模块→条目 + FTS5(bigram) 检索 + 版次制 + 知识图谱边表 + reindex
 ├── packages/agents/        # 角色/团队定义解析校验渲染 + ZCode 适配器 + 目录解析（prism.yaml）
 ├── packages/skills/        # Prism 内置 Skill + 校验 + 安装到宿主 Skill 目录
 ├── packages/server/        # HTTP API + MCP（10 工具）+ Graphify 封装 + 控制台静态服务
 ├── packages/cli/           # prism init/serve/doctor/kb/graph/role/team/skill（含写守卫）
 ├── 3rd/                    # 第三方子工程：archify v2.16.0（自包含）/ graphify v0.9.56（Python，免构建）
-└── apps/web/               # React 控制台：知识库/知识图谱/代码图谱/架构图谱/角色/团队/技能/任务中心/工作队列
+└── apps/web/               # React 控制台：知识库/知识图谱/代码图谱/架构图谱/角色/团队/技能/工作队列
 ```
 
-**已实现模块**：知识库（检索/版次/导入/reindex）、**知识图谱**（单一边表：双链/覆盖/取代；邻域与路径查询 + SVG 可视化）、代码图谱（Graphify Python 版封装，仓库内子工程优先，产物 graphify-out/）、角色与团队（定义/校验/装配/激活）、Skill 安装、`prism init` 接入、任务台账（登记/回报/依赖图）、**工作队列**（拉取式：宿主经 MCP/HTTP 认领执行 LLM 工作，Prism 不调 LLM）。
+**已实现模块**：知识库（检索/版次/导入/reindex）、**知识图谱**（单一边表：双链/覆盖/取代；邻域与路径查询 + SVG 可视化）、代码图谱（Graphify Python 版封装，仓库内子工程优先，产物 graphify-out/）、角色与团队（定义/校验/装配/激活）、Skill 安装、`prism init` 接入、**工作队列**（拉取式：宿主经 MCP/HTTP 认领执行 LLM 工作，Prism 不调 LLM）。
 
 **架构图谱**（Archify v2.16.0 vendored 子工程）：五类图 IR 校验与渲染 + 控制台 iframe 预览。
 

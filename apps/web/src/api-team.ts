@@ -62,6 +62,18 @@ export interface TeamDefinition {
   workflow: WorkflowStage[]
 }
 
+/** 图 status 详情（镜像 server `graph/registry.ts` 的 `GraphStatusDetail`，只读展示用）。 */
+export interface GraphStatusDetail {
+  project: string
+  root: string
+  graph_exists: boolean
+  built_at: string | null
+  changed_files: number
+  total_files: number
+  stale: boolean
+  note?: string
+}
+
 export interface TeamActivation {
   team_id: string
   members: Array<{
@@ -73,6 +85,13 @@ export interface TeamActivation {
   }>
   workflow: WorkflowStage[]
   deposit: DepositPolicy
+  /**
+   * 只读图状态（server 侧附加，`?project=<名>` 给出时才有值，否则 `null`）。
+   * 当前 UI 的 activate 调用**不带 project** → 恒为 `null`（不伪造）。
+   */
+  graph_status?: GraphStatusDetail | null
+  /** `?build=1` 时返回的建图任务句柄。 */
+  graph_build?: { job_id: string }
 }
 
 export interface PrismSkill {
@@ -93,6 +112,13 @@ export interface ValidationResult {
   issues: ValidationIssue[]
 }
 
+/**
+ * 统一请求：解析信封，失败抛错（与 `api.ts` 的 `request()` 同一契约的第二处实现）。
+ *
+ * ⚠ **契约（debts D-1，不得更改）**：错误**必须**以 `` `${code}: ${message}` `` 抛成 `Error.message`
+ * ——错误码靠这个前缀承载（消费方按 `startsWith('not_found')` 之类的判断分派）。
+ * 改这里就必须同步 `api.ts` 的同名函数。
+ */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     headers: { 'content-type': 'application/json' },
@@ -124,6 +150,33 @@ export interface SkillDetail {
   teams: string[]
   /** SKILL.md 全文（含 frontmatter）；读不到为空串 */
   content: string
+}
+
+/**
+ * 内置 Skill 清单响应（`GET /api/skills`，v7 改型）。
+ *
+ * 由裸数组改为 `{ skills, skills_dir }`：与 MCP `prism_skill_list` 对齐，
+ * `skills_dir` 供安装/卸载表单回填（服务端 body 的 `skills_dir` **必填**）。
+ */
+export interface SkillListResult {
+  skills: PrismSkill[]
+  /** 宿主技能目录（服务端已解析；安装/卸载的原样入参） */
+  skills_dir: string
+}
+
+/** 安装结果（`POST /api/skills/install`）——与 server 的 `SkillInstallOutcome` 同形。 */
+export interface SkillInstallOutcome {
+  skills_dir: string
+  written: string[]
+  skipped: Array<{ path: string; reason: string }>
+}
+
+/** 卸载结果（`POST /api/skills/uninstall`）——与 server 的 `SkillUninstallOutcome` 同形。 */
+export interface SkillUninstallOutcome {
+  skills_dir: string
+  removed: string[]
+  /** 未删的（人写的 Skill / 无 SKILL.md）：卸载只动 Prism 产物 */
+  kept: Array<{ name: string; path: string; reason: string }>
 }
 
 /** 团队列表 + 受管 teams 目录（design-v4 §3.4：GET /api/teams 增只读 teamsDir）。 */
@@ -274,7 +327,8 @@ export const teamApi = {
     ),
   team: (id: string) => request<TeamDefinition>(`/api/teams/${encodeURIComponent(id)}`),
   activate: (id: string) => request<TeamActivation>(`/api/teams/${encodeURIComponent(id)}/activate`),
-  skills: () => request<PrismSkill[]>('/api/skills'),
+  /** 内置 Skill 清单（v7 改型：`{ skills, skills_dir }`，与 MCP `prism_skill_list` 对齐）。 */
+  skills: () => request<SkillListResult>('/api/skills'),
   skill: (name: string) => request<SkillDetail>(`/api/skills/${encodeURIComponent(name)}`),
   skillUsage: () => request<SkillUsage[]>('/api/skills/usage'),
 
@@ -320,4 +374,25 @@ export const teamApi = {
     if (team !== undefined && team !== '') qs.set('team', team)
     return request<EffectiveSkillSet>(`/api/skills/effective?${qs.toString()}`)
   },
+
+  /**
+   * 安装内置 Skill（`POST /api/skills/install`，§4.3 S5）。
+   *
+   * - `skills_dir` **必填**且原样传给服务端——服务端绝不复用默认宿主目录（写路径不回落），
+   *   所以 UI 必须把 `skills()` 返回的 `skills_dir` 带回来；
+   * - `names` 省略/空 = 全部内置；
+   * - `force` 缺省**不覆盖**人写的同名 Skill（服务端写 `.prism-new` 供对比）。
+   */
+  skillInstall: (input: { skills_dir: string; names?: string[]; force?: boolean }) =>
+    request<SkillInstallOutcome>('/api/skills/install', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+
+  /** 卸载 Skill（`POST /api/skills/uninstall`）。只删 Prism 产物，人写的记入 `kept`。 */
+  skillUninstall: (input: { skills_dir: string; names?: string[] }) =>
+    request<SkillUninstallOutcome>('/api/skills/uninstall', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
 }

@@ -12,15 +12,15 @@ import { PRISM_MARKER_PREFIX, prismSkillMarker } from '../marker.js'
  */
 const PRISM_SKILL_CONTENT = `---
 name: prism
-description: "使用 Prism 平台能力时触发：检索/沉淀知识（kb）、查询知识图谱与代码图谱（graph）、渲染架构图（arch）、启用团队与派发角色（team/role）、领取 LLM 待办（work）、登记与回报任务（task）。或用户提到 prism、PRISM_HOME、知识库、落库、代码图谱、影响面、架构图、启用团队、任务台账时使用。注意：纯代码结构问答优先 graphify；本 Skill 负责 Prism 服务接入与资产消费。"
+description: "使用 Prism 平台能力时触发：检索/沉淀知识（kb）、查询知识图谱与代码图谱（graph）、渲染架构图（arch）、启用团队与派发角色（team/role）、领取 LLM 待办（work）。或用户提到 prism、PRISM_HOME、知识库、落库、代码图谱、影响面、架构图、启用团队时使用。注意：纯代码结构问答优先 graphify；本 Skill 负责 Prism 服务接入与资产消费。"
 ---
 
 ${prismSkillMarker('prism')}
 
 # Prism 使用手册（元 Skill）
 
-Prism 是本机的**研发效能控制面**：知识库、知识图谱、代码图谱、架构图谱、专家角色与团队、任务台账。
-**它不执行任务、不调 LLM、不调度 agent**——只提供资产与台账；执行归宿主（你）。
+Prism 是本机的**研发效能控制面**：知识库、知识图谱、代码图谱、架构图谱、专家角色与团队。
+**它不执行任务、不调 LLM、不调度 agent**——只提供资产；执行归宿主（你）。
 
 ## 0. 快速路径：先看状态，再决定查还是建
 
@@ -49,7 +49,6 @@ Prism 是本机的**研发效能控制面**：知识库、知识图谱、代码�
 | 导入项目文档（二进制） | \`prism_kb_convert\`（→Markdown）→ 你提炼 → \`prism_kb_deposit\` | [references/import.md](references/import.md) |
 | 批量导入整个项目文档 | \`prism_kb_import\`（扫目录建引用索引） | [references/import.md](references/import.md) |
 | 回写你的 LLM 产出（摘要/标签/实体） | \`prism_kb_enrich\` | [references/import.md](references/import.md) |
-| 登记任务 / 回报状态 / 看依赖图 | \`prism_task_register/report/status\` | [references/task.md](references/task.md) |
 | 环境自检 / 换宿主 / 打包 | \`prism doctor\` / \`prism harness show\` | [references/cli.md](references/cli.md) |
 
 ## 1.5 第一次接入：从零到能用
@@ -123,7 +122,7 @@ prism serve --ensure               # 后台幂等起控制台（已在跑则复�
 - **不编边**：图谱没有的关系不要推断；\`confidence\` 字段（EXTRACTED/INFERRED）照实呈现；
 - **不读全图**：用查询拿子图（\`limit\`/\`depth\` 有界），避免把整张图塞进上下文。
 
-## 5. 工具速查（47 个 MCP 工具）
+## 5. 工具速查（44 个 MCP 工具）
 
 | 分组 | 工具 |
 | :--- | :--- |
@@ -131,7 +130,6 @@ prism serve --ensure               # 后台幂等起控制台（已在跑则复�
 | 代码图谱（8） | \`prism_graph_query\` \`prism_graph_path\` \`prism_graph_explain\` \`prism_graph_affected\` \`prism_graph_god_nodes\` \`prism_graph_summary\` \`prism_graph_status\` \`prism_graph_merge\` |
 | 架构图谱（1） | \`prism_arch_generate\`（五类图统一入口：workflow 传 \`team\`，architecture/sequence/dataflow 传 \`project\`，lifecycle 无入参） |
 | 角色团队（18） | \`prism_role_list\` \`prism_role_get\` \`prism_role_new\` \`prism_role_edit\` \`prism_role_rm\` \`prism_role_render\` \`prism_team_list\` \`prism_team_get\` \`prism_team_new\` \`prism_team_edit\` \`prism_team_rm\` \`prism_team_render\` \`prism_team_activate\` \`prism_context_pack\` \`prism_skill_effective\` \`prism_skill_list\` \`prism_skill_install\` \`prism_skill_uninstall\` |
-| 任务台账（3） | \`prism_task_register\` \`prism_task_report\` \`prism_task_status\` |
 
 > **导入三件套**：\`prism_kb_convert\`（文档→Markdown，本地 anydoc 转换）→ 你提炼 →
 > \`prism_kb_deposit\` 逐条落库；或 \`prism_kb_import\` 一次扫描整个项目目录建引用索引。
@@ -164,7 +162,6 @@ prism arch   types/schema/validate/render/from-team/from-graph/from-state  # 架
 prism role   list/show/new/edit/rm/validate/render [--source <dir>]
 prism team   list/show/new/edit/rm/validate/render/activate [--source <dir>] [--roles-dir <dir>]
 prism skill  list/install/update/uninstall/validate/effective
-prism task   list/show/graph/register/report/stats
 \`\`\`
 
 **写守卫**：目标是默认宿主目录且未显式指定时会拒绝（\`guard_required\`），需 \`--yes\` 或显式 \`--harness-root\`。
@@ -370,7 +367,7 @@ prism graph affected "<节点>" --depth 2 --project <名>
 ## 与 graphify Skill 的分工
 
 纯代码结构问答（「这个函数干嘛的」）优先用宿主自带的 **graphify** Skill；
-需要**影响面 / 与 Prism 知识关联 / 跨会话台账**时用 Prism 的图谱工具。
+需要**影响面 / 与 Prism 知识关联**时用 Prism 的图谱工具。
 `,
   },
   {
@@ -458,53 +455,6 @@ prism_kb_enrich { kind, payload, result, by? }
 - Prism **不审核结果**——你说落就落；结构不符（缺 entry_id/summary 等）则跳过并说明；
 - 回写失败会**抛出**（不静默），据错误修正后重试；
 - 一次调用一种 kind，一对一（不做批处理）。
-`,
-  },
-  {
-    path: 'references/task.md',
-    content: `# 任务台账（prism_task_*）
-
-## 定位
-
-**被动台账**——任务由你（宿主/队长）创建推进，Prism 只记录、可视化、审计。
-Prism **不派发、不推进、不重试**。
-
-## 登记 DAG（prism_task_register）
-
-\`\`\`
-{ dag_id, session_id, team_id, project_id, version, difficulty,
-  tasks: [{ id, description, depends_on?, write_scopes?, assigned_agent?, stage? }] }
-\`\`\`
-
-- 校验：任务 id 唯一、\`depends_on\` 必须同批内存在、**无环**（Kahn 拓扑排序）；
-- 同 \`dag_id\` 重复登记是**幂等**的（不重复写）；
-- 登记**不触发执行**。
-
-## 回报状态（prism_task_report）
-
-\`\`\`
-{ task_id, to_status, by, from_status?, expected_revision?, result?, error_type? }
-\`\`\`
-
-- **状态机判定**：14 态、32 条合法转移；非法转移直接拒绝（\`invalid_status_transition\`）；
-- **乐观并发**：\`from_status\` / \`expected_revision\` 不符 → \`task_stale_revision\`；
-- 每次回报 \`revision + 1\`，写审计。
-
-常见转移：\`WAITING → RUNNING → COMPLETED\`；\`RUNNING → FAILED\`；\`FAILED → WAITING\`（重试）。
-
-## 查询（prism_task_status）
-
-- 带 \`task_id\` → 单任务；
-- 带 \`dag_id\` → 该 DAG 的任务 + 依赖图（\`edges\`）；
-- 都不带 → 列表 + 统计。
-
-## CLI 等价
-
-\`\`\`bash
-prism task register --dag d1 --file dag.json --session s1 --team core-dev --project prism
-prism task report T-1 --to RUNNING --by dev-1
-prism task graph d1
-\`\`\`
 `,
   },
   {
@@ -678,7 +628,7 @@ prism serve --stop       # 停掉后台那份
 > 日志 \`<PRISM_HOME>/state/serve-<port>.log\`；状态记录 \`<PRISM_HOME>/state/serve-<port>.json\`。
 > 关掉宿主自动拉起：\`PRISM_SERVE_AUTOSTART=0\`。
 
-控制台页面：知识库 / 代码图谱 / 角色 / 团队 / 技能 / 任务中心 / 项目台账。
+控制台页面：知识库 / 代码图谱 / 角色 / 团队 / 技能 / 项目台账。
 （知识图谱与架构图谱**没有一级页**——它们归入「知识库 → 点开一本书 → 详情面板」。）
 
 ## 打包与部署
@@ -700,7 +650,7 @@ pnpm run release      # 发 GitHub Release（复用本机 git 凭据，无需手
 export const prismSkill: PrismSkill = {
   name: 'prism',
   description:
-    '使用 Prism 平台能力时触发：检索/沉淀知识（kb）、查询知识图谱与代码图谱（graph）、渲染架构图（arch）、启用团队与派发角色（team/role）、领取 LLM 待办（work）、登记与回报任务（task）。或用户提到 prism、PRISM_HOME、知识库、落库、代码图谱、影响面、架构图、启用团队、任务台账时使用。注意：纯代码结构问答优先 graphify；本 Skill 负责 Prism 服务接入与资产消费。',
+    '使用 Prism 平台能力时触发：检索/沉淀知识（kb）、查询知识图谱与代码图谱（graph）、渲染架构图（arch）、启用团队与派发角色（team/role）、领取 LLM 待办（work）。或用户提到 prism、PRISM_HOME、知识库、落库、代码图谱、影响面、架构图、启用团队时使用。注意：纯代码结构问答优先 graphify；本 Skill 负责 Prism 服务接入与资产消费。',
   content: PRISM_SKILL_CONTENT,
   assets: PRISM_SKILL_ASSETS,
   builtin: true,

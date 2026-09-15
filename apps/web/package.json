@@ -6,6 +6,7 @@
   "description": "Prism 控制台（Vite + React + TypeScript）",
   "scripts": {
     "dev": "vite",
+    "prebuild": "node scripts/check-hardcoded-cjk.mjs && node scripts/dead-keys.mjs",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.json"

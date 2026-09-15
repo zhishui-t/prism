@@ -2,7 +2,9 @@ import { useState } from 'react'
 
 import { teamApi, type EffectiveSkill, type ValidationIssue } from '../api-team.ts'
 import { State } from '../components/State.tsx'
+import { SkillScopeList } from './SkillScopeList.tsx'
 import { useAsync } from '../components/useAsync.ts'
+import { useT } from '../i18n.ts'
 
 /**
  * F-D2 Skill **有效集**（正向视图：角色 × 团队 → 能用的 skill）。
@@ -11,20 +13,9 @@ import { useAsync } from '../components/useAsync.ts'
  * 按来源分组（global → team → role），同名 skill 只出现一次但挂多枚来源标签；
  * 未装（`available === false`）高亮并给出可执行命令。
  *
- * 复用：`.card` `.row` `.tag` `.mono` `.small` `.muted` `.empty` `.error` `.list-row` `.form-grid`、
- * `State`、`useAsync`。零新 UI 库、零新视觉语言。
+ * 复用：`.row` `.tag` `.mono` `.small` `.muted` `.empty` `.error` `.list-row` `.form-grid`、
+ * `State`、`useAsync`。零新 UI 库、零新视觉语言。文案一律走 `t()`（组件内不留裸中文）。
  */
-
-type Source = 'global' | 'team' | 'role'
-
-/** 来源分组顺序（与 F-D1 合并顺序一致：global → team → role）。 */
-const SOURCE_ORDER: Source[] = ['global', 'team', 'role']
-
-const SOURCE_LABEL: Record<Source, string> = {
-  global: '全局已装',
-  team: '团队声明',
-  role: '角色声明',
-}
 
 export function EffectiveSkills({
   role,
@@ -42,9 +33,10 @@ export function EffectiveSkills({
   teamFixed?: boolean
   /** 角色可选项（缺省 = 全部角色库）；团队详情传成员角色 */
   roleOptions?: string[]
-  /** 「查看使用情况 →」入口（Skills 页反向视图） */
+  /** 「查看使用情况」入口（Skills 页反向视图） */
   onOpenUsage?: () => void
 }) {
+  const t = useT()
   const [roleSel, setRoleSel] = useState(role ?? '')
   const [teamSel, setTeamSel] = useState(team ?? '')
 
@@ -70,25 +62,27 @@ export function EffectiveSkills({
   }, [roleSel, teamSel, skip])
 
   return (
-    <div style={{ marginTop: 14 }}>
+    <div style={{ marginTop: 'var(--s-3)' }}>
       <div className="row" style={{ justifyContent: 'space-between' }}>
         <h3 style={{ margin: 0 }}>
-          有效 Skill
+          {t('skills.effective.title')}
           {eff.data !== undefined && <span className="muted"> ({eff.data.skills.length})</span>}
         </h3>
-        <div className="row" style={{ gap: 8 }}>
+        <div className="row" style={{ gap: 'var(--s-2)' }}>
           {onOpenUsage && (
-            <button className="rel-link" onClick={onOpenUsage} title="技能页 → 使用情况（反向视图）">
-              查看使用情况 →
+            <button className="rel-link" onClick={onOpenUsage} title={t('skills.effective.usageHint')}>
+              {t('skills.effective.viewUsage')}
             </button>
           )}
           {roleFixed ? (
-            <span className="tag">角色: {role ?? ''}</span>
+            <span className="tag">
+              {t('skills.effective.role')}: {role ?? ''}
+            </span>
           ) : (
             <label className="field" style={{ gap: 2 }}>
-              <span className="label">角色</span>
+              <span className="label">{t('skills.effective.role')}</span>
               <select value={roleSel} onChange={(e) => setRoleSel(e.target.value)}>
-                <option value="">（不指定角色）</option>
+                <option value="">{t('skills.effective.anyRole')}</option>
                 {roleChoices.map((r) => (
                   <option key={r} value={r}>
                     {r}
@@ -98,15 +92,17 @@ export function EffectiveSkills({
             </label>
           )}
           {teamFixed ? (
-            <span className="tag">团队: {team ?? ''}</span>
+            <span className="tag">
+              {t('skills.effective.team')}: {team ?? ''}
+            </span>
           ) : (
             <label className="field" style={{ gap: 2 }}>
-              <span className="label">团队</span>
+              <span className="label">{t('skills.effective.team')}</span>
               <select value={teamSel} onChange={(e) => setTeamSel(e.target.value)}>
-                <option value="">（不指定团队）</option>
-                {(lists.data?.teams ?? []).map((t) => (
-                  <option key={t} value={t}>
-                    {t}
+                <option value="">{t('skills.effective.anyTeam')}</option>
+                {(lists.data?.teams ?? []).map((teamId) => (
+                  <option key={teamId} value={teamId}>
+                    {teamId}
                   </option>
                 ))}
               </select>
@@ -116,28 +112,35 @@ export function EffectiveSkills({
       </div>
 
       {teamMissing ? (
-        <div className="error" style={{ marginTop: 10 }}>
-          团队「{teamSel}」不存在。检查团队 ID，或清空团队选择。
+        <div className="error" style={{ marginTop: 'var(--s-2)' }}>
+          {t('skills.effective.teamMissing', { name: teamSel })}
         </div>
       ) : roleSel === '' ? (
-        <div className="empty" style={{ marginTop: 10 }}>
-          选择角色或团队以查看有效 Skill
-          <div className="small muted" style={{ marginTop: 6 }}>
-            有效集按角色计算：global ∪ 团队声明 ∪ 角色声明，同名合并、未装高亮。
+        <div className="empty" style={{ marginTop: 'var(--s-2)' }}>
+          {t('skills.effective.pickHint')}
+          <div className="small muted" style={{ marginTop: 'var(--s-2)' }}>
+            {t('skills.effective.hint')}
           </div>
         </div>
       ) : (
         <>
-          <div style={{ marginTop: 10 }}>
-            <State loading={eff.loading} error={eff.error !== undefined && eff.error.startsWith('not_found') ? `角色「${roleSel}」不存在（404）。刷新角色库后重试。` : eff.error}>
+          <div style={{ marginTop: 'var(--s-2)' }}>
+            <State
+              loading={eff.loading}
+              error={
+                eff.error !== undefined && eff.error.startsWith('not_found')
+                  ? t('skills.effective.roleMissing', { name: roleSel })
+                  : eff.error
+              }
+            >
               {eff.data !== undefined && (
                 <EffectiveList skills={eff.data.skills} warnings={eff.data.warnings} role={roleSel} />
               )}
             </State>
           </div>
           {eff.error !== undefined && (
-            <div className="row" style={{ marginTop: 8 }}>
-              <button onClick={eff.reload}>重试</button>
+            <div className="row" style={{ marginTop: 'var(--s-2)' }}>
+              <button onClick={eff.reload}>{t('common.retry')}</button>
             </div>
           )}
         </>
@@ -155,68 +158,25 @@ function EffectiveList({
   warnings: ValidationIssue[]
   role: string
 }) {
-  const notInstalled = skills.filter((s) => !s.available)
-  const installed = skills.length - notInstalled.length
-
+  const t = useT()
   if (skills.length === 0) {
-    return (
-      <div className="empty">
-        「{role}」当前没有可用 Skill。在角色定义的 <span className="mono">skills:</span> 里加一行，或在团队定义里声明。
-      </div>
-    )
+    return <div className="empty">{t('skills.effective.noneFor', { role })}</div>
   }
-
-  // 分组：按来源优先级取主来源（global → team → role），多来源的行只出现一次
-  const groups = SOURCE_ORDER.map((source) => ({
-    source,
-    items: skills.filter((s) => (s.sources[0] ?? 'global') === source),
-  })).filter((g) => g.items.length > 0)
 
   return (
     <>
-      <div className="row small muted" style={{ gap: 8, marginBottom: 8 }}>
-        <span>
-          已装 <span style={{ color: 'var(--text)' }}>{installed}</span> / 未装{' '}
-          <span style={{ color: notInstalled.length > 0 ? 'var(--warn)' : 'var(--text)' }}>{notInstalled.length}</span>
-        </span>
-        {notInstalled.length === 0 && <span className="tag ok">全部已装</span>}
-      </div>
-
-      <div className="form-grid">
-        {groups.map((g) => (
-          <div key={g.source}>
-            <div className="small muted" style={{ marginBottom: 4 }}>
-              {SOURCE_LABEL[g.source]}（{g.items.length}）
-            </div>
-            {g.items.map((s) => (
-              <div
-                key={s.name}
-                className="list-row"
-                style={{ borderLeft: `3px solid ${s.available ? 'transparent' : 'var(--err)'}` }}
-              >
-                <span className="mono list-main">{s.name}</span>
-                {s.sources.map((src) => (
-                  <span key={src} className="tag">
-                    {src}
-                  </span>
-                ))}
-                <span className={`tag${s.available ? ' ok' : ' err'}`}>{s.available ? '已装' : '未装'}</span>
-                {!s.available && (
-                  <div className="small muted" style={{ width: '100%' }}>
-                    宿主未装：<span className="mono">prism skill install {s.name}</span>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        ))}
-      </div>
+      {/* 分组渲染统一走 SkillScopeList（skills 详情「查看有效集」与 teams 详情共用，§4.3 S1/S7） */}
+      <SkillScopeList skills={skills} />
 
       {warnings.length > 0 && (
-        <div className="card" role="status" style={{ background: 'var(--panel-2)', marginTop: 12, marginBottom: 0 }}>
-          <h3>⚠ {warnings.length} 条警告</h3>
+        <div
+          className="pane"
+          role="status"
+          style={{ background: 'var(--sheet-2)', marginTop: 'var(--s-3)', marginBottom: 0 }}
+        >
+          <h3>{t('skills.effective.warnings', { n: warnings.length })}</h3>
           {warnings.map((w, i) => (
-            <div key={`${w.code}-${i}`} className="row" style={{ gap: 6, alignItems: 'baseline' }}>
+            <div key={`${w.code}-${i}`} className="row" style={{ gap: 'var(--s-2)', alignItems: 'baseline' }}>
               <span className="tag err">{w.code}</span>
               <span className="small">{w.message}</span>
             </div>

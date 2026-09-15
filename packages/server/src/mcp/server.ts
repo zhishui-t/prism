@@ -5,13 +5,9 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
-  AuditLog,
   prismHome,
-  openPersistence,
   prismPaths,
   PrismError,
-  TaskLedger,
-  type PrismPersistence,
 } from '@prism/core'
 import {
   buildArchitectureIr,
@@ -69,13 +65,12 @@ import type { GraphQuery, KnowledgeService, Layer, SearchQuery } from '../kb/por
 import { depositWithPolicy, type DepositRequest } from '../kb/deposit-entry.js'
 import { loadKnowledgeService } from '../kb/wiring.js'
 import { buildContextPack } from '../kb/context-pack.js'
-import { buildDepositSuggestions } from '../tasks/deposit-suggestions.js'
 import { writeEnrichment } from '../kb/enrich-writeback.js'
 import { DEFAULT_SERVE_PORT, ensureServe } from '../serve-control.js'
 
 /**
  * MCP stdio 服务（design.md §4 最小集 + design-v3 §3.4 P6 增量，手写 JSON-RPC 2.0）：
- * 知识库 / 图谱 / 角色 / 团队 / 技能 / 任务台账，共 43 个工具（v6：角色与团队补齐增删改查）。
+ * 知识库 / 图谱 / 角色 / 团队 / 技能，共 44 个工具（v6：角色与团队补齐增删改查）。
  * 独立进程运行（`node dist/mcp/server.js`），与 prism serve 经 SQLite WAL 并存。
  */
 
@@ -120,7 +115,7 @@ export interface McpTool {
 /**
  * MCP 工具集：`McpTool[]` + 一个**释放钩子**。
  *
- * 为什么要 close：`kb()` / `ledger()` 是**惰性**打开 SQLite 的（知识库 + 任务台账），
+ * 为什么要 close：`kb()` 是**惰性**打开 SQLite 的（知识库），
  * 若调用方不释放，句柄会挂到进程结束——Windows 上表现为「临时目录里的
  * `*.db/-wal/-shm` 删不掉」，e2e 长期静默堆积（F-T1 实测：修前 `D:\tmp` 积压 97 个）。
  * 类型是数组的交叉，既有消费方（`for (const t of tools)` / `tools.length`）不受影响。
@@ -141,21 +136,6 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
   }
 
   const registry = new ProjectRegistry(deps.home)
-
-  // 任务台账（被动台账，task-center.md）：宿主登记 DAG / 回报状态；Prism 只记录
-  let taskLedger: TaskLedger | undefined
-  /** 惰性打开的持久化句柄（`close()` 时释放；未打开过则为 undefined）。 */
-  let taskPersistence: PrismPersistence | undefined
-  const ledger = async (): Promise<TaskLedger> => {
-    if (taskLedger === undefined) {
-      taskPersistence = openPersistence({ home: deps.home })
-      taskLedger = new TaskLedger({
-        persistence: taskPersistence,
-        audit: new AuditLog({ dir: prismPaths(deps.home).auditDir, queue: taskPersistence.queue }),
-      })
-    }
-    return taskLedger
-  }
 
   const requireProjectRoot = async (name: string): Promise<{ project: string; root: string }> => {
     const info = await registry.get(name)
@@ -1551,105 +1531,6 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
       },
       call: teamRender,
     },
-    {
-      name: 'prism_task_register',
-      description:
-        '批量登记任务 DAG（被动台账：只记录不触发执行）。校验任务 id 唯一、依赖同批内存在、无环',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          dag_id: { type: 'string' },
-          session_id: { type: 'string' },
-          team_id: { type: 'string' },
-          project_id: { type: 'string' },
-          version: { type: 'string' },
-          difficulty: { type: 'string' },
-          tasks: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                id: { type: 'string' },
-                description: { type: 'string' },
-                depends_on: { type: 'array', items: { type: 'string' } },
-                write_scopes: { type: 'array', items: { type: 'string' } },
-                assigned_agent: { type: 'string' },
-                executor: { type: 'string' },
-                stage: { type: 'string' },
-              },
-              required: ['id', 'description'],
-            },
-          },
-        },
-        required: ['dag_id', 'session_id', 'team_id', 'project_id', 'version', 'difficulty', 'tasks'],
-      },
-      call: async (args) => await (await ledger()).registerDag(args as never),
-    },
-    {
-      name: 'prism_task_report',
-      description:
-        '回报任务状态（被动台账：执行方推状态，Prism 只记录）。状态机校验转移合法性 + 乐观并发（expected_revision）。COMPLETED 返回 deposit_hint=await_close；CLOSED 返回 deposit_suggestions（F-E3，只建议不落库）',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          task_id: { type: 'string' },
-          from_status: { type: 'string', description: '执行方声明的当前状态（并发守卫）' },
-          to_status: { type: 'string' },
-          by: { type: 'string', description: '回报者标识' },
-          expected_revision: { type: 'integer', description: '期望 revision（乐观并发）' },
-          result: { description: '结果对象（可选）' },
-          error_type: { type: 'string' },
-        },
-        required: ['task_id', 'to_status', 'by'],
-      },
-      call: async (args) => {
-        const row = await (await ledger()).report(args as never)
-        // F-E3（队长裁决 A4）：COMPLETED 只提示待收口；CLOSED 才给建议清单（只建议、不落库）
-        if (row.status === 'COMPLETED') {
-          return { ...row, deposit_hint: 'await_close' as const }
-        }
-        if (row.status !== 'CLOSED') {
-          return row
-        }
-        const team = await loadTeam(teamsDir, row.team_id, { rolesDir })
-        if (team === null) {
-          return row
-        }
-        const suggestions = buildDepositSuggestions({
-          policy: team.deposit,
-          stage: row.stage,
-          description: row.description,
-        })
-        return suggestions.length === 0 ? row : { ...row, deposit_suggestions: suggestions }
-      },
-    },
-    {
-      name: 'prism_task_status',
-      description: '查询任务台账（列表/单任务/DAG 依赖图/统计）',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          task_id: { type: 'string', description: '取单任务（与 dag_id 二选一）' },
-          dag_id: { type: 'string', description: '取该 DAG 的任务与依赖图' },
-          status: { type: 'string', description: '按状态过滤列表' },
-          session_id: { type: 'string', description: '按会话过滤列表' },
-        },
-      },
-      call: async (args) => {
-        const led = await ledger()
-        const taskId = asString(args.task_id)
-        if (taskId !== undefined) return led.get(taskId)
-        const dagId = asString(args.dag_id)
-        if (dagId !== undefined) return led.dag(dagId)
-        return {
-          tasks: led.list({
-            ...(asString(args.status) !== undefined ? { status: asString(args.status) as never } : {}),
-            ...(asString(args.session_id) !== undefined ? { session_id: asString(args.session_id) as string } : {}),
-          }),
-          stats: led.stats(),
-        }
-      },
-    },
   ]
 
   // 释放惰性打开的句柄（幂等）。见 `McpToolSet` 注释：不释放会导致 Windows 上
@@ -1658,9 +1539,6 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
     close: (): void => {
       kbCache?.close?.()
       kbCache = undefined
-      taskPersistence?.close()
-      taskPersistence = undefined
-      taskLedger = undefined
     },
   })
 }
@@ -1722,7 +1600,7 @@ export async function handleRpcRequest(request: JsonRpcRequest, tools: McpTool[]
         return respond({ content: [{ type: 'text', text: JSON.stringify(value, null, 2) }], isError: false })
       } catch (error) {
         // 工具执行错误按 MCP 约定走 result.isError，而非 JSON-RPC error。
-        // PrismError 带上 [code] 前缀——宿主需要按错误码分支（如 task_stale_revision / harness_not_found）。
+        // PrismError 带上 [code] 前缀——宿主需要按错误码分支（如 bad_request / harness_not_found）。
         const text =
           error instanceof PrismError
             ? `[${error.code}] ${error.message}`

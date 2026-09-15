@@ -199,13 +199,18 @@ describe('people 路由（design-v3 §3.4 F11：信封 + issues + activate）', 
     expect(actBody.value.members[0]).toMatchObject({ role: 'dev-1', installed: true })
   })
 
-  it('GET /api/skills → 内置 PrismSkill[]（含 prism 元 skill）', async () => {
+  it('GET /api/skills → { skills, skills_dir }（含 prism 元 skill）', async () => {
     const res = await fetch(`${base}/api/skills`)
-    const body = (await res.json()) as { ok: boolean; value: Array<{ name: string; builtin: boolean }> }
+    const body = (await res.json()) as {
+      ok: boolean
+      value: { skills: Array<{ name: string; builtin: boolean }>; skills_dir: string }
+    }
     expect(res.status).toBe(200)
     expect(body.ok).toBe(true)
-    expect(body.value.map((s) => s.name)).toContain('prism')
-    expect(body.value.every((s) => s.builtin)).toBe(true)
+    expect(Array.isArray(body.value.skills)).toBe(true)
+    expect(body.value.skills.map((s) => s.name)).toContain('prism')
+    expect(body.value.skills.every((s) => s.builtin)).toBe(true)
+    expect(typeof body.value.skills_dir).toBe('string')
   })
 })
 

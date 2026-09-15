@@ -150,7 +150,7 @@ async function main() {
   const env = { PRISM_HOME: home, PRISM_HARNESS_ROOT: harnessRoot, PRISM_EMBEDDING: 'off' }
 
   let server
-  // F-T1：MCP 工具集会惰性打开知识库/台账 SQLite，需在清理临时目录前显式释放。
+  // F-T1：MCP 工具集会惰性打开知识库 SQLite，需在清理临时目录前显式释放。
   let mcpTools
   try {
     await mkdir(join(projectDir, 'src'), { recursive: true })
@@ -253,27 +253,7 @@ async function main() {
     const conv = await cli(['kb', 'convert', docA, '--json'], env)
     check('4.3 kb convert 纯文本直读', conv.code === 0 && JSON.parse(conv.stdout).value.status === 'text')
 
-    // ===== 5. 任务台账：register → report → 依赖图 =====
-    const dagFile = join(workRoot, 'dag.json')
-    await writeFile(
-      dagFile,
-      JSON.stringify({
-        tasks: [
-          { id: 'T-1', description: '探索' },
-          { id: 'T-2', description: '开发', depends_on: ['T-1'] },
-        ],
-      }),
-      'utf-8',
-    )
-    const reg = await cli(
-      ['task', 'register', '--dag', 'd-e2e', '--session', 's1', '--team', 'core-dev', '--project', 'prism', '--file', dagFile, '--json'],
-      env,
-    )
-    check('5.1 task register 登记 DAG', reg.code === 0 && JSON.parse(reg.stdout).value.tasks === 2)
-    const rep = await cli(['task', 'report', 'T-1', '--to', 'RUNNING', '--by', 'e2e', '--json'], env)
-    check('5.2 task report 合法转移', rep.code === 0 && JSON.parse(rep.stdout).value.status === 'RUNNING')
-    const badRep = await cli(['task', 'report', 'T-2', '--to', 'COMPLETED', '--by', 'e2e'], env)
-    check('5.3 task report 非法转移被拒', badRep.code !== 0, badRep.stderr.trim().slice(0, 80))
+    // ===== 5. 任务台账：已随任务中心删除（第七轮 F2），编号保留占位 =====
 
     // ===== 6. harness：运行时适配器配置 =====
     const hList = await cli(['harness', 'list', '--json'], env)
@@ -318,8 +298,6 @@ async function main() {
     check('8.2 /api/kb/search 命中', kbSearch.body.value.length >= 1)
     const kbGraph = await fetchJson(`${base}/api/kb/graph`)
     check('8.3 /api/kb/graph 返回节点/边', kbGraph.body.value.nodes.length >= 2)
-    const taskStats = await fetchJson(`${base}/api/tasks/stats`)
-    check('8.4 /api/tasks/stats', taskStats.body.value.total === 2)
     const kbStats = await fetchJson(`${base}/api/kb/stats`)
     check('8.5 /api/kb/stats 含摘要条目', kbStats.body.value.entries >= 3)
     const archTypes = await fetchJson(`${base}/api/arch/types`)
@@ -1413,104 +1391,6 @@ async function main() {
         `status=${depNoteHttp.status} value=${JSON.stringify(depNoteHttp.body?.value ?? depNoteHttp.body?.error).slice(0, 120)}`,
       )
 
-      // ---------- F-E3 任务终态沉淀建议 ----------
-      // 状态链必须是 RUNNING→COMPLETED→AWAITING_FEEDBACK→CLOSED（TASK_TRANSITIONS 无 COMPLETED→CLOSED）
-      const dagE3 = join(workRoot, 'dag-e3.json')
-      await writeFile(
-        dagE3,
-        JSON.stringify({
-          tasks: [
-            { id: 'E3-1', description: '安全：修复越权访问的漏洞' },
-            { id: 'E3-2', description: '性能：优化检索延迟' },
-          ],
-        }),
-        'utf-8',
-      )
-      const regE3 = await cli(
-        ['task', 'register', '--dag', 'd-e3', '--session', 's19', '--team', 'core-dev', '--project', 'prism', '--file', dagE3, '--json'],
-        env,
-      )
-      check('19.9.0 F-E3 前置：登记 E3 DAG', regE3.code === 0 && jparse(regE3).value?.tasks === 2)
-      const e3Running = await cli(['task', 'report', 'E3-1', '--to', 'RUNNING', '--by', 'tester-1', '--json'], env)
-      const e3RunningV = jparse(e3Running).value ?? {}
-      check(
-        '19.9.1 F-E3 边界：非终态（RUNNING）→ 不给 deposit_hint/deposit_suggestions',
-        e3Running.code === 0 &&
-          e3RunningV.deposit_hint === undefined &&
-          e3RunningV.deposit_suggestions === undefined,
-      )
-      const e3Completed = await cli(['task', 'report', 'E3-1', '--to', 'COMPLETED', '--by', 'tester-1', '--json'], env)
-      const e3CompletedV = jparse(e3Completed).value ?? {}
-      check(
-        '19.9.2 F-E3 COMPLETED → 仅 deposit_hint=await_close（无清单，裁决 A4）',
-        e3Completed.code === 0 &&
-          e3CompletedV.deposit_hint === 'await_close' &&
-          e3CompletedV.deposit_suggestions === undefined,
-        `hint=${String(e3CompletedV.deposit_hint)}`,
-      )
-      const e3Awaiting = await cli(['task', 'report', 'E3-1', '--to', 'AWAITING_FEEDBACK', '--by', 'tester-1', '--json'], env)
-      const e3AwaitingV = jparse(e3Awaiting).value ?? {}
-      check(
-        '19.9.3 F-E3 边界：AWAITING_FEEDBACK（保温期）→ 仍不给清单',
-        e3Awaiting.code === 0 &&
-          e3AwaitingV.deposit_hint === undefined &&
-          e3AwaitingV.deposit_suggestions === undefined,
-      )
-      const e3Closed = await cli(['task', 'report', 'E3-1', '--to', 'CLOSED', '--by', 'tester-1', '--json'], env)
-      const e3ClosedV = jparse(e3Closed).value ?? {}
-      const e3Suggestions = Array.isArray(e3ClosedV.deposit_suggestions) ? e3ClosedV.deposit_suggestions : []
-      check(
-        '19.9.4 F-E3 CLOSED → deposit_suggestions（团队规则 + 安全关键词，均带 reason）',
-        e3Closed.code === 0 &&
-          e3Suggestions.length >= 2 &&
-          e3Suggestions.some((s) => String(s.reason).includes('团队规则 match{type:rule}')) &&
-          e3Suggestions.some((s) => String(s.reason).includes('安全关键词') && s.layer === 'global' && s.kind === 'rule'),
-        `n=${e3Suggestions.length} ${JSON.stringify(e3Suggestions.map((s) => [s.kind, s.layer, s.reason]))}`.slice(0, 200),
-      )
-      // --deposit 一步落库（文本模式：先打回报结果再打落库结果，故用正则取 id）
-      for (const to of ['RUNNING', 'COMPLETED', 'AWAITING_FEEDBACK']) {
-        await cli(['task', 'report', 'E3-2', '--to', to, '--by', 'tester-1'], env)
-      }
-      const depE3File = join(workRoot, 'dep-e3.md')
-      await writeFile(depE3File, '---\ntitle: E3 一步落库\n---\n\nE3 一步落库正文。\n', 'utf-8')
-      const e3Deposit = await cli(
-        ['task', 'report', 'E3-2', '--to', 'CLOSED', '--by', 'tester-1', '--deposit', depE3File, '--title', 'E3 一步落库', '--type', 'pitfall', '--layer', 'global', '--note', 'E3 一步落库验证'],
-        env,
-      )
-      const e3DepMatch = /已落库\s+(\S+?)@v1/.exec(e3Deposit.stdout)
-      const e3DepId = e3DepMatch !== null ? e3DepMatch[1] : ''
-      check(
-        '19.9.5 F-E3 --deposit 一步落库（复用 kb deposit，rc 0 + 来源地址）',
-        e3Deposit.code === 0 && e3Deposit.stdout.includes('来源地址') && e3DepId !== '',
-        `id=${e3DepId} tail=${e3Deposit.stdout.trim().split('\n').slice(-1)[0]?.slice(0, 80) ?? ''}`,
-      )
-      const e3DepEntry = e3DepId !== '' ? jparse(await cli(['kb', 'get', e3DepId, '--json'], env)).value : undefined
-      check(
-        '19.9.6 F-E3 一步落库带任务来源（deposited_by.task_id=E3-2）',
-        e3DepEntry?.deposited_by?.task_id === 'E3-2',
-        `by=${JSON.stringify(e3DepEntry?.deposited_by)}`,
-      )
-      const dagE3NoTeam = join(workRoot, 'dag-e3b.json')
-      await writeFile(dagE3NoTeam, JSON.stringify({ tasks: [{ id: 'E3-NT', description: '无团队任务' }] }), 'utf-8')
-      // 注：`registerDag` 必填 team_id（CLI 造不出「空团队」任务）→ 这里覆盖「团队不存在 → 不打扰」；
-      //     空 team_id / deposit.enabled=false 两态由 packages/server/test/stream-b.test.ts（F-E3 四态）单测覆盖。
-      await cli(
-        ['task', 'register', '--dag', 'd-e3b', '--session', 's19', '--team', 'ghost-team', '--project', 'prism', '--file', dagE3NoTeam, '--json'],
-        env,
-      )
-      for (const to of ['RUNNING', 'COMPLETED', 'AWAITING_FEEDBACK']) {
-        await cli(['task', 'report', 'E3-NT', '--to', to, '--by', 'tester-1'], env)
-      }
-      const e3NoTeam = await cli(['task', 'report', 'E3-NT', '--to', 'CLOSED', '--by', 'tester-1', '--json'], env)
-      const e3NoTeamV = jparse(e3NoTeam).value ?? {}
-      check(
-        '19.9.7 F-E3 边界：团队不存在 → 不打扰（两字段都不给）',
-        e3NoTeam.code === 0 &&
-          e3NoTeamV.deposit_hint === undefined &&
-          e3NoTeamV.deposit_suggestions === undefined,
-        `rc=${e3NoTeam.code} status=${String(e3NoTeamV.status)}`,
-      )
-
       // ---------- F-B1/F-B2 上下文包暴露面（normalized_by / symbols 加权 / max_excerpt_chars） ----------
       const packQuery = (extra) =>
         `/api/kb/context-pack?role=dev-1&task=${encodeURIComponent('性能')}&budget_tokens=2000${extra}`
@@ -1967,7 +1847,7 @@ async function main() {
     )
   } finally {
     if (server !== undefined) await server.close()
-    // F-T1：释放 MCP 工具的惰性句柄（kb + 任务台账），否则临时目录的 *.db/-wal/-shm 删不掉
+    // F-T1：释放 MCP 工具的惰性句柄（kb），否则临时目录的 *.db/-wal/-shm 删不掉
     mcpTools?.close?.()
     if (KEEP) {
       process.stdout.write(`\n临时目录保留（--keep）: ${workRoot}\n`)

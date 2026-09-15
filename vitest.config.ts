@@ -20,7 +20,7 @@ export default defineConfig({
     },
   },
   test: {
-    include: ['packages/*/test/**/*.test.ts'],
+    include: ['packages/*/test/**/*.test.ts', 'apps/web/test/**/*.test.ts'],
     environment: 'node',
     testTimeout: 20_000,
     // 单测跑「主流程」口径：关掉向量（与 .agent-team/test-plan-v4.md、test/run-e2e.mjs 一致）。
