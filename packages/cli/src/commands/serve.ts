@@ -48,6 +48,10 @@ export async function runServe(ctx: CommandContext, _args: string[], values: Arg
       port,
       host,
       ...(root !== undefined ? { harnessRoot: root } : {}),
+      // v9 F3 / C-8：回收站到期自动清除只在 serve 进程存在——启动 sweep 一次 + 每小时 purge
+      // （定时器由 createApp 挂在 server 生命周期上：unref + close 清除）。
+      // 纯 CLI 部署没有常驻进程，靠 `prism trash purge` 手动兜底（I-4）。
+      trashSweep: true,
     })
     ctx.stdout(`Prism serve 监听 http://${app.host}:${app.port}（home=${app.home}）`)
     ctx.stdout('按 Ctrl+C 停止；要后台常驻（重启后靠宿主/计划任务拉起）改用：prism serve --ensure')

@@ -4,6 +4,7 @@
  *
  * 分工（与 `team-create.ts` 同一形状，写路径单点可审）：
  * - 实际写盘 = agents `newRole` / `editRole` / `removeRole`（CLI `prism role new|edit|rm` 同一实现）；
+ *   其中 `removeRole` 自 v9 F3 起把角色本体**搬进回收站**（`TrashStore`，由入口层注入）；
  * - **校验 + 落点参数化 = 本模块**：落点**恒为调用方显式给出的 `roles_dir`**，
  *   没有 env 回落，也绝不复用 `resolveDirsFromHome` 的默认宿主目录（R5/R6 延伸）。
  *
@@ -15,6 +16,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { PrismError } from '@prism/core'
+import type { TrashStore, TrashTrigger } from '@prism/core'
 import {
   editRole,
   newRole,
@@ -126,13 +128,24 @@ export async function updateRoleDefinition(
   return { path: result.written[0]!, overwritten: false }
 }
 
-/** `DELETE /api/roles/:name` / `prism_role_rm`：删除角色文件本体。 */
-export async function deleteRoleDefinition(name: string, rolesDir: unknown): Promise<{ removed: string[] }> {
+/**
+ * `DELETE /api/roles/:name` / `prism_role_rm` / CLI `prism role rm`：把角色本体**搬进回收站**。
+ *
+ * v9 F3：原「直接删」改为 `TrashStore.put`（可 `prism trash restore <id>` 还原）。
+ * 回收站由入口层按 `PRISM_HOME` 构造后注入（`trashStoreFor`），本模块只传 `trigger` 定界来源。
+ */
+export async function deleteRoleDefinition(
+  name: string,
+  rolesDir: unknown,
+  trash: TrashStore,
+  trigger: TrashTrigger,
+): Promise<{ removed: string[]; trash_id: string }> {
   const targetDir = asNonEmptyString(rolesDir)
   if (targetDir === undefined) {
     throw new PrismError('bad_request', 'roles_dir_required：未指定角色目录（防误写真实宿主，写路径一律显式参数化）。')
   }
-  return run(() => removeRole({ name, rolesDir: targetDir }))
+  const result = await run(() => removeRole({ name, rolesDir: targetDir, trash, trigger }))
+  return { removed: result.removed, trash_id: result.trashId }
 }
 
 /** 把 agents 的 `RoleWriteError` 归一为 `PrismError`（HTTP 走信封状态码、MCP 转 isError 文本）。 */

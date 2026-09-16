@@ -20,6 +20,7 @@ import { runAudit } from './commands/audit.js'
 import { runRole } from './commands/role.js'
 import { runTeam } from './commands/team.js'
 import { runSkill } from './commands/skill.js'
+import { runTrash } from './commands/trash.js'
 
 /** CLI 命令上下文（可注入，便于测试）。 */
 export interface CommandContext {
@@ -65,7 +66,8 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
                                            修改角色（只改点名字段，正文与未知键原样保留）
                                            --skills "" / --color "" / --model "" = 清空该项
   prism role rm <name> [--source <dir>] [--harness-root <dir>|--yes]
-                                           删除角色文件（默认宿主目录需 --yes；不可逆）
+                                           删除角色（**进回收站**，可 prism trash restore <id> 还原；
+                                           默认宿主目录需 --yes）
   prism role validate [--source <dir>]     校验角色定义
   prism role render <name> [--model --thought-level]   渲染为当前 harness 原生形态（预览，不写盘）
   prism team list | show <id> | validate <id> | render <id> [--source <dir>] [--roles-dir <dir>]
@@ -74,7 +76,8 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
   prism team edit <id> [--source <dir>] [--roles-dir <dir>] [--name <名>] [--description <述>] [--members <role[:n],...>] [--harness-root <dir>|--yes]
                                            修改团队（改名册时工作流表就地收窄）
   prism team rm <id> [--source <dir>] [--harness-root <dir>|--yes]
-                                           删除团队文件（默认宿主目录需 --yes；不可逆）
+                                           删除团队（**进回收站**，可 prism trash restore <id> 还原；
+                                           默认宿主目录需 --yes）
   prism team activate <id> [--source <dir>] [--roles-dir <dir>]
   prism skill list | install | update | uninstall | validate [name...] [--force]
   prism skill effective --role <r> [--team <t>] [--json]
@@ -82,6 +85,11 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
   prism skill categorize <name...> [--category <分类>] [--json]
                                            给技能打分类（省略 --category / 空串 = 清除；映射落
                                            <PRISM_HOME>/skill-categories.json，不校验技能是否存在）
+  prism trash list [--kind role|team|skill] | restore <id> [--overwrite] | purge [--all]
+                                           回收站（role/team/skill 删除的落点）：list 列单元，
+                                           restore 还原到原路径（--overwrite 才覆盖），
+                                           purge 只清到期（PRISM_TRASH_RETENTION_DAYS，默认 3 天），
+                                           --all 清全部。到期的自动清除只在 prism serve 运行时发生
 
 目录解析（装配语义简化——角色/团队/Skill 直接住在宿主目录）：
   <PRISM_HOME>/prism.yaml 可选覆盖：roles_dir / teams_dir / skills_dir；
@@ -231,6 +239,8 @@ const CLI_OPTIONS = {
   role: { type: 'string' },
   /** skill categorize --category <分类>（省略 / 空串 = 清除该项分类） */
   category: { type: 'string' },
+  /** trash restore --overwrite：允许覆盖已存在的原路径（缺省拒绝并报 target_exists） */
+  overwrite: { type: 'boolean' },
   /** kb structure freeze --modules a,b（显式冻结清单） */
   modules: { type: 'string' },
   /** kb structure generate|freeze --confirmed-by <who> */
@@ -332,6 +342,8 @@ export type ArgValues = {
   role?: string
   /** `skill categorize --category <分类>`（省略 / 空串 = 清除该项分类） */
   category?: string
+  /** `trash restore --overwrite` */
+  overwrite?: boolean
   modules?: string
   'confirmed-by'?: string
   skills?: string
@@ -513,6 +525,8 @@ export async function runCommand(ctx: CommandContext, argv: string[]): Promise<n
         return await runTeam(effective, rest, values)
       case 'skill':
         return await runSkill(effective, rest, values)
+      case 'trash':
+        return await runTrash(effective, rest, values)
       default:
         effective.stderr(`未知命令: ${command}\n${USAGE}`)
         return 1

@@ -56,6 +56,13 @@
   --type-diagram: #3ac0c4;
   --type-summary: #e06ba0;
   --type-other: #8b93a7;
+  /* v9 F2：架构图五类型（树行首圆点 / 行尾徽章的取色）。色相取自上面同一块数据域色板，
+     浅色主题在 `:root[data-theme='light']` 里有同色相的降明度版本。组件一律引用 token。 */
+  --arch-architecture: #5b8cff;
+  --arch-sequence: #a06bff;
+  --arch-dataflow: #3ac0c4;
+  --arch-workflow: #e0c23a;
+  --arch-lifecycle: #35c46b;
 
   /* ---- 字体族（brief-A §2.3，只用系统栈） ----
      F9 病因 1：`--font-read` 原为 `ui-serif, Georgia, "Songti SC", "SimSun", …`，
@@ -184,6 +191,11 @@
   --type-diagram: #247679;
   --type-summary: #c62970;
   --type-other: #636b82;
+  --arch-architecture: #145aff;
+  --arch-sequence: #8039ff;
+  --arch-dataflow: #247679;
+  --arch-workflow: #7e6a14;
+  --arch-lifecycle: #217a43;
 
   --scrim: rgba(28, 33, 31, 0.35);
   --on-buckram: #ffffff;
@@ -510,6 +522,12 @@ tr:last-child td { border-bottom: 0; }
 .book-toc .toc-status.err { color: var(--err); }
 .book-toc .toc-lamp { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
 
+/* F2 架构图节点：行样式全复用 `.toc-item`（同缩进 / 同选中态），只补两件——
+   行首类型圆点 + 行尾徽章。圆点直径沿用状态点的 8px 例外档（§2.5），色取 `--arch-*` token。 */
+.book-toc .toc-arch-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--arch-color); flex-shrink: 0; }
+/* 行尾徽章（类型 / project）不参与收缩：余量已由 `.toc-title` 的 `flex: 1` 吃走。 */
+.book-toc .toc-item .toc-arch-badge { flex-shrink: 0; }
+
 /* 检索模式（K5/K6/K7）：左栏整体替换为结果列表，顶部「← 返回目录 · N 条」 */
 .book-toc .toc-search-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s-2); padding: var(--s-2) var(--s-3); border-bottom: 1px solid var(--rule); }
 .book-toc .toc-scope { display: flex; gap: var(--s-1); padding: var(--s-2) var(--s-3); }
@@ -666,6 +684,16 @@ tr:last-child td { border-bottom: 0; }
    两道已删——它们压过 `.md-read` 的 `--fs-read/--font-read`，把知识正文变成 14px 等宽代码块。
    正文外观的唯一来源从此是下面的全局 `.md-read`（§2.3/§2.4）。 */
 .book-content .empty-hint { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: var(--mute); gap: var(--s-2); padding: var(--s-6) 0; }
+
+/* F2 图视图（右栏，选中 arch 节点时）：工具条 + 全宽 iframe。
+   `height: 100%` 取 `.book-content` 的**内容盒**高（与上面 `.empty-hint` 同口径）——
+   `.book-content` 的 padding 落在滚动区内，故子项恰好填满、不会多出「内边距那么高的假滚动」；
+   小视口下 `min-height` 兜底，超出部分由书页自身滚动。`iframe` 本体沿用全局 `.iframe-wrap`。 */
+.arch-view { display: flex; flex-direction: column; gap: var(--s-2); height: 100%; min-height: calc(var(--s-7) * 8); }
+.arch-view-bar { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-2); flex: 0 0 auto; }
+/* 「新标签打开」贴右：与左侧「类型徽章 · 生成时间」拉开，扫读时不挤在一起。 */
+.arch-view-open { margin-left: auto; }
+.arch-view .iframe-wrap { flex: 1 1 auto; min-height: 0; }
 
 /* ===== 角色卡片（精简版） ===== */
 

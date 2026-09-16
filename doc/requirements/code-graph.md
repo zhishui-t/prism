@@ -6,7 +6,8 @@
 
 > ## ⚠ v5 修订（2026-09-11，功能迭代第三轮）
 > 本文件下方仍是 2026-09-09 的讨论稿；以下为**与 Python 版 graphify（`3rd/graphify`）实测对齐的事实**，与下方冲突时以本节为准：
-> - **全量建图**：`graphify <项目根> --code-only`（裸路径即 `extract`，`3rd/graphify/graphify/cli.py:4725-4731`）。`--code-only` 是红线 R2 的护栏：不加它时树内有 doc/paper/image 会使 `needs_llm=True`（`cli.py:3642`）——无 LLM key 直接 exit 1、有 key **真会调 LLM**。裁决 D1：Prism 建图永不调 LLM，**不提供「含文档」开关**。
+> - **全量建图**：`graphify <项目根> --code-only --exclude .prism`（裸路径即 `extract`，`3rd/graphify/graphify/cli.py:4725-4731`）。`--code-only` 是红线 R2 的护栏：不加它时树内有 doc/paper/image 会使 `needs_llm=True`（`cli.py:3642`）——无 LLM key 直接 exit 1、有 key **真会调 LLM**。裁决 D1：Prism 建图永不调 LLM，**不提供「含文档」开关**。
+>   - `--exclude .prism` 是 **v9 F1 防自污染**：arch 产物落 `<项目根>/.prism/arch/`，而 graphify 的 `_SKIP_DIRS`（`detect.py:827-851`）只认 `graphify-out`/`.graphify`，**不认 `.prism`**——不排除就会把 Prism 自己写的 `.ir.json`/`.meta.json` 当源码扫进图里。该 flag 只有 `extract` 接受且会被持久化（`cli.py:3384-3392`），后续 `update` 复用同一 exclude 集，故增量子命令**不带**它（`update` 拒收其它 `-` 开头参数，`cli.py:2400-2414`）。
 > - **聚类**：`graphify cluster-only <项目根> --no-label`（跳过 LLM 社区命名）。
 > - **增量**：`graphify update <项目根>`（只重建代码、本就零 LLM；只接受 `--force/--no-cluster`，`cli.py:2400-2414`）。
 > - **产物**：`graph.json` / `manifest.json` / `graph.html` / `GRAPH_REPORT.md`。**没有** `flows.json`，**没有** `studio/`。
@@ -53,7 +54,8 @@
 
 ```bash
 # 建图（零 token、零 LLM：只做 AST 代码层，跳过 doc/paper/image 语义层）
-graphify <项目根> --code-only
+# `--exclude .prism`：排除 Prism 自己的项目内产物目录（arch 的 .ir.json/.meta.json），防自污染（v9 F1）
+graphify <项目根> --code-only --exclude .prism
 
 # 聚类 + 渲染（--no-label 跳过 LLM 社区命名）
 graphify cluster-only <项目根> --no-label
@@ -162,6 +164,6 @@ Prism 把这些 Graphify 能力包成 MCP 工具：
 | 1 | 能力来源 | ✅ 用 Graphify 工具 |
 | 2 | 显示方式 | ✅ 用 graphify 自带的 `graph.html`（iframe 预览） |
 | 3 | 产物落点 | ✅ `<项目根>/graphify-out/`（合并产物例外：`<PRISM_HOME>/graphify-merged/`，裁决 D2） |
-| 4 | 默认建图参数 | ✅ **全量固定 `--code-only`**（零 token、零 LLM；裁决 D1，v5 落地）；**无「含文档」开关** |
+| 4 | 默认建图参数 | ✅ **全量固定 `--code-only --exclude .prism`**（零 token、零 LLM；裁决 D1，v5 落地；`--exclude .prism` 为 v9 F1 防自污染）；**无「含文档」开关** |
 | 5 | 建图触发 | ⏳ 默认仅手动；团队启用时**只提示**（裁决 D3，F-C3 落地）；自动建图仅在显式参数时触发 |
 | 6 | 多项目图谱合并 | ✅ 用 `graphify merge-graphs`（v5 F-C2 落地：`prism graph merge` / `POST /api/graph/merge` / `prism_graph_merge`） |

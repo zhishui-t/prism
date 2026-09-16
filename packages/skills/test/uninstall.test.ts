@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
+import { AuditLog, TrashStore } from '@prism/core'
+
 import { installSkills } from '../src/install.js'
 import { uninstallSkills } from '../src/uninstall.js'
 import { listBuiltinSkills } from '../src/index.js'
@@ -15,33 +17,65 @@ function makeSkill(name: string, withMarker: boolean): PrismSkill {
   return { name, description: 'demo', content: body, builtin: false }
 }
 
-describe('uninstallSkills（只删 Prism 产物；全部写临时目录）', () => {
+/**
+ * 卸载自 v9 F3 起**搬进回收站**（不再硬删）——本测试全部落在临时目录：
+ * `targetDir`（宿主技能目录）与 `trashDir` / 审计目录彼此分离，任何用例都不碰真实宿主。
+ */
+describe('uninstallSkills（只回收 Prism 产物到回收站；全部写临时目录）', () => {
   let target: string
+  let trashDir: string
+  let auditDir: string
 
   beforeEach(async () => {
     target = await mkdtemp(join(tmpdir(), 'prism-skills-uninstall-'))
+    trashDir = await mkdtemp(join(tmpdir(), 'prism-skills-trash-'))
+    auditDir = await mkdtemp(join(tmpdir(), 'prism-skills-audit-'))
   })
 
   afterEach(async () => {
-    await rm(target, { recursive: true, force: true }).catch(() => {})
+    for (const dir of [target, trashDir, auditDir]) {
+      await rm(dir, { recursive: true, force: true }).catch(() => {})
+    }
+  })
+
+  /** 每次调用现造回收站（单元目录名带时间戳，无需跨用例共享实例）。 */
+  const deps = (): { trash: TrashStore; trigger: 'CLI' } => ({
+    trash: new TrashStore({ trashDir, audit: new AuditLog({ dir: auditDir }) }),
+    trigger: 'CLI',
   })
 
   it('目录不存在 → 空结果（幂等：没什么可卸的）', async () => {
-    const result = await uninstallSkills({ targetDir: join(target, 'nope') })
-    expect(result).toEqual({ removed: [], kept: [] })
+    const result = await uninstallSkills({ targetDir: join(target, 'nope') }, deps())
+    expect(result).toEqual({ removed: [], kept: [], trashIds: [] })
   })
 
-  it('names 缺省 = 扫描目录下全部：Prism 产物删除、人写的保留、无 SKILL.md 的保留', async () => {
+  it('names 缺省 = 扫描目录下全部：Prism 产物进回收站、人写的保留、无 SKILL.md 的保留', async () => {
     await installSkills({ targetDir: target, skills: [makeSkill('mine', true)] })
     await mkdir(join(target, 'handwritten'), { recursive: true })
     await writeFile(join(target, 'handwritten', 'SKILL.md'), '---\nname: handwritten\n---\n\n手写\n', 'utf-8')
     await mkdir(join(target, 'empty-dir'), { recursive: true })
 
-    const result = await uninstallSkills({ targetDir: target })
-    expect(result.removed).toEqual(['mine'])
+    const { trash } = deps()
+    const result = await uninstallSkills({ targetDir: target }, { trash, trigger: 'CLI' })
+    // v9 F3：removed 是**实际落点（整目录）**，不再是 Skill 名
+    expect(result.removed).toEqual([join(target, 'mine')])
+    expect(result.trashIds).toHaveLength(1)
+    expect(result.trashIds[0]?.startsWith('skill/')).toBe(true)
     expect(existsSync(join(target, 'mine'))).toBe(false)
     expect(existsSync(join(target, 'handwritten', 'SKILL.md'))).toBe(true)
     expect(existsSync(join(target, 'empty-dir'))).toBe(true)
+
+    // 回收站单元：kind=skill、name=mine、受管根 = 宿主技能目录
+    const units = await trash.list('skill')
+    expect(units).toHaveLength(1)
+    expect(units[0]).toMatchObject({
+      id: result.trashIds[0],
+      kind: 'skill',
+      name: 'mine',
+      originalPaths: [join(target, 'mine')],
+      managedRoot: join(target),
+      broken: false,
+    })
 
     const keptNames = result.kept.map((k) => k.name).sort()
     expect(keptNames).toEqual(['empty-dir', 'handwritten'])
@@ -51,37 +85,55 @@ describe('uninstallSkills（只删 Prism 产物；全部写临时目录）', () 
 
   it('names 指定 → 只处理点名的 Skill（其余原地不动）', async () => {
     await installSkills({ targetDir: target, skills: [makeSkill('a', true), makeSkill('b', true)] })
-    const result = await uninstallSkills({ targetDir: target, names: ['a'] })
-    expect(result.removed).toEqual(['a'])
+    const result = await uninstallSkills({ targetDir: target, names: ['a'] }, deps())
+    expect(result.removed).toEqual([join(target, 'a')])
     expect(existsSync(join(target, 'a'))).toBe(false)
     expect(existsSync(join(target, 'b', 'SKILL.md'))).toBe(true)
   })
 
   it('names 里的未知名字 → 记入 kept（无 SKILL.md），不报错', async () => {
-    const result = await uninstallSkills({ targetDir: target, names: ['ghost'] })
+    const result = await uninstallSkills({ targetDir: target, names: ['ghost'] }, deps())
     expect(result.removed).toEqual([])
     expect(result.kept).toEqual([{ name: 'ghost', path: join(target, 'ghost'), reason: '无 SKILL.md' }])
   })
 
-  it('安装 → 卸载全链路：内置 prism skill（含 references/）整目录清除', async () => {
+  it('安装 → 卸载全链路：内置 prism skill（含 references/）整目录进回收站且可还原', async () => {
     await installSkills({ targetDir: target, skills: listBuiltinSkills() })
     expect(existsSync(join(target, 'prism', 'references', 'cli.md'))).toBe(true)
 
-    const result = await uninstallSkills({ targetDir: target, names: ['prism'] })
-    expect(result.removed).toEqual(['prism'])
+    const { trash } = deps()
+    const result = await uninstallSkills({ targetDir: target, names: ['prism'] }, { trash, trigger: 'HTTP' })
+    expect(result.removed).toEqual([join(target, 'prism')])
     expect(existsSync(join(target, 'prism'))).toBe(false)
     expect(result.kept).toEqual([])
+
+    // 回收站里是**整目录**（references/ 也在），可原样还原
+    const unitDir = join(trashDir, ...result.trashIds[0]!.split('/'))
+    expect(existsSync(join(unitDir, 'prism', 'references', 'cli.md'))).toBe(true)
+    expect(await trash.restore(result.trashIds[0]!)).toEqual([join(target, 'prism')])
+    expect(existsSync(join(target, 'prism', 'references', 'cli.md'))).toBe(true)
   })
 
-  it('人写的 Skill 用 --force 装过（已带 marker）→ 可被卸载', async () => {
+  it('人写的 Skill 用 --force 装过（已带 marker）→ 可被回收', async () => {
     // 先人造一个文件，再用 force 覆盖安装（写入带 marker 的 Prism 产物）
     await mkdir(join(target, 'demo'), { recursive: true })
     await writeFile(join(target, 'demo', 'SKILL.md'), '人写的\n', 'utf-8')
     await installSkills({ targetDir: target, skills: [makeSkill('demo', true)], force: true })
     expect(await readFile(join(target, 'demo', 'SKILL.md'), 'utf-8')).toContain('generated by prism')
 
-    const result = await uninstallSkills({ targetDir: target, names: ['demo'] })
-    expect(result.removed).toEqual(['demo'])
+    const result = await uninstallSkills({ targetDir: target, names: ['demo'] }, deps())
+    expect(result.removed).toEqual([join(target, 'demo')])
     expect(existsSync(join(target, 'demo'))).toBe(false)
+  })
+
+  it('审计：每个被回收的 Skill 写一条 trash.put，trigger 如实记录', async () => {
+    await installSkills({ targetDir: target, skills: [makeSkill('a', true)] })
+    const audit = new AuditLog({ dir: auditDir })
+    const trash = new TrashStore({ trashDir, audit })
+    await uninstallSkills({ targetDir: target, names: ['a'] }, { trash, trigger: 'MCP' })
+
+    const events = await audit.query({ types: ['trash.put'] })
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({ kind: 'skill', trigger: 'MCP', paths: [join(target, 'a')] })
   })
 })

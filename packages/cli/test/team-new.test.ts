@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
+import { TrashStore } from '@prism/core'
+
 import { defaultContext, runCommand, type CommandContext } from '../src/argv.js'
 
 const ROLE_DEV1 = `---
@@ -336,15 +338,23 @@ describe('prism team edit | rm（v6 增删改对齐）', () => {
     expect(existsSync(join(home, 'teams', 'nope.md'))).toBe(false)
   })
 
-  it('rm：硬删文件本体；再次 rm → team_not_found', async () => {
+  it('rm：搬进回收站（trash_id + 单元落 <home>/trash）；再次 rm → team_not_found', async () => {
     expect(await runCommand(ctx, ['team', 'new', 'demo', '--members', 'dev-1:1'])).toBe(0)
     const path = join(home, 'teams', 'demo.md')
     expect(existsSync(path)).toBe(true)
 
     lines = []
     expect(await runCommand(ctx, ['team', 'rm', 'demo'])).toBe(0)
-    expect(lines.join('\n')).toContain('已删除')
+    const output = lines.join('\n')
+    expect(output).toContain('已删除')
+    expect(output).not.toContain('不可逆')
+    expect(output).toContain('进回收站')
+    expect(output).toContain('prism trash restore')
     expect(existsSync(path)).toBe(false)
+
+    const units = await new TrashStore({ trashDir: join(home, 'trash') }).list('team')
+    expect(units).toHaveLength(1)
+    expect(units[0]).toMatchObject({ kind: 'team', name: 'demo', managedRoot: join(home, 'teams') })
 
     lines = []
     expect(await runCommand(ctx, ['team', 'rm', 'demo'])).toBe(1)

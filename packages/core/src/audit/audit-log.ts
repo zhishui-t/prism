@@ -20,9 +20,23 @@ export const AUDIT_EVENT_TYPES = [
   'knowledge.conflict_detected',
   'import.confirmed',
   'team.switched',
+  'trash.put',
+  'trash.restore',
+  'trash.purge',
 ] as const
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number]
+
+/**
+ * 回收站事件的触发入口（F3）。
+ *
+ * 定义放在审计侧：`trigger` 首先是审计字段（谁删的），TrashStore 与三个入口
+ * （MCP/CLI/HTTP）都是它的消费方——单一真相源，避免「镜像契约」漂移。
+ */
+export type TrashTrigger = 'CLI' | 'MCP' | 'HTTP'
+
+/** `TrashTrigger` 的运行时闭集（用于校验回收站 meta 与外部入参）。 */
+export const TRASH_TRIGGERS: readonly TrashTrigger[] = ['CLI', 'MCP', 'HTTP']
 
 export interface AuditEventBase {
   id?: string
@@ -44,6 +58,14 @@ export type AuditEvent =
   | (AuditEventBase & { type: 'knowledge.conflict_detected'; high_id: string; low_id: string; kind: string })
   | (AuditEventBase & { type: 'import.confirmed'; job_id: string; candidate_id: string })
   | (AuditEventBase & { type: 'team.switched'; session_id: string; from_team: string; to_team: string })
+  /**
+   * 回收站三事件（F3）。由 **TrashStore 单点写入**（put/restore/purge 各一条），
+   * 三入口（MCP/CLI/HTTP）只负责传 `trigger`——避免 3 kind × 3 入口 = 9 处分散写漂移。
+   * `kind` = 实体类别（role/team/skill），`unit_id` = `<kind>/<回收站单元目录名>`。
+   */
+  | (AuditEventBase & { type: 'trash.put'; kind: string; unit_id: string; trigger: TrashTrigger; paths?: string[] })
+  | (AuditEventBase & { type: 'trash.restore'; kind: string; unit_id: string; trigger: TrashTrigger; paths?: string[] })
+  | (AuditEventBase & { type: 'trash.purge'; kind: string; unit_id: string; trigger: TrashTrigger; paths?: string[] })
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never
 
@@ -65,6 +87,9 @@ export const AUDIT_EVENT_REQUIRED_FIELDS: Record<AuditEventType, readonly string
   'knowledge.conflict_detected': ['high_id', 'low_id', 'kind'],
   'import.confirmed': ['job_id', 'candidate_id'],
   'team.switched': ['session_id', 'from_team', 'to_team'],
+  'trash.put': ['kind', 'unit_id', 'trigger'],
+  'trash.restore': ['kind', 'unit_id', 'trigger'],
+  'trash.purge': ['kind', 'unit_id', 'trigger'],
 }
 
 export interface AuditLogOptions {

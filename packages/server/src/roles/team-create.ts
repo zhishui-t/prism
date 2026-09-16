@@ -15,6 +15,7 @@ import { join } from 'node:path'
 
 import { editTeam, parseTeamMarkdown, removeTeam, renderTeamScaffold, renderZcodeTeam, TeamWriteError } from '@prism/agents'
 import { PrismError } from '@prism/core'
+import type { TrashStore, TrashTrigger } from '@prism/core'
 
 import { loadRoles, type DepositPolicy, type TeamMember, type ValidationIssue } from './index.js'
 
@@ -210,8 +211,18 @@ export async function updateTeamDefinition(
   }
 }
 
-/** `DELETE /api/teams/:id` / `prism_team_rm`：删除团队文件本体。 */
-export async function deleteTeamDefinition(teamId: string, teamsDir: unknown): Promise<{ removed: string[] }> {
+/**
+ * `DELETE /api/teams/:id` / `prism_team_rm` / CLI `prism team rm`：把团队本体**搬进回收站**。
+ *
+ * v9 F3：原「直接删」改为 `TrashStore.put`（可 `prism trash restore <id>` 还原）。
+ * 回收站由入口层按 `PRISM_HOME` 构造后注入（`trashStoreFor`），本模块只传 `trigger` 定界来源。
+ */
+export async function deleteTeamDefinition(
+  teamId: string,
+  teamsDir: unknown,
+  trash: TrashStore,
+  trigger: TrashTrigger,
+): Promise<{ removed: string[]; trash_id: string }> {
   const targetDir = asNonEmptyString(teamsDir)
   if (targetDir === undefined) {
     throw new PrismError('bad_request', 'teams_dir_required：未指定团队目录（防误写真实宿主，写路径一律显式参数化）。')
@@ -221,7 +232,8 @@ export async function deleteTeamDefinition(teamId: string, teamsDir: unknown): P
     throw new PrismError('bad_request', `team_id_invalid：团队 id 必须 kebab-case：${teamId}`)
   }
   try {
-    return await removeTeam({ teamId: id, teamsDir: targetDir })
+    const result = await removeTeam({ teamId: id, teamsDir: targetDir, trash, trigger })
+    return { removed: result.removed, trash_id: result.trashId }
   } catch (err) {
     if (err instanceof TeamWriteError) {
       throw new PrismError(err.code === 'team_not_found' ? 'not_found' : 'bad_request', err.message, { path: err.path })

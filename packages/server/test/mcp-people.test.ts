@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
+import { AuditLog, TrashStore } from '@prism/core'
+
 import { createMcpTools, handleRpcRequest, type JsonRpcResponse, type McpTool } from '../src/mcp/server.js'
 import { CORE_DEV_TEAM_MD } from '../src/roles/templates.js'
 
@@ -296,13 +298,22 @@ describe('MCP 角色/团队写工具 v6（增删改三入口对齐）', () => {
     expect(textOf(miss)).toContain('role_not_found')
   })
 
-  it('prism_role_rm：硬删；再删 → isError role_not_found', async () => {
+  it('prism_role_rm：搬进回收站（返回 trash_id）；再删 → isError role_not_found', async () => {
     const path = join(writeRoles, 'mcp-role.md')
     expect(existsSync(path)).toBe(true)
     const res = await call('prism_role_rm', { name: 'mcp-role', roles_dir: writeRoles })
     expect(res?.result).toMatchObject({ isError: false })
-    expect((JSON.parse(textOf(res)) as { removed: string[] }).removed.length).toBe(1)
+    const value = JSON.parse(textOf(res)) as { removed: string[]; trash_id: string }
+    expect(value.removed).toEqual([path])
     expect(existsSync(path)).toBe(false)
+    // v9 F3：删除进回收站（trashDir 归属 MCP 的 home）+ 审计 trigger=MCP
+    expect(value.trash_id.startsWith('role/')).toBe(true)
+    const units = await new TrashStore({ trashDir: join(home, 'trash') }).list('role')
+    expect(units.map((u) => u.id)).toContain(value.trash_id)
+    const audit = await new AuditLog({ dir: join(home, 'audit') }).query({ types: ['trash.put'] })
+    expect(audit.some((e) => (e as { unit_id: string }).unit_id === value.trash_id && (e as { trigger: string }).trigger === 'MCP')).toBe(
+      true,
+    )
 
     const again = await call('prism_role_rm', { name: 'mcp-role', roles_dir: writeRoles })
     expect(again?.result).toMatchObject({ isError: true })
@@ -365,7 +376,7 @@ describe('MCP 角色/团队写工具 v6（增删改三入口对齐）', () => {
     }
   })
 
-  it('prism_team_edit：改名册 → 工作流就地收窄（workflow_pruned）；prism_team_rm 硬删', async () => {
+  it('prism_team_edit：改名册 → 工作流就地收窄（workflow_pruned）；prism_team_rm 搬进回收站', async () => {
     const res = await call('prism_team_edit', {
       team_id: 'mcp-team',
       members: [{ role: 'dev-1', count: 2 }],
@@ -381,7 +392,12 @@ describe('MCP 角色/团队写工具 v6（增删改三入口对齐）', () => {
 
     const del = await call('prism_team_rm', { team_id: 'mcp-team', teams_dir: writeTeams })
     expect(del?.result).toMatchObject({ isError: false })
+    const removed = JSON.parse(textOf(del)) as { removed: string[]; trash_id: string }
+    expect(removed.removed).toEqual([join(writeTeams, 'mcp-team.md')])
+    expect(removed.trash_id.startsWith('team/')).toBe(true)
     expect(existsSync(join(writeTeams, 'mcp-team.md'))).toBe(false)
+    const units = await new TrashStore({ trashDir: join(home, 'trash') }).list('team')
+    expect(units.map((u) => u.id)).toContain(removed.trash_id)
   })
 })
 
@@ -464,7 +480,7 @@ describe('MCP Skill 写工具（v6.2 补齐：skill_list / install / uninstall�
     expect(textOf(ghost)).toContain('unknown_skill')
   })
 
-  it('prism_skill_uninstall：只删 Prism 产物；人写的同名 Skill 保留并记入 kept', async () => {
+  it('prism_skill_uninstall：只回收 Prism 产物（整目录进回收站）；人写的同名 Skill 保留并记入 kept', async () => {
     // 造一个「人写」的 Skill（无 Prism marker）→ 必须保留
     await mkdir(join(skillsDir, 'handwritten'), { recursive: true })
     await writeFile(join(skillsDir, 'handwritten', 'SKILL.md'), '# 人写的\n\n不含 marker。\n', 'utf-8')
@@ -474,11 +490,29 @@ describe('MCP Skill 写工具（v6.2 补齐：skill_list / install / uninstall�
     const value = JSON.parse(textOf(res)) as {
       removed: string[]
       kept: Array<{ name: string; reason: string }>
+      trash_ids: string[]
     }
-    expect(value.removed).toContain('prism')
+    // v9 F3：removed = 实际落点（整目录），trash_ids 与之同序
+    expect(value.removed).toEqual([join(skillsDir, 'prism')])
+    expect(value.trash_ids).toHaveLength(1)
+    expect(value.trash_ids[0]?.startsWith('skill/')).toBe(true)
     expect(existsSync(join(skillsDir, 'prism'))).toBe(false)
     expect(value.kept.map((k) => k.name)).toContain('handwritten')
     expect(existsSync(join(skillsDir, 'handwritten', 'SKILL.md'))).toBe(true)
+
+    // 回收站落在 MCP 的 home 下（不是真实宿主），单元可还原
+    const trash = new TrashStore({ trashDir: join(home, 'trash') })
+    expect((await trash.list('skill')).map((u) => u.id)).toContain(value.trash_ids[0])
+    expect(await trash.restore(value.trash_ids[0]!)).toEqual([join(skillsDir, 'prism')])
+    expect(existsSync(join(skillsDir, 'prism', 'SKILL.md'))).toBe(true)
+
+    // 白盒补测（tester-whitebox，审计闭环）：MCP 面 skill 卸载的 trash.put 带 trigger=MCP
+    const skillAudit = await new AuditLog({ dir: join(home, 'audit') }).query({ types: ['trash.put'] })
+    expect(
+      skillAudit.some(
+        (e) => (e as { kind: string }).kind === 'skill' && (e as { trigger: string }).trigger === 'MCP',
+      ),
+    ).toBe(true)
 
     const noDir = await call('prism_skill_uninstall', {})
     expect(noDir?.result).toMatchObject({ isError: true })

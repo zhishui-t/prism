@@ -22,10 +22,13 @@ import {
   ARCHIFY_SCHEMA_KEYS,
   ARCHIFY_TYPE_LABELS,
   ProjectRegistry,
+  globalArchDir,
   loadTeam,
   readArchifySchema,
   readCodeGraph,
   renderDiagram,
+  resolveArchPlacement,
+  sanitizeArtifactName,
   validateDiagram,
   writeArtifactMeta,
   type ArchifyDiagramType,
@@ -64,6 +67,7 @@ export async function runArch(ctx: CommandContext, args: string[], values: ArgVa
             `                                          由团队工作流生成工作流图（IR 是纯函数派生物）\n` +
             `  from-graph <type> <project> [--out <html>] [--top <组件数>] [--limit <连接数>]\n` +
             `                                          由代码图谱生成 architecture|sequence|dataflow\n` +
+            `                                          （缺省落 <projectRoot>/.prism/arch/<type>/，--out 完全接管）\n` +
             `  from-state [--out <html>] [--title <标题>]\n` +
             `                                          由 Prism 任务状态机生成生命周期图`,
         )
@@ -171,7 +175,7 @@ async function archRender(ctx: CommandContext, args: string[], values: ArgValues
   const outPath =
     values.out !== undefined
       ? String(values.out)
-      : join(prismPaths(home).home, 'archify', type, `${type}.html`)
+      : join(globalArchDir(home, type), `${type}.html`)
 
   const result = await renderDiagram(type, ir, outPath, {
     timeoutMs: values.timeout !== undefined ? Number(values.timeout) * 1000 : undefined,
@@ -269,7 +273,7 @@ async function archFromTeam(ctx: CommandContext, args: string[], values: ArgValu
   const outPath =
     values.out !== undefined
       ? String(values.out)
-      : join(prismPaths(home).home, 'archify', 'workflow', `${teamId}.html`)
+      : join(globalArchDir(home, 'workflow'), `${teamId}.html`)
 
   const result = await emitDerivedIr(values, 'workflow', ir, outPath)
 
@@ -323,6 +327,21 @@ async function archFromGraph(ctx: CommandContext, args: string[], values: ArgVal
   const home = ctx.home ?? prismPaths().home
   const registry = new ProjectRegistry(home)
   const info = await registry.get(project) // 未注册 → not_found（由外层统一渲染）
+  /**
+   * 缺省落点（v9 F1，与 MCP/HTTP 同口径）：project 派生三类图落
+   * `<projectRoot>/.prism/arch/<type>/<project>.html`（`--out` 完全接管，此时跳过落点解析）。
+   * 解析与 root 校验都在 `resolveArchPlacement` —— 未注册拒绝、root 缺失报
+   * `project_root_missing` 且**不 mkdir 复活**（先于读图谱，报错才指向真因）。
+   * 注：`resolveArchPlacement` 内部会再读一次注册表（`ProjectRegistry` 每次访问都重读磁盘）。
+   * 这点重复是刻意换来的：未注册/root 校验只有**一处**实现，不会在三个入口间漂移。
+   */
+  const placement = await resolveArchPlacement({
+    type,
+    home,
+    name: sanitizeArtifactName(project, type),
+    project,
+    ...(values.out !== undefined ? { out: String(values.out) } : {}),
+  })
   const graph = await readCodeGraph(info.root)
 
   const top = values.top !== undefined ? Number(values.top) : undefined
@@ -354,10 +373,7 @@ async function archFromGraph(ctx: CommandContext, args: string[], values: ArgVal
     return generationFailure(ctx, error)
   }
 
-  const outPath =
-    values.out !== undefined
-      ? String(values.out)
-      : join(prismPaths(home).home, 'archify', type, `${project}.html`)
+  const outPath = placement.htmlPath
 
   const result = await emitDerivedIr(values, type, ir, outPath)
 
@@ -365,7 +381,15 @@ async function archFromGraph(ctx: CommandContext, args: string[], values: ArgVal
     ctx.stdout(
       JSON.stringify({
         ok: true,
-        value: { type, project, root: info.root, html: result.html, ir: result.ir, meta: result.meta },
+        value: {
+          type,
+          project,
+          root: info.root,
+          html: result.html,
+          ir: result.ir,
+          meta: result.meta,
+          source: placement.project !== undefined ? 'project' : 'global',
+        },
       }),
     )
   } else {
@@ -400,7 +424,7 @@ async function archFromState(ctx: CommandContext, _args: string[], values: ArgVa
   const outPath =
     values.out !== undefined
       ? String(values.out)
-      : join(prismPaths(home).home, 'archify', 'lifecycle', 'task-state-machine.html')
+      : join(globalArchDir(home, 'lifecycle'), 'task-state-machine.html')
 
   const result = await emitDerivedIr(values, 'lifecycle', ir, outPath)
 

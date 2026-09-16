@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
+import { AuditLog, TrashStore } from '@prism/core'
+
 import { startServer, type AppHandle } from '../src/app.js'
 import { CORE_DEV_TEAM_MD } from '../src/roles/templates.js'
 
@@ -353,7 +355,7 @@ describe('people 写路由（F-C3 新建团队）与有效集（F-D2）', () => 
  *   `skills` / 知识绑定落正文 `## 能力（Skill 白名单）` / `## 知识绑定` 小节；
  * - `PATCH` 是**外科式补丁**：只动点名字段，正文与未知 frontmatter 键原样保留；
  *   `''` / `null` = 清除该 frontmatter 键；
- * - `DELETE` 是**硬删**（不可逆）。
+ * - `DELETE` 自 v9 F3 起**搬进回收站**（返回体附 `trash_id`，可 `prism trash restore <id>` 还原）。
  */
 describe('people 写路由 v6（角色与团队 增删改）', () => {
   let app: AppHandle
@@ -362,6 +364,8 @@ describe('people 写路由 v6（角色与团队 增删改）', () => {
   let home: string
   let rolesDir: string
   let teamsDir: string
+  /** 同一 home 下的回收站（删路由的落点）；只读断言用。 */
+  let trashStore: TrashStore
 
   beforeAll(async () => {
     tmp = await mkdtemp(join(tmpdir(), 'prism-people-v6-'))
@@ -381,6 +385,7 @@ describe('people 写路由 v6（角色与团队 增删改）', () => {
     await writeFile(join(home, 'roles', 'tester', 'AGENTS.md'), ZCODE_ROLE_MD.replace(/dev-1/g, 'tester'), 'utf-8')
     app = await startServer({ home, harnessRoot: join(tmp, 'zcode'), port: 0 })
     base = `http://127.0.0.1:${app.port}`
+    trashStore = new TrashStore({ trashDir: join(home, 'trash') })
   })
 
   afterAll(async () => {
@@ -490,15 +495,26 @@ describe('people 写路由 v6（角色与团队 增删改）', () => {
     expect(existsSync(join(rolesDir, 'ghost-role.md'))).toBe(false)
   })
 
-  it('DELETE /api/roles/:name：硬删文件本体；再删 → 404', async () => {
+  it('DELETE /api/roles/:name：搬进回收站（返回 trash_id，trigger=HTTP）；再删 → 404', async () => {
     const rolePath = join(rolesDir, 'v6-role.md')
     expect(existsSync(rolePath)).toBe(true)
 
     const del = await send('DELETE', '/api/roles/v6-role', { roles_dir: rolesDir })
-    const delBody = (await del.json()) as { ok: boolean; value: { removed: string[] } }
+    const delBody = (await del.json()) as { ok: boolean; value: { removed: string[]; trash_id: string } }
     expect(del.status).toBe(200)
-    expect(delBody.value.removed.length).toBe(1)
+    expect(delBody.value.removed).toEqual([rolePath])
+    expect(delBody.value.trash_id.startsWith('role/')).toBe(true)
     expect(existsSync(rolePath)).toBe(false)
+
+    // 回收站单元落在 <home>/trash（不是真实宿主），meta 的受管根 = 请求里显式给的 roles_dir
+    const units = await trashStore.list('role')
+    const unit = units.find((u) => u.id === delBody.value.trash_id)
+    expect(unit).toMatchObject({ kind: 'role', name: 'v6-role', managedRoot: rolesDir, broken: false })
+    // 审计 trigger 交给 HTTP（TrashStore 单点写）
+    const audit = await new AuditLog({ dir: join(home, 'audit') }).query({ types: ['trash.put'] })
+    expect(audit.some((e) => (e as { unit_id: string }).unit_id === delBody.value.trash_id && (e as { trigger: string }).trigger === 'HTTP')).toBe(
+      true,
+    )
 
     const again = await send('DELETE', '/api/roles/v6-role', { roles_dir: rolesDir })
     const againBody = (await again.json()) as { error: { code: string } }
@@ -513,7 +529,7 @@ describe('people 写路由 v6（角色与团队 增删改）', () => {
     expect(body.error.message).toContain('roles_dir_required')
   })
 
-  it('PATCH /api/teams/:id：改名册 → 工作流就地收窄（workflow_pruned）；DELETE 硬删', async () => {
+  it('PATCH /api/teams/:id：改名册 → 工作流就地收窄（workflow_pruned）；DELETE 搬进回收站', async () => {
     // 先建一个双成员团队
     const created = await send('POST', '/api/teams', {
       team_id: 'v6-team',
@@ -622,7 +638,7 @@ describe('people 写路由 v6（角色与团队 增删改）', () => {
     expect(existsSync(join(skillsDir, 'prism', 'SKILL.md'))).toBe(true)
   })
 
-  it('POST /api/skills/uninstall：只删 Prism 产物（人写的保留在 kept）', async () => {
+  it('POST /api/skills/uninstall：只回收 Prism 产物（整目录进回收站；人写的保留在 kept）', async () => {
     const skillsDir = join(tmp, 'uninstall-skills')
     await send('POST', '/api/skills/install', { skills_dir: skillsDir, names: ['prism'] })
     await mkdir(join(skillsDir, 'handwritten'), { recursive: true })
@@ -630,11 +646,19 @@ describe('people 写路由 v6（角色与团队 增删改）', () => {
 
     const res = await send('POST', '/api/skills/uninstall', { skills_dir: skillsDir })
     expect(res.status).toBe(200)
-    const body = (await res.json()) as { value: { removed: string[]; kept: Array<{ name: string }> } }
-    expect(body.value.removed).toContain('prism')
+    const body = (await res.json()) as {
+      value: { removed: string[]; kept: Array<{ name: string }>; trash_ids: string[] }
+    }
+    expect(body.value.removed).toEqual([join(skillsDir, 'prism')])
+    expect(body.value.trash_ids).toHaveLength(1)
     expect(body.value.kept.map((k) => k.name)).toContain('handwritten')
     expect(existsSync(join(skillsDir, 'prism'))).toBe(false)
     expect(existsSync(join(skillsDir, 'handwritten', 'SKILL.md'))).toBe(true)
+    const units = await trashStore.list('skill')
+    expect(units.find((u) => u.id === body.value.trash_ids[0])).toMatchObject({
+      name: 'prism',
+      managedRoot: skillsDir,
+    })
   })
 })
 

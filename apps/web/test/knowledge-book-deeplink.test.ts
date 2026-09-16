@@ -39,6 +39,8 @@ vi.mock('../src/api.ts', () => ({
     kbGet: () => Promise.resolve(null),
     kbVersions: () => Promise.resolve([]),
     kbBookStructure: () => Promise.resolve(null),
+    // v9 F2：页面挂载即拉一次全量架构图；空清单 = 图集组不出现，既有断言不受影响。
+    archDiagrams: () => Promise.resolve([]),
   },
 }))
 

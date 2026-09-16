@@ -28,6 +28,7 @@
 > | `lifecycle` | Prism 任务状态机（14 态 36 转移） | `prism arch from-state` |
 >
 > 新增 CLI 子命令 `from-graph`（`--out/--top/--limit`）与 `from-state`（`--out/--title`）；新增 MCP `prism_arch_generate`（统一入口，按 `type` 分派，见 §2.3）。`prism arch schema` **保留但降级**——从「生成 IR 的依据」变为「核对/调试契约」。
+> **v9 F1 落点**：`from-graph` 的 `architecture|sequence|dataflow` **缺省**落 `<projectRoot>/.prism/arch/<type>/`（与 MCP/HTTP 同口径，`--out` 完全接管）；`from-team`/`from-state`（workflow/lifecycle）仍落 `<PRISM_HOME>/archify/<type>/`。
 > **两处口径说明**（都不是缺陷，是有理由的拒画或改名）：① `dataflow` 图谱里**没有 reads/writes 边**，无法画真正的数据读写流，故改口径为**依赖流向视图**（按目录角色分层 + 依赖边跨层流动，层次压缩后只留命中层）；② 生成器在真实图谱上**可能明确拒画**并给出理由（同目录扁平仓库无处分层、图谱无跨文件 CALLS 边、层数不足两级），此时报错而非产出坏图。派生逻辑硬约束见 `knowledge-base.md §4.4`。
 > **渲染器踩坑已被生成器吸收**（不再要求使用者知道）：节点文本不换行需自收敛、连线侧向契约（给了 `via` 即跳过 `endpoint-side-direction` 校验）、`edge-through-node` 无法靠命名通道避让（唯一解是自给 `via`）、标签默认落线段中点常压节点（需自定 `labelAt`）、各类最短段阈值（architecture 24px / dataflow 34px / lifecycle 32px）、同层节点净空 10px。生成器内部用「Hanan 网格 + Dijkstra（折点优先）」正交布线自动解这些约束。
 >
@@ -63,7 +64,7 @@ prism
 │   ├── show <role>         查看角色定义
 │   ├── new <name>          新建角色（写守卫；--from 复制既有定义；v6 由 init 更名）
 │   ├── edit <name>         字段补丁（只改点名字段，正文不重排；v6 新增）
-│   ├── rm <name>           删除角色文件本体（不可逆；v6 新增）
+│   ├── rm <name>           删除角色文件本体（搬进回收站，默认 3 天后彻底清除；v6 新增）
 │   ├── validate            校验角色定义
 │   ├── render <role>       渲染当前 harness 原生格式（预览，不写盘；target = 真实落点）
 │   ├── install <role>      复制到 ~/.zcode/agents/  ⚠ 已废弃（v6 装配语义移除）
@@ -74,7 +75,7 @@ prism
 │   ├── show <team>         查看团队定义
 │   ├── new <id>            建队脚手架（写守卫 + 自动校验；v6 由 init 更名）
 │   ├── edit <id>           修改团队（改 members 时工作流按名册就地收窄；v6 新增）
-│   ├── rm <id>             删除团队文件本体（不可逆；v6 新增）
+│   ├── rm <id>             删除团队文件本体（搬进回收站，默认 3 天后彻底清除；v6 新增）
 │   ├── render <team>       渲染宿主格式团队文件（v6 新增）
 │   ├── validate <team>     校验（角色存在、工作流引用合法）
 │   ├── activate <team>     启用：输出运行时配置（含装配状态）
@@ -117,7 +118,7 @@ prism
 │   ├── validate <type> <ir.json>   校验 IR（schema + 布局）
 │   ├── render <type> <ir.json>     渲染为自包含 HTML（--book/--module 归到书内）
 │   ├── from-team <team_id>         由团队定义自动派生工作流图（IR 是纯函数产物，零手写）
-│   ├── from-graph <type> <project> 由代码图谱派生 architecture|sequence|dataflow（--top/--limit）
+│   ├── from-graph <type> <project> 由代码图谱派生 architecture|sequence|dataflow（--top/--limit；缺省落 <project>/.prism/arch/）
 │   └── from-state [--title <t>]    由 Prism 任务状态机派生生命周期图（14 态 36 转移）
 │
 ├── graph                   代码图谱（Python 版 graphify）
@@ -213,7 +214,18 @@ prism
 
 | 工具 | 作用 |
 | :--- | :--- |
-| `prism_arch_generate` | 由 `type` 分派生成五类图并落盘 —— `workflow`（需 `team`）、`architecture`/`sequence`/`dataflow`（需已注册 `project`）、`lifecycle`（无入参）。返回 `{ type, html, ir, bytes, title, subtitle }`（可选 `out` 指定落点，缺省落 `<PRISM_HOME>/archify/<type>/<name>.html`） |
+| `prism_arch_generate` | 由 `type` 分派生成五类图并落盘 —— `workflow`（需 `team`）、`architecture`/`sequence`/`dataflow`（需已注册 `project`）、`lifecycle`（无入参）。返回 `{ type, html, ir, bytes, title, subtitle, source, project?, book?, module? }`。**落盘（v9 F1）**：项目三类图缺省落 `<projectRoot>/.prism/arch/<type>/`（未注册 → not_found；root 被删/被挪 → `project_root_missing`，**不 mkdir 复活**），`workflow`/`lifecycle` 落 `<PRISM_HOME>/archify/<type>/`，可选 `out` 完全接管（跳过项目解析）。**写 sidecar** `*.meta.json`（含可选 `book`/`module` 作用域）——v9 起 MCP 与 CLI/HTTP 同口径 |
+
+> **v9 F1 资产归位（HTTP 面）**：`GET /api/arch/diagrams` **双源**——各注册项目
+> `<projectRoot>/.prism/arch/<type>/*.html` + 全局 `<PRISM_HOME>/archify/<type>/*.html`。
+> 逐字段：`type, name, bytes, mtime, title?, layer?, owner?, book?, module?, archify_version?,
+> has_ir, source: 'project'|'global', project?, preview, ir`（身份键 = `(type, name, source, project)`；
+> `preview`/`ir` 由**服务端构造**，项目源带 `?project=`）。**扫 `*.html` + sidecar 容错**——
+> 缺 meta 的历史产物不隐藏（title 回落 IR `meta.title`）。`GET /api/arch/preview|ir/:type/:file`
+> 支持 `?project=`：限定则只在该项目源内解析（不存在 → 404，**不回落全局**）；未限定且同名命中
+> 多源 → `bad_request` **歧义拒绝**（默认产物名 = 图类型，故同名是默认路径而非边缘）。
+> HTTP `POST /api/arch/render` 亦接可选 `project`（落项目源），但其**不接任意 `out`**——
+> `out` 的「完全接管」语义只在 MCP/CLI 两面存在，避免新增经 HTTP 的任意写入口。
 
 ### 2.4 团队与角色（13）
 
@@ -230,13 +242,13 @@ prism
 | `prism_role_get` | 查看角色定义（全文） |
 | `prism_role_new` | 新建角色（按**宿主原生形态**落盘：frontmatter 只含适配器白名单字段，skills / 知识绑定落正文小节；v6 新增） |
 | `prism_role_edit` | 修改角色（字段补丁：`description`/`skills`/`knowledge`/`body`/`color`/`model`/`thought_level`；正文不重排；v6 新增） |
-| `prism_role_rm` | 删除角色文件本体（**不可逆**；`roles_dir` 必填；v6 新增） |
+| `prism_role_rm` | 删除角色文件本体（**搬进回收站**，可 `prism trash restore <trash_id>` 还原；默认 3 天后彻底清除、自动清除需 serve 运行；`roles_dir` 必填；v6 新增） |
 | `prism_role_render` | 渲染宿主格式角色文件（原文漏列） |
 | `prism_team_list` | 列出团队库（v6 新增） |
 | `prism_team_get` | 查看团队定义 |
 | `prism_team_new` | 新建团队定义（`teams_dir` 必填；`roles_dir` 可选＝成员角色校验用；v4 新增为 `prism_team_create`，v6 更名） |
 | `prism_team_edit` | 修改团队（`name`/`description`/`members`/`deposit`；改 `members` 时**工作流表按名册就地收窄**；v6 新增） |
-| `prism_team_rm` | 删除团队文件本体（**不可逆**；`teams_dir` 必填；v6 新增） |
+| `prism_team_rm` | 删除团队文件本体（**搬进回收站**，可 `prism trash restore <trash_id>` 还原；默认 3 天后彻底清除、自动清除需 serve 运行；`teams_dir` 必填；v6 新增） |
 | `prism_team_render` | 渲染宿主格式团队文件（v6 新增） |
 | `prism_team_activate` | 拉取团队运行时配置（含装配状态） |
 

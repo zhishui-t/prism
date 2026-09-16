@@ -169,6 +169,50 @@ export interface BookStructure {
   updated_at: string
 }
 
+/**
+ * 架构图产物（v9 F2，`GET /api/arch/diagrams` 的响应项，**逐字段冻结** design-v9 §2）。
+ *
+ * - `preview` / `ir` 是**服务端构造好的 URL**（带 project 限定）——前端**绝不拼路径**，
+ *   iframe `src` 与「新标签打开」一律直接用 `preview`（design-v9 G-1）。
+ * - `source` 区分「项目派生」（`<project>/.prism/arch/`）与「全局」（`<PRISM_HOME>/archify/`）；
+ *   `project` 只在 `source === 'project'` 时存在。
+ * - `book` / `module` 是 sidecar 里的**挂载作用域**（MCP 历史产物两者皆无 → 落「全局图集」）。
+ * - `mtime` 是 ISO 字符串（`stat().mtime.toISOString()`），展示统一走 `fmtTime`。
+ * - **可选字段缺失时后端不下发该键**（不是 `null`）：一律按
+ *   `x === undefined` / `x ?? fallback` 读，**不得**写 `item.x === null` 这类判断。
+ *
+ * ✅ v9 批次 2 已与 `packages/server/src/http/routes/arch.ts` 的 `ArchArtifact` **逐字对账**
+ * （字段名/类型/必选性/排序/过滤口径），并按冻结契约接真路由；对账留痕见
+ * `.agent-team/v9-web-report.md` 的「契约接线状态」节。
+ */
+export interface ArchDiagram {
+  type: string
+  name: string
+  bytes: number
+  /** 产物文件的修改时间（ISO 字符串） */
+  mtime: string
+  /** 图标题（sidecar → IR `meta.title`；两者都缺**不下发**，渲染层回落 `name`） */
+  title?: string
+  layer?: string
+  owner?: string
+  book?: string
+  module?: string
+  archify_version?: string
+  /** 同目录 `<name>.ir.json` 是否存在 */
+  has_ir: boolean
+  source: 'project' | 'global'
+  /**
+   * 项目名（仅 `source === 'project'`）。后端**恒成对下发**（实测：项目源项必有非空
+   * `project`，全局源项必无该键）——故「是不是项目派生的」两套写法等价，树上的 project
+   * 徽章按 `project` 判（`Knowledge.tsx` 的 `renderArch`）。
+   */
+  project?: string
+  /** 服务端构造的预览 URL（iframe src / 新标签打开都用它） */
+  preview: string
+  /** 服务端构造的 IR 源 URL */
+  ir: string
+}
+
 /** 调用链关系方向（v8 F4）：`out` = 查询节点为**发出方**（它调用谁）；`in` = **指向**查询节点（谁调用它）。 */
 export type GraphRelationDir = 'in' | 'out'
 
@@ -344,6 +388,24 @@ export const api = {
   kbBookStructure: (params: { layer: string; book: string }) => {
     const qs = new URLSearchParams({ layer: params.layer, book: params.book })
     return request<BookStructure>(`/api/kb/book-structure?${qs.toString()}`)
+  },
+
+  /**
+   * 架构图产物列表（v9 F2 → `GET /api/arch/diagrams`）。
+   *
+   * - **无参 = 全量**（页面挂载时拉一次：无书归属的进「全局图集」，也用于按 `(type, name)`
+   *   解析深链）；
+   * - `{ book }` = 该书的图（展开某本书时懒加载，design-v9 §4「按书懒加载」）。传的是
+   *   `kbTree` 的**书名**（`BookNode.book`），服务端按 sidecar 的 `book` **精确**匹配，两端口径一致。
+   *   ⚠ 服务端过滤**只认 book 名**、不含 layer/owner：跨层或多 owner 的同名书会各拿到**同一批**图，
+   *   前端无从区分（见交付报告「对账冲突」）。
+   * - 返回**服务端已排序**（`mtime` 降序）。前端原样消费、不重排——深链的「首个命中」依赖这条。
+   **/
+  archDiagrams: (params?: { book?: string }) => {
+    const qs = new URLSearchParams()
+    if (params?.book) qs.set('book', params.book)
+    const suffix = qs.toString()
+    return request<ArchDiagram[]>(`/api/arch/diagrams${suffix ? `?${suffix}` : ''}`)
   },
 
   graphProjects: () => request<GraphProject[]>('/api/graph/projects'),

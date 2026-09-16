@@ -1,5 +1,6 @@
 import { listBuiltinSkills } from '@prism/skills'
 import { PrismError } from '@prism/core'
+import type { TrashStore } from '@prism/core'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -7,6 +8,7 @@ import { join } from 'node:path'
 import { fail, ok, type Envelope } from '../envelope.js'
 import type { GraphStatusDetail } from '../../graph/registry.js'
 import type { RouteContext } from '../router.js'
+import { trashStoreFor } from '../../trash.js'
 import {
   activateTeam,
   createRoleDefinition,
@@ -64,6 +66,8 @@ export interface PeopleDeps {
  * - 读路由一律只读；写路由（`POST|PATCH|DELETE /api/roles[/:name]`、`/api/teams[/:id]`）只写 body
  *   显式给出的 `roles_dir` / `teams_dir`，**绝不复用** `dirs` 的默认宿主目录（写路径不得回落）。
  * - v6.1：读返回的目录字段统一为 snake_case（`roles_dir` / `teams_dir`），与写参数同名。
+ * - v9 F3：`DELETE` 三条（角色/团队/Skill 卸载）改为**搬进回收站**（返回体附 `trash_id`），
+ *   并新增只读 `GET /api/trash`（响应 snake_case 逐字段冻结）。
  */
 export function peopleRoutes(deps: PeopleDeps): {
   roles: (ctx: RouteContext) => Promise<Envelope>
@@ -82,6 +86,7 @@ export function peopleRoutes(deps: PeopleDeps): {
   skillsEffective: (ctx: RouteContext) => Promise<Envelope>
   skillInstall: (ctx: RouteContext) => Promise<Envelope>
   skillUninstall: (ctx: RouteContext) => Promise<Envelope>
+  trash: (ctx: RouteContext) => Promise<Envelope>
   createTeam: (ctx: RouteContext) => Promise<Envelope>
   updateTeam: (ctx: RouteContext) => Promise<Envelope>
   deleteTeam: (ctx: RouteContext) => Promise<Envelope>
@@ -91,6 +96,11 @@ export function peopleRoutes(deps: PeopleDeps): {
   const teamsDir = dirs.teamsDir
   /** 技能分类映射（design-v8 §3 F7）：`<PRISM_HOME>/skill-categories.json`，与 CLI/MCP 同一实现。 */
   const categories = new SkillCategoryStore(deps.home)
+  /**
+   * 回收站（v9 F3）：删除角色/团队/Skill 走 `TrashStore.put`，trashDir 与审计都归属 `deps.home`
+   * （不落默认 `~/.prism`）。三个删除路由只传 `trigger: 'HTTP'` 定界来源。
+   */
+  const trashStore = trashStoreFor(deps.home)
 
   /** 已装 skill 名单（`<harnessRoot>/skills/*`，只读）；目录不存在 → undefined（跳过引用校验）。 */
   const knownSkills = (): Promise<string[] | undefined> => installedSkillNames(deps.harnessRoot, deps.home)
@@ -354,7 +364,30 @@ export function peopleRoutes(deps: PeopleDeps): {
     ok(await installBuiltinSkillDefinitions((await ctx.body()) as SkillWriteBody))
 
   const skillUninstall = async (ctx: RouteContext): Promise<Envelope> =>
-    ok(await uninstallSkillDefinitions((await ctx.body()) as SkillWriteBody))
+    ok(await uninstallSkillDefinitions((await ctx.body()) as SkillWriteBody, trashStore, 'HTTP'))
+
+  /**
+   * `GET /api/trash`（v9 F3 §3）：**只读**回收站列表。
+   *
+   * 响应**逐字段冻结**（snake_case）：`[{id, kind, name, deleted_at, original_paths, broken}]`。
+   * 字段名一律 snake_case 与 `trash-meta.json` / 其余 HTTP 面同形（`TrashEntry` 是 camelCase
+   * 的域内形态，故此处显式映射一次——不做「原样透传」，否则前端契约会随域类型漂移）。
+   * 可选 `?kind=role|team|skill` 过滤（未给 = 全部）。
+   */
+  const trash = async (ctx: RouteContext): Promise<Envelope> => {
+    const kind = (ctx.query.get('kind') ?? '').trim()
+    const units = await trashStore.list(kind === '' ? undefined : kind)
+    return ok(
+      units.map((unit) => ({
+        id: unit.id,
+        kind: unit.kind,
+        name: unit.name,
+        deleted_at: unit.deletedAt,
+        original_paths: unit.originalPaths,
+        broken: unit.broken === true,
+      })),
+    )
+  }
 
   /** F-C3：新建团队。只传 `rolesDir`——写路径不得看见默认 `teamsDir`。 */
   const createTeam = async (ctx: RouteContext): Promise<Envelope> => await createTeamRoute(ctx, rolesDir)
@@ -364,7 +397,7 @@ export function peopleRoutes(deps: PeopleDeps): {
     role,
     createRole: (ctx) => roleCreateRoute(ctx, deps),
     updateRole: (ctx) => roleUpdateRoute(ctx, deps),
-    deleteRole: (ctx) => roleDeleteRoute(ctx),
+    deleteRole: (ctx) => roleDeleteRoute(ctx, trashStore),
     teams,
     team,
     teamActivate,
@@ -376,9 +409,10 @@ export function peopleRoutes(deps: PeopleDeps): {
     skillsEffective,
     skillInstall,
     skillUninstall,
+    trash,
     createTeam,
     updateTeam: (ctx) => teamUpdateRoute(ctx),
-    deleteTeam: (ctx) => teamDeleteRoute(ctx),
+    deleteTeam: (ctx) => teamDeleteRoute(ctx, trashStore),
   }
 }
 
@@ -397,11 +431,14 @@ async function roleUpdateRoute(ctx: RouteContext, deps: PeopleDeps): Promise<Env
   return ok(await updateRoleDefinition(ctx.params.name ?? '', body, { renderRole: roleRendererFor(deps.harnessRoot, deps.home) }))
 }
 
-/** `DELETE /api/roles/:name`：删除角色文件本体（`?roles_dir=` 必填；不落默认宿主目录）。 */
-async function roleDeleteRoute(ctx: RouteContext): Promise<Envelope> {
+/**
+ * `DELETE /api/roles/:name`：把角色本体**搬进回收站**（`?roles_dir=` / body 必填；不落默认宿主目录）。
+ * 返回体含 `trash_id`（= `<kind>/<单元名>`），可经 `prism trash restore <id>` 还原（v9 F3 / G-5）。
+ */
+async function roleDeleteRoute(ctx: RouteContext, trash: TrashStore): Promise<Envelope> {
   const body = await ctx.body().catch(() => ({}))
   const rolesDir = (body as { roles_dir?: unknown }).roles_dir ?? ctx.query.get('roles_dir') ?? undefined
-  return ok(await deleteRoleDefinition(ctx.params.name ?? '', rolesDir))
+  return ok(await deleteRoleDefinition(ctx.params.name ?? '', rolesDir, trash, 'HTTP'))
 }
 
 /** `PATCH /api/teams/:id`：字段补丁（改名册时工作流就地收窄）。 */
@@ -410,11 +447,14 @@ async function teamUpdateRoute(ctx: RouteContext): Promise<Envelope> {
   return ok(await updateTeamDefinition(ctx.params.id ?? '', body))
 }
 
-/** `DELETE /api/teams/:id`：删除团队文件本体（`teams_dir` 必填；不落默认宿主目录）。 */
-async function teamDeleteRoute(ctx: RouteContext): Promise<Envelope> {
+/**
+ * `DELETE /api/teams/:id`：把团队本体**搬进回收站**（`teams_dir` 必填；不落默认宿主目录）。
+ * 返回体含 `trash_id`（= `<kind>/<单元名>`），可经 `prism trash restore <id>` 还原（v9 F3 / G-5）。
+ */
+async function teamDeleteRoute(ctx: RouteContext, trash: TrashStore): Promise<Envelope> {
   const body = await ctx.body().catch(() => ({}))
   const teamsDir = (body as { teams_dir?: unknown }).teams_dir ?? ctx.query.get('teams_dir') ?? undefined
-  return ok(await deleteTeamDefinition(ctx.params.id ?? '', teamsDir))
+  return ok(await deleteTeamDefinition(ctx.params.id ?? '', teamsDir, trash, 'HTTP'))
 }
 
 /**

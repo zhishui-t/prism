@@ -14,6 +14,7 @@
  */
 
 import { PrismError } from '@prism/core'
+import type { TrashStore, TrashTrigger } from '@prism/core'
 import { installSkills, listBuiltinSkills, uninstallSkills } from '@prism/skills'
 
 /** 安装/卸载 Skill 请求体（MCP 与 HTTP 共用；`skills_dir` 必填）。 */
@@ -34,8 +35,11 @@ export interface SkillInstallOutcome {
 
 export interface SkillUninstallOutcome {
   skills_dir: string
+  /** **实际落点**（整目录绝对路径；v9 F3 起不再是被卸的 Skill 名，见 `uninstallSkills` 注释）。 */
   removed: string[]
   kept: Array<{ name: string; path: string; reason: string }>
+  /** 回收站单元 id（每个被卸 Skill 一个单元，与 `removed` 同序）。 */
+  trash_ids: string[]
 }
 
 /** `POST /api/skills/install` / `prism_skill_install`：安装内置 Skill 到**显式** `skills_dir`。 */
@@ -58,12 +62,31 @@ export async function installBuiltinSkillDefinitions(body: SkillWriteBody): Prom
   return { skills_dir: targetDir, ...result }
 }
 
-/** `POST /api/skills/uninstall` / `prism_skill_uninstall`：只删 Prism 产物（人写的一律不动）。 */
-export async function uninstallSkillDefinitions(body: SkillWriteBody): Promise<SkillUninstallOutcome> {
+/**
+ * `POST /api/skills/uninstall` / `prism_skill_uninstall` / CLI `prism skill uninstall`：
+ * **只回收 Prism 产物**（人写的一律不动）。
+ *
+ * v9 F3：原「直接删」改为 `TrashStore.put`（可 `prism trash restore <id>` 还原）。
+ * 回收站由入口层按 `PRISM_HOME` 构造后注入（`trashStoreFor`），本模块只传 `trigger` 定界来源。
+ * 一个 Skill 一个回收站单元，故 `trash_ids` 是数组。
+ */
+export async function uninstallSkillDefinitions(
+  body: SkillWriteBody,
+  trash: TrashStore,
+  trigger: TrashTrigger,
+): Promise<SkillUninstallOutcome> {
   const targetDir = requireSkillsDir(body)
   const names = asStringList(body.names)
-  const result = await uninstallSkills({ targetDir, ...(names !== undefined ? { names } : {}) })
-  return { skills_dir: targetDir, ...result }
+  const result = await uninstallSkills(
+    { targetDir, ...(names !== undefined ? { names } : {}) },
+    { trash, trigger },
+  )
+  return {
+    skills_dir: targetDir,
+    removed: result.removed,
+    kept: result.kept,
+    trash_ids: result.trashIds,
+  }
 }
 
 function requireSkillsDir(body: SkillWriteBody): string {

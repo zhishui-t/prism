@@ -22,6 +22,12 @@ export interface PrismPaths {
   skillsDir: string
   graphDir: string
   /**
+   * **删除回收站根目录**（`<home>/trash/<kind>/<单元>/`）。删除的角色/团队/技能整单元落这里，
+   * 支持 list/restore/purge。所有回收站路径一律经 `TrashStore`（`src/trash/`）拼装，
+   * **不得在别处散落 `<home>/trash` 字符串**。
+   */
+  trashDir: string
+  /**
    * **harness 适配器插件目录**：第三方把打包好的适配器放这里，运行期自动注册
    * （无需改 Prism 代码/重新编译）。每个插件一个子目录，见 harness-plugins.ts。
    */
@@ -37,6 +43,7 @@ export function prismPaths(home: string = prismHome()): PrismPaths {
     knowledgeDir: join(home, 'knowledge'),
     skillsDir: join(home, 'skills'),
     graphDir: join(home, 'graph'),
+    trashDir: join(home, 'trash'),
     harnessesDir: join(home, 'harnesses'),
   }
 }

@@ -71,6 +71,16 @@ export interface SkillUninstallKept {
 }
 
 export interface SkillUninstallResult {
+  /**
+   * **实际落点**（v9 F3 起）：被搬进回收站的**整目录绝对路径**数组。
+   * 旧语义是被卸的 Skill 名——改口径的原因：目录式卸载必须整目录搬走才不留残目录，
+   * 且调用方需要真实路径做回收站/审计（名与路径不可混用）。
+   */
   removed: string[]
   kept: SkillUninstallKept[]
+  /**
+   * 回收站单元 id 数组（`<kind>/<单元目录名>`，与 `removed` 同序）。
+   * 宿主据此引导 `prism trash restore <id>`；未产生回收站单元时为 `[]`。
+   */
+  trashIds: string[]
 }

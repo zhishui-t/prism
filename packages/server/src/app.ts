@@ -15,6 +15,7 @@ import { consoleRoute, resolveWebDistDir } from './http/routes/console.js'
 import { peopleRoutes } from './http/routes/people.js'
 import { resolveDirsFromHome } from './roles/index.js'
 import { archRoutes } from './http/routes/arch.js'
+import { trashStoreFor } from './trash.js'
 import { BuildJobManager } from './graph/jobs.js'
 import { ProjectRegistry, inspectGraphStatus } from './graph/registry.js'
 import type { KbFactory, KnowledgeService } from './kb/port.js'
@@ -39,7 +40,18 @@ export interface AppOptions {
   buildRunner?: GraphDeps['runner']
   graphifyEnv?: NodeJS.ProcessEnv
   graphifyTimeoutMs?: number
+  /**
+   * **回收站到期自动清除**（v9 F3 / C-8）：`true` 时启动即 `sweep()` 一次，此后每小时
+   * `purge(resolveTrashRetentionDays())`（定时器 `unref`，`server.close` 时清除）。
+   *
+   * 默认 **`false`**——测试与一次性调用不得凭空留下定时器（累积会拖住进程退出）。
+   * 只有常驻的 `prism serve` 打开它；纯 CLI 部署靠 `prism trash purge` 手动兜底（I-4）。
+   */
+  trashSweep?: boolean
 }
+
+/** 回收站定时清除周期（每小时；与 `prism serve` 同生共死）。 */
+const TRASH_SWEEP_INTERVAL_MS = 3_600_000
 
 export interface AppHandle {
   home: string
@@ -198,6 +210,10 @@ export async function createApp(options: AppOptions = {}): Promise<{
   router.add('POST', '/api/skills/install', people.skillInstall)
   router.add('POST', '/api/skills/uninstall', people.skillUninstall)
 
+  // 回收站（v9 F3 §3）：只读列表；响应 snake_case 冻结（people.ts 显式映射）。
+  // 不带 `:param`，与上面的 `/api/skills*` 无顺序耦合；仍须排在 `GET /*` 兜底之前。
+  router.add('GET', '/api/trash', people.trash)
+
   // 控制台静态兜底（GET /*）必须注册在最后：/api、/studio 优先，不劫持（返工单 F03）
   const webDist = options.webDist ?? resolveWebDistDir()
   router.add('GET', '/*', consoleRoute(webDist))
@@ -222,6 +238,20 @@ export async function createApp(options: AppOptions = {}): Promise<{
     // 注入的 `options.kb`（测试内存桩）归调用方，不越权。
     kbCache?.close?.()
   })
+
+  // 回收站到期自动清除（v9 F3 / C-8）：**仅在显式打开时**存在，故测试与一次性调用
+  // 不会凭空多出一个定时器（默认关 = 零副作用）。定时器挂 server 生命周期：
+  // `server.close`（`AppHandle.close()` 走它）即清除，`unref` 保证不挡进程退出。
+  if (options.trashSweep === true) {
+    const trash = trashStoreFor(home)
+    await trash.sweep({ trigger: 'CLI' }).catch(() => [])
+    const timer = setInterval(() => {
+      // 自动清除失败不该打挂服务（审计/日志留给 sweep 自身）；吞掉即可，下一轮再来
+      void trash.sweep({ trigger: 'CLI' }).catch(() => [])
+    }, TRASH_SWEEP_INTERVAL_MS)
+    timer.unref()
+    server.on('close', () => clearInterval(timer))
+  }
 
   return { server, loadKb, home }
 }

@@ -144,10 +144,26 @@ describe('runGraphify（错误映射 + 参数钉死）', () => {
     await rm(dir, { recursive: true, force: true })
   })
 
+  /**
+   * 端到端一步：`buildGraphArgs` 的常量**真的**进了子进程 argv（只看常量会漏掉
+   * spawn/shell 引号环节把它吃掉的情况；Windows `.cmd` 走 shell 拼串，是真实风险面）。
+   */
+  it('全量建图 step argv 真的带上 --exclude .prism（假 CLI 回显）', async () => {
+    const dir = await tempDir()
+    const script = join(dir, 'argv.mjs')
+    await writeFile(script, 'process.stdout.write(JSON.stringify(process.argv.slice(2)));\n', 'utf-8')
+    const step = buildGraphArgs('K:/proj')[0]!
+    const result = await runGraphify(step, { env: { GRAPHIFY_BIN: script }, timeoutMs: 5000 })
+    const argv = JSON.parse(result.stdout) as string[]
+    expect(argv).toContain('--exclude')
+    expect(argv[argv.indexOf('--exclude') + 1]).toBe('.prism')
+    await rm(dir, { recursive: true, force: true })
+  })
+
   it('buildGraphArgs 钉死零 LLM 参数：全量必带 --code-only（红线 R2 / 裁决 D1）', () => {
     const args = buildGraphArgs('K:/proj')
     expect(args).toEqual([
-      ['K:/proj', '--code-only'],
+      ['K:/proj', '--code-only', '--exclude', '.prism'],
       ['cluster-only', 'K:/proj', '--no-label'],
     ])
     // 显式护栏：全量路径缺 --code-only 时，树内有 doc/paper/image 会让 graphify 调 LLM
@@ -157,6 +173,19 @@ describe('runGraphify（错误映射 + 参数钉死）', () => {
     expect(args.flat()).not.toContain('--no-description')
   })
 
+  /**
+   * v9 F1 防自污染（v9.1 B-3）：arch 产物落 `<projectRoot>/.prism/arch/`，而 graphify
+   * 的 `_SKIP_DIRS`（detect.py:827-851）不含 `.prism` —— 不排除就会把 Prism 自己写的
+   * `.ir.json`/`.meta.json` 当源码扫进图里。`--exclude` 仅 `extract` 接受且会被持久化
+   * （cli.py:3384-3392），故只钉全量步。
+   */
+  it('buildGraphArgs 全量步带 --exclude .prism（防把 .prism 产物扫进代码图谱）', () => {
+    const args = buildGraphArgs('K:/proj')
+    // flag/value 成对出现，不能只断言 flat 含 '.prism'（那样 `--exclude` 丢了也绿）
+    expect(args[0]).toContain('--exclude')
+    expect(args[0]![args[0]!.indexOf('--exclude') + 1]).toBe('.prism')
+  })
+
   it('buildGraphArgs 增量：`update` 不带 --code-only（它只认 --force/--no-cluster），本就零 LLM', () => {
     const args = buildGraphArgs('K:/proj', 'incremental')
     expect(args).toEqual([
@@ -164,6 +193,8 @@ describe('runGraphify（错误映射 + 参数钉死）', () => {
       ['cluster-only', 'K:/proj', '--no-label'],
     ])
     expect(args.flat()).not.toContain('--code-only')
+    // update 拒收任何其它 `-` 开头参数（cli.py:2400-2414）——加 --exclude 会直接 exit 2
+    expect(args.flat()).not.toContain('--exclude')
   })
 
   it('formatCommand 对含空格参数加引号', () => {

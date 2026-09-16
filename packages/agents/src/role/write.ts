@@ -8,8 +8,9 @@
  *   `skills` / `knowledge` 塞进 frontmatter，与两个适配器自述都冲突，已废（见 `templates.ts`）。
  * - `edit` 是**外科式补丁**：只动点名的那几处（`patchRoleRaw`），正文与未知 frontmatter 键原样保留；
  *   绝不整文件重渲染——人写的内容不该被命令重排。
- * - `rm` 只删角色文件本体（扁平 `<name>.md` 与兼容形态 `<name>/AGENTS.md` 都认）；是否放行由调用方
- *   的写守卫决定（默认宿主目录需 `--yes`）。
+ * - `rm` 把角色文件本体（扁平 `<name>.md` 与兼容形态 `<name>/AGENTS.md` 都认）**整单元搬进回收站**
+ *   （v9 F3：原「直接删」改为 `TrashStore.put`，可 `prism trash restore <id>` 还原）；是否放行由
+ *   调用方的写守卫决定（默认宿主目录需 `--yes`）。
  *
  * **历史**：本文件原为「装配」实现（design-v3 §5 冲突策略：渲染后写入宿主目录，含 marker 冲突策略、
  * `.prism-new` 对比、旧源目录迁移）。「角色直接住宿主目录」确立后该路径不再成立——
@@ -19,8 +20,10 @@
  * 安全：目标目录由参数传入，**绝不硬编码宿主根**；测试必须用临时目录。
  */
 
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+
+import type { TrashStore, TrashTrigger } from '@prism/core'
 
 import { renderMarkdownFile, splitFrontmatter, type FrontmatterData } from '../frontmatter.js'
 import { ROLE_BODY_SKELETON, ROLE_TEMPLATE_NAME_PLACEHOLDER } from '../templates.js'
@@ -89,6 +92,23 @@ export interface EditRoleInput {
 export interface RemoveRoleInput {
   name: string
   rolesDir: string
+  /**
+   * 回收站（搬移 + 审计单点）。
+   *
+   * 由**入口层**按 `PRISM_HOME` 构造后注入——本域不解析 home，故 `--home` / 测试临时目录
+   * 都能把回收站与审计重定向到同一处，绝不落默认 `~/.prism`（红线 R5/R6）。
+   */
+  trash: TrashStore
+  /** 触发入口（进回收站 meta 与审计，仅作溯源）。 */
+  trigger: TrashTrigger
+}
+
+/** `role rm` 的结果。 */
+export interface RoleRemoveResult {
+  /** **实际落点**：扁平形态 = `<name>.md`；目录形态 = 整个 `<name>/` 目录（不是其中的 AGENTS.md）。 */
+  removed: string[]
+  /** 回收站单元 id（`<kind>/<单元目录名>`），宿主据此引导 `prism trash restore <id>`。 */
+  trashId: string
 }
 
 /**
@@ -194,26 +214,31 @@ export function patchRoleRaw(raw: string, patch: RolePatch): string {
 }
 
 /**
- * `role rm`：删除角色文件本体（扁平 `<name>.md` + 兼容形态 `<name>/AGENTS.md`）。
+ * `role rm`：把角色文件本体搬进回收站（扁平 `<name>.md` + 兼容形态 `<name>/AGENTS.md`）。
  * 两处都不存在 → `role_not_found`。删除是否放行由调用方的写守卫决定，本函数不做二次确认。
+ *
+ * **落点粒度**（v9.1 D-1）：目录形态必须**整目录**搬走——只搬其中的 `AGENTS.md` 会留下残目录，
+ * 「原位置消失」验收不过。`removed` 因此返回 `dirname(dirForm)` 而非 `dirForm`。
  */
-export async function removeRole(input: RemoveRoleInput): Promise<{ removed: string[] }> {
+export async function removeRole(input: RemoveRoleInput): Promise<RoleRemoveResult> {
   const name = input.name.trim()
   const flat = join(input.rolesDir, `${name}.md`)
   const dirForm = join(input.rolesDir, name, 'AGENTS.md')
-  const removed: string[] = []
+  const targets: string[] = []
   if (existsSync(flat)) {
-    rmSync(flat, { force: true })
-    removed.push(flat)
+    targets.push(flat)
   }
   if (existsSync(dirForm)) {
-    rmSync(dirname(dirForm), { recursive: true, force: true })
-    removed.push(dirForm)
+    targets.push(dirname(dirForm))
   }
-  if (removed.length === 0) {
+  if (targets.length === 0) {
     throw new RoleWriteError('role_not_found', `角色不存在，无法删除：${name}`, flat)
   }
-  return { removed }
+  const moved = await input.trash.put('role', name, targets, {
+    managedRoot: input.rolesDir,
+    trigger: input.trigger,
+  })
+  return { removed: moved.originalPaths, trashId: moved.id }
 }
 
 function ensureDir(dir: string): void {

@@ -1,7 +1,7 @@
 import { createServer, type Server } from 'node:http'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { ERROR_CODES, fail, ok } from '../src/http/envelope.js'
+import { ERROR_CODES, fail, ok, statusFor } from '../src/http/envelope.js'
 import { Router } from '../src/http/router.js'
 import { PrismError } from '@prism/core'
 
@@ -36,6 +36,13 @@ describe('信封（envelope）', () => {
     expect(ok(42)).toEqual({ ok: true, value: 42 })
     expect(fail('bad_request', 'x')).toEqual({ ok: false, error: { code: 'bad_request', message: 'x' } })
     expect(ERROR_CODES).toContain('build_in_progress')
+  })
+
+  it('v9 检视整改新增码的语义：trash_source_residue=500（部分失败）、trash_busy=409（占用冲突）', () => {
+    expect(ERROR_CODES).toContain('trash_source_residue')
+    expect(ERROR_CODES).toContain('trash_busy')
+    expect(statusFor(fail('trash_source_residue', 'x'))).toBe(500)
+    expect(statusFor(fail('trash_busy', 'x'))).toBe(409)
   })
 })
 

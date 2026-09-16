@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
+import { prismHome } from '@prism/core'
 import {
   editTeam,
   parseMembersSpec,
@@ -18,6 +19,7 @@ import {
   parseTeamMarkdown,
   ProjectRegistry,
   teamNotFoundMessage,
+  trashStoreFor,
   validateTeam,
 } from '@prism/server'
 import type { GraphStatusDetail, TeamDefinition, TeamMember, ValidationIssue } from '@prism/server'
@@ -253,13 +255,22 @@ export async function runTeam(ctx: CommandContext, args: string[], values: ArgVa
       }
       if (!guardWriteTarget(ctx, values, writeDirs, 'teams', 1, 'delete')) return 1
       try {
-        const result = await removeTeam({ teamId: id, teamsDir })
+        // v9 F3：删除 = 搬进回收站；回收站与审计归属 ctx.home（I-2），绝不落默认 ~/.prism
+        const result = await removeTeam({
+          teamId: id,
+          teamsDir,
+          trash: trashStoreFor(ctx.home ?? prismHome()),
+          trigger: 'CLI',
+        })
         if (ctx.json) {
-          ctx.stdout(JSON.stringify({ ok: true, value: { teamId: id, removed: result.removed } }))
+          ctx.stdout(JSON.stringify({ ok: true, value: { teamId: id, removed: result.removed, trash_id: result.trashId } }))
           return 0
         }
-        for (const p of result.removed) ctx.stdout(`  已删除 ${p}`)
-        ctx.stdout(`团队 ${id} 已删除（不可逆；宿主在会话启动时扫描——下一会话生效）`)
+        for (const p of result.removed) ctx.stdout(`  已移入回收站 ${p}`)
+        ctx.stdout(
+          `团队 ${id} 已删除（进回收站 ${result.trashId}；默认 3 天后彻底清除，` +
+            `prism trash restore ${result.trashId} 可还原；宿主在会话启动时扫描——下一会话生效）`,
+        )
         return 0
       } catch (error) {
         ctx.stderr(`错误 [${(error as { code?: string }).code ?? 'bad_request'}] ${error instanceof Error ? error.message : String(error)}`)

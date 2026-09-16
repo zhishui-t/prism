@@ -2,11 +2,10 @@ import { createInterface } from 'node:readline'
 
 import { access, mkdir, writeFile } from 'node:fs/promises'
 import { readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
   prismHome,
-  prismPaths,
   PrismError,
 } from '@prism/core'
 import {
@@ -58,7 +57,8 @@ import {
   graphGodNodes as queryGraphGodNodes,
   graphSummary as queryGraphSummary,
 } from '../graph/graphify.js'
-import { renderDiagram } from '../graph/archify.js'
+import { renderDiagram, writeArtifactMeta } from '../graph/archify.js'
+import { assertProjectRoot, resolveArchPlacement, sanitizeArtifactName } from '../graph/arch-placement.js'
 import { inspectGraphStatus, ProjectRegistry } from '../graph/registry.js'
 import { mergeProjectGraphs, type MergeProjectInput } from '../graph/merge.js'
 import { convertFileToMarkdown } from '../kb/convert-file.js'
@@ -69,6 +69,7 @@ import { loadKnowledgeService } from '../kb/wiring.js'
 import { buildContextPack } from '../kb/context-pack.js'
 import { writeEnrichment } from '../kb/enrich-writeback.js'
 import { DEFAULT_SERVE_PORT, ensureServe } from '../serve-control.js'
+import { trashStoreFor } from '../trash.js'
 
 /**
  * MCP stdio 服务（design.md §4 最小集 + design-v3 §3.4 P6 增量，手写 JSON-RPC 2.0）：
@@ -293,6 +294,11 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
   const rolesDir = dirs.rolesDir
   const teamsDir = dirs.teamsDir
   const hostPaths = harnessPaths(harnessRoot, deps.home)
+  /**
+   * 回收站（v9 F3）：删除角色/团队/Skill 走 `TrashStore.put`，trashDir 与审计都归属
+   * `deps.home`（不落默认 `~/.prism`）。三个删除工具只传 `trigger: 'MCP'` 定界来源。
+   */
+  const trash = trashStoreFor(deps.home)
   /** 技能分类映射（design-v8 §3 F7）：`<PRISM_HOME>/skill-categories.json`，与 HTTP/CLI 同一实现。 */
   const skillCategories = new SkillCategoryStore(deps.home)
 
@@ -488,14 +494,18 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
 
   /**
    * 卸载 Skill（写）：与 CLI `prism skill uninstall`、HTTP `POST /api/skills/uninstall`
-   * 共用 `uninstallSkillDefinitions`。**只删 Prism 产物**——人写的 Skill 一律不动并记入 `kept`。
-   * `skills_dir` 必填；`names` 缺省 = 扫描该目录下全部 Skill。
+   * 共用 `uninstallSkillDefinitions`。**只回收 Prism 产物**——人写的 Skill 一律不动并记入 `kept`。
+   * `skills_dir` 必填；`names` 缺省 = 扫描该目录下全部 Skill。删除进回收站（可 restore）。
    */
   const skillUninstall = async (args: Record<string, unknown>): Promise<unknown> =>
-    await uninstallSkillDefinitions({
-      skills_dir: args.skills_dir,
-      names: args.names,
-    })
+    await uninstallSkillDefinitions(
+      {
+        skills_dir: args.skills_dir,
+        names: args.names,
+      },
+      trash,
+      'MCP',
+    )
 
   /** 取单个角色定义（装配器按名拉取，免拉全量）。 */
   const roleGet = async (args: Record<string, unknown>): Promise<unknown> => {
@@ -541,13 +551,13 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
     return await updateRoleDefinition(name, args as RoleWriteBody, { renderRole: roleRendererFor(harnessRoot, deps.home) })
   }
 
-  /** 删除角色文件本体。 */
+  /** 删除角色本体：搬进回收站（v9 F3），返回体带 `trash_id`。 */
   const roleRemove = async (args: Record<string, unknown>): Promise<unknown> => {
     const name = asString(args.name)
     if (name === undefined) {
       throw new Error('缺少 name')
     }
-    return await deleteRoleDefinition(name, args.roles_dir)
+    return await deleteRoleDefinition(name, args.roles_dir, trash, 'MCP')
   }
 
   const teamList = async (): Promise<unknown> => {
@@ -564,13 +574,13 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
     return await updateTeamDefinition(teamId, args as UpdateTeamBody)
   }
 
-  /** 删除团队文件本体。 */
+  /** 删除团队本体：搬进回收站（v9 F3），返回体带 `trash_id`。 */
   const teamRemove = async (args: Record<string, unknown>): Promise<unknown> => {
     const teamId = asString(args.team_id)
     if (teamId === undefined) {
       throw new Error('缺少 team_id')
     }
-    return await deleteTeamDefinition(teamId, args.teams_dir)
+    return await deleteTeamDefinition(teamId, args.teams_dir, trash, 'MCP')
   }
 
   /** 团队渲染预览（不写盘；与 role_render 对称）。 */
@@ -598,8 +608,14 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
    * `@prism/agents` 的**纯函数**生成器，最后交给 vendored archify 渲染。
    * 宿主/用户**一行 IR 都不用写**——这正是红线 R7「IR 是派生视图」的落地方式。
    *
-   * 与 CLI 的唯一差别：不写产物 sidecar（`*.meta.json` 在 `@prism/cli`，server 不反向依赖它），
-   * 只落 HTML + `*.ir.json`；需要入库/溯源时走 CLI。
+   * 落盘（v9 F1）：project 派生三类图 → `<projectRoot>/.prism/arch/<type>/`（未注册拒绝、
+   * root 缺失报 `project_root_missing` 且不重建）；workflow/lifecycle → `<PRISM_HOME>/archify/`；
+   * 显式 `out` 完全接管。口径与 HTTP/CLI 同源，见 `graph/arch-placement.ts`。
+   *
+   * **写 sidecar**（v9.1 E-1，本条订正旧注释）：`writeArtifactMeta` 就在本包
+   * `graph/archify.ts`，不存在「server 反向依赖 CLI」问题；可选 `book`/`module` 一并落进
+   * sidecar，界面才能把项目图挂到知识库树上（旧行为「只落 HTML + IR」让项目图无书归属、
+   * 只能进全局图集）。
    */
   const archGenerate = async (args: Record<string, unknown>): Promise<unknown> => {
     const type = asString(args.type)
@@ -610,6 +626,8 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
     let ir: unknown
     let name: string
     let scope: Record<string, unknown> = {}
+    /** 项目源时由分支填项目名（落点解析用）。 */
+    let project: string | undefined
 
     if (type === 'workflow') {
       const teamId = asString(args.team)
@@ -626,6 +644,10 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
       const projectName = asString(args.project)
       if (projectName === undefined) throw new Error(`prism_arch_generate 生成 ${type} 需要 { project }`)
       const info = await requireProjectRoot(projectName)
+      project = info.project
+      // root 存在性校验先于读图谱：root 被删/被挪时报 `project_root_missing`（而非含糊的
+      // 「图谱不存在」），且**绝不 mkdir 复活**它（v9.1 B-1）。
+      await assertProjectRoot(info.root, info.project)
       const graph = await readCodeGraph(info.root)
       const top = typeof args.top === 'number' ? args.top : undefined
       const limit = typeof args.limit === 'number' ? args.limit : undefined
@@ -654,8 +676,16 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
     }
 
     const explicitOut = asString(args.out)
-    const htmlPath = explicitOut ?? join(prismPaths(deps.home).home, 'archify', type, `${name}.html`)
-    await mkdir(dirname(htmlPath), { recursive: true })
+    // 落点与 HTTP/CLI 同源（`graph/arch-placement.ts`）：project 三类图 → 项目内
+    // `.prism/arch/<type>/`；workflow/lifecycle → 全局；`out` 完全接管（跳过项目解析）。
+    const placement = await resolveArchPlacement({
+      type,
+      home: deps.home,
+      name: sanitizeArtifactName(name, type),
+      ...(explicitOut !== undefined ? { out: explicitOut } : project !== undefined ? { project } : {}),
+    })
+    await mkdir(placement.dir, { recursive: true })
+    const htmlPath = placement.htmlPath
     // 渲染前 archify 会先校验；不过直接抛 → 不产出坏图
     const rendered = await renderDiagram(type, ir, htmlPath, {
       ...(deps.graphifyEnv !== undefined ? { env: deps.graphifyEnv } : {}),
@@ -663,6 +693,15 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
     })
     const irPath = htmlPath.replace(/\.html$/i, '.ir.json')
     await writeFile(irPath, `${JSON.stringify(ir, null, 2)}\n`, 'utf-8')
+    // sidecar（v9.1 E-1）：作用域（可选 book/module）+ 渲染器版本 + IR 哈希。
+    // 与 HTTP `POST /api/arch/render`、CLI `arch from-*` 同口径；历史产物无 sidecar
+    // 也照常可列（`GET /api/arch/diagrams` 按 `*.html` 扫，缺 meta 容错）。
+    const book = asString(args.book)
+    const moduleName = asString(args.module)
+    await writeArtifactMeta(htmlPath, ir, {
+      ...(book !== undefined ? { book } : {}),
+      ...(moduleName !== undefined ? { module: moduleName } : {}),
+    })
 
     const meta = (ir as { meta?: { title?: string; subtitle?: string } }).meta ?? {}
     return {
@@ -673,6 +712,10 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
       bytes: rendered.bytes,
       title: meta.title,
       subtitle: meta.subtitle,
+      source: placement.project !== undefined ? 'project' : 'global',
+      ...(placement.project !== undefined ? { project: placement.project } : {}),
+      ...(book !== undefined ? { book } : {}),
+      ...(moduleName !== undefined ? { module: moduleName } : {}),
     }
   }
 
@@ -1248,7 +1291,7 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
     {
       name: 'prism_arch_generate',
       description:
-        '派生并渲染 archify 架构图（五类：workflow / architecture / sequence / lifecycle / dataflow），返回 HTML 与 IR 路径。IR 全部由 Prism 内置纯函数生成器派生——调用方不需要写任何 IR。workflow 需 { team }；architecture/sequence/dataflow 需 { project }（已注册且已建图）；lifecycle 无需入参（源自 @prism/core 的任务状态机常量）。生成器在数据不足时会**明确报错而不是造图**（如图谱没有跨文件 calls 边 → 无法画时序图；所有源文件同目录 → 无法分层画依赖流向）。',
+        '派生并渲染 archify 架构图（五类：workflow / architecture / sequence / lifecycle / dataflow），返回 HTML 与 IR 路径。IR 全部由 Prism 内置纯函数生成器派生——调用方不需要写任何 IR。workflow 需 { team }；architecture/sequence/dataflow 需 { project }（已注册且已建图，产物落 <projectRoot>/.prism/arch/<type>/）；lifecycle 无需入参（源自 @prism/core 的任务状态机常量）。可选 { book, module } 写进产物 sidecar，让项目图挂到知识库树对应书/模块下（缺省则进全局图集）。生成器在数据不足时会**明确报错而不是造图**（如图谱没有跨文件 calls 边 → 无法画时序图；所有源文件同目录 → 无法分层画依赖流向）。',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1258,7 +1301,9 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
           title: { type: 'string', description: '可选：覆盖图标题' },
           top: { type: 'integer', minimum: 1, description: '可选：组件/参与者上限' },
           limit: { type: 'integer', minimum: 1, description: '可选：连线/消息上限' },
-          out: { type: 'string', description: '可选：覆盖 HTML 产物路径（默认 <PRISM_HOME>/archify/<type>/<name>.html）' },
+          book: { type: 'string', description: '可选：知识库书（写进 sidecar，界面按书挂载该图）' },
+          module: { type: 'string', description: '可选：书内模块（写进 sidecar）' },
+          out: { type: 'string', description: '可选：覆盖 HTML 产物路径（给了就完全接管落点；缺省见描述）' },
         },
         required: ['type'],
       },
@@ -1333,7 +1378,7 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
     {
       name: 'prism_role_rm',
       description:
-        '删除角色文件本体（扁平 <name>.md 与兼容形态 <name>/AGENTS.md 都删）。不可逆——roles_dir 必填，绝不回落到默认宿主目录',
+        '删除角色文件本体（扁平 <name>.md 与兼容形态 <name>/AGENTS.md 都删，整目录搬走不留残目录）。**删除进回收站**，默认 3 天后彻底清除；自动清除需 serve 运行（纯 CLI 部署靠 `prism trash purge` 兜底）。返回体含 trash_id，可经 `prism trash restore <trash_id>` 还原——roles_dir 必填，绝不回落到默认宿主目录',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1426,7 +1471,7 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
     {
       name: 'prism_skill_uninstall',
       description:
-        '卸载 Skill（**只删 Prism 产物**：SKILL.md 含 marker；人写的 Skill 一律不动并记入 kept）。names 缺省 = 扫描 skills_dir 下全部 Skill。不可逆——skills_dir 必填，绝不回落到默认宿主目录',
+        '卸载 Skill（**只删 Prism 产物**：SKILL.md 含 marker；人写的 Skill 一律不动并记入 kept）。names 缺省 = 扫描 skills_dir 下全部 Skill。**删除进回收站**，默认 3 天后彻底清除；自动清除需 serve 运行（纯 CLI 部署靠 `prism trash purge` 兜底）。返回体含 trash_ids，可经 `prism trash restore <trash_id>` 还原——skills_dir 必填，绝不回落到默认宿主目录',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1564,7 +1609,7 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
     {
       name: 'prism_team_rm',
       description:
-        '删除团队文件本体（扁平 <id>.md 与兼容形态 <id>/AGENTS.md 都删）。不可逆——teams_dir 必填，绝不回落到默认宿主目录',
+        '删除团队（扁平 <id>.md 与兼容形态 <id>/AGENTS.md 都删，整目录搬走不留残目录）。**删除进回收站**，默认 3 天后彻底清除；自动清除需 serve 运行（纯 CLI 部署靠 `prism trash purge` 兜底）。返回体含 trash_id，可经 `prism trash restore <trash_id>` 还原——teams_dir 必填，绝不回落到默认宿主目录',
       inputSchema: {
         type: 'object',
         properties: {

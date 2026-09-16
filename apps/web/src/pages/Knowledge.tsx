@@ -1,33 +1,38 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
 
-import { api, type BookNode, type BookStructure, type CatalogEntry, type EntryVersion, type SearchResult } from '../api.ts'
+import { api, type ArchDiagram, type BookNode, type BookStructure, type CatalogEntry, type EntryVersion, type SearchResult } from '../api.ts'
 import { ConfirmModal } from '../components/ConfirmModal.tsx'
 import { MarkdownBlocks } from '../components/Markdown.tsx'
 import { Ref } from '../components/ref.tsx'
 import { State } from '../components/State.tsx'
 import { CopyButton, EmptyBlock, PageHead } from '../components/ui.tsx'
 import { useAsync } from '../components/useAsync.ts'
-import { useT } from '../i18n.ts'
+import { useT, type DictKey } from '../i18n.ts'
 import { parseMarkdown } from '../markdown.ts'
 import { hrefOf } from '../route.ts'
 import { fmtTime } from '../time.ts'
 import {
+  archSel,
+  archVisible,
   buildTree,
   countTree,
   filterTree,
   isSelMiss,
+  mountArch,
+  parseArchSel,
   resolveBookDeepLink,
   selMissDetail,
+  type ArchNode,
   type DirNode,
 } from './knowledge-logic.ts'
 import { SearchHitRow } from './SearchHitRow.tsx'
 
 /**
- * 知识库（左栏目录 + 右栏书页，v7 阅读室）。
+ * 知识库（左栏目录 + 右栏书页，v7 阅读室；v9 F2 起架构图入同一棵树）。
  *
- * 左栏模型（design-brief-v7-a §4.1 K1/K2/K3/K13 + design-v8 §5 F2）：
- * - **书 → 目录多级嵌套 → 条目**（F2 把原「书 → 压平模块」换成**真目录树**）；
+ * 左栏模型（design-brief-v7-a §4.1 K1/K2/K3/K13 + design-v8 §5 F2 + design-v9 §4）：
+ * - **书 → 目录多级嵌套 → 条目 / 架构图**（F2 把原「书 → 压平模块」换成**真目录树**）；
  *   **层（global/project/role）不占树的一层**，降为两处 —— ① 每本书恒有副行「层 › 归属」
  *   （global 无归属只显示「全局」，同名书因此必然两行文本不同，K2）；② 顶部过滤 chips
  *   （全部/全局/项目/角色）。
@@ -35,12 +40,17 @@ import { SearchHitRow } from './SearchHitRow.tsx'
  *   **书内目录树由前端按该书条目的 `path` 建**（`knowledge-logic.ts#buildTree`）——
  *   **条目按书懒加载**，首次展开某书才 `kbCatalog({layer, owner, book, limit: CATALOG_LIMIT})`，
  *   仍被 5000 上限截断时该书末尾给「还有 N 条」。旧的模块行与 `kbTree` 的 `modules` 不再渲染。
+ * - **架构图（v9 F2）**：与条目**同树同权**——按 sidecar 的 `book`/`module` 挂到对应书的目录段
+ *   （`mountArch`，未命中回落书根），**无书归属**的聚成根级虚拟组「全局图集」（默认收起）；
+ *   行样式复用 `.toc-item`，只多「行首类型圆点 + 行尾类型徽章（+ project 徽章）」。
+ *   数据是**两条流**：挂载即全量拉一次（喂图集组与深链解析），各书展开时按 `?book=` 再拉一次。
  * - 目录引线（§2.9）：目录行的「标题 …… 计数」用 `border-bottom: 1px dotted var(--rule)`
  *   撑满弹性区，计数列 `tabular-nums` 右对齐；**层级缩进**由行内注入的 `--toc-depth`
  *   驱动（`styles.css` 的 `.book-toc .toc-mod` / `.toc-item`），沿用既有零件、零新色。
  * - 深链：`?layer/?owner/?book` 初始化过滤与展开态；**`?book=` 命中时目录收敛到那一本**
  *   （D-3 / T6 边表：`Ref kind=book` 的落点必须收敛，判据见 `knowledge-logic.ts`）；
- *   点书/目录/条目回写 hash。
+ *   点书/目录/条目回写 hash。**架构图是单段 sel `arch-<type>-<name>`**（design-v9 E-5）：
+ *   页面见到 `arch-` 前缀**先分支**（右栏换图视图、`kbGet` 不发），绝不落条目的 404 帧。
  */
 
 const TYPE_COLOR: Record<string, string> = {
@@ -52,6 +62,27 @@ const TYPE_COLOR: Record<string, string> = {
   diagram: 'var(--type-diagram)',
   summary: 'var(--type-summary)',
   other: 'var(--type-other)',
+}
+
+/**
+ * 五类架构图的 i18n 标签（**静态字面量映射**，不拼模板串）：
+ * dead-keys 守卫按源码里的字符串字面量认引用，写 `` t(`knowledge.arch.type.${x}`) `` 会被判死键。
+ */
+const ARCH_TYPE_LABEL: Record<string, DictKey> = {
+  architecture: 'knowledge.arch.type.architecture',
+  sequence: 'knowledge.arch.type.sequence',
+  dataflow: 'knowledge.arch.type.dataflow',
+  workflow: 'knowledge.arch.type.workflow',
+  lifecycle: 'knowledge.arch.type.lifecycle',
+}
+
+/** 五类架构图的点色 / 徽章底 token（双主题由 token 自己切，见 `styles.css` 的 `--arch-*`）。 */
+const ARCH_TYPE_COLOR: Record<string, string> = {
+  architecture: 'var(--arch-architecture)',
+  sequence: 'var(--arch-sequence)',
+  dataflow: 'var(--arch-dataflow)',
+  workflow: 'var(--arch-workflow)',
+  lifecycle: 'var(--arch-lifecycle)',
 }
 
 /** 无 module 的条目在侧栏分组用的哨兵；展示时经 i18n 映射为「未归类」。 */
@@ -121,6 +152,16 @@ export function KnowledgePage({
   /** bookKey → 该书的条目（懒加载缓存；undefined = 尚未拉取）。 */
   const [entriesByBook, setEntriesByBook] = useState<Record<string, CatalogEntry[]>>({})
   const loadingRef = useRef<Set<string>>(new Set())
+  /**
+   * 架构图（F2）：全量拉一次供「全局图集」与深链解析（`archDiagrams()` 无参 = 全量），
+   * 各书的图则按展开状态懒加载进 `archByBook`。`useAsync` 的 `reload()` 即降级态的重试钮。
+   */
+  const archFeed = useAsync(() => api.archDiagrams(), [])
+  /** bookKey → 该书的架构图（懒加载缓存；模式与 `entriesByBook` 一致）。 */
+  const [archByBook, setArchByBook] = useState<Record<string, ArchDiagram[]>>({})
+  const archLoadingRef = useRef<Set<string>>(new Set())
+  /** 根级虚拟组「全局图集」的展开态：**默认收起**（与书默认收起同口径）。 */
+  const [atlasOpen, setAtlasOpen] = useState(false)
   const [viewVersion, setViewVersion] = useState<number | undefined>(undefined)
   const [showVersions, setShowVersions] = useState(false)
   const [busyRemove, setBusyRemove] = useState(false)
@@ -226,6 +267,24 @@ export function KnowledgePage({
     }
   }, [books, expanded, entriesByBook])
 
+  /**
+   * 架构图懒加载（F2）：只拉「已展开且未缓存」的书的图，`?book=` 走服务端作用域过滤。
+   * 与上面条目懒加载同一套防重入模式（`archLoadingRef` 独立，免得与条目拉取互相挡）。
+   * 失败的书写空数组（与条目同口径：不把整页拖进错误态）；**全量**拉取失败才是图集组的错误态。
+   */
+  useEffect(() => {
+    for (const bk of books) {
+      const key = bookKey(bk)
+      if (!expanded.has(key) || archByBook[key] !== undefined || archLoadingRef.current.has(key)) continue
+      archLoadingRef.current.add(key)
+      void api
+        .archDiagrams({ book: bk.book })
+        .then((list) => setArchByBook((prev) => ({ ...prev, [key]: list })))
+        .catch(() => setArchByBook((prev) => ({ ...prev, [key]: [] })))
+        .finally(() => archLoadingRef.current.delete(key))
+    }
+  }, [books, expanded, archByBook])
+
   // 深链到某条目：选中它；若它所在的（已加载）书未展开，则展开（§2.5：sel 变更自动恢复）。
   useEffect(() => {
     if (sel === undefined || sel === '') {
@@ -288,10 +347,12 @@ export function KnowledgePage({
     const map = new Map<string, DirNode<CatalogEntry>>()
     for (const bk of scopedBooks) {
       const key = bookKey(bk)
-      map.set(key, buildTree(entriesByBook[key] ?? [], bk.book))
+      const full = buildTree(entriesByBook[key] ?? [], bk.book)
+      // 架构图按 sidecar 的 `module` 挂目录段，未命中回落书根（design-v9 E-2）。
+      map.set(key, mountArch(full, archByBook[key] ?? []))
     }
     return map
-  }, [scopedBooks, entriesByBook])
+  }, [scopedBooks, entriesByBook, archByBook])
 
   /**
    * 过滤视图（F2）：**先按 `path` 建整棵目录树，再按检索词裁枝**——
@@ -302,6 +363,9 @@ export function KnowledgePage({
    * ⚠ **建树必须在裁枝之前**：`buildTree` 的根锚定/公共前缀是拿**整本书**的路径算的，
    * 若先过滤条目再建树，剩下同处一目录的少数条目会把该目录也算成公共前缀剥掉，树会变形。
    *
+   * 架构图与条目**同一轮裁枝**（`filterTree` 的第四个参数）：命中判据见 `archVisible`
+   * （name/type/title + 层 chip），目录段名命中时整棵子树（含图）原样保留。
+   *
    * 未展开的书只能按书名命中 —— 懒加载的必然代价（与改造前一致）。
    */
   const view = useMemo(() => {
@@ -309,14 +373,15 @@ export function KnowledgePage({
     const isHit = (e: CatalogEntry): boolean =>
       e.title.toLowerCase().includes(nd) || e.id.toLowerCase().includes(nd) || e.tags.some((tag) => tag.toLowerCase().includes(nd))
     const dirHit = (name: string): boolean => name.toLowerCase().includes(nd)
-    const empty: DirNode<CatalogEntry> = { name: '', key: '', dirs: [], entries: [] }
+    const archHit = (a: ArchNode): boolean => archVisible(a, nd, layer)
+    const empty: DirNode<CatalogEntry> = { name: '', key: '', dirs: [], entries: [], arch: [] }
     return scopedBooks
       .map((bk) => {
         const key = bookKey(bk)
         const cached = entriesByBook[key]
         const bookHit = nd !== '' && bk.book.toLowerCase().includes(nd)
         const full = trees.get(key) ?? empty
-        const kept = nd === '' || bookHit ? full : filterTree(full, isHit, dirHit)
+        const kept = nd === '' || bookHit ? full : filterTree(full, isHit, dirHit, archHit)
         return {
           node: bk,
           key,
@@ -326,10 +391,32 @@ export function KnowledgePage({
         }
       })
       .filter((b) => b.visible)
-  }, [scopedBooks, entriesByBook, trees, needle])
+  }, [scopedBooks, entriesByBook, trees, needle, layer])
 
-  /** 目录内收敛的命中条目数（过滤时底部计数行用）。 */
+  /** 目录内收敛的命中条目数（过滤时底部计数行用；F2 起含架构图节点）。 */
   const hitCount = view.reduce((n, b) => n + countTree(b.tree), 0)
+
+  /** 「全局图集」（F2）：**无书归属**的图（MCP 历史产物、团队 workflow、全局 lifecycle）。 */
+  const atlasItems = useMemo(
+    () => (archFeed.data ?? []).filter((a) => a.book === undefined || a.book === ''),
+    [archFeed.data],
+  )
+  /** 图集在当前「检索词 + 层 chip」下可见的项（与书内节点同一判据）。 */
+  const atlasVisibleItems = useMemo(
+    () => atlasItems.filter((a) => archVisible(a, needle, layer)),
+    [atlasItems, needle, layer],
+  )
+  /** 图集组的可见性：**有图或出错**才出现（图确实为空时不占位）。 */
+  const atlasShown = atlasVisibleItems.length > 0 || archFeed.error !== undefined
+  /** 检索中自动展开图集（否则命中在收起态里看不见）；手动开合仍由 `atlasOpen` 说了算。 */
+  const atlasExpanded = atlasOpen || (needle !== '' && atlasVisibleItems.length > 0)
+
+  /**
+   * 空库有图（design-v9 E-4）：`books.length === 0` **不足以**判「整库皆空」——
+   * 图集有内容、图集拉取失败（要能重试）或仍在途中时，两栏照常渲染；
+   * **库与图确实全空**才落 `EmptyBlock`。判据是 `showLayout`（渲染层唯一的空态开关）。
+   */
+  const showLayout = books.length > 0 || atlasShown || archFeed.loading
 
   const selectedMeta = useMemo<EntryMeta | null>(() => {
     if (selectedId === '') return null
@@ -338,9 +425,61 @@ export function KnowledgePage({
     return (searchRun.data ?? []).find((r) => r.id === selectedId) ?? null
   }, [entryIndex, selectedId, searchRun.data])
 
+  /**
+   * 架构图深链（F2）：`arch-` 前缀的 sel **先于一切条目逻辑**解析出来。
+   *
+   * 这个 memo 是「arch sel 永不落 `kbGet` 404 帧」的支点——它同时决定 ① 右栏走图视图还是
+   * 条目阅读区（见渲染层的首个分支）、② `selectedContent` 发不发 `kbGet`（见其 loader）。
+   * `parseArchSel` 判不到（前缀不符 / 类型不在五类闭集 / 缺名字）→ `null` = 当条目 sel。
+   */
+  const parsedArch = useMemo(() => parseArchSel(selectedId), [selectedId])
+
+  /**
+   * 深链命中项：在**全量**清单里按 `(type, name)` 取**首个**。
+   *
+   * ⚠ **承重依赖（后端排序）**：这份清单是**原样消费服务端顺序**的——`useAsync` 不排序、
+   * `.find` 也不重排。服务端按 `mtime` 降序返回（`routes/arch.ts` 的
+   * `sort((a, b) => b.mtime.localeCompare(a.mtime))`；ISO 串字典序 = 时间序），
+   * 故「首个 = mtime 最新」是确定的。谁要在前端给这份清单再排序/反转，深链落点会跟着变。
+   *
+   * 已知边界：契约的身份键是 `(type, name, source, project)`，而深链 sel 只带 `(type, name)`
+   * （design-v9 E-5 的单段形态）——同名产物跨项目/双源共存时（默认产物名 = 图类型，故这是
+   * 默认路径），这里只能取 mtime 最新的一条，未必是用户点的那一条、也未必与 `?project=`
+   * 限定的那条一致。属**契约级**取舍，见交付报告「对账冲突」，前端不擅改 sel 形态。
+   *
+   * 全量未到位时为 `undefined`——渲染层据此区分「在途」与「确实不存在」，不把两者混成一帧。
+   */
+  const archTarget = useMemo(
+    () =>
+      parsedArch === null
+        ? undefined
+        : (archFeed.data ?? []).find((a) => a.type === parsedArch.type && a.name === parsedArch.name),
+    [parsedArch, archFeed.data],
+  )
+
+  /**
+   * 深链命中：带 `book` → 自动展开那本书（图随书挂载，不展开就看不到行）；
+   * 无书归属 → 展开「全局图集」组（该组默认收起，不展开则命中行藏在收起态里）。
+   */
+  useEffect(() => {
+    if (archTarget === undefined) return
+    const name = archTarget.book
+    if (name === undefined || name === '') {
+      setAtlasOpen(true)
+      return
+    }
+    const bk = books.find((b) => b.book === name)
+    if (bk === undefined) return
+    const key = bookKey(bk)
+    setExpanded((prev) => (prev.has(key) ? prev : new Set(prev).add(key)))
+  }, [archTarget, books])
+
   const selectedContent = useAsync(
-    () => (selectedId !== '' ? api.kbGet(selectedId, viewVersion) : Promise.resolve(null)),
-    [selectedId, viewVersion],
+    () =>
+      selectedId !== '' && parsedArch === null
+        ? api.kbGet(selectedId, viewVersion)
+        : Promise.resolve(null),
+    [selectedId, viewVersion, parsedArch],
   )
 
   const versions = useAsync(
@@ -391,6 +530,13 @@ export function KnowledgePage({
     if (status === 'deprecated') return 'err'
     return 'muted'
   }
+  /** 架构图类型标签：未知类型**原文显示**（不隐藏、不假装成某一类）。 */
+  const archTypeLabel = (type: string): string => {
+    const key = ARCH_TYPE_LABEL[type]
+    return key === undefined ? type : t(key)
+  }
+  /** 架构图类型色：未知类型回落中性的 `--type-other`（与条目类型徽标同一兜底）。 */
+  const archColor = (type: string): string => ARCH_TYPE_COLOR[type] ?? 'var(--type-other)'
 
   /**
    * 层 chip = 「重选范围」，故一并清掉 `book` 深链（与它已经在清的 `owner` 同理）：
@@ -446,6 +592,9 @@ export function KnowledgePage({
    */
   const entryHref = (id: string): string => hrefOf({ page: 'knowledge', sel: id, query: { ...q } })
 
+  /** 架构图节点的 `href`：与条目行同源（`arch-<type>-<name>` 单段 sel + 保留过滤 query）。 */
+  const archHref = (selId: string): string => hrefOf({ page: 'knowledge', sel: selId, query: { ...q } })
+
   /** A2：非原生可点行（展开切换）的键盘契约 —— Enter / Space 等价于点击。 */
   const keyboardToggle = (e: ReactKeyboardEvent<HTMLDivElement>, run: () => void) => {
     if (e.key !== 'Enter' && e.key !== ' ') return
@@ -484,9 +633,54 @@ export function KnowledgePage({
   )
 
   /**
+   * 架构图叶子行（F2）：复用条目的 `.toc-item` 行样式（同缩进 / 同选中态 / 同链接语义），
+   * 只多两件——**行首类型圆点**（`--arch-*` token）与**行尾类型徽章**（未知类型原文显示）；
+   * 图带 `project`（项目派生）时再加一枚 project 徽章，与全局产物一眼可分。
+   *
+   * 标题取 `title ?? name`：`title` 来自 sidecar / IR meta，缺 sidecar 的历史产物回落文件名。
+   */
+  /**
+   * 架构图行的 **React key**（裁决 2）——**不能**用 `archSel(item)`。
+   *
+   * 深链 sel 只含 `(type, name)`（design-v9 E-5 的单段形态），而契约身份键是
+   * `(type, name, source, project)`：多项目 / 双源同名是**默认路径**（产物名缺省回落图类型），
+   * 于是同一本书下会出现**同 sel 的多行** ⇒ 旧 `key={selId}` 直接撞车（React 报
+   * `Encountered two children with the same key`，并可能吞行）。
+   *
+   * `mtime` 分清「同名不同源」，末尾 `index` 兜底「同 mtime 同名」这种真·不可区分的极端
+   * 重复（列表顺序由服务端定，展开序号稳定）。**深链 sel 本身不变**（`(type,name)` 粒度
+   * 已裁决接受现状，见报告 D-v9-1 技术债）。
+   */
+  const archKey = (item: ArchNode, index: number): string =>
+    `${item.type}|${item.name}|${item.mtime}|${index}`
+
+  const renderArch = (item: ArchNode, depth: number, index: number): ReactNode => {
+    const selId = archSel(item)
+    const color = archColor(item.type)
+    return (
+      <a
+        key={archKey(item, index)}
+        href={archHref(selId)}
+        className={`toc-item${selectedId === selId ? ' active' : ''}`}
+        style={depthStyle(depth)}
+        onClick={() => select(selId)}
+      >
+        <span className="toc-arch-dot" style={{ '--arch-color': color } as CSSProperties} />
+        <span className="toc-title">{item.title ?? item.name}</span>
+        <span className="tag tag-type toc-arch-badge" style={{ '--type-color': color } as CSSProperties}>
+          {archTypeLabel(item.type)}
+        </span>
+        {item.project !== undefined && item.project !== '' && (
+          <span className="tag toc-arch-badge">{item.project}</span>
+        )}
+      </a>
+    )
+  }
+
+  /**
    * 递归渲染目录层（F2）：每个目录节点 = 「可点的目录行 + `.collapse` 子层」，
    * 与书行同构（`.toc-mod` 行 + `.collapse`），故收起时子层**常驻 DOM**
-   * （高度可过渡的前提，见 `collapse-dom.test.ts`）。计数取**子树条目总数**。
+   * （高度可过渡的前提，见 `collapse-dom.test.ts`）。计数取**子树条目总数**（F2 起含架构图）。
    */
   function renderDirs(nodes: DirNode<CatalogEntry>[], depth: number, bk: BookNode): ReactNode {
     const bookK = bookKey(bk)
@@ -512,11 +706,82 @@ export function KnowledgePage({
             <div>
               {renderDirs(node.dirs, depth + 1, bk)}
               {node.entries.map((entry) => renderEntry(entry, depth + 1))}
+              {/* F2：同节点内架构图排在条目**之后**（图是「本目录的附件」，不抢条目的位置）。 */}
+              {node.arch.map((item, i) => renderArch(item, depth + 1, i))}
             </div>
           </div>
         </div>
       )
     })
+  }
+
+  /**
+   * 右栏「图视图」（F2）：选中 arch sel 时**整块替换**条目阅读区（书头也不出——图不属于某条目录）。
+   *
+   * 分派次序（四态互不冒充）：
+   * 1. 命中 → 工具条 + 全宽 iframe（`sandbox` 沿用 CodeGraph 既有约定）；
+   * 2. 全量清单在途 → 骨架（**不能先报「不存在」**，那会把慢网络说成没有这张图）；
+   * 3. 全量清单出错 → `knowledge.arch.loadFailed` 原文 + 重试（与左侧图集组同一键）；
+   * 4. 确实没有 → **arch 专用**未命中 pane（不复用条目的「条目不存在」文案）。
+   */
+  function renderArchPane(target: { type: string; name: string }): ReactNode {
+    const selId = archSel(target)
+    if (archTarget !== undefined) {
+      return (
+        <div className="arch-view swap-in" key={selId}>
+          <div className="arch-view-bar">
+            <span className="tag tag-type" style={{ '--type-color': archColor(archTarget.type) } as CSSProperties}>
+              {archTypeLabel(archTarget.type)}
+            </span>
+            <span className="small muted">{t('knowledge.arch.generated', { ts: fmtTime(archTarget.mtime) })}</span>
+            {/* 与 CodeGraph 的「新窗口打开图谱」同制：`<a>` 带按钮外观类，不做交互元素嵌套（B15）。
+                `src` / `href` 一律直接用服务端给的 `preview` URL——前端不拼路径（design-v9 G-1）。 */}
+            <a className="btn-link arch-view-open" href={archTarget.preview} target="_blank" rel="noreferrer">
+              {t('knowledge.arch.openNewTab')}
+            </a>
+          </div>
+          <div className="iframe-wrap">
+            <iframe
+              title={archTarget.name}
+              src={archTarget.preview}
+              sandbox="allow-scripts allow-same-origin allow-popups"
+            />
+          </div>
+        </div>
+      )
+    }
+    if (archFeed.loading) {
+      return (
+        <div className="pane swap-in">
+          <State loading />
+        </div>
+      )
+    }
+    if (archFeed.error !== undefined) {
+      return (
+        <div className="pane swap-in">
+          <div className="error" role="alert">
+            {t('knowledge.arch.loadFailed', { msg: archFeed.error })}
+          </div>
+          <div style={{ marginTop: 'var(--s-3)' }}>
+            <button className="tool-btn" onClick={() => archFeed.reload()}>
+              {t('common.retry')}
+            </button>
+          </div>
+        </div>
+      )
+    }
+    return (
+      <div className="pane swap-in">
+        <h3>{t('knowledge.arch.notFound.title')}</h3>
+        <div className="small muted">{t('knowledge.arch.notFound.desc', { sel: selId })}</div>
+        <div style={{ marginTop: 'var(--s-3)' }}>
+          <button className="tool-btn" onClick={() => onSelect?.(undefined)}>
+            {t('knowledge.search.back')}
+          </button>
+        </div>
+      </div>
+    )
   }
 
   /** 把条目从已加载缓存里摘掉（软删后行内立即消失，不整页重拉）。 */
@@ -583,15 +848,21 @@ export function KnowledgePage({
     if (tooLarge) setRenderMode('source')
   }, [tooLarge])
 
-  /** 书头定位：选中条目的书优先，否则 ?book= 命中的书。 */
+  /**
+   * 书头定位：选中条目的书优先，否则 `?book=` 命中的书。
+   * F2：选中架构图时**没有书头**（图视图整块替换右栏），故这里直接给 `undefined`——
+   * 顺带省掉一次对图的选中毫无意义的 `kbBookStructure` 请求。
+   */
   const bookRef = useMemo(
     () =>
-      meta !== null
-        ? { layer: meta.layer, book: meta.book }
-        : currentBook !== undefined
-          ? { layer: currentBook.layer, book: currentBook.book }
-          : undefined,
-    [meta, currentBook],
+      parsedArch !== null
+        ? undefined
+        : meta !== null
+          ? { layer: meta.layer, book: meta.book }
+          : currentBook !== undefined
+            ? { layer: currentBook.layer, book: currentBook.book }
+            : undefined,
+    [parsedArch, meta, currentBook],
   )
   // K4：not_found / bad_request（同层多 owner 同名书）与「未生成」同路 —— 一律回落，不弹错误
   const structure = useAsync(
@@ -628,7 +899,9 @@ export function KnowledgePage({
         <PageHead title={t('knowledge.title')} sub={t('knowledge.desc')} />
 
         <State loading={tree.loading} error={tree.error ?? undefined}>
-          {books.length === 0 ? (
+          {/* F2/design-v9 E-4：整页空态的唯一开关是 `showLayout` —— 条目为零但**图集有图、
+              图集出错或尚在途中**时照常渲染两栏（空库有图不得被 EmptyBlock 短路）。 */}
+          {!showLayout ? (
             <EmptyBlock
               title={t('knowledge.empty.title')}
               desc={t('knowledge.empty.desc')}
@@ -792,6 +1065,8 @@ export function KnowledgePage({
                             <div>
                               {renderDirs(bk.tree.dirs, 0, bk.node)}
                               {bk.tree.entries.map((entry) => renderEntry(entry, 0))}
+                              {/* F2：书根下的图（`module` 空 / 未命中目录段时的回落落点）。 */}
+                              {bk.tree.arch.map((item, i) => renderArch(item, 0, i))}
                             </div>
                           </div>
 
@@ -812,8 +1087,49 @@ export function KnowledgePage({
                       )
                     })}
 
-                  {/* 过滤无匹配：行内空态，不是整页空态（K13） */}
-                  {!searching && view.length === 0 && (
+                  {/*
+                    F2「全局图集」：**无书归属**的图（MCP 历史产物 / 团队 workflow / 全局 lifecycle）
+                    聚成一个根级虚拟组，与书**同级**、默认**收起**。它刻意不写 `?book=`
+                    （普通书行 toggle 会回写，那是「收敛到某本书」的语义；图集不是书，写进去会把
+                    目录错误地收敛成空）。`atlasOpen` 只管开合；检索命中时自动展开（否则命中看不见）。
+                  */}
+                  {!searching && atlasShown && (
+                    <div className="toc-section">
+                      <div
+                        className="toc-book"
+                        role="button"
+                        tabIndex={0}
+                        aria-expanded={atlasExpanded}
+                        onClick={() => setAtlasOpen((v) => !v)}
+                        onKeyDown={(e) => keyboardToggle(e, () => setAtlasOpen((v) => !v))}
+                      >
+                        <div className="toc-book-main">
+                          <span className={`toc-chev${atlasExpanded ? ' open' : ''}`}>▸</span>
+                          <span className="toc-bookname">{t('knowledge.atlas')}</span>
+                          <span className="toc-leader" />
+                          <span className="toc-count">{atlasVisibleItems.length}</span>
+                        </div>
+                      </div>
+                      {/* 降级态（design-v9 §4）：全量清单拉不到 → 错误原文 + 重试。
+                          刻意放在 `.collapse` **之外**——收起态也必须看得见「拉失败了」，
+                          否则用户只会以为「一张图都没有」。条目浏览完全不因此受阻。 */}
+                      {archFeed.error !== undefined && (
+                        <div className="toc-note small error" role="alert">
+                          <span>{t('knowledge.arch.loadFailed', { msg: archFeed.error })}</span>{' '}
+                          <button className="tool-btn" onClick={() => archFeed.reload()}>
+                            {t('common.retry')}
+                          </button>
+                        </div>
+                      )}
+                      <div className={`collapse${atlasExpanded ? ' open' : ''}`}>
+                        <div>{atlasVisibleItems.map((item, i) => renderArch(item, 0, i))}</div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 过滤无匹配：行内空态，不是整页空态（K13）。
+                      图集组在场时不算「全无匹配」——空库有图（E-4）正是这种形态。 */}
+                  {!searching && view.length === 0 && !atlasShown && (
                     <div className="small muted toc-note">{t('knowledge.noResults')}</div>
                   )}
                 </nav>
@@ -839,7 +1155,8 @@ export function KnowledgePage({
                   </div>
                 )}
 
-                {/* K4 书头：定稿目录 rev + 继承链；not_found / bad_request 一律回落「按实际条目列目录」 */}
+                {/* K4 书头：定稿目录 rev + 继承链；not_found / bad_request 一律回落「按实际条目列目录」。
+                    F2：选中架构图时 `bookRef` 恒为 undefined（图视图整块替换右栏），书头自然不出。 */}
                 {bookRef !== undefined && (
                   <div className="book-head">
                     <div className="book-head-row">
@@ -876,7 +1193,12 @@ export function KnowledgePage({
                   </div>
                 )}
 
-                {notFound ? (
+                {/* F2 深链**先分支**：`arch-` 前缀的 sel 一律走图视图（在途 / 出错 / 未命中三态
+                    由 `renderArchPane` 自己分派），**绝不落下面的 `notFound`（kbGet 404）帧**——
+                    `selectedContent` 的 loader 已按 `parsedArch` 短路，`kbGet` 根本不会发。 */}
+                {parsedArch !== null ? (
+                  renderArchPane(parsedArch)
+                ) : notFound ? (
                   /* 深链未命中 / 已移出索引（§2.5）：带名称 + 出路（撤销 / 返回目录） */
                   <div className="pane swap-in">
                     <h3>{t('knowledge.notFound.title')}</h3>

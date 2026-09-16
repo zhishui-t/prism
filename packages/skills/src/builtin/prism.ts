@@ -128,7 +128,7 @@ prism serve --ensure               # 后台幂等起控制台（已在跑则复�
 | :--- | :--- |
 | 知识库（17） | \`prism_kb_search\` \`prism_kb_get\` \`prism_kb_deposit\` \`prism_kb_convert\` \`prism_kb_import\` \`prism_kb_enrich\` \`prism_kb_graph\` \`prism_kb_tree\` \`prism_kb_stats\` \`prism_kb_catalog\` \`prism_kb_path\` \`prism_kb_remove\` \`prism_kb_restore\` \`prism_kb_conflicts\` \`prism_kb_resolve_conflict\` \`prism_kb_versions\` \`prism_kb_book_structure\` |
 | 代码图谱（8） | \`prism_graph_query\` \`prism_graph_path\` \`prism_graph_explain\` \`prism_graph_affected\` \`prism_graph_god_nodes\` \`prism_graph_summary\` \`prism_graph_status\` \`prism_graph_merge\` |
-| 架构图谱（1） | \`prism_arch_generate\`（五类图统一入口：workflow 传 \`team\`，architecture/sequence/dataflow 传 \`project\`，lifecycle 无入参） |
+| 架构图谱（1） | \`prism_arch_generate\`（五类图统一入口：workflow 传 \`team\`，architecture/sequence/dataflow 传 \`project\`，lifecycle 无入参；可选 \`book\`/\`module\`/\`out\`） |
 | 角色团队（19） | \`prism_role_list\` \`prism_role_get\` \`prism_role_new\` \`prism_role_edit\` \`prism_role_rm\` \`prism_role_render\` \`prism_team_list\` \`prism_team_get\` \`prism_team_new\` \`prism_team_edit\` \`prism_team_rm\` \`prism_team_render\` \`prism_team_activate\` \`prism_context_pack\` \`prism_skill_effective\` \`prism_skill_list\` \`prism_skill_install\` \`prism_skill_uninstall\` \`prism_skill_categorize\` |
 
 > **导入三件套**：\`prism_kb_convert\`（文档→Markdown，本地 anydoc 转换）→ 你提炼 →
@@ -408,7 +408,7 @@ Prism 不持有第二份副本 —— 因此**不存在"把角色/团队装进�
 | 建角色 | \`prism_role_new { name, roles_dir, description?, skills?, knowledge? }\`（等价入口：web 控制台 \`POST /api/roles\`、终端 \`prism role new\`）；只给名字则写骨架 |
 | 改团队 | \`prism_team_edit { team_id, teams_dir, name?/description?/members? }\`——改 members 时**工作流表就地按名册收窄** |
 | 改角色 | \`prism_role_edit { name, roles_dir, description?/skills?/knowledge?/body? }\`——只改点名字段，正文不重排 |
-| 删 | \`prism_team_rm\` / \`prism_role_rm\`（**不可逆**；CLI 删除默认宿主目录需 \`--yes\`） |
+| 删 | \`prism_team_rm\` / \`prism_role_rm\`（**删除进回收站**，可 \`prism trash restore <id>\` 还原；默认 3 天后彻底清除，自动清除需 serve 运行。CLI 删除默认宿主目录需 \`--yes\`） |
 | 查在不在 | \`prism_role_list\`（角色库）/ \`prism_team_list\`（团队库）/ \`prism_team_get { team_id }\`（单个团队定义全文） |
 | 校验 | \`prism team validate <id>\` / \`prism role validate\`（MCP 侧无独立校验工具，看 list/detail 的 \`issues\`） |
 | 给技能分类 | \`prism_skill_categorize { names, category? }\`：写 Prism 侧分类映射（\`<PRISM_HOME>/skill-categories.json\`），**不校验技能是否存在、不碰宿主技能文件**；\`category\` 省略/空串 = **清除**；读回走 \`prism_skill_list\`（每条技能带 \`category\`）或 \`GET /api/skills\` |
@@ -418,7 +418,7 @@ Prism 不持有第二份副本 —— 因此**不存在"把角色/团队装进�
 > 取值来源单一：先 \`prism_role_list\` 拿 \`roles_dir\`、\`prism_team_list\` 拿 \`teams_dir\`（读写两侧键名同名，可直接回填）。
 > \`<roles_dir>\`/\`<teams_dir>\` 由激活的适配器声明（如 WorkBuddy：\`~/.workbuddy/agents\`、\`~/.workbuddy/teams\`），
 > \`prism.yaml\` 可覆盖；用 \`prism harness show\` 看当前适配器。
-> **Skill 的装/卸三入口齐**：CLI \`prism skill install|uninstall|update\` ↔ MCP \`prism_skill_install|uninstall\` ↔ HTTP \`POST /api/skills/install|uninstall\`；写路径 \`skills_dir\` 必填（防误写真实宿主），先用 \`prism_skill_list\` 拿 \`skills_dir\` 回填。
+> **Skill 的装/卸三入口齐**：CLI \`prism skill install|uninstall|update\` ↔ MCP \`prism_skill_install|uninstall\` ↔ HTTP \`POST /api/skills/install|uninstall\`；写路径 \`skills_dir\` 必填（防误写真实宿主），先用 \`prism_skill_list\` 拿 \`skills_dir\` 回填。卸下去的产物**进回收站**（返回体带 \`trash_ids\`），可 \`prism trash restore <id>\` 还原。
 > **技能分类三入口齐**（v8 F7）：CLI \`prism skill categorize <name...> [--category <分类>]\` ↔ MCP \`prism_skill_categorize { names, category? }\` ↔ HTTP \`POST /api/skills/categorize\`；全量表 \`GET /api/skills/categories\`。映射独立于技能台账——**Prism 不管该不该分类，只管存**。
 
 ## 沉淀规则（团队定义里）
@@ -503,9 +503,10 @@ prism arch from-graph dataflow mini-snake     # dataflow
 prism arch from-state                         # lifecycle：由任务状态机派生
 
 # 通用选项
-prism arch from-graph architecture mini-snake --out ./arch.html --top 12 --limit 30
+prism arch from-graph architecture mini-snake --out ./arch.html --top 12 --limit 30  # --out 完全接管落点
 prism arch from-state --out ./lifecycle.html --title 任务生命周期
 prism arch from-team core-dev --book order-platform --module order   # 归到书/模块
+# 缺省落点：from-graph 三类项目图 → <projectRoot>/.prism/arch/<type>/；from-team/from-state → <PRISM_HOME>/archify/<type>/
 
 # 契约核对 / 排障（降级用途，不是常规流程）
 prism arch schema architecture                # 打印 IR 的 JSON Schema
@@ -524,13 +525,19 @@ prism_arch_generate { type: 'dataflow',     project: 'mini-snake' }
 prism_arch_generate { type: 'lifecycle' }
 \`\`\`
 
-返回 \`{ type, html, ir, bytes, title, subtitle }\`（含标题与图注；拒画时直接报错并说明理由）。\`workflow\` 要 \`team\`，
+返回 \`{ type, html, ir, bytes, title, subtitle, source, project? }\`（含标题与图注；拒画时直接报错并说明理由）。\`workflow\` 要 \`team\`，
 \`architecture|sequence|dataflow\` 要 \`project\`（**必须已注册**），\`lifecycle\` 无入参。
+可选 \`book\`/\`module\` 写进产物 sidecar（归到知识库的书/模块下）；可选 \`out\` 覆盖产物路径。
+
+**产物落点（v9 F1）**：\`architecture|sequence|dataflow\` 三类**项目图**缺省落
+\`<projectRoot>/.prism/arch/<type>/\`（project 必须已注册；root 被删/被挪会报
+\`project_root_missing\`，Prism **不会**重建目录）；\`workflow|lifecycle\` 落
+\`<PRISM_HOME>/archify/<type>/\`；给了 \`out\` 则完全接管落点。
 
 **产物归属**：\`--book/--module\` 把产物归到知识库的书/模块下，渲染时同时写
 \`<name>.meta.json\`（作用域 + archify 版本 + IR 哈希 + 标题）。界面在
 「知识库 → 点开书 → 架构图」按作用域过滤显示，子标签 [预览 | IR | 元数据]。
-不带 \`--book\` 的产物不属于任何书，只出现在全量列表里。
+不带 \`--book\` 的产物不属于任何书，只出现在全量列表（全局图集）里。
 
 ## 出图被拒时怎么读报错（生成器已内化这些约束）
 
@@ -557,10 +564,12 @@ prism_arch_generate { type: 'lifecycle' }
 ## HTTP 等价
 
 \`POST /api/arch/from-team { team, out?, book?, module? }\` → 由团队派生工作流图；
-\`POST /api/arch/render { type, ir, name?, book?, module? }\` → 落 \`<PRISM_HOME>/archify/<type>/<name>.html\`；
-\`GET /api/arch/diagrams?book=&module=\` 按作用域列出产物；
-\`GET /api/arch/ir/:type/:file\` 取 IR 源 + 元数据；
-\`GET /api/arch/preview/:type/:file\` 可在控制台 iframe 预览。
+\`POST /api/arch/render { type, ir, name?, project?, book?, module? }\` → 给 \`project\`（三类项目图）落
+\`<projectRoot>/.prism/arch/<type>/<name>.html\`，否则落 \`<PRISM_HOME>/archify/<type>/<name>.html\`；
+\`GET /api/arch/diagrams?book=&module=\` 按作用域列出产物（**双源**：项目源 + 全局源，条目带
+\`source\`/\`project\`/\`preview\`/\`ir\`）；
+\`GET /api/arch/ir/:type/:file\` 取 IR 源 + 元数据（可加 \`?project=\` 限定项目源）；
+\`GET /api/arch/preview/:type/:file\` 可在控制台 iframe 预览（同上；同一 type+name 命中多源时必须带 \`?project=\`）。
 `,
   },
   {

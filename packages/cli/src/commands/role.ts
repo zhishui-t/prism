@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
+import { prismHome } from '@prism/core'
 import {
   checkPrincipleConsistency,
   editRole,
@@ -12,6 +13,7 @@ import {
   roleNotFoundMessage,
   roleRendererFor,
   installedSkillNames,
+  trashStoreFor,
   type KnowledgeBinding,
   type RoleColor,
   type RoleDefinition,
@@ -28,7 +30,7 @@ import { dirProvenanceLabel, expandHome, guardWriteTarget, readStdinDefault, res
  * 因此没有「装配/导入」这一步。写盘一律走适配器声明的**宿主原生形态**：
  * - `new`  → 渲染 + 写；只给名字写骨架，给了字段就写填好的定义；
  * - `edit` → 外科式字段补丁（正文不重排）；
- * - `rm`   → 删文件本体（默认宿主目录需 `--yes`）。
+ * - `rm`   → 删文件本体（**搬进回收站**，可 `prism trash restore <id>` 还原；默认宿主目录需 `--yes`）。
  * 三个动词在 CLI / HTTP / MCP 上同名同位（`prism_role_new|edit|rm`、`POST|PATCH|DELETE /api/roles`）。
  */
 export async function runRole(ctx: CommandContext, args: string[], values: ArgValues): Promise<number> {
@@ -231,13 +233,22 @@ export async function runRole(ctx: CommandContext, args: string[], values: ArgVa
       }
       if (!guardWriteTarget(ctx, values, writeDirs, 'roles', 1, 'delete')) return 1
       try {
-        const result = await removeRole({ name, rolesDir: rolesDir })
+        // v9 F3：删除 = 搬进回收站。回收站与审计都归属 ctx.home（I-2）——绝不落默认 ~/.prism
+        const result = await removeRole({
+          name,
+          rolesDir: rolesDir,
+          trash: trashStoreFor(ctx.home ?? prismHome()),
+          trigger: 'CLI',
+        })
         if (ctx.json) {
-          ctx.stdout(JSON.stringify({ ok: true, value: { name, removed: result.removed } }))
+          ctx.stdout(JSON.stringify({ ok: true, value: { name, removed: result.removed, trash_id: result.trashId } }))
           return 0
         }
-        for (const p of result.removed) ctx.stdout(`  已删除 ${p}`)
-        ctx.stdout(`角色 ${name} 已删除（不可逆；宿主在会话启动时扫描——下一会话生效）`)
+        for (const p of result.removed) ctx.stdout(`  已移入回收站 ${p}`)
+        ctx.stdout(
+          `角色 ${name} 已删除（进回收站 ${result.trashId}；默认 3 天后彻底清除，` +
+            `prism trash restore ${result.trashId} 可还原；宿主在会话启动时扫描——下一会话生效）`,
+        )
         return 0
       } catch (error) {
         return reportError(ctx, error)

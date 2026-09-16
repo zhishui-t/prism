@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
+import { TrashStore } from '@prism/core'
+
 import { defaultContext, runCommand, type CommandContext } from '../src/argv.js'
 
 const ROLE_DEV1 = `---
@@ -99,6 +101,10 @@ describe('prism team --source / --roles-dir（v6.2）', () => {
     expect(await runCommand(ctx, ['team', 'rm', 'dup', '--source', src])).toBe(0)
     expect(existsSync(join(src, 'dup.md'))).toBe(false)
     expect(existsSync(join(home, 'teams', 'dup.md'))).toBe(true)
+    // 回收站单元只有一个，受管根 = --source 给的目录（v9 F3：删除进回收站而非硬删）
+    const units = await new TrashStore({ trashDir: join(home, 'trash') }).list('team')
+    expect(units).toHaveLength(1)
+    expect(units[0]).toMatchObject({ managedRoot: src, originalPaths: [join(src, 'dup.md')] })
   })
 
   it('--source 显式 → 解除写守卫（prism.yaml 缺席、目标非默认宿主目录时也无需 --yes）', async () => {

@@ -6,6 +6,9 @@
 // 应用与启动
 export { createApp, startServer, type AppOptions, type AppHandle } from './app.js'
 
+// 回收站装配点（v9 F3）：三入口（MCP/HTTP/CLI）共用同一 TrashStore 构造（trashDir + AuditLog 归属 home）
+export { trashStoreFor } from './trash.js'
+
 // 控制台（HTTP serve）的按需拉起 / 状态 / 停止——CLI `serve --ensure|--check|--stop`
 // 与宿主启动时的 MCP 共用同一套实现（幂等；只认 Prism 自己的 /api/health）
 export {
@@ -164,6 +167,7 @@ export {
   type GraphQueryOptions,
   formatCommand,
   DEFAULT_GRAPHIFY_TIMEOUT_MS,
+  PRISM_EXCLUDED_SCAN_DIR,
   // v5 F-C2：多项目合并（低层命令封装；CLI 经公共面调用，避免复刻 argv 造成契约漂移）
   mergeGraphArgs,
   mergeGraphs,
@@ -205,6 +209,21 @@ export {
   type ArchifyValidation,
   type RenderResult,
 } from './graph/archify.js'
+
+// 架构图产物**落盘路由**（v9 F1）：三入口同口径（MCP / HTTP / CLI 共用）。
+// 消费方：CLI `arch from-graph`（缺省落项目目录）、HTTP/MCP 的 project 落点解析。
+export {
+  PROJECT_DIAGRAM_TYPES,
+  assertProjectRoot,
+  globalArchDir,
+  isProjectDiagramType,
+  projectArchDir,
+  resolveArchPlacement,
+  sanitizeArtifactName,
+  type ArchPlacement,
+  type ArchPlacementInput,
+  type ProjectDiagramType,
+} from './graph/arch-placement.js'
 
 // 角色与团队域（返工单 B4：类型与行为委托 @prism/agents，server 仅保留 wiring/glue）。
 // 显式导出：ENTRY_TYPES 与 kb/port 的导出同名（枚举一致），避免星号导出冲突。

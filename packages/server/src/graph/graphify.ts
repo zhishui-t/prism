@@ -10,6 +10,12 @@ import type { CodeGraph } from '@prism/agents'
 /** 建图默认超时（design.md §4：300s）。 */
 export const DEFAULT_GRAPHIFY_TIMEOUT_MS = 300_000
 
+/**
+ * 建图时**必须排除**的目录（v9 F1 防自污染）：Prism 自己的项目内产物目录
+ * `<projectRoot>/.prism/`（arch 产物所在）——graphify 的 `_SKIP_DIRS` 不认它。
+ */
+export const PRISM_EXCLUDED_SCAN_DIR = '.prism'
+
 export interface GraphifyCommand {
   /** 可执行体：python / node / .cmd+.exe 绝对路径 */
   command: string
@@ -301,12 +307,22 @@ export async function runGraphify(
  * 环境里恰好有 key → **真的调 LLM 抽文档语义**。`--code-only` 跳过整个语义层
  * （cli.py:3550-3563）。故全量固定钉死该 flag，**不提供「含文档」开关**；
  * 需要文档语义的宿主请自行跑 graphify，Prism 不做。
+ *
+ * **`--exclude .prism` 是防自污染**（v9 F1 / v9.1 B-3）：arch 产物落
+ * `<projectRoot>/.prism/arch/<type>/`（`arch-placement.ts`），而 graphify 的
+ * `_SKIP_DIRS`（`3rd/graphify/graphify/detect.py:827-851`）**只有** `graphify-out`/`.graphify`，
+ * **不含 `.prism`** —— 不排除的话 `.ir.json`/`.meta.json` 会进代码扫描面，图越建越脏。
+ * `--exclude` 只有 `extract`（默认路径）接受，且会被持久化进 `<graphify-out>/.graphify_build.json`
+ * （cli.py:3384-3392），后续 `graphify update` **复用同一 exclude 集**——故只需钉在全量步。
+ * 其余子命令（`update`/`cluster-only`/`query`/`export`）**不得**带它：`update` 只认
+ * `--force`/`--no-cluster`，其他 `-` 开头参数一律 exit 2（cli.py:2400-2414）。
  */
 export function buildGraphArgs(projectRoot: string, mode: 'full' | 'incremental' = 'full'): string[][] {
   // 增量（code-graph.md §3.2）：已有图谱时只重提取变化文件（graphify update，零 LLM），
   // 再聚类。首次建图仍走全量。
   // `update` **只接受** --force/--no-cluster，其他 `-` 开头参数一律 exit 2（cli.py:2400-2414），
-  // 且它本就只重建代码（cli.py:2438）——故增量路径**不加** `--code-only`。
+  // 且它本就只重建代码（cli.py:2438）——故增量路径**不加** `--code-only`（也不加 `--exclude`，
+  // 它复用全量步持久化下来的 exclude 集）。
   if (mode === 'incremental') {
     return [
       ['update', projectRoot],
@@ -314,7 +330,7 @@ export function buildGraphArgs(projectRoot: string, mode: 'full' | 'incremental'
     ]
   }
   return [
-    [projectRoot, '--code-only'],
+    [projectRoot, '--code-only', '--exclude', PRISM_EXCLUDED_SCAN_DIR],
     ['cluster-only', projectRoot, '--no-label'],
   ]
 }

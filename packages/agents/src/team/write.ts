@@ -10,14 +10,17 @@
  * - 其余 frontmatter 键（name/description/skills/knowledge/deposit/arbitration/rework_limit）就地覆盖；
  * - 正文其余小节与未知 frontmatter 键原样保留。
  *
- * `rm` 只删团队文件本体（扁平 `<id>.md` 与兼容形态 `<id>/AGENTS.md` 都认）；是否放行由调用方的
- * 写守卫决定（默认宿主目录需 `--yes`）。
+ * `rm` 把团队文件本体（扁平 `<id>.md` 与兼容形态 `<id>/AGENTS.md` 都认）**整单元搬进回收站**
+ * （v9 F3：原「直接删」改为 `TrashStore.put`，可 `prism trash restore <id>` 还原）；是否放行由
+ * 调用方的写守卫决定（默认宿主目录需 `--yes`）。
  *
  * 安全：目标目录由参数传入，**绝不硬编码宿主根**；测试必须用临时目录。
  */
 
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+
+import type { TrashStore, TrashTrigger } from '@prism/core'
 
 import { renderMarkdownFile, splitFrontmatter, type FrontmatterData } from '../frontmatter.js'
 import type { DepositPolicy, KnowledgeBinding, TeamMember, ValidationIssue } from '../types.js'
@@ -68,6 +71,18 @@ export interface EditTeamInput {
 export interface RemoveTeamInput {
   teamId: string
   teamsDir: string
+  /** 回收站（搬移 + 审计单点）；由入口层按 `PRISM_HOME` 构造后注入（见 role/write.ts 同名注释）。 */
+  trash: TrashStore
+  /** 触发入口（进回收站 meta 与审计，仅作溯源）。 */
+  trigger: TrashTrigger
+}
+
+/** `team rm` 的结果。 */
+export interface TeamRemoveResult {
+  /** **实际落点**：扁平形态 = `<id>.md`；目录形态 = 整个 `<id>/` 目录（不是其中的 AGENTS.md）。 */
+  removed: string[]
+  /** 回收站单元 id（`<kind>/<单元目录名>`）。 */
+  trashId: string
 }
 
 /**
@@ -132,26 +147,30 @@ export function patchTeamRaw(raw: string, patch: TeamPatch): { markdown: string;
 }
 
 /**
- * `team rm`：删除团队文件本体（扁平 `<id>.md` + 兼容形态 `<id>/AGENTS.md`）。
+ * `team rm`：把团队文件本体搬进回收站（扁平 `<id>.md` + 兼容形态 `<id>/AGENTS.md`）。
  * 两处都不存在 → `team_not_found`。删除是否放行由调用方的写守卫决定，本函数不做二次确认。
+ *
+ * **落点粒度**同 `role rm`（v9.1 D-1）：目录形态整目录搬走，不留残目录。
  */
-export async function removeTeam(input: RemoveTeamInput): Promise<{ removed: string[] }> {
+export async function removeTeam(input: RemoveTeamInput): Promise<TeamRemoveResult> {
   const teamId = input.teamId.trim()
   const flat = join(input.teamsDir, `${teamId}.md`)
   const dirForm = join(input.teamsDir, teamId, 'AGENTS.md')
-  const removed: string[] = []
+  const targets: string[] = []
   if (existsSync(flat)) {
-    rmSync(flat, { force: true })
-    removed.push(flat)
+    targets.push(flat)
   }
   if (existsSync(dirForm)) {
-    rmSync(dirname(dirForm), { recursive: true, force: true })
-    removed.push(dirForm)
+    targets.push(dirname(dirForm))
   }
-  if (removed.length === 0) {
+  if (targets.length === 0) {
     throw new TeamWriteError('team_not_found', `团队不存在，无法删除：${teamId}`, flat)
   }
-  return { removed }
+  const moved = await input.trash.put('team', teamId, targets, {
+    managedRoot: input.teamsDir,
+    trigger: input.trigger,
+  })
+  return { removed: moved.originalPaths, trashId: moved.id }
 }
 
 /** 校验团队 id 形状（CLI 建团队入口用）。 */

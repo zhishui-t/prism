@@ -1,0 +1,23 @@
+export {
+  TrashStore,
+  TrashSourceResidueError,
+  resolveTrashRetentionDays,
+  TRASH_META_FILE,
+  TRASH_HOLDER_FILE,
+  TRASH_HOLDER_TIMEOUT_MS,
+  DEFAULT_TRASH_RETENTION_DAYS,
+  MAX_TRASH_RETENTION_DAYS,
+  type TrashEntry,
+  type TrashFsLike,
+  type TrashHolder,
+  type TrashPurgeOptions,
+  type TrashPutDeps,
+  type TrashPutMeta,
+  type TrashPutResult,
+  type TrashRemove,
+  type TrashRename,
+  type TrashRestoreOptions,
+  type TrashStoreOptions,
+  type TrashUnitMeta,
+} from './store.js'
+export { isInside } from './is-inside.js'

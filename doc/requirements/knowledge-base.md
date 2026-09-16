@@ -321,6 +321,20 @@ archify compare  architecture base.json head.json delta.html --json  # Before/De
 
 **存储**：IR 是源、HTML 是派生，两者都作为 `type: diagram` 条目；frontmatter 记录 `archify_version` + IR 哈希 + 来源图谱 commit。
 
+**落盘与归位（v9 F1，2026-09-16）**：`architecture|sequence|dataflow` 是**项目资产**，缺省落
+`<projectRoot>/.prism/arch/<type>/`（projectRoot 经 `ProjectRegistry` 解析——未注册 → `not_found`；
+已注册但 root 被删/被挪 → `project_root_missing`，**渲染前 stat 校验、绝不 mkdir 复活**）；
+`workflow|lifecycle` 是全局资产，落 `<PRISM_HOME>/archify/<type>/`；`out`/`--out` 完全接管落点。
+`.prism` 已在知识库扫描忽略表（本文件 §忽略规则），代码图谱侧由建图参数 `--exclude .prism`
+挡住（graphify 的 `_SKIP_DIRS` 不认它）。
+
+控制台列表 `GET /api/arch/diagrams` **双源**扫描两处，逐字段冻结（身份键 = `(type, name, source, project)`）：
+`type, name, bytes, mtime, title?, layer?, owner?, book?, module?, archify_version?, has_ir,
+source: 'project'|'global', project?, preview, ir`——`preview`/`ir` 由服务端构造（项目源带 `?project=`），
+前端不拼路径。扫描口径是**扫 `*.html` + sidecar 容错**（缺 meta 的历史产物 title 回落 IR `meta.title`，
+**不隐藏**）。`preview|ir/:type/:file` 支持 `?project=` 限定（限定则只在该项目源内找，不存在 → 404
+不回落全局）；未限定且同名命中多源 → `bad_request` **歧义拒绝**。
+
 ---
 
 ## 5. 检索与分发

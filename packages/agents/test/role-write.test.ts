@@ -1,8 +1,9 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 
+import { TrashStore } from '@prism/core'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { splitFrontmatter } from '../src/frontmatter.js'
@@ -330,21 +331,52 @@ describe('patchRoleRaw（纯函数：落点判定 + marker 保持）', () => {
   })
 })
 
-describe('removeRole（硬删文件本体；扁平 + 目录式两形态）', () => {
-  it('扁平 <name>.md 与目录式 <name>/AGENTS.md 都删；两处皆无 → role_not_found', async () => {
+describe('removeRole（搬进回收站；扁平 + 目录式两形态）', () => {
+  it('目录形态整目录搬走（不留残目录）；扁平形态搬文件；两处皆无 → role_not_found', async () => {
     const rolesDir = makeTmp()
+    const trashDir = makeTmp()
+    const trash = new TrashStore({ trashDir })
     writeFileSync(join(rolesDir, 'flat.md'), ROLE_RAW)
     mkdirSync(join(rolesDir, 'dir-form'), { recursive: true })
     writeFileSync(join(rolesDir, 'dir-form', 'AGENTS.md'), ROLE_RAW)
+    // 目录形态里的附带文件也要一起走（只搬 AGENTS.md 会留下残目录）
+    writeFileSync(join(rolesDir, 'dir-form', 'notes.md'), '# 附带\n')
 
-    const flatResult = await removeRole({ name: 'flat', rolesDir })
+    const flatResult = await removeRole({ name: 'flat', rolesDir, trash, trigger: 'CLI' })
     expect(flatResult.removed).toEqual([join(rolesDir, 'flat.md')])
     expect(existsSync(join(rolesDir, 'flat.md'))).toBe(false)
+    expect(flatResult.trashId.startsWith('role/')).toBe(true)
 
-    const dirResult = await removeRole({ name: 'dir-form', rolesDir })
-    expect(dirResult.removed).toEqual([join(rolesDir, 'dir-form', 'AGENTS.md')])
+    // 目录形态返回的是**整个目录**（不是其中的 AGENTS.md）
+    const dirResult = await removeRole({ name: 'dir-form', rolesDir, trash, trigger: 'CLI' })
+    expect(dirResult.removed).toEqual([join(rolesDir, 'dir-form')])
     expect(existsSync(join(rolesDir, 'dir-form'))).toBe(false)
 
-    await expect(removeRole({ name: 'ghost', rolesDir })).rejects.toMatchObject({ code: 'role_not_found' })
+    // 原位置零残留 + 回收站出现两个单元，单元内容完整
+    expect(readdirSync(rolesDir)).toEqual([])
+    const units = await trash.list('role')
+    expect(units.map((unit) => unit.id)).toEqual([dirResult.trashId, flatResult.trashId])
+    expect(units.every((unit) => unit.broken === false)).toBe(true)
+    expect(units.every((unit) => unit.managedRoot === resolve(rolesDir))).toBe(true)
+    expect(readFileSync(join(trashDir, ...dirResult.trashId.split('/'), 'dir-form', 'notes.md'), 'utf-8')).toBe(
+      '# 附带\n',
+    )
+
+    await expect(removeRole({ name: 'ghost', rolesDir, trash, trigger: 'CLI' })).rejects.toMatchObject({
+      code: 'role_not_found',
+    })
+  })
+
+  it('还原闭环：restore 把整目录搬回原路径（含附带文件）', async () => {
+    const rolesDir = makeTmp()
+    const trash = new TrashStore({ trashDir: makeTmp() })
+    mkdirSync(join(rolesDir, 'dir-form'), { recursive: true })
+    writeFileSync(join(rolesDir, 'dir-form', 'AGENTS.md'), ROLE_RAW)
+    writeFileSync(join(rolesDir, 'dir-form', 'notes.md'), '# 附带\n')
+
+    const { trashId } = await removeRole({ name: 'dir-form', rolesDir, trash, trigger: 'MCP' })
+    expect(await trash.restore(trashId)).toEqual([join(rolesDir, 'dir-form')])
+    expect(readFileSync(join(rolesDir, 'dir-form', 'notes.md'), 'utf-8')).toBe('# 附带\n')
+    expect(await trash.list('role')).toEqual([])
   })
 })

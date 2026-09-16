@@ -17,6 +17,13 @@ export const ERROR_CODES = [
   'archify_failed',
   'archify_timeout',
   'archify_validation_failed',
+  // v9 F1：注册项目的 root 已被删除/移动（产物落项目内时才可能出现；Prism 不重建目录）
+  'project_root_missing',
+  // v9 检视整改：回收站删除「副本已入站但原位置有残留未清除」（HTTP 删除面可达）
+  'trash_source_residue',
+  // v9 检视整改：回收站单元正被他方 put/restore 占有（当前仅 CLI restore 面可达；
+  // 一旦 HTTP/MCP 暴露 restore 即为该面的 409）
+  'trash_busy',
   'harness_not_found',
   'internal',
 ] as const
@@ -49,6 +56,11 @@ const ERROR_STATUS: Record<ErrorCode, number> = {
   archify_failed: 500,
   archify_timeout: 504,
   archify_validation_failed: 422,
+  project_root_missing: 400,
+  // 删除「已入站 + 源残留」是**部分失败**：实体已在回收站，但原位置仍需人工清理 →
+  // 500（服务端侧失败），并把残留路径写进 message
+  trash_source_residue: 500,
+  trash_busy: 409,
   harness_not_found: 400,
   internal: 500,
 }

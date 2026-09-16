@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { parseRoleMarkdown } from '@prism/agents'
+import { AuditLog, TrashStore } from '@prism/core'
 
 import { defaultContext, runCommand, type CommandContext } from '../src/argv.js'
 
@@ -267,15 +268,29 @@ describe('prism role edit | rm（v6 增删改对齐）', () => {
     expect(existsSync(join(home, 'roles', 'nope.md'))).toBe(false)
   })
 
-  it('rm：硬删文件本体；再次 rm → role_not_found', async () => {
+  it('rm：搬进回收站（trash_id + 单元落 <home>/trash）；再次 rm → role_not_found', async () => {
     expect(await runCommand(ctx, ['role', 'new', 'dev-x'])).toBe(0)
     const path = join(home, 'roles', 'dev-x.md')
     expect(existsSync(path)).toBe(true)
 
     lines = []
     expect(await runCommand(ctx, ['role', 'rm', 'dev-x'])).toBe(0)
-    expect(lines.join('\n')).toContain('已删除')
+    const output = lines.join('\n')
+    expect(output).toContain('已删除')
+    // v9 F3：文案不再说「不可逆」，如实说明进回收站 + 默认保留期 + 还原路径
+    expect(output).not.toContain('不可逆')
+    expect(output).toContain('进回收站')
+    expect(output).toContain('prism trash restore')
     expect(existsSync(path)).toBe(false)
+
+    // 回收站与审计都归属 ctx.home（--home / 临时目录），不落默认 ~/.prism
+    const trash = new TrashStore({ trashDir: join(home, 'trash') })
+    const units = await trash.list('role')
+    expect(units).toHaveLength(1)
+    expect(units[0]).toMatchObject({ kind: 'role', name: 'dev-x', managedRoot: join(home, 'roles') })
+    const audit = await new AuditLog({ dir: join(home, 'audit') }).query({ types: ['trash.put'] })
+    expect(audit).toHaveLength(1)
+    expect(audit[0]).toMatchObject({ kind: 'role', trigger: 'CLI', paths: [path] })
 
     lines = []
     expect(await runCommand(ctx, ['role', 'rm', 'dev-x'])).toBe(1)
@@ -380,6 +395,10 @@ describe('prism role new|edit|rm --source（写命令与读命令同源）', () 
     expect(await runCommand(ctx, ['role', 'rm', 'dup', '--source', src])).toBe(0)
     expect(existsSync(join(src, 'dup.md'))).toBe(false) // 目标被删
     expect(existsSync(join(home, 'roles', 'dup.md'))).toBe(true) // 旧实现删的是这里
+    // 回收站单元只有一个，meta 的受管根 = --source 给的目录（不是默认 roles_dir）
+    const units = await new TrashStore({ trashDir: join(home, 'trash') }).list('role')
+    expect(units).toHaveLength(1)
+    expect(units[0]).toMatchObject({ managedRoot: src, originalPaths: [join(src, 'dup.md')] })
   })
 
   it('edit --source：改的是 --source 那份', async () => {

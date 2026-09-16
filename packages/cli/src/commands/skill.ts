@@ -4,7 +4,7 @@ import { join } from 'node:path'
 
 import { PrismError, prismHome } from '@prism/core'
 import { installSkills, listBuiltinSkills, uninstallSkills, validateSkill } from '@prism/skills'
-import { loadEffectiveSkills, SkillCategoryStore } from '@prism/server'
+import { loadEffectiveSkills, SkillCategoryStore, trashStoreFor } from '@prism/server'
 
 import type { ArgValues, CommandContext } from '../argv.js'
 import { dirProvenanceLabel, guardWriteTarget, resolveTargetDirs } from '../argv.js'
@@ -117,7 +117,7 @@ export async function runSkill(ctx: CommandContext, args: string[], values: ArgV
     }
 
     case 'uninstall': {
-      // 只删 Prism 产物（SKILL.md 含 marker）；人写的 Skill 一律不动。
+      // 只回收 Prism 产物（SKILL.md 含 marker）；人写的 Skill 一律不动。
       // 实现单点在 @prism/skills 的 uninstallSkills（与 MCP `prism_skill_uninstall`、
       // HTTP `POST /api/skills/uninstall` 共用）。
       const names = rest.filter((n) => !n.startsWith('-'))
@@ -129,13 +129,23 @@ export async function runSkill(ctx: CommandContext, args: string[], values: ArgV
       }
       if (!guardWriteTarget(ctx, values, dirs, 'skills', planned, 'delete')) return 1
 
-      const result = await uninstallSkills({ targetDir: skillsDir, names })
+      // v9 F3：卸载 = 搬进回收站；回收站与审计归属 ctx.home（I-2），绝不落默认 ~/.prism
+      const result = await uninstallSkills(
+        { targetDir: skillsDir, names },
+        { trash: trashStoreFor(ctx.home ?? prismHome()), trigger: 'CLI' },
+      )
       if (ctx.json) {
-        ctx.stdout(JSON.stringify({ ok: true, value: { skillsDir, ...result } }))
+        ctx.stdout(
+          JSON.stringify({
+            ok: true,
+            value: { skillsDir, removed: result.removed, kept: result.kept, trash_ids: result.trashIds },
+          }),
+        )
       } else {
-        for (const name of result.removed) ctx.stdout(`  已卸载 ${name}`)
+        for (const p of result.removed) ctx.stdout(`  已移入回收站 ${p}`)
         for (const k of result.kept) ctx.stdout(`  跳过 ${k.name}（${k.reason}）`)
-        ctx.stdout(`卸载完成（${result.removed.length} 删 / ${result.kept.length} 跳过）`)
+        ctx.stdout(`卸载完成（${result.removed.length} 进回收站 / ${result.kept.length} 跳过）`)
+        for (const id of result.trashIds) ctx.stdout(`  回收站单元 ${id}（prism trash restore ${id} 可还原）`)
         ctx.stdout('注意: 请重启 ZCode 会话使卸载生效')
       }
       return 0

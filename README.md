@@ -254,7 +254,9 @@ prism arch validate architecture ir.json      # 校验一个现成 IR（schema +
 prism arch render architecture ir.json --out out.html
 ```
 
-MCP 等价：`prism_arch_generate { type, team?, project? }`（`workflow` 传 `team`，`architecture|sequence|dataflow` 传 `project`，`lifecycle` 无入参）。
+MCP 等价：`prism_arch_generate { type, team?, project?, book?, module? }`（`workflow` 传 `team`，`architecture|sequence|dataflow` 传 `project`，`lifecycle` 无入参；可选 `book`/`module` 写进产物 sidecar）。
+
+**产物归位（v9 F1）**：`architecture|sequence|dataflow` 三类项目图落 `<projectRoot>/.prism/arch/<type>/`（项目根经注册表解析——未注册拒绝；root 被删/被挪报 `project_root_missing` 且不重建目录）；`workflow|lifecycle` 落 `<PRISM_HOME>/archify/<type>/`；`--out`/`out` 完全接管落点。控制台列表 `GET /api/arch/diagrams` **双源**扫描两处（扫 `*.html` + sidecar 容错，缺 sidecar 的历史产物照常可见），条目带 `source`/`project` 并由服务端给出 `preview`/`ir` URL。`.prism` 已在知识库扫描忽略表，代码图谱侧由建图参数 `--exclude .prism` 挡住自污染。
 
 IR 是源、HTML 是派生，两者都可作为 `type: diagram` 条目沉淀。**IR 是派生视图（R7）**：五类图都由**既有真相**（团队定义 / 代码图谱 / 任务状态机）纯函数派生，**宿主与用户都不产 IR**；`prism arch schema` 只作契约核对。真实图谱上可能**有理由地拒画**（同目录扁平仓库无处分层、图谱无跨文件 calls 边、层数不足两级）——报错并说明理由，不产出坏图。
 
