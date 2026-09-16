@@ -49,14 +49,12 @@ Prism 代码库
 | :--- | :--- |
 | 共享资产 | 知识库、代码图谱、角色/团队定义是团队级，不是会话私有 |
 | 并行任务 | 一个团队同时开多个会话做不同任务是常态 |
-| 台账隔离 | 任务台账按 `session_id` 隔离，但同一实例可见全局 |
 
 ```
         ZCode 会话 A ─┐
         ZCode 会话 B ─┼─→ Prism 实例（harness=zcode）
         ZCode 会话 C ─┘        ├─ 知识库（文件 + SQLite）
                                ├─ 代码图谱（.git 项目各自 graphify-out/）
-                               ├─ 任务台账（按 session 隔离）
                                └─ 工作队列
 ```
 
@@ -95,7 +93,7 @@ mcp:
 | 概念 | 来源 | 用途 |
 | :--- | :--- | :--- |
 | `host` | **实例配置固定**（`harness: zcode`） | 不需要每请求区分 |
-| `session_id` | stdio 从启动参数 / HTTP 从请求头或 `prism_session_attach` | 台账隔离、审计溯源 |
+| `session_id` | stdio 从启动参数 / HTTP 从请求头或 `prism_session_attach` | 审计溯源 |
 | `role` / `team_id` | 请求携带 | 权限与上下文 |
 
 **简化**：因为只有一个 harness，`host` 是常量，不必每次协商。
@@ -119,7 +117,6 @@ mcp:
 | 写操作 | 进程内单写队列 + 跨进程 SQLite WAL |
 | 知识文件 | 版次制 + 内容哈希冲突检测 |
 | 代码图谱构建 | 同一项目同时只允许一个构建（文件锁） |
-| 任务台账 | 按 `session_id` 隔离 |
 | 工作队列 | 认领制（attempt token）防重复认领 |
 
 ---

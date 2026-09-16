@@ -9,12 +9,13 @@ import { RoleParseError, extractPrinciple, parseRoleMarkdown } from '../src/role
 import { renderZcodeRole } from '../src/role/render.js'
 
 /**
- * 本机真实角色目录（只读导入验证；F07 验收命令的数据源）。
- * QA v4 修复 D-3：原为硬编码 `C:/Users/10042/.zcode/agents`（换机/换用户即静默跳过，
+ * 本机真实角色目录（只读冒烟的数据源）。
+ * QA v4 修复 D-3：原为硬编码本机 agents 目录（换机/换用户即静默跳过，
  * 覆盖度无声下降，且属 R6「不硬编码宿主路径」的灰区）→ 改由 `os.homedir()` 推导。
+ * v7 F3 环境无关改造：本目录**只**做存在性+可解析性冒烟（内容随宿主演进，不可断言
+ * 数量/名单）；精确断言由下方 fixture 块（临时目录）承担。
  */
 const REAL_AGENTS_DIR = join(homedir(), '.zcode', 'agents')
-const REAL_ROLE_NAMES = ['dev-1', 'dev-2', 'dev-3', 'qa-checker', 'researcher', 'reviewer', 'super-dev', 'tester', 'writer']
 
 function makeTmp(): string {
   return join(tmpdir(), `prism-agents-test-${Date.now()}-${Math.random().toString(36).slice(2)}`)
@@ -149,42 +150,73 @@ describe('角色渲染 → 再解析往返（含真实格式）', () => {
   })
 })
 
-describe('本机 9 个真实角色（C:/Users/10042/.zcode/agents，只读）', () => {
+describe('本机真实角色（~/.zcode/agents，只读冒烟：不断言数量与名单）', () => {
+  // **环境无关改造（v7 F3 必修项）**：该目录属于真实宿主，内容随宿主演进自由增删改名——
+  // 本测试曾断言「恰有 9 个文件 + 固定 9 个名字」，实际宿主角色已整批换名（8 个、全不同
+  // 的名字，且 workbuddy.md 无原则节），门禁因此常年假红。现在这里只断「存在 ⇒ 每个
+  // 文件可解析」（存在性 + 可解析性）；数量/名单/原则节/往返等精确断言全部下沉到下方
+  // **fixture 块**（临时目录）——R5：测试绝不写真实宿主目录，R6：路径不硬编码（homedir 推导）。
   const dirExists = existsSync(REAL_AGENTS_DIR)
 
-  beforeEach(() => {
-    if (!dirExists) console.warn(`[skip-assert] 本机角色目录不存在：${REAL_AGENTS_DIR}`)
-  })
-
-  it('目录存在且恰有 9 个角色 .md 文件', () => {
-    if (!dirExists) return
-    const files = readdirSync(REAL_AGENTS_DIR).filter((f) => f.endsWith('.md')).sort()
-    expect(files).toHaveLength(9)
-  })
-
-  it('9 个角色全部解析成功：name/description/核心契约/正文齐全', () => {
-    if (!dirExists) return
-    const parsed: string[] = []
+  it('目录存在时：每个 .md 都可解析且 name/正文非空；目录不存在则零断言跳过', () => {
+    if (!dirExists) {
+      console.warn(`[skip] 本机角色目录不存在：${REAL_AGENTS_DIR}`)
+      return
+    }
     for (const file of readdirSync(REAL_AGENTS_DIR).sort()) {
       if (!file.endsWith('.md')) continue
       const raw = readFileSync(join(REAL_AGENTS_DIR, file), 'utf8')
       const role = parseRoleMarkdown(raw, { sourcePath: join(REAL_AGENTS_DIR, file) })
+      expect(role.name.trim(), `${file} 的 name 不应为空`).not.toBe('')
+      expect(role.body.trim(), `${file} 正文不应为空`).not.toBe('')
+    }
+  })
+})
+
+describe('9 角色 fixture（临时目录，环境无关）', () => {
+  // 承接旧「本机 9 角色」块的**精确**断言：数量、名单齐全性、原则节非空、渲染往返等价。
+  // 这些断言的正确载体是受控 fixture，不是会演进的宿主目录——宿主再怎么变都不碰门禁。
+  const FIXTURE_NAMES = ['dev-1', 'dev-2', 'dev-3', 'qa-checker', 'researcher', 'reviewer', 'super-dev', 'tester', 'writer']
+
+  /** 以 BASIC_ROLE 为模板造一个指名角色（frontmatter name 换掉，其余字段复用）。 */
+  function fixtureRole(name: string): string {
+    return BASIC_ROLE.replace('name: "dev-1"', `name: "${name}"`)
+  }
+
+  function makeFixtureDir(): string {
+    const dir = makeTmp()
+    mkdirSync(dir, { recursive: true })
+    for (const name of FIXTURE_NAMES) writeFileSync(join(dir, `${name}.md`), fixtureRole(name))
+    return dir
+  }
+
+  it('恰有 9 个角色 .md 文件（数量断言的载体是 fixture）', () => {
+    const files = readdirSync(makeFixtureDir()).filter((f) => f.endsWith('.md')).sort()
+    expect(files).toHaveLength(9)
+  })
+
+  it('9 个角色全部解析成功：name/description/核心契约/正文齐全', () => {
+    const dir = makeFixtureDir()
+    const parsed: string[] = []
+    for (const file of readdirSync(dir).sort()) {
+      if (!file.endsWith('.md')) continue
+      const role = parseRoleMarkdown(readFileSync(join(dir, file), 'utf8'), { sourcePath: join(dir, file) })
       expect(role.name.trim(), `${file} 的 name 不应为空`).not.toBe('')
       expect(role.description.trim(), `${file} 的 description 不应为空`).not.toBe('')
       expect(role.principle.trim(), `${file} 缺核心契约正文`).not.toBe('')
       expect(role.body.trim(), `${file} 正文不应为空`).not.toBe('')
       parsed.push(file.replace(/\.md$/, ''))
     }
-    for (const expected of REAL_ROLE_NAMES) {
+    for (const expected of FIXTURE_NAMES) {
       expect(parsed, `缺少角色 ${expected}`).toContain(expected)
     }
   })
 
   it('9 个角色渲染 → 再解析往返数据等价（P2 往返要求）', () => {
-    if (!dirExists) return
-    for (const file of readdirSync(REAL_AGENTS_DIR).sort()) {
+    const dir = makeFixtureDir()
+    for (const file of readdirSync(dir).sort()) {
       if (!file.endsWith('.md')) continue
-      const role = parseRoleMarkdown(readFileSync(join(REAL_AGENTS_DIR, file), 'utf8'))
+      const role = parseRoleMarkdown(readFileSync(join(dir, file), 'utf8'))
       const round = parseRoleMarkdown(renderZcodeRole(role))
       expect(round.name, file).toBe(role.name)
       expect(round.description, file).toBe(role.description)

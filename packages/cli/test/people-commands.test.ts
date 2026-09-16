@@ -101,7 +101,7 @@ describe('prism init（F09 五步；全部写临时目录）', () => {
     expect(output).toContain('① 宿主目录')
     expect(output).toContain('catalog')
     expect(output).toContain('roles')
-    expect(output).toContain('③ Skill 安装: 写 9 个') // SKILL.md + 8 个 references/（渐进披露）
+    expect(output).toContain('③ Skill 安装: 写 8 个') // SKILL.md + 7 个 references/（渐进披露）
     expect(existsSync(join(harnessRoot, 'skills', 'prism', 'SKILL.md'))).toBe(true)
     expect(existsSync(join(harnessRoot, 'skills', 'prism', 'references', 'graph.md'))).toBe(true)
     // ④ config.json 合并写入
@@ -128,8 +128,8 @@ describe('prism init（F09 五步；全部写临时目录）', () => {
     const second = JSON.parse(lines[lines.length - 1]) as { value: { mcp: { status: string }; skills: { written: unknown[]; skipped: unknown[] } } }
     expect(second.value.mcp.status).toBe('unchanged')
     expect(second.value.mcp.backup).toBeUndefined()
-    // skill 幂等重装（marker → 覆盖，无 skip；9 个文件：SKILL.md + 8 references）
-    expect(second.value.skills.written).toHaveLength(9)
+    // skill 幂等重装（marker → 覆盖，无 skip；8 个文件：SKILL.md + 7 references）
+    expect(second.value.skills.written).toHaveLength(8)
     expect(second.value.skills.skipped).toHaveLength(0)
   })
 

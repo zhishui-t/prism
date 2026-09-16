@@ -104,14 +104,13 @@ describe('PrismDatabase', () => {
 })
 
 describe('PrismPersistence', () => {
-  it('内存模式建 3 个库且表齐全', () => {
+  it('内存模式建 2 个库且表齐全', () => {
     const p = new PrismPersistence({ inMemory: true })
-    expect(p.dbs).toHaveLength(3)
+    expect(p.dbs).toHaveLength(2)
     const knowledgeTables = p.knowledge.tables()
     expect(knowledgeTables).toContain('knowledge_entries')
     expect(knowledgeTables).toContain('knowledge_edges')
     expect(knowledgeTables).toContain('book_structures')
-    expect(p.tasks.tables()).toContain('tasks')
     expect(p.core.tables()).toContain('team_bindings')
     p.close()
   })

@@ -11,7 +11,6 @@ import { runServe } from './commands/serve.js'
 import { runDoctor } from './commands/doctor.js'
 import { runEmbedding } from './commands/embedding.js'
 import { runKb } from './commands/kb.js'
-import { runTask } from './commands/task.js'
 import { runArch } from './commands/arch.js'
 import { runHarness } from './commands/harness.js'
 import { runGraph } from './commands/graph.js'
@@ -110,11 +109,6 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
   prism kb deposit --file <md|-> --title <t> --type <ty> [--layer --owner --book --module --team --by --task --note --tags]
                                           落库（--team 走团队沉淀策略；--file - 读 stdin）
   prism kb reindex                        以文件为真相重建索引（手工改过知识文件后用）
-  prism task list [--dag --status]        任务台账（被动记录，不驱动）
-  prism task show <task-id> | graph <dag-id> | stats
-  prism task register --dag <id> --file <dag.json> --session --team --project
-  prism task report <task-id> --to <STATUS> --by <who> [--from --revision] [--deposit <md|->]
-                                          CLOSED 时给沉淀建议清单；COMPLETED 仅提示待收口
   prism arch types | validate <type> <ir.json> | render <type> <ir.json> [--out <html>]
   prism audit query [--type ...] [--task/--request/--knowledge/--session <id>] [--limit N]
   prism harness list | show               运行时宿主适配器（prism.yaml: harness 键）
@@ -184,15 +178,9 @@ const CLI_OPTIONS = {
   result: { type: 'string' },
   by: { type: 'string' },
   error: { type: 'string' },
-  dag: { type: 'string' },
   session: { type: 'string' },
   team: { type: 'string' },
-  difficulty: { type: 'string' },
-  'dag-version': { type: 'string' },
   file: { type: 'string' },
-  revision: { type: 'string' },
-  'error-type': { type: 'string' },
-  status: { type: 'string' },
   out: { type: 'string' },
   /** `graph merge --out-dir <目录>`（多项目合并产物目录；缺省 <PRISM_HOME>/graphify-merged/） */
   'out-dir': { type: 'string' },
@@ -233,8 +221,6 @@ const CLI_OPTIONS = {
   tags: { type: 'string' },
   /** skill effective --role <r> */
   role: { type: 'string' },
-  /** task report --deposit <md|->：终态一步落库（复用 kb deposit 路径） */
-  deposit: { type: 'string' },
   /** kb structure freeze --modules a,b（显式冻结清单） */
   modules: { type: 'string' },
   /** kb structure generate|freeze --confirmed-by <who> */
@@ -299,15 +285,9 @@ export type ArgValues = {
   result?: string
   by?: string
   error?: string
-  dag?: string
   session?: string
   team?: string
-  difficulty?: string
-  'dag-version'?: string
   file?: string
-  revision?: string
-  'error-type'?: string
-  status?: string
   out?: string
   /** `graph merge --out-dir <目录>` */
   'out-dir'?: string
@@ -338,7 +318,6 @@ export type ArgValues = {
   note?: string
   tags?: string
   role?: string
-  deposit?: string
   modules?: string
   'confirmed-by'?: string
   skills?: string
@@ -502,8 +481,6 @@ export async function runCommand(ctx: CommandContext, argv: string[]): Promise<n
         return await runEmbedding(effective, rest, values)
       case 'kb':
         return await runKb(effective, rest, values)
-      case 'task':
-        return await runTask(effective, rest, values)
       case 'arch':
         return await runArch(effective, rest, values)
       case 'harness':

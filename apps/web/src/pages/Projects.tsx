@@ -3,6 +3,8 @@ import { State } from '../components/State.tsx'
 import { useAsync } from '../components/useAsync.ts'
 import { CopyCommand, PageHead, Pane, StatusTag } from '../components/ui.tsx'
 import { useT } from '../i18n.ts'
+import { hrefOf } from '../route.ts'
+import { fmtTime } from '../time.ts'
 
 /**
  * 项目台账页：登记过的项目 + 建图/扫描状态。
@@ -15,13 +17,13 @@ export function ProjectsPage() {
   const t = useT()
   const projects = useAsync(() => api.graphProjects(), [])
 
-  /** 常用命令：与文档同一口径，一行一条，可一键复制。 */
+  /** 常用命令：与文档同一口径，一行一条，可一键复制（命令文本也走字典，R-4 破口补齐）。 */
   const commands: Array<{ cmd: string; comment: string }> = [
-    { cmd: 'prism project add <项目根目录> --name <项目名>', comment: t('projects.commands.comment.add') },
-    { cmd: 'prism graph build <项目根目录> --name <项目名>', comment: t('projects.commands.comment.build') },
-    { cmd: 'prism kb sync <项目名> [--dry-run]', comment: t('projects.commands.comment.sync') },
-    { cmd: 'prism project show <项目名>', comment: t('projects.commands.comment.show') },
-    { cmd: 'prism project remove <项目名> --yes', comment: t('projects.commands.comment.remove') },
+    { cmd: t('projects.cmd.add'), comment: t('projects.commands.comment.add') },
+    { cmd: t('projects.cmd.build'), comment: t('projects.commands.comment.build') },
+    { cmd: t('projects.cmd.sync'), comment: t('projects.commands.comment.sync') },
+    { cmd: t('projects.cmd.show'), comment: t('projects.commands.comment.show') },
+    { cmd: t('projects.cmd.remove'), comment: t('projects.commands.comment.remove') },
   ]
 
   return (
@@ -65,10 +67,10 @@ export function ProjectsPage() {
                     <td className="small muted">
                       {p.last_scan_at !== undefined ? (
                         <>
-                          {fmt(p.last_scan_at)}
+                          {fmtTime(p.last_scan_at)}
                           <span className="muted">
                             {' '}
-                            · {t('projects.scan.sources', { n: p.scanned_sources ?? 0 })}
+                            › {t('projects.scan.sources', { n: p.scanned_sources ?? 0 })}
                           </span>
                         </>
                       ) : (
@@ -86,9 +88,9 @@ export function ProjectsPage() {
       <ScanHistoryCard />
 
       <Pane title={t('projects.commands')}>
-        <div style={{ display: 'grid', gap: 6 }}>
+        <div style={{ display: 'grid', gap: 'var(--s-2)' }}>
           {commands.map((item) => (
-            <div key={item.cmd} className="row" style={{ gap: 10, flexWrap: 'nowrap' }}>
+            <div key={item.cmd} className="row" style={{ gap: 'var(--s-2)', flexWrap: 'nowrap' }}>
               <CopyCommand command={item.cmd} />
               <span className="small muted" style={{ whiteSpace: 'nowrap' }}>
                 {item.comment}
@@ -140,7 +142,7 @@ function ScanHistoryCard() {
             <tbody>
               {list.map((r, i) => (
                 <tr key={`${r.project}-${r.scanned_at}-${i}`}>
-                  <td className="mono small muted">{fmt(r.scanned_at)}</td>
+                  <td className="mono small muted">{fmtTime(r.scanned_at)}</td>
                   <td className="mono small">{r.project}</td>
                   <td className="small muted">
                     {t('projects.scanHistory.result', {
@@ -177,42 +179,48 @@ function ScanFlags({ record }: { record: ScanRecord }) {
   if (ignoredDirs.length > 0) ignoredParts.push(t('projects.scanHistory.ignoredDirs', { n: ignoredDirs.length }))
   if (ignoredFiles > 0) ignoredParts.push(t('projects.scanHistory.ignoredFiles', { n: ignoredFiles }))
 
-  if (flags.length === 0 && ignoredParts.length === 0) return <span className="muted">—</span>
+  if (flags.length === 0 && ignoredParts.length === 0) return <span className="muted">{t('common.unset')}</span>
   return (
     <div className="flag-row">
       {ignoredParts.length > 0 && (
         <StatusTag kind="info" title={ignoredDirs.join('\n')}>
-          {ignoredParts.join(' · ')}
+          {ignoredParts.join(' › ')}
         </StatusTag>
       )}
       {flags.length > 0 && (
         <StatusTag kind="warn" title={record.missing.join(', ')}>
-          {flags.join(' · ')}
+          {flags.join(' › ')}
         </StatusTag>
       )}
     </div>
   )
 }
 
+/**
+ * 图谱状态徽标 —— **可点**，落到 `#/graph/<project>`（§3.5：项目详情在图谱页）。
+ * 文案口径**以 graph 页为唯一真相**（`graph.status.*` 三键），本页只展示、不重复解释。
+ */
 function GraphBadge({ project }: { project: GraphProject }) {
   const t = useT()
+  const href = hrefOf({ page: 'graph', sel: project.project })
   if (project.built_at === undefined || project.built_at === null) {
-    return <StatusTag kind="info">{t('projects.graph.none')}</StatusTag>
-  }
-  if (project.stale === true) {
     return (
-      <StatusTag kind="warn" title={`${t('projects.graph.built')} · ${fmt(project.built_at)}`}>
-        {t('projects.graph.stale')}
-      </StatusTag>
+      <a className="badge-link" href={href}>
+        <StatusTag kind="info">{t('graph.status.absent')}</StatusTag>
+      </a>
     )
   }
+  const stale = project.stale === true
   return (
-    <StatusTag kind="ok" title={`${t('projects.graph.built')} · ${fmt(project.built_at)}`}>
-      {t('projects.graph.built')}
-    </StatusTag>
+    <a
+      className="badge-link"
+      href={href}
+      title={t('projects.graph.builtAt', { time: fmtTime(project.built_at) })}
+    >
+      <StatusTag kind={stale ? 'warn' : 'ok'}>
+        {stale ? t('graph.status.stale') : t('graph.status.fresh')}
+      </StatusTag>
+    </a>
   )
 }
 
-function fmt(iso: string): string {
-  return iso.replace('T', ' ').slice(0, 19)
-}

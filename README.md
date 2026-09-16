@@ -4,7 +4,7 @@
 >
 > **它不执行、不调度、不调 LLM。**
 
-Prism 是**纯控制面**：一个 CLI + 自带 Web 控制台，服务一个宿主 harness（默认 ZCode）的多个会话。知识库、知识图谱、代码图谱、架构图谱、角色/团队定义、任务台账都归它管；真正的 agent 调度仍由宿主自己负责。
+Prism 是**纯控制面**：一个 CLI + 自带 Web 控制台，服务一个宿主 harness（默认 ZCode）的多个会话。知识库、知识图谱、代码图谱、架构图谱、角色/团队定义都归它管；真正的 agent 调度仍由宿主自己负责。
 
 ---
 
@@ -149,13 +149,13 @@ docs/examples/tests（约 46MB）。`--full-3rd` 可保留 3rd 子模块的全�
 ```
 prism/
 ├── packages/
-│   ├── core/          # 14 态任务状态机 · SQLite(单写队列/WAL) · 审计 · 熔断 · HarnessAdapter · 任务台账
+│   ├── core/          # 14 态任务状态机 · SQLite(单写队列/WAL) · 审计 · 熔断 · HarnessAdapter
 │   ├── knowledge/     # 层→书→模块→条目 · FTS5(bigram)+向量混合检索 · 版次制 · 知识图谱边表 · reindex
 │   ├── agents/        # 角色/团队定义解析校验渲染 · harness 适配器 + 运行期插件 · 目录解析
 │   ├── skills/        # Prism 内置 Skill · 校验 · 安装到宿主 Skill 目录
-│   ├── server/        # HTTP API · MCP(47 工具) · Graphify/Archify/embedding 封装 · 控制台静态服务
-│   └── cli/           # prism 命令行（init/serve/doctor/kb/graph/arch/role/team/skill/task/harness/embedding/project/inject/audit）
-├── apps/web/          # React 控制台（7 页 · 浅/深主题 · 中/英 · hash 深链）
+│   ├── server/        # HTTP API · MCP(44 工具) · Graphify/Archify/embedding 封装 · 控制台静态服务
+│   └── cli/           # prism 命令行（init/serve/doctor/kb/graph/arch/role/team/skill/harness/embedding/project/inject/audit）
+├── apps/web/          # React 控制台（6 页 · 浅/深主题 · 中/英 · hash 深链）
 ├── 3rd/               # git submodule（锁定上游发布 tag，见 3rd/README.md）
 │   ├── archify/       # v2.16.0（自包含 Node CLI，免构建）
 │   ├── graphify/      # v0.9.57（Python，免构建）
@@ -320,18 +320,6 @@ PRISM_HARNESS=my-harness prism harness show   # 激活某个适配器
 
 **向量化（Prism 内置）**：BGE-M3（多语言基线）或 Qwen3-Embedding（更强）经 llama.cpp 常驻服务提供，按算力自动选档——无显卡用轻量 `small`（512 维），有显卡用 `large`（1024 维，快约 170 倍）。落库自动向量化。
 
-### 4.8 任务台账
-
-**被动台账**——任务由宿主创建推进，Prism 只记录、可视化、审计。
-
-```bash
-prism task register --dag d1 --file dag.json --session s1 --team core-dev --project prism
-prism task report T-1 --to RUNNING --by dev-1
-prism task graph d1          # 依赖图
-```
-
-状态回报走 14 态状态机校验（非法转移直接拒绝）+ 乐观并发（`expected_revision`）。控制台「任务中心」页有依赖图 SVG。
-
 ---
 
 ## 5. 命令面
@@ -351,11 +339,10 @@ prism
 ├── arch       types | validate | render
 ├── project    add | list | show | remove
 ├── inject     <项目根> [--team <id>] [--remove]        把 Prism 指引写进项目 AGENTS.md
-├── harness / audit
-└── task       list | show | graph | register | report | stats
+└── harness / audit
 ```
 
-**MCP 工具 47 个**：知识库 17 · 代码图谱 8 · 架构图谱 1 · 角色/团队/技能 17 · 任务台账 3 · 上下文包 1（`tools/list` 实测）。
+**MCP 工具 44 个**：知识库 17 · 代码图谱 8 · 架构图谱 1 · 角色/团队/技能 17 · 上下文包 1（`tools/list` 实测）。
 
 ---
 
@@ -419,7 +406,6 @@ pnpm run package   # 打包 tarball
 | `code-graph.md` / `knowledge-injection.md` | 代码图谱与知识注入 |
 | `role-definition.md` / `team-definition.md` | 角色与团队定义 |
 | `harness-adapters.md` / `adding-a-harness.md` | 宿主适配约定 + 新增 harness 配方 |
-| `task-center.md` | 任务台账（被动台账 + 回报协议） |
 | `deployment-model.md` | 部署形态（多 harness / 单激活、多会话共享） |
 | `model-negotiation.md` | 边界声明：Prism 不参与子 agent 管理与模型选择 |
 | ~~`work-queue.md`~~ | **已废弃**（工作队列移除；富化改宿主直付，见该文顶部） |

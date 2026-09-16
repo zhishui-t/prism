@@ -193,59 +193,6 @@ describe('CLI 命令（注入真实知识服务 / 假 graphify）', () => {
     expect(lines.join('\n')).toContain('无路径')
   })
 
-  it('task 台账：register → list → graph → report → stats（被动记录）', async () => {
-    const tHome = await tempDir('prism-cli-task-')
-    cleanup.push(tHome)
-    const tCtx: CommandContext = { ...ctx, home: tHome }
-    const dagFile = join(tHome, 'dag.json')
-    await writeFile(
-      dagFile,
-      JSON.stringify({
-        tasks: [
-          { id: 'T-1', description: '探索' },
-          { id: 'T-2', description: '设计', depends_on: ['T-1'] },
-          { id: 'T-3', description: '开发', depends_on: ['T-2'] },
-        ],
-      }),
-      'utf-8',
-    )
-
-    // 登记
-    lines = []
-    expect(
-      await runCommand(tCtx, [
-        'task', 'register', '--dag', 'dag-cli', '--session', 's1', '--team', 'core-dev',
-        '--project', 'prism', '--dag-version', 'v1', '--difficulty', 'normal', '--file', dagFile,
-      ]),
-    ).toBe(0)
-    expect(lines.join('\n')).toContain('3 任务 / 2 边')
-
-    // 列表
-    lines = []
-    expect(await runCommand(tCtx, ['task', 'list', '--dag', 'dag-cli'])).toBe(0)
-    expect(lines.join('\n')).toContain('T-1')
-
-    // 依赖图
-    lines = []
-    expect(await runCommand(tCtx, ['task', 'graph', 'dag-cli'])).toBe(0)
-    expect(lines.join('\n')).toContain('← T-1')
-
-    // 回报（合法）
-    lines = []
-    expect(await runCommand(tCtx, ['task', 'report', 'T-1', '--to', 'RUNNING', '--by', 'dev-1'])).toBe(0)
-    expect(lines.join('\n')).toContain('RUNNING')
-
-    // 回报（非法转移 → rc 1）
-    lines = []
-    expect(await runCommand(tCtx, ['task', 'report', 'T-2', '--to', 'COMPLETED', '--by', 'x'])).toBe(1)
-    expect(lines.join('\n')).toContain('invalid_status_transition')
-
-    // 统计
-    lines = []
-    expect(await runCommand(tCtx, ['task', 'stats'])).toBe(0)
-    expect(lines.join('\n')).toContain('任务 3 个')
-  })
-
   it('kb enrich：直付摘要 → 落 SUMMARY 条目（工作队列已移除）', async () => {
     const eHome = await tempDir('prism-cli-enrich-')
     cleanup.push(eHome)

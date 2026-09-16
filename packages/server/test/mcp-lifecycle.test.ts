@@ -2,8 +2,7 @@ import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { PrismPersistence } from '@prism/core'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 
 import { createMcpTools } from '../src/mcp/server.js'
 import type { KnowledgeService, SearchQuery, SearchResult } from '../src/kb/port.js'
@@ -11,7 +10,7 @@ import type { KnowledgeService, SearchQuery, SearchResult } from '../src/kb/port
 const makeTempDir = (): Promise<string> => mkdtemp(join(tmpdir(), 'prism-mcp-lifecycle-'))
 
 /**
- * F-T1：MCP 工具集惰性打开 SQLite（知识库 + 任务台账），必须可被显式释放。
+ * F-T1：MCP 工具集惰性打开 SQLite（知识库），必须可被显式释放。
  *
  * 不释放的后果：Windows 上 `*.db/-wal/-shm` 句柄挂到进程结束，临时目录删不掉——
  * e2e 长期静默堆积（修前 `D:\tmp` 积压 97+ 个 `prism-e2e-*`）。
@@ -42,22 +41,6 @@ describe('MCP 工具集生命周期（F-T1：惰性句柄释放）', () => {
     tools.close()
     tools.close() // 幂等
     expect(closed).toEqual(['kb'])
-  })
-
-  it('惰性打开的持久化（任务台账）→ close() 释放', async () => {
-    const spy = vi.spyOn(PrismPersistence.prototype, 'close')
-    try {
-      const tools = createMcpTools({ home: await makeTempDir() })
-      const list = tools.find((t) => t.name === 'prism_task_status')
-      expect(list).toBeDefined()
-      await list!.call({}) // 触发 openPersistence → tasks.db
-      expect(spy).not.toHaveBeenCalled()
-
-      tools.close()
-      expect(spy).toHaveBeenCalledTimes(1)
-    } finally {
-      spy.mockRestore()
-    }
   })
 
   it('注入的 kb（调用方持有）不被 close() 关闭：所有权边界不外溢', async () => {

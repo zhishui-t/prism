@@ -15,8 +15,8 @@ export interface PersistenceOptions {
 }
 
 /**
- * PrismPersistence — 按域管理 3 个 SQLite 库：
- * tasks.db / core.db / knowledge.db，全部开启 WAL 并通过同一个
+ * PrismPersistence — 按域管理 2 个 SQLite 库：
+ * core.db / knowledge.db，全部开启 WAL 并通过同一个
  * SingleWriterQueue 串行化写操作。
  */
 export class PrismPersistence {
@@ -25,7 +25,6 @@ export class PrismPersistence {
   /** 全局单写者：所有库的写操作共享同一队列串行化 */
   readonly queue = new SingleWriterQueue()
 
-  readonly tasks: PrismDatabase
   readonly core: PrismDatabase
   readonly knowledge: PrismDatabase
 
@@ -40,11 +39,6 @@ export class PrismPersistence {
       this.inMemory ? ':memory:' : join(this.stateDir, file)
 
     const dbOptions = { queue: this.queue }
-    this.tasks = new PrismDatabase({
-      ...dbOptions,
-      path: pathFor('tasks.db'),
-      schema: DEFAULT_SCHEMAS.tasks,
-    })
     this.core = new PrismDatabase({
       ...dbOptions,
       path: pathFor('core.db'),
@@ -58,7 +52,7 @@ export class PrismPersistence {
   }
 
   get dbs(): PrismDatabase[] {
-    return [this.tasks, this.core, this.knowledge]
+    return [this.core, this.knowledge]
   }
 
   close(): void {

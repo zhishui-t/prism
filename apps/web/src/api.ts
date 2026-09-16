@@ -140,136 +140,26 @@ export interface KbConflict {
   detected_at: string
 }
 
-/** 知识图谱节点（/api/kb/graph）。 */
-export interface KbGraphNode {
-  id: string
-  title: string
-  type: string
+/**
+ * 书的定稿目录 / 继承链（`GET /api/kb/book-structure`，§4.1 K4）。
+ * 服务端形状见 knowledge 的 `BookStructure`（下划线字段，不再驼峰改写）。
+ */
+export interface BookStructure {
   layer: string
-  owner?: string
   book: string
-  module: string
-  in_degree: number
-  out_degree: number
-}
-
-/** 知识图谱边。 */
-export interface KbGraphEdge {
-  from_id: string
-  to_id: string
-  relation: string
-  confidence: string
-  weight: number
-  source: string
-  created_at: string
-}
-
-/** 知识图谱视图（单一边表的过滤视图）。 */
-export interface KbGraphView {
-  nodes: KbGraphNode[]
-  edges: KbGraphEdge[]
-  root?: string
-  truncated: boolean
-}
-
-/** 两节点最短路径。 */
-export interface KbGraphPath {
-  nodes: string[]
-  edges: KbGraphEdge[]
-}
-
-/** 架构图类型（五类）。 */
-export interface ArchType {
-  type: string
-  label: string
-}
-
-/** 已渲染的架构图产物（带作用域，供按书/模块过滤）。 */
-export interface ArchDiagram {
-  type: string
-  name: string
-  bytes: number
-  mtime: string
-  /** 图标题（IR meta.title） */
-  title?: string
-  layer?: string
-  owner?: string
-  book?: string
-  module?: string
-  archify_version?: string
-  /** 同目录是否有 IR 源 */
-  has_ir: boolean
-}
-
-/** 产物元数据（sidecar <name>.meta.json）。 */
-export interface ArchArtifactMeta {
-  type: string
-  name: string
-  archify_version: string
-  ir_hash: string
-  ir_file: string
-  title?: string
-  layer?: string
-  owner?: string
-  book?: string
-  module?: string
-  created_at: string
-}
-
-/** 产物 IR + 元数据。 */
-export interface ArchIrResult {
-  type: string
-  name: string
-  ir: unknown
-  meta: ArchArtifactMeta | null
-}
-
-/** 渲染结果。 */
-export interface ArchRenderResult {
-  type: string
-  name: string
-  bytes: number
-  preview: string
-  ir: string
-}
-
-/** 校验结果。 */
-export interface ArchValidation {
-  ok: boolean
-  type: string
-  problems: Array<{ code: string; severity: string; message: string; fix?: string }>
-}
-
-export interface TaskRow {
-  id: string
-  dag_id: string
-  description: string
-  status: string
-  dependencies: string[]
-  write_scopes: string[]
+  /** 每次 freeze 递增 */
   revision: number
-  assigned_agent?: string | null
-  executor?: string | null
-  stage?: string
-  result?: unknown
-  error_type?: string | null
-  created_at: string
+  /** 冻结清单（有序；本地项覆盖继承项） */
+  modules: string[]
+  /** 推导建议 */
+  suggested: Array<{ slug: string; entries: number }>
+  /** 声明的继承（形如 `["global/java-standards"]`） */
+  inherits: string[]
+  /** 实际生效的继承链 */
+  inherited_from: string[]
+  frozen_at: string | null
+  confirmed_by: string | null
   updated_at: string
-}
-
-/** 任务台账统计。 */
-export interface TaskStats {
-  total: number
-  by_status: Record<string, number>
-  dags: number
-}
-
-/** DAG 依赖图（任务 + 边）。 */
-export interface TaskDag {
-  dag_id: string
-  status: string
-  tasks: TaskRow[]
-  edges: Array<{ from: string; to: string }>
 }
 
 export interface HealthInfo {
@@ -278,7 +168,16 @@ export interface HealthInfo {
   uptime: number
 }
 
-/** 统一请求：解析信封，失败抛错（页面据此显示错误态）。 */
+/**
+ * 统一请求：解析信封，失败抛错（页面据此显示错误态）。
+ *
+ * ⚠ **契约（debts D-1，不得更改）**：错误**必须**以 `` `${code}: ${message}` `` 抛成 `Error.message`
+ * ——错误码靠这个前缀承载。消费方按前缀分派：
+ * - `components/EffectiveSkills.tsx`：`err.startsWith('not_found')` → 换成「角色不存在」的人话；
+ * - 各页 `State` / `.error` 直接展示原文（`code: message`）。
+ * 因此**不要**把它改成结构化 error、也不要在前缀里加别的东西；要翻译码，请在消费方做映射。
+ * （`api-team.ts` 的同名函数是同一契约的第二处实现，改一处必须同步另一处。）
+ */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     headers: { 'content-type': 'application/json' },
@@ -345,30 +244,6 @@ export const api = {
     return request<CatalogEntry[]>(`/api/kb/catalog${suffix ? `?${suffix}` : ''}`)
   },
 
-  kbGraph: (params?: {
-    id?: string
-    depth?: number
-    relations?: string
-    limit?: number
-    book?: string
-    owner?: string
-    module?: string
-    layer?: string
-  }) => {
-    const qs = new URLSearchParams()
-    if (params?.id) qs.set('id', params.id)
-    if (params?.depth) qs.set('depth', String(params.depth))
-    if (params?.relations) qs.set('relations', params.relations)
-    if (params?.limit) qs.set('limit', String(params.limit))
-    if (params?.book) qs.set('book', params.book)
-    if (params?.owner) qs.set('owner', params.owner)
-    if (params?.module) qs.set('module', params.module)
-    if (params?.layer) qs.set('layer', params.layer)
-    const suffix = qs.toString()
-    return request<KbGraphView>(`/api/kb/graph${suffix ? `?${suffix}` : ''}`)
-  },
-
-  /** 知识图谱导出（借 Graphify 渲染/Obsidian） */
   kbScanHistory: (project?: string, limit = 20) => {
     const qs = new URLSearchParams()
     if (project !== undefined) qs.set('project', project)
@@ -379,28 +254,34 @@ export const api = {
   kbConflicts: (includeResolved = false) =>
     request<KbConflict[]>(`/api/kb/conflicts${includeResolved ? '?include_resolved=true' : ''}`),
 
-  kbResolveConflict: (id: string) =>
-    request<{ id: string; resolved: boolean }>(
-      `/api/kb/conflicts/${encodeURIComponent(id)}/resolve`,
-      { method: 'POST' },
-    ),
-
   kbRemove: (id: string, hard = false) =>
     request<{ id: string; mode: string; references: number }>(
       `/api/kb/entry/${encodeURIComponent(id)}/remove${hard ? '?hard=true' : ''}`,
       { method: 'POST' },
     ),
 
-  kbExport: (format: string) =>
-    request<{ format: string; output: string; files: string[]; summary: { nodes: number; edges: number } }>(
-      '/api/kb/export',
-      { method: 'POST', body: JSON.stringify({ format }) },
+  /**
+   * 恢复软删条目（`POST /api/kb/entry/:id/restore`）。
+   *
+   * 「删除不可逆」是阅读室硬伤 → 必加（§6.3）。`restored=false` 表示本就 active（幂等）。
+   * ⚠ 与 `kbRemove` 相反：服务端**不**做审核语义，只按宿主指令改状态（R3）。
+   */
+  kbRestore: (entryId: string) =>
+    request<{ id: string; restored: boolean }>(
+      `/api/kb/entry/${encodeURIComponent(entryId)}/restore`,
+      { method: 'POST' },
     ),
 
-  kbPath: (from: string, to: string, relations?: string) => {
-    const qs = new URLSearchParams({ from, to })
-    if (relations) qs.set('relations', relations)
-    return request<KbGraphPath>(`/api/kb/path?${qs.toString()}`)
+  /**
+   * 书的定稿目录 / 继承链（`GET /api/kb/book-structure`，只读）。
+   *
+   * 「跨层同名书」与「层间继承」的唯一数据源（§4.1 K4 → §6.5「同名书可辨」锚点）。
+   * 结构未生成（或书不存在）→ 服务端抛 `not_found`（不是空结构，两者必须可区分）。
+   * **不接** `POST` 形态的 generate/freeze（写操作，本轮无 UI 位置）。
+   */
+  kbBookStructure: (params: { layer: string; book: string }) => {
+    const qs = new URLSearchParams({ layer: params.layer, book: params.book })
+    return request<BookStructure>(`/api/kb/book-structure?${qs.toString()}`)
   },
 
   graphProjects: () => request<GraphProject[]>('/api/graph/projects'),
@@ -419,42 +300,4 @@ export const api = {
 
   graphStatus: (project: string) =>
     request<GraphStatus>(`/api/graph/status?project=${encodeURIComponent(project)}`),
-
-  tasks: (params?: { dag_id?: string; status?: string; session_id?: string }) => {
-    const qs = new URLSearchParams()
-    if (params?.dag_id) qs.set('dag_id', params.dag_id)
-    if (params?.status) qs.set('status', params.status)
-    if (params?.session_id) qs.set('session_id', params.session_id)
-    const suffix = qs.toString()
-    return request<TaskRow[]>(`/api/tasks${suffix ? `?${suffix}` : ''}`)
-  },
-
-  taskStats: () => request<TaskStats>('/api/tasks/stats'),
-
-  taskDag: (dagId: string) => request<TaskDag>(`/api/dags/${encodeURIComponent(dagId)}`),
-
-  archTypes: () => request<ArchType[]>('/api/arch/types'),
-
-  archDiagrams: (params?: { book?: string; module?: string }) => {
-    const qs = new URLSearchParams()
-    if (params?.book !== undefined) qs.set('book', params.book)
-    if (params?.module !== undefined) qs.set('module', params.module)
-    const suffix = qs.toString()
-    return request<ArchDiagram[]>(`/api/arch/diagrams${suffix ? `?${suffix}` : ''}`)
-  },
-
-  archIr: (type: string, name: string) =>
-    request<ArchIrResult>(`/api/arch/ir/${encodeURIComponent(type)}/${encodeURIComponent(name)}`),
-
-  archValidate: (type: string, ir: unknown) =>
-    request<ArchValidation>('/api/arch/validate', {
-      method: 'POST',
-      body: JSON.stringify({ type, ir }),
-    }),
-
-  archRender: (type: string, ir: unknown, name?: string) =>
-    request<ArchRenderResult>('/api/arch/render', {
-      method: 'POST',
-      body: JSON.stringify({ type, ir, ...(name ? { name } : {}) }),
-    }),
 }

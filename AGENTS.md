@@ -7,7 +7,7 @@
 
 ## 1. 项目一句话
 
-Prism 是团队的知识与协作**控制面**：管理知识库、知识图谱、代码图谱、架构图谱、角色/团队定义、任务台账，通过 MCP/HTTP 供宿主 agent 使用。
+Prism 是团队的知识与协作**控制面**：管理知识库、知识图谱、代码图谱、架构图谱、角色/团队定义，通过 MCP/HTTP 供宿主 agent 使用。
 
 **它不执行、不调度、不调 LLM、不管版本控制。**
 
@@ -43,7 +43,7 @@ cli ──→ server ──→ agents ──→ core
  └────────┴──────────┴──────────┴──→ knowledge（core 之外独立）
 ```
 
-- **core**：纯域模型，不含任何宿主耦合。状态机、持久化、审计、熔断、任务台账、HarnessAdapter 接口。
+- **core**：纯域模型，不含任何宿主耦合。状态机、持久化、审计、熔断、HarnessAdapter 接口。
 - **knowledge**：知识库领域。只依赖 core。
 - **agents**：角色/团队定义 + 宿主适配器。只依赖 core。
 - **skills**：Skill 定义与安装。只依赖 core。
@@ -71,7 +71,7 @@ interface HarnessAdapter { defaultRoot, agent, dispatch, model, skill, instructi
 
 ### 3.3 存储
 
-- SQLite 三库：`tasks.db` / `core.db` / `knowledge.db`，WAL 模式。
+- SQLite 两库：`core.db` / `knowledge.db`，WAL 模式。
 - 所有写操作走 `SingleWriterQueue` 串行化（跨进程由 WAL + busy_timeout 兜底）。
 - 写路径模式：**文件快照 → 写文件 → 事务提交 → 失败回滚并还原文件**。
 
@@ -102,7 +102,7 @@ TS 侧无法导入），改一处必须同步另一处。
 
 ```bash
 pnpm typecheck     # 1. 类型
-pnpm test          # 2. 单测（921，93 文件）
+pnpm test          # 2. 单测（952，97 文件）
 pnpm lint          # 3. 风格
 pnpm build         # 4. 构建
 pnpm test:e2e      # 5. 端到端（涉及 CLI/HTTP/Web 时）
@@ -163,7 +163,7 @@ pnpm test:package  # 6. 发行冒烟（打包→解压→在解压环境验证�
 
 | 要改什么 | 去哪 |
 | :--- | :--- |
-| 任务状态机 / 持久化 / 台账 | `packages/core/src/{state,persistence,tasks}/` |
+| 任务状态机 / 持久化 | `packages/core/src/{state,persistence}/` |
 | 知识条目 / 检索 / 知识图谱 | `packages/knowledge/src/` |
 | 角色 / 团队 / 适配器 / 目录解析 | `packages/agents/src/` |
 | HTTP 路由 / MCP 工具 | `packages/server/src/{http/routes,mcp}/` |

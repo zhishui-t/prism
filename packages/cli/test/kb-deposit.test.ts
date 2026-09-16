@@ -90,7 +90,7 @@ rework_limit: 2
 # 关闭沉淀团队
 `
 
-describe('F-E2/F-B4/F-E3：kb deposit / kb versions / task report 沉淀建议', () => {
+describe('F-E2/F-B4：kb deposit / kb versions 落库与版次', () => {
   let home: string
   let lines: string[]
   let ctx: CommandContext
@@ -316,133 +316,6 @@ describe('F-E2/F-B4/F-E3：kb deposit / kb versions / task report 沉淀建议',
     lines = []
     expect(await runCommand(ctx, ['kb', 'versions'])).toBe(1)
     expect(lines.join('\n')).toContain('用法: prism kb versions')
-  })
-
-  // -------------------------------------------------------------------------
-  // F-E3：task report 终态沉淀建议（裁决 A4：只有 CLOSED 给清单）
-  // -------------------------------------------------------------------------
-  async function registerTask(teamId: string, description = '实现功能'): Promise<void> {
-    const dagFile = join(home, `dag-${teamId}.json`)
-    await writeFile(
-      dagFile,
-      JSON.stringify({ tasks: [{ id: 'T-1', description, stage: '开发' }] }),
-      'utf-8',
-    )
-    lines = []
-    expect(
-      await runCommand(ctx, [
-        'task', 'register', '--dag', `dag-${teamId}`, '--session', 's1', '--team', teamId,
-        '--project', 'prism', '--dag-version', 'v1', '--difficulty', 'normal', '--file', dagFile,
-      ]),
-    ).toBe(0)
-  }
-
-  it('task report：COMPLETED 只给 deposit_hint=await_close（无清单）', async () => {
-    await registerTask('pol')
-    lines = []
-    expect(await runCommand(ctx, ['task', 'report', 'T-1', '--to', 'RUNNING', '--by', 'dev-3'])).toBe(0)
-    lines = []
-    expect(await runCommand(ctx, ['task', 'report', 'T-1', '--to', 'COMPLETED', '--by', 'dev-3', '--json'])).toBe(0)
-    const out = JSON.parse(lines[lines.length - 1]) as {
-      value: { deposit_hint?: string; deposit_suggestions?: unknown[] }
-    }
-    expect(out.value.deposit_hint).toBe('await_close')
-    expect(out.value.deposit_suggestions).toBeUndefined()
-  })
-
-  it('task report：CLOSED → deposit_suggestions（团队规则 match{...} + 关键词）', async () => {
-    await registerTask('pol', '修复安全漏洞')
-    for (const to of ['RUNNING', 'COMPLETED', 'AWAITING_FEEDBACK']) {
-      expect(await runCommand(ctx, ['task', 'report', 'T-1', '--to', to, '--by', 'dev-3'])).toBe(0)
-    }
-    lines = []
-    expect(await runCommand(ctx, ['task', 'report', 'T-1', '--to', 'CLOSED', '--by', 'qa', '--json'])).toBe(0)
-    const out = JSON.parse(lines[lines.length - 1]) as {
-      value: {
-        status: string
-        deposit_suggestions?: Array<{ kind: string; layer: string; priority: string; reason: string; require_note: boolean }>
-      }
-    }
-    expect(out.value.status).toBe('CLOSED')
-    const suggestions = out.value.deposit_suggestions ?? []
-    // ① 团队规则逐条（两条规则）
-    expect(suggestions[0]?.reason).toContain('团队规则 match{type:rule}')
-    expect(suggestions[0]?.kind).toBe('pitfall') // 规则未设 type → 回落 default_type
-    expect(suggestions[0]?.layer).toBe('global')
-    expect(suggestions[0]?.priority).toBe('high')
-    expect(suggestions[0]?.require_note).toBe(false)
-    expect(suggestions[1]?.reason).toContain('团队规则 match{book:handbook}')
-    // ② 关键词：安全 → rule/global
-    const security = suggestions.find((s) => s.kind === 'rule' && s.layer === 'global')
-    expect(security?.reason).toContain('安全关键词')
-
-    // 文本模式也打印建议清单与一步落库提示
-    lines = []
-    expect(await runCommand(ctx, ['task', 'report', 'T-1', '--to', 'AWAITING_FEEDBACK', '--by', 'qa'])).toBe(0)
-    // （先回到 AWAITING_FEEDBACK 再 CLOSED，验证文本输出）
-    lines = []
-    expect(await runCommand(ctx, ['task', 'report', 'T-1', '--to', 'CLOSED', '--by', 'qa'])).toBe(0)
-    const text = lines.join('\n')
-    expect(text).toContain('建议沉淀')
-    expect(text).toContain('一步落库: prism kb deposit')
-    expect(text).toContain('--team pol')
-  })
-
-  it('task report：非终态（RUNNING/AWAITING_FEEDBACK）不给建议字段', async () => {
-    await registerTask('pol')
-    lines = []
-    expect(await runCommand(ctx, ['task', 'report', 'T-1', '--to', 'RUNNING', '--by', 'x', '--json'])).toBe(0)
-    const running = JSON.parse(lines[lines.length - 1]) as { value: { deposit_suggestions?: unknown; deposit_hint?: string } }
-    expect(running.value.deposit_suggestions).toBeUndefined()
-    expect(running.value.deposit_hint).toBeUndefined()
-
-    lines = []
-    expect(await runCommand(ctx, ['task', 'report', 'T-1', '--to', 'COMPLETED', '--by', 'x'])).toBe(0)
-    lines = []
-    expect(await runCommand(ctx, ['task', 'report', 'T-1', '--to', 'AWAITING_FEEDBACK', '--by', 'x', '--json'])).toBe(0)
-    const awaiting = JSON.parse(lines[lines.length - 1]) as { value: { deposit_suggestions?: unknown } }
-    expect(awaiting.value.deposit_suggestions).toBeUndefined()
-  })
-
-  it('task report：无团队 / deposit.enabled=false → 不给建议字段（不打扰）', async () => {
-    // 无团队：team_id 传空串会被 registerDag 拒绝 → 用 enabled=false 的团队覆盖"不打扰"，
-    // 另用一条 dag 的 team 指向不存在的团队文件（loadTeam → null）。
-    await registerTask('off', '修复安全漏洞')
-    for (const to of ['RUNNING', 'COMPLETED', 'AWAITING_FEEDBACK']) {
-      expect(await runCommand(ctx, ['task', 'report', 'T-1', '--to', to, '--by', 'x'])).toBe(0)
-    }
-    lines = []
-    expect(await runCommand(ctx, ['task', 'report', 'T-1', '--to', 'CLOSED', '--by', 'x', '--json'])).toBe(0)
-    const off = JSON.parse(lines[lines.length - 1]) as { value: { deposit_suggestions?: unknown } }
-    expect(off.value.deposit_suggestions).toBeUndefined()
-  })
-
-  it('task report --deposit：CLOSED 一步落库（复用 kb deposit 路径 + 团队策略）', async () => {
-    await registerTask('pol', '实现功能')
-    for (const to of ['RUNNING', 'COMPLETED', 'AWAITING_FEEDBACK']) {
-      expect(await runCommand(ctx, ['task', 'report', 'T-1', '--to', to, '--by', 'dev-3'])).toBe(0)
-    }
-    const doc = join(home, 'task-deposit.md')
-    await writeFile(doc, '任务收口沉淀正文。\n', 'utf-8')
-    lines = []
-    expect(
-      await runCommand(ctx, [
-        'task', 'report', 'T-1', '--to', 'CLOSED', '--by', 'qa',
-        '--deposit', doc, '--title', 'T-1 教训', '--type', 'pitfall',
-        '--layer', 'project', '--owner', 'prism', '--book', 'handbook',
-      ]),
-    ).toBe(0)
-    const text = lines.join('\n')
-    expect(text).toContain('一步落库')
-    expect(text).toMatch(/已落库 .+@v1/)
-    expect(text).toContain('来源地址: ')
-
-    // 落库条目确实带任务来源
-    const id = depositedId()
-    lines = []
-    expect(await runCommand(ctx, ['kb', 'get', id, '--json'])).toBe(0)
-    const entry = JSON.parse(lines[lines.length - 1]) as { value: { deposited_by?: { task_id?: string } } }
-    expect(entry.value.deposited_by?.task_id).toBe('T-1')
   })
 
   it('kb deposit：标题/正文走 frontmatter 回落', async () => {

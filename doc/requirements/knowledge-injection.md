@@ -230,7 +230,7 @@ HTTP 等价面：`GET /api/kb/context-pack?role=&task=&budget_tokens=&layers=&bo
     → 读 AGENTS.md（知道 Prism 可用）
     → 需要知识时调 MCP（模式 A）
     → 派发子 agent 时请求上下文包（模式 B）
-    → 执行完经 MCP 回报 Prism（台账 + 沉淀）
+    → 执行完经 MCP 回报 Prism（沉淀）
 ```
 
 ---

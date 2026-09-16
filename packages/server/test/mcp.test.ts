@@ -40,7 +40,7 @@ describe('MCP stdio（手写 JSON-RPC，design.md §4 最小 5 工具 + design-v
     expect(info?.version).toBe(ownVersion)
   })
 
-  it('tools/list → 固定 47 个工具（kb 17 + graph 8 + arch 1 + 角色/团队/技能/上下文 18 + task 3；v5 增 graph_merge；v6 角色/团队补齐增删改 + team_create→team_new；v6.2 skill 写入口；v10 arch_generate）', async () => {
+  it('tools/list → 固定 44 个工具（kb 17 + graph 8 + arch 1 + 角色/团队/技能/上下文 18；v5 增 graph_merge；v6 角色/团队补齐增删改 + team_create→team_new；v6.2 skill 写入口；v10 arch_generate）', async () => {
     const tools = createMcpTools({ home: await makeTempDir('prism-mcp-') })
     const res = await handleRpcRequest(rpc('tools/list'), tools)
     const names = ((res?.result as { tools: Array<{ name: string }> }).tools).map((t) => t.name)
@@ -89,10 +89,6 @@ describe('MCP stdio（手写 JSON-RPC，design.md §4 最小 5 工具 + design-v
       'prism_team_edit',
       'prism_team_rm',
       'prism_team_render',
-      'prism_task_register',
-      'prism_task_report',
-      'prism_task_status',
-
     ])
   })
 
@@ -199,72 +195,6 @@ describe('MCP 富化直付工具（prism_kb_enrich，工作队列已移除）', 
     expect(res?.result).toMatchObject({ isError: true })
   })
 })
-describe('MCP 任务台账工具（被动台账：register → report → status）', () => {
-  it('register → report → status 端到端', async () => {
-    const home = await makeTempDir('prism-mcp-task-')
-    const tools = createMcpTools({ home })
-
-    const reg = await handleRpcRequest(
-      rpc('tools/call', {
-        name: 'prism_task_register',
-        arguments: {
-          dag_id: 'dag-mcp',
-          session_id: 'sess-1',
-          team_id: 'core-dev',
-          project_id: 'prism',
-          version: 'v1',
-          difficulty: 'normal',
-          tasks: [
-            { id: 'm1', description: '设计' },
-            { id: 'm2', description: '开发', depends_on: ['m1'] },
-          ],
-        },
-      }),
-      tools,
-    )
-    expect(JSON.parse(textOf(reg))).toEqual({ dag_id: 'dag-mcp', tasks: 2, edges: 1 })
-
-    const report = await handleRpcRequest(
-      rpc('tools/call', { name: 'prism_task_report', arguments: { task_id: 'm1', to_status: 'RUNNING', by: 'dev-1' } }),
-      tools,
-    )
-    expect(JSON.parse(textOf(report))).toMatchObject({ status: 'RUNNING', revision: 1 })
-
-    const status = await handleRpcRequest(
-      rpc('tools/call', { name: 'prism_task_status', arguments: { dag_id: 'dag-mcp' } }),
-      tools,
-    )
-    const graph = JSON.parse(textOf(status)) as { edges: Array<{ from: string; to: string }>; tasks: unknown[] }
-    expect(graph.edges).toEqual([{ from: 'm1', to: 'm2' }])
-    expect(graph.tasks).toHaveLength(2)
-
-    const list = await handleRpcRequest(rpc('tools/call', { name: 'prism_task_status', arguments: {} }), tools)
-    const overview = JSON.parse(textOf(list)) as { tasks: unknown[]; stats: { total: number } }
-    expect(overview.stats.total).toBe(2)
-  })
-
-  it('report 非法转移 → isError（状态机拒绝）', async () => {
-    const home = await makeTempDir('prism-mcp-task2-')
-    const tools = createMcpTools({ home })
-    await handleRpcRequest(
-      rpc('tools/call', {
-        name: 'prism_task_register',
-        arguments: {
-          dag_id: 'dag-x', session_id: 's', team_id: 't', project_id: 'p', version: 'v1', difficulty: 'normal',
-          tasks: [{ id: 'x1', description: 'X' }],
-        },
-      }),
-      tools,
-    )
-    const bad = await handleRpcRequest(
-      rpc('tools/call', { name: 'prism_task_report', arguments: { task_id: 'x1', to_status: 'COMPLETED', by: 'x' } }),
-      tools,
-    )
-    expect(bad?.result).toMatchObject({ isError: true })
-    expect(textOf(bad)).toContain('invalid_status_transition')
-  })
-})
-
 describe('MCP 新增工具（kb stats/catalog/path/remove/conflicts/resolve）', () => {
   it('prism_kb_stats → 统计；prism_kb_remove → 软删', async () => {
     const kb = new MemoryKb()
