@@ -14,6 +14,8 @@ import {
   exportKnowledgeGraph,
   makeDryRunKb,
   scanProject,
+  GATE_SKIP_REASONS,
+  SKIP_REASONS,
   type DepositInput,
   type DepositResult,
   type KnowledgeService,
@@ -771,11 +773,26 @@ async function kbExport(ctx: CommandContext, args: string[], values: ArgValues):
   return 0
 }
 
+/** `by_skip_reason` 键 → 人读短标签（未知键原样显示，不吞信息）。 */
+const SKIP_REASON_LABELS: Record<string, string> = {
+  [SKIP_REASONS.extNotIncluded]: '扩展不在扫描集',
+  [SKIP_REASONS.buildFile]: '构建文件/配置',
+  [SKIP_REASONS.tooLarge]: '文件过大',
+  [SKIP_REASONS.readFailed]: '读取失败',
+  [SKIP_REASONS.decodeFailed]: '文本解码失败',
+  [SKIP_REASONS.convertFailed]: '转换失败',
+  [SKIP_REASONS.needsOcr]: '需 OCR',
+  [SKIP_REASONS.indexFailed]: '索引失败',
+}
+
 /**
- * `prism kb sync <项目名|项目根> [--book] [--module] [--ignore-dirs <a,b>] [--dry-run]`
+ * `prism kb sync <项目名|项目根> [--book] [--module] [--ignore-dirs <a,b>] [--include-ext <a,b>] [--dry-run]`
  *
- * 扫描项目文档建「引用型」索引（design-knowledge-model-v1 §4）：
+ * 扫描项目文档建「引用型」索引（design-knowledge-model-v1 §4 / design-v8 §4）：
  * - 参数是已登记的项目名 → 从台账取根目录并回写扫描时间；是路径 → 直接扫（需 --owner）；
+ * - **默认只扫文档集**（`DOC_ONLY_EXTENSIONS` = anydoc 支持集 − {html, htm}），构建文件/
+ *   配置/源码默认跳过并计入 `by_skip_reason`；`--include-ext h,cpp` 显式纳入额外扩展
+ *   （非 anydoc 扩展走纯文本直读）；
  * - `--dry-run` 只报告发现与转换结果，不落库（验证用）。
  *   富化（实体抽取等）由宿主另经 MCP `prism_kb_enrich` 直接回写（工作队列已移除）。
  */
@@ -783,7 +800,7 @@ async function kbSync(ctx: CommandContext, args: string[], values: ArgValues): P
   const target = args[0]
   if (target === undefined) {
     ctx.stderr(
-      '用法: prism kb sync <项目名|项目根> [--owner <名>] [--book <书>] [--module <模块>] [--ignore-dirs <a,b>] [--dry-run]',
+      '用法: prism kb sync <项目名|项目根> [--owner <名>] [--book <书>] [--module <模块>] [--ignore-dirs <a,b>] [--include-ext <a,b>] [--dry-run]',
     )
     return 1
   }
@@ -823,6 +840,15 @@ async function kbSync(ctx: CommandContext, args: string[], values: ArgValues): P
           .map((d) => d.trim())
           .filter((d) => d !== '')
       : undefined
+  // --include-ext <a,b>：显式纳入的扩展名（写法随意：`h` / `.H` / `cpp` 都认；
+  // 归一化在 scanProject 内统一做，CLI/MCP 两边同口径）
+  const includeExt =
+    values['include-ext'] !== undefined
+      ? String(values['include-ext'])
+          .split(',')
+          .map((e) => e.trim())
+          .filter((e) => e !== '')
+      : undefined
   const report = await scanProject(
     dryRun ? makeDryRunKb(realKb) : realKb,
     {
@@ -832,6 +858,7 @@ async function kbSync(ctx: CommandContext, args: string[], values: ArgValues): P
       ...(values.book !== undefined ? { book: String(values.book) } : {}),
       ...(values.module !== undefined ? { module: String(values.module) } : {}),
       ...(ignoreDirs !== undefined ? { ignoreDirs } : {}),
+      ...(includeExt !== undefined ? { includeExt } : {}),
     },
   )
 
@@ -864,10 +891,33 @@ async function kbSync(ctx: CommandContext, args: string[], values: ArgValues): P
   }
 
   ctx.stdout(`扫描 ${report.root}`)
+  const included = report.created + report.updated + report.unchanged
+  // 「纳入 M」= 新建+更新+未变；`discovered` = M + 处理失败（门挡的**不在** discovered 里）
   ctx.stdout(
-    `  发现 ${report.discovered} 个可处理文件 → 新建 ${report.created} · 更新 ${report.updated} · 未变 ${report.unchanged} · 跳过 ${report.skipped}`,
+    `  发现 ${report.discovered} 个候选文件 → 纳入 ${included}（新建 ${report.created} · 更新 ${report.updated} · 未变 ${report.unchanged}）· 处理失败 ${report.skipped}`,
   )
   if (report.truncated) ctx.stdout('  ⚠ 已达文件数上限，结果被截断（可调 --max-files 或分批扫描）')
+  /**
+   * 「未纳入 / 处理失败」两行分列（design-v8 §4：dry-run 的对账物）。
+   *
+   * MAJ-2（2026-09-16）：候选内失败（too_large/read_failed/decode_failed/convert_failed/
+   * needs_ocr/index_failed）**同时**计入 `skipped` 与 `by_skip_reason`——旧写法把「未纳入」
+   * 写成全量 `by_skip_reason`，「发现」行又用 `discovered`（也含它们）→ 同一批文件算两遍
+   * （4 文件项目实测打出「发现 2 + 未纳入 3」）。拆开后人读口径与报告恒等式一致：
+   *   `纳入 + 处理失败 + 未纳入（= 门挡两类）= 审视全量`。
+   */
+  const skipRows = Object.entries(report.by_skip_reason).sort((a, b) => b[1] - a[1])
+  const gateRows = skipRows.filter(([reason]) => GATE_SKIP_REASONS.includes(reason))
+  const failedRows = skipRows.filter(([reason]) => !GATE_SKIP_REASONS.includes(reason))
+  const sumRows = (rows: Array<[string, number]>): number => rows.reduce((sum, [, n]) => sum + n, 0)
+  const renderRows = (rows: Array<[string, number]>): string =>
+    rows.map(([reason, n]) => `${SKIP_REASON_LABELS[reason] ?? reason} ${n}`).join(' · ')
+  if (failedRows.length > 0) {
+    ctx.stdout(`  处理失败 ${sumRows(failedRows)} 个: ${renderRows(failedRows)}`)
+  }
+  if (gateRows.length > 0) {
+    ctx.stdout(`  未纳入 ${sumRows(gateRows)} 个: ${renderRows(gateRows)}`)
+  }
   if (report.ignored_dirs.length > 0 || report.ignored_files > 0) {
     const parts: string[] = []
     if (report.ignored_dirs.length > 0) {

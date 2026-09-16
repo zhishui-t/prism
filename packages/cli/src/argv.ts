@@ -79,6 +79,9 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
   prism skill list | install | update | uninstall | validate [name...] [--force]
   prism skill effective --role <r> [--team <t>] [--json]
                                            角色（可选绑定团队）的生效 Skill 集（global∪team∪role + 缺失告警）
+  prism skill categorize <name...> [--category <分类>] [--json]
+                                           给技能打分类（省略 --category / 空串 = 清除；映射落
+                                           <PRISM_HOME>/skill-categories.json，不校验技能是否存在）
 
 目录解析（装配语义简化——角色/团队/Skill 直接住在宿主目录）：
   <PRISM_HOME>/prism.yaml 可选覆盖：roles_dir / teams_dir / skills_dir；
@@ -88,8 +91,8 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
                  显式给出即等同 --harness-root，不再需要 --yes）
   --roles-dir <dir> team 子命令专有：成员校验用的角色库（对齐 MCP team_new|edit 的 roles_dir）
   prism kb import <file.md> [--layer --owner --book --module]
-  prism kb sync <项目名|项目根> [--owner --book --module] [--ignore-dirs <a,b>] [--dry-run]
-                                           扫描项目文档建引用索引（--ignore-dirs 按目录名匹配任意层级，重复出现取最后一个）
+  prism kb sync <项目名|项目根> [--owner --book --module] [--ignore-dirs <a,b>] [--include-ext <a,b>] [--dry-run]
+                                           扫描项目文档建引用索引（默认只扫文档集；--ignore-dirs 按目录名匹配任意层级，重复出现取最后一个；--include-ext 显式纳入额外扩展名，如 h,cpp）
   prism kb search <query> [--layer --book --limit]
   prism kb get <id[@version]>
   prism kb tree [--layer]
@@ -188,6 +191,11 @@ const CLI_OPTIONS = {
   format: { type: 'string' },
   'dry-run': { type: 'boolean' },
   'ignore-dirs': { type: 'string' },
+  /**
+   * `kb sync --include-ext <a,b>`：显式纳入的扩展名（默认只扫文档集；
+   * h/cpp 这类源码扩展纳入后走纯文本直读）
+   */
+  'include-ext': { type: 'string' },
   remove: { type: 'boolean' },
   hard: { type: 'boolean' },
   audit_type: { type: 'string' },
@@ -221,6 +229,8 @@ const CLI_OPTIONS = {
   tags: { type: 'string' },
   /** skill effective --role <r> */
   role: { type: 'string' },
+  /** skill categorize --category <分类>（省略 / 空串 = 清除该项分类） */
+  category: { type: 'string' },
   /** kb structure freeze --modules a,b（显式冻结清单） */
   modules: { type: 'string' },
   /** kb structure generate|freeze --confirmed-by <who> */
@@ -297,6 +307,8 @@ export type ArgValues = {
   format?: string
   'dry-run'?: boolean
   'ignore-dirs'?: string
+  /** `kb sync --include-ext <a,b>`（显式纳入的扩展名，逗号分隔） */
+  'include-ext'?: string
   remove?: boolean
   hard?: boolean
   visibility?: string
@@ -318,6 +330,8 @@ export type ArgValues = {
   note?: string
   tags?: string
   role?: string
+  /** `skill categorize --category <分类>`（省略 / 空串 = 清除该项分类） */
+  category?: string
   modules?: string
   'confirmed-by'?: string
   skills?: string

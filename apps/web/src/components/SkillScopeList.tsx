@@ -81,14 +81,22 @@ function ScopeRow({ label, count, children }: { label: string; count: number; ch
 /**
  * **有效集列表**（正向视图）：按主来源分组渲染 `EffectiveSkill[]`，
  * 同名只出现一次、多来源挂多枚标签；未装行给 lamp + 可复制命令（S4）。
+ *
+ * **组折叠（R-v8-7）**：`foldedSources` 列出的来源组改用 `<details>` 承载（**默认收起**），
+ * 组头沿用既有的 `.rsec-label`（放进 `<summary>`，计数 `{label}（{n}）` 常驻，收起也知道有几条）。
+ * 未列出的组**结构一字不变**（`<div>` + `.rsec-label` + 行）——技能页 `EffectiveSkills` 是既有
+ * 消费方，本参数不传即零变更，折叠只是团队页「防全局技能罗列」的收窄手段。
  */
 export function SkillScopeList({
   skills,
   note,
+  foldedSources = [],
 }: {
   skills: EffectiveSkill[]
   /** 可选的逐行补充（团队有效集用来标注「由哪些成员角色带进来」）。 */
   note?: (s: EffectiveSkill) => React.ReactNode
+  /** 默认**收起**的来源组（团队页只给 `global`，见 R-v8-7）。 */
+  foldedSources?: readonly Scope[]
 }) {
   const t = useT()
   const notInstalled = skills.filter((s) => !s.available)
@@ -109,30 +117,41 @@ export function SkillScopeList({
         {notInstalled.length === 0 && <span className="tag">{t('skills.effective.allInstalled')}</span>}
       </div>
       <div className="scope-groups">
-        {groups.map((g) => (
-          <div key={g.source}>
-            <div className="rsec-label">
-              {t('skills.effective.groupCount', { label: t(SOURCE_LABEL[g.source]), n: g.items.length })}
+        {groups.map((g) => {
+          const label = t('skills.effective.groupCount', { label: t(SOURCE_LABEL[g.source]), n: g.items.length })
+          const items = g.items.map((s) => (
+            <div key={s.name} className={`scope-item${s.available ? '' : ' missing'}`}>
+              <Ref kind="skill" name={s.name} />
+              {s.sources.map((src) => (
+                <span key={src} className="tag">{t(SOURCE_LABEL[src])}</span>
+              ))}
+              <span className="scope-count">{s.available ? t('common.installed') : t('common.notInstalled')}</span>
+              {note !== undefined && note(s)}
+              {!s.available && <span className="scope-lamp" />}
+              {!s.available && (
+                <div className="scope-cmd">
+                  {t('skills.effective.hostNotInstalled')}
+                  <span className="mono">prism skill install {s.name}</span>
+                </div>
+              )}
             </div>
-            {g.items.map((s) => (
-              <div key={s.name} className={`scope-item${s.available ? '' : ' missing'}`}>
-                <Ref kind="skill" name={s.name} />
-                {s.sources.map((src) => (
-                  <span key={src} className="tag">{t(SOURCE_LABEL[src])}</span>
-                ))}
-                <span className="scope-count">{s.available ? t('common.installed') : t('common.notInstalled')}</span>
-                {note !== undefined && note(s)}
-                {!s.available && <span className="scope-lamp" />}
-                {!s.available && (
-                  <div className="scope-cmd">
-                    {t('skills.effective.hostNotInstalled')}
-                    <span className="mono">prism skill install {s.name}</span>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        ))}
+          ))
+          // 折叠组：`<details>` 原生展开态（无 `open` = 默认收起），组头即 `summary`。
+          if (foldedSources.includes(g.source)) {
+            return (
+              <details key={g.source} className="scope-group">
+                <summary className="rsec-label">{label}</summary>
+                {items}
+              </details>
+            )
+          }
+          return (
+            <div key={g.source}>
+              <div className="rsec-label">{label}</div>
+              {items}
+            </div>
+          )
+        })}
       </div>
     </>
   )

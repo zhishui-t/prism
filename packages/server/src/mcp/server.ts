@@ -37,8 +37,10 @@ import {
   resolveDirsFromHome,
   harnessPaths,
   harnessAdapterOf,
+  parseCategorizeInput,
   roleNotFoundMessage,
   roleRendererFor,
+  SkillCategoryStore,
   teamNotFoundMessage,
   uninstallSkillDefinitions,
   updateRoleDefinition,
@@ -70,7 +72,8 @@ import { DEFAULT_SERVE_PORT, ensureServe } from '../serve-control.js'
 
 /**
  * MCP stdio 服务（design.md §4 最小集 + design-v3 §3.4 P6 增量，手写 JSON-RPC 2.0）：
- * 知识库 / 图谱 / 角色 / 团队 / 技能，共 44 个工具（v6：角色与团队补齐增删改查）。
+ * 知识库 / 图谱 / 角色 / 团队 / 技能，共 45 个工具（v6：角色与团队补齐增删改查）。
+ * ⚠ 上面这个数是**对外口径**，由 `packages/server/test/tool-surface-drift.test.ts` 锁定（MIN-1）。
  * 独立进程运行（`node dist/mcp/server.js`），与 prism serve 经 SQLite WAL 并存。
  */
 
@@ -290,6 +293,8 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
   const rolesDir = dirs.rolesDir
   const teamsDir = dirs.teamsDir
   const hostPaths = harnessPaths(harnessRoot, deps.home)
+  /** 技能分类映射（design-v8 §3 F7）：`<PRISM_HOME>/skill-categories.json`，与 HTTP/CLI 同一实现。 */
+  const skillCategories = new SkillCategoryStore(deps.home)
 
   const requireTeam = async (teamId: unknown) => {
     const id = asString(teamId)
@@ -441,15 +446,31 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
    * 内置 Skill 清单（读）：让宿主先「看见有什么可装」，并拿到 `skills_dir` 回填给
    * `prism_skill_install|uninstall`（键名 = 写参数名，与 `roles_dir` / `teams_dir` 同一纪律）。
    * `installed` 由宿主 skills 目录实测（与 `installedSkillNames` 同源）。
+   *
+   * v8 F7（design-v8 §3 / R-v8-5）：每个 skill **合并 `category` 字段**（映射里没有该技能
+   * 则**不加键**——与 HTTP `GET /api/skills` 完全同口径，见 `people.ts` 同名注释）。
    */
   const skillList = async (): Promise<unknown> => {
     const installed = new Set((await installedSkillNames(harnessRoot, deps.home)) ?? [])
+    const categoryOf = await skillCategories.all()
     const skills = listBuiltinSkills().map((s) => ({
       name: s.name,
       description: s.description,
       installed: installed.has(s.name),
+      ...(categoryOf[s.name] !== undefined ? { category: categoryOf[s.name] } : {}),
     }))
     return { count: skills.length, skills, skills_dir: dirs.skillsDir }
+  }
+
+  /**
+   * 技能分类（写）：`{ names: string[], category? }` → 写 `<PRISM_HOME>/skill-categories.json`。
+   * 与 HTTP `POST /api/skills/categorize`、CLI `prism skill categorize` 共用 `SkillCategoryStore`
+   * （入参归一化同为 `parseCategorizeInput`）。`category` 省略 / 空串 = **清除**；`names` 空 → 报错。
+   * **不校验技能是否存在**（映射独立于技能台账；R3 不做审核——分类判断归宿主）。
+   */
+  const skillCategorize = async (args: Record<string, unknown>): Promise<unknown> => {
+    const input = parseCategorizeInput({ names: args.names, category: args.category })
+    return await skillCategories.categorize(input.names, input.category)
   }
 
   /**
@@ -850,7 +871,7 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
     {
       name: 'prism_kb_import',
       description:
-        '把项目文档目录扫描成「引用型」索引（项目文件为真相，Prism 只存索引 + 转换后的检索副本，只读不改原文件）。适合宿主批量导入项目知识：先 import 建索引，再对重点条目用 prism_kb_enrich 补实体/摘要',
+        '把项目文档目录扫描成「引用型」索引（项目文件为真相，Prism 只存索引 + 转换后的检索副本，只读不改原文件）。默认只扫文档集（md/txt/pdf/docx/…；html/htm 与构建文件/配置默认不扫，后者计入 by_skip_reason），需要源码等额外扩展用 include_ext 显式纳入。适合宿主批量导入项目知识：先 import 建索引，再对重点条目用 prism_kb_enrich 补实体/摘要',
       inputSchema: {
         type: 'object',
         properties: {
@@ -864,6 +885,12 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
             description:
               '是否读项目根 .gitignore 并跳过其中忽略的路径（默认 true）。置 false 只按内置目录名过滤',
           },
+          include_ext: {
+            type: 'array',
+            items: { type: 'string' },
+            description:
+              '显式纳入的扩展名（默认只扫文档集：md/txt/pdf/docx/… 但 html/htm 默认不扫）。写法随手：h / .c / cpp 都认；纳入的非 anydoc 扩展走纯文本直读',
+          },
         },
         required: ['path', 'owner'],
       },
@@ -874,6 +901,9 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
           throw new Error('prism_kb_import 需要 { path, owner }')
         }
         const dryRun = args.dry_run === true
+        const includeExt = Array.isArray(args.include_ext)
+          ? args.include_ext.filter((v): v is string => typeof v === 'string')
+          : undefined
         const service = await kb()
         const target = dryRun ? makeDryRunKb(service) : service
         const report = await scanProject(target, {
@@ -885,6 +915,7 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
           ...(typeof args.respect_gitignore === 'boolean'
             ? { respectGitignore: args.respect_gitignore }
             : {}),
+          ...(includeExt !== undefined && includeExt.length > 0 ? { includeExt } : {}),
         })
         return {
           root: report.root,
@@ -893,6 +924,8 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
           updated: report.updated,
           unchanged: report.unchanged,
           skipped: report.skipped,
+          // 未纳入分列（design-v8 §4：纳入/跳过对账物，含被扩展门/文件名表挡掉的）
+          by_skip_reason: report.by_skip_reason,
           truncated: report.truncated,
           missing: report.missing,
           ignored_dirs: report.ignored_dirs,
@@ -1403,6 +1436,27 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
         required: ['skills_dir'],
       },
       call: skillUninstall,
+    },
+    {
+      name: 'prism_skill_categorize',
+      description:
+        '给技能打分类标签（v8 F7）：写 <PRISM_HOME>/skill-categories.json 的 Prism 侧映射（**不碰宿主技能文件、不校验技能是否存在**——分类判断归宿主）。category 省略或空串 = **清除**该技能的分类；names 必填且非空。与 HTTP POST /api/skills/categorize、CLI `prism skill categorize` 同一实现',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          names: {
+            type: 'array',
+            items: { type: 'string' },
+            description: '要设置分类的技能名（必填且非空；可一次多个）',
+          },
+          category: {
+            type: 'string',
+            description: '分类名；省略或空串 = 清除这些技能的分类（不校验技能是否存在）',
+          },
+        },
+        required: ['names'],
+      },
+      call: skillCategorize,
     },
     {
       name: 'prism_role_render',

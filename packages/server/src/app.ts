@@ -134,6 +134,7 @@ export async function createApp(options: AppOptions = {}): Promise<{
   router.add('GET', '/api/graph/path', graph.path)
   router.add('GET', '/api/graph/explain', graph.explain)
   router.add('GET', '/api/graph/affected', graph.affected)
+  router.add('GET', '/api/graph/relations', graph.relations)
   router.add('GET', '/api/graph/god-nodes', graph.godNodes)
   router.add('GET', '/api/graph/summary', graph.summary)
   router.add('POST', '/api/graph/export', graph.exportGraph)
@@ -187,7 +188,12 @@ export async function createApp(options: AppOptions = {}): Promise<{
   router.add('GET', '/api/skills', people.skills)
   router.add('GET', '/api/skills/usage', people.skillUsage)
   router.add('GET', '/api/skills/effective', people.skillsEffective)
-  // 单技能详情必须注册在 usage/effective **之后**（路由器首个匹配即命中，:name 会吞掉它们）
+  // v8 F7（design-v8 §3）：技能分类映射——**必须在 `/api/skills/:name` 之前**注册，
+  // 否则被 `:name` 吞掉（路由器首个匹配即命中；people.ts 有同款顺序注释）。
+  router.add('GET', '/api/skills/categories', people.skillCategories)
+  router.add('POST', '/api/skills/categorize', people.skillCategorize)
+  // 单技能详情必须注册在 usage/effective/categories/categorize **之后**
+  // （路由器首个匹配即命中，:name 会吞掉它们）
   router.add('GET', '/api/skills/:name', people.skill)
   router.add('POST', '/api/skills/install', people.skillInstall)
   router.add('POST', '/api/skills/uninstall', people.skillUninstall)

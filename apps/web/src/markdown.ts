@@ -7,18 +7,21 @@
  *
  * 范围取舍（K8 明细表）：
  * 支持 ATX 标题 `#`–`######`、段落、嵌套 ≤2 层的无序/有序列表、围栏代码块、
- * 行内 code/粗体/斜体（互不嵌套）、链接（仅 `http(s):` 与 `#/`）、引用块、
- * 水平线、GFM 表格（含对齐）、YAML frontmatter。
- * **不支持**（明确）：内联 HTML（按纯文本）、脚注、数学、任务列表、定义列表、
+ * 行内 code/粗体/斜体/删除线（互不嵌套）、链接（仅 `http(s):` 与 `#/`）、引用块、
+ * 水平线、GFM 表格（含对齐）、YAML frontmatter（含 `>`/`|` 块标量）。
+ * **不支持**（明确）：内联 HTML（按纯文本；**独立成段**的 `<!-- … -->` 注释例外，见
+ * `standaloneCommentEnd`）、脚注、数学、任务列表、定义列表、
  * 自动链接裸 URL；图片 `![]()` 降级为「图片引用」文本行（控制台不当图片宿主）。
  */
 
-/** 行内节点：`strong`/`em`/`code` 的内层**不再递归解析**（K8「互不嵌套」）。 */
+/** 行内节点：`strong`/`em`/`code`/`del` 的内层**不再递归解析**（K8「互不嵌套」）。 */
 export type Inline =
   | { type: 'text'; text: string }
   | { type: 'code'; text: string }
   | { type: 'strong'; text: string }
   | { type: 'em'; text: string }
+  /** GFM 删除线 `~~…~~`（F9 病因 7：此前原样裸奔）→ 组件渲染 `<del>`。 */
+  | { type: 'del'; text: string }
   | { type: 'link'; href: string; text: string }
   | { type: 'image'; alt: string; url: string }
 
@@ -57,9 +60,73 @@ export function isSafeHref(href: string): boolean {
   return /^https?:\/\//i.test(href) || href.startsWith('#/')
 }
 
+/** 行首缩进宽度（tab 记 1——frontmatter 用 tab 缩进属病态输入，不引 YAML 的 tab 规则）。 */
+function indentOf(line: string): number {
+  return /^[ \t]*/.exec(line)![0].length
+}
+
+/**
+ * YAML 块标量头（值写在**后续缩进行**里）：`>` / `>-` / `>+` / `>` 带缩进指示符（`>2-`
+ * / `>-2`）以及 `|` 家族。裁剪指示符（`-`/`+`）与缩进数字在本模块都只用于识别，不改变读法。
+ *
+ * ⚠ 只认「指示符本身占满整值」这一种形态（YAML 同款歧义）：想把 `>` / `|` **当普通值**，
+ * 写成引号形式即可（`separator: "|"` 不会被当块标量）。
+ */
+const BLOCK_SCALAR_HEAD = /^([>|])[+\-\d]*$/
+
+/**
+ * 读一个块标量（诊断病因 8①：baoyu-design 技能 `description: >-` 曾把正文首行当**键**、
+ * 把 `>-` 当值，炸穿 kv 表）。
+ *
+ * 读法：从键行往下收编「缩进 > 键行缩进」的行（空行也属于块内），遇到第一条缩进回落
+ * 的非空行即块尾（那才是下一个键）。折叠：`>` 折成一行（空行 = 段落，折成换行），
+ * `|` 原样折行（保留块内相对缩进）。
+ *
+ * 取舍（K8「只做结构化 kv 展示」的延伸）：`+`/`-` 的**尾随换行**语义、锚点、多行折行宽度、
+ * 嵌套结构等 YAML 其余特性一概不做；值统一去掉尾随空行——本模块的消费方是一格表格单元格，
+ * 末尾多一个换行没有可观测差异（`<td>` 里换行会被 HTML 折叠成空格）。
+ */
+function readBlockScalar(
+  lines: string[],
+  start: number,
+  end: number,
+  style: '>' | '|',
+): { value: string; next: number } {
+  const keyIndent = indentOf(lines[start])
+  const raw: string[] = []
+  let blockIndent = -1
+  let i = start + 1
+  for (; i < end; i++) {
+    const line = lines[i]
+    if (line.trim() === '') {
+      raw.push('')
+      continue
+    }
+    const indent = indentOf(line)
+    if (indent <= keyIndent) break
+    if (blockIndent === -1) blockIndent = indent
+    raw.push(line.slice(Math.min(indent, blockIndent)))
+  }
+  while (raw.length > 0 && raw[raw.length - 1].trim() === '') raw.pop()
+  const body = raw.map((l) => (style === '|' ? l.replace(/[ \t]+$/, '') : l.trim()))
+  let value = ''
+  let blank = 0
+  for (const line of body) {
+    if (line.trim() === '') {
+      blank++
+      continue
+    }
+    if (value === '') value = line
+    else value += (style === '|' || blank > 0 ? '\n' : ' ') + line
+    blank = 0
+  }
+  return { value, next: i }
+}
+
 /**
  * 拆出 frontmatter：仅当**首行**为 `---` 且随后存在闭合 `---` 行时生效。
- * 只做一层 `key: value`（去引号），不做嵌套/数组——K8 的定位是「结构化 kv 展示」。
+ * 只做一层 `key: value`（去引号）+ `>`/`|` 块标量（`readBlockScalar`），
+ * 不做嵌套/数组/锚点——K8 的定位是「结构化 kv 展示」。
  */
 function splitFrontmatter(src: string): { frontmatter?: Record<string, string>; body: string } {
   const normalized = src.replace(/^\uFEFF/, '')
@@ -74,12 +141,21 @@ function splitFrontmatter(src: string): { frontmatter?: Record<string, string>; 
   }
   if (end === -1) return { body: normalized }
   const frontmatter: Record<string, string> = {}
-  for (const line of lines.slice(1, end)) {
+  for (let i = 1; i < end; i++) {
+    const line = lines[i]
     const at = line.indexOf(':')
     if (at <= 0) continue
     const key = line.slice(0, at).trim()
     if (key === '') continue
-    let value = line.slice(at + 1).trim()
+    const raw = line.slice(at + 1).trim()
+    const scalar = BLOCK_SCALAR_HEAD.exec(raw)
+    if (scalar !== null) {
+      const read = readBlockScalar(lines, i, end, scalar[1] === '|' ? '|' : '>')
+      frontmatter[key] = read.value
+      i = read.next - 1
+      continue
+    }
+    let value = raw
     if (value.length >= 2 && (value.startsWith('"') || value.startsWith("'")) && value.endsWith(value[0])) {
       value = value.slice(1, -1)
     }
@@ -168,6 +244,18 @@ export function parseInline(text: string): Inline[] {
         continue
       }
     }
+    // 删除线 `~~…~~`（病因 7）。与 `**`/`__` 同款：必须成对且内容非空，
+    // 否则（`~~~~` / 未闭合 `~~a`）整段退回纯文本——`~` 不在任何其他语法里，
+    // 故落回 buf 不会误伤。
+    if (ch === '~' && text[i + 1] === '~') {
+      const end = text.indexOf('~~', i + 2)
+      if (end > i + 2) {
+        flush()
+        out.push({ type: 'del', text: text.slice(i + 2, end) })
+        i = end + 2
+        continue
+      }
+    }
     buf += ch
     i++
   }
@@ -184,6 +272,26 @@ const TABLE_DELIM = /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)*\|?\s*$/
 
 function isBlank(line: string): boolean {
   return line.trim() === ''
+}
+
+/**
+ * 独立成段的 HTML 注释（病因 8②：prism 技能正文印出字面
+ * `<!-- generated by prism (skill: prism) -->`）。
+ *
+ * 判定刻意收紧到「独占段落」这一种形态，返回**下一个块起点**（注释尾行的下一行），
+ * 否则 -1（按纯文本原样显示）：
+ * - 起始行必须以 `<!--` 开头（行内的 `<!--` 依然是纯文本——K8 不含 HTML 语义）；
+ * - 结尾行必须以 `-->` 收尾。`<!-- x --> 正文` 这种「注释后面还拖正文」的写法不剥，
+ *   免得连带吃掉后面的文字（宁可显示一个注释，不可丢正文）；
+ * - 找不到 `-->`（未闭合）不剥——与 `parseInline` 的「未闭合标记符退回纯文本」同一条口径。
+ */
+function standaloneCommentEnd(lines: string[], start: number): number {
+  if (!/^\s*<!--/.test(lines[start])) return -1
+  for (let i = start; i < lines.length; i++) {
+    if (!lines[i].includes('-->')) continue
+    return /-->\s*$/.test(lines[i]) ? i + 1 : -1
+  }
+  return -1
 }
 
 /** 表格行 → 单元格（去首尾空管，保留内部空单元）。 */
@@ -267,6 +375,13 @@ function parseBlocks(lines: string[]): Block[] {
     const line = lines[i]
     if (isBlank(line)) {
       i++
+      continue
+    }
+    // 独立成段的 HTML 注释：整段丢弃（围栏代码块内的注释不受影响——那些行在上面的
+    // fence 分支里被一次性吃掉，根本走不到这里）。
+    const commentEnd = standaloneCommentEnd(lines, i)
+    if (commentEnd !== -1) {
+      i = commentEnd
       continue
     }
     const fence = FENCE.exec(line)

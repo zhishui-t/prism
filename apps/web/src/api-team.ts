@@ -98,6 +98,15 @@ export interface PrismSkill {
   name: string
   description: string
   builtin: boolean
+  /**
+   * 分类（v8 F7 / design-v8 §3、R-v8-5）：服务端把 `PRISM_HOME/skill-categories.json`
+   * 的映射**合并进 `/api/skills` 的每条技能**——**映射里没有该技能则不加这个键**
+   * （与 MCP `prism_skill_list` 同口径），故消费方一律按 `skill.category ?? ''` 读。
+   *
+   * 它是技能页分组的**唯一数据源**：UI 不做「列表 + 独立映射表（`/api/skills/categories`）」
+   * 的二次拼接。分类判断归宿主，Prism 只存映射、只读展示（R2/R3）。
+   */
+  category?: string
 }
 
 export interface ValidationIssue {
@@ -136,6 +145,15 @@ export interface SkillUsage {
   installed: boolean
   roles: string[]
   teams: string[]
+  /**
+   * 分类（v8 F7-1）：服务端已按与 `/api/skills` **完全一致**的口径逐条合并
+   * `PRISM_HOME/skill-categories.json` 的映射——**映射里没有该技能则不加这个键**
+   * （与 `PrismSkill.category` 同源同口径），故消费方一律按 `item.category ?? ''` 读。
+   *
+   * 它是**外部技能**唯一的分类来源：`/api/skills` 只列内置技能，宿主已装的外部技能
+   * 只出现在 usage 路，分组时要靠这里补上（见 `Skills.tsx` 的 `row.category ??=`）。
+   */
+  category?: string
 }
 
 /** 单个技能详情（GET /api/skills/:name）：正文 + 安装路径 + 引用方。 */

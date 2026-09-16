@@ -105,11 +105,21 @@ export {
   type ContextPackOptions,
 } from './kb/context-pack.js'
 export {
+  BUILD_CONFIG_BASENAMES,
+  BUILD_CONFIG_DOT_PREFIXES,
+  BUILD_FILE_NAMES,
+  BUILD_FILE_SUFFIXES,
   DEFAULT_IGNORE_DIRS,
+  DOC_ONLY_EXTENSIONS,
+  GATE_SKIP_REASONS,
+  SKIP_REASONS,
+  WEB_EXTENSIONS,
   extractTitle,
   idFromRel,
+  isBuildFileName,
   makeDryRunKb,
   moduleFromRel,
+  normalizeExtensions,
   scanProject,
   type ScanOptions,
   type ScanReport,
@@ -293,6 +303,14 @@ export {
   type NewTeamBody,
   type UpdateTeamBody,
   type CreateTeamResult,
+} from './roles/index.js'
+
+// 技能分类映射（design-v8 §3 F7：`<PRISM_HOME>/skill-categories.json`；三入口共用）
+export {
+  SkillCategoryStore,
+  parseCategorizeInput,
+  type SkillCategoryMap,
+  type SkillCategorizeResult,
 } from './roles/index.js'
 
 // AGENTS.md 注入块（knowledge-injection.md §5 模式 C）

@@ -64,6 +64,13 @@ export interface CatalogEntry {
   status: string
   risk: string
   tags: string[]
+  /**
+   * 条目的真相文件路径（**索引型**= 项目原件绝对路径，**自有序**= 版次文件
+   * `<knowledgeDir>/…/<book>/<module>/<id>/vNN.md`）。服务端一直返回它
+   * （`packages/knowledge/src/service.ts` 的 `catalog()` → `path: row.path`），
+   * 这里补上声明：**F2 的书内目录树按它建**（`knowledge-logic.ts#buildTree`）。
+   */
+  path: string
   in_degree: number
   out_degree: number
   updated_at: string
@@ -160,6 +167,61 @@ export interface BookStructure {
   frozen_at: string | null
   confirmed_by: string | null
   updated_at: string
+}
+
+/** 调用链关系方向（v8 F4）：`out` = 查询节点为**发出方**（它调用谁）；`in` = **指向**查询节点（谁调用它）。 */
+export type GraphRelationDir = 'in' | 'out'
+
+/**
+ * 一条调用关系（v8 F4，`GET /api/graph/relations` 的 `items[]`）。
+ *
+ * ⚠ `other` 是**节点 id**——寻址（追问）一律用它：`other_label` 不唯一
+ * （本仓 2340 节点仅 2063 个唯一 label）。`file` / `line` 是**调用发出侧**的定位，
+ * 都可能为空串（边与节点都没记 location 时）；空则对应那段不渲染。
+ */
+export interface GraphRelationItem {
+  other: string
+  other_label: string
+  /** 边上的 relation 原值（calls / imports / …） */
+  kind: string
+  file: string
+  /** 纯数字行号串（服务端已剥 `L` 前缀）；定位不到为空串 */
+  line: string
+}
+
+/** 符号名多义命中时的候选（UI 让用户挑；「多义」是 200 非报错）。 */
+export interface GraphRelationCandidate {
+  id: string
+  label: string
+}
+
+/** `GET /api/graph/relations` 的 value（多义时 `node`=查询原串、`total`=0、多出 `candidates`）。 */
+export interface GraphRelations {
+  project: string
+  node: string
+  dir: GraphRelationDir
+  /** 过滤后**全量**边数（不受 `limit` 截断） */
+  total: number
+  limit: number
+  items: GraphRelationItem[]
+  candidates?: GraphRelationCandidate[]
+}
+
+/** `GET /api/graph/path` 的 value（graphify 子进程；`chain` 已由服务端切好）。 */
+export interface GraphPath {
+  project: string
+  raw: string
+  hops: number | null
+  chain: string[]
+  found: boolean
+}
+
+/** `GET /api/graph/affected` 的 value。⚠ `nodes[].label` 是 label 不是 id——**不可**当寻址主键。 */
+export interface GraphAffected {
+  project: string
+  raw: string
+  depth: number | null
+  nodes: Array<{ label: string; relation: string; location: string | null }>
 }
 
 export interface HealthInfo {
@@ -286,10 +348,38 @@ export const api = {
 
   graphProjects: () => request<GraphProject[]>('/api/graph/projects'),
 
-  graphQuery: (project: string, q: string) =>
-    request<{ nodes?: unknown[]; edges?: unknown[]; text?: string }>(
-      `/api/graph/query?project=${encodeURIComponent(project)}&q=${encodeURIComponent(q)}`,
-    ),
+  /**
+   * 调用链关系查询（v8 F4）：`GET /api/graph/relations`。
+   *
+   * `node` 收**节点 id 或符号名**（服务端按 `norm_label` 精确 → 唯一前缀解析）；
+   * `relation` 是逗号分隔的 relation 白名单（如 `'calls,invokes'`），
+   * `undefined` / 空串 = 不传（= 全部关系）。
+   */
+  graphRelations: (params: {
+    project: string
+    node: string
+    dir: GraphRelationDir
+    relation?: string
+    limit?: number
+  }) => {
+    const qs = new URLSearchParams({ project: params.project, node: params.node, dir: params.dir })
+    if (params.relation !== undefined && params.relation !== '') qs.set('relation', params.relation)
+    if (params.limit !== undefined) qs.set('limit', String(params.limit))
+    return request<GraphRelations>(`/api/graph/relations?${qs.toString()}`)
+  },
+
+  /** A→B 调用链（`GET /api/graph/path`，graphify 子进程：首次调用可能数秒）。 */
+  graphPath: (params: { project: string; from: string; to: string }) => {
+    const qs = new URLSearchParams({ project: params.project, from: params.from, to: params.to })
+    return request<GraphPath>(`/api/graph/path?${qs.toString()}`)
+  },
+
+  /** 改动影响谁（`GET /api/graph/affected`，graphify 子进程）。 */
+  graphAffected: (params: { project: string; node: string; depth?: number }) => {
+    const qs = new URLSearchParams({ project: params.project, node: params.node })
+    if (params.depth !== undefined) qs.set('depth', String(params.depth))
+    return request<GraphAffected>(`/api/graph/affected?${qs.toString()}`)
+  },
 
   /** 图谱导出（obsidian/wiki/svg/graphml…） */
   graphExport: (project: string, format: string) =>

@@ -13,6 +13,7 @@ import {
   graphExplain,
   graphGodNodes,
   graphPath,
+  graphQuery,
   graphSummary,
   resolveGraphifyCommand,
   resolvePythonCommand,
@@ -251,6 +252,76 @@ describe('图谱查询封装（假 CLI 注入，验证参数与结构化解析�
       { label: 'handler()', relation: 'calls', location: 'src/app.py:L2' },
       { label: 'util.py', relation: 'imports', location: 'src/util.py:L1' },
     ])
+  })
+
+  /**
+   * F4-1 回归（黑盒 2026-09-16：「改动影响谁」恒显 0 个受影响节点）。
+   *
+   * Windows 下 Python CLI 的 stdout 是 **CRLF**，而 JS 的 `.` 不匹配 `\r`
+   * → 带 `$` 锚的行解析正则（affected/query/explain）全部失配 → 结构化字段恒空。
+   * 上面的 fixture 用 `\n` join，故旧实现照样全绿（「Windows 独有」陷阱）；
+   * 这里按**真实 CLI 形态**用 `\r\n` join 钉死。
+   */
+  describe('CRLF 回归（F4-1：Windows 真实 CLI 形态）', () => {
+    const CRLF = String.fromCharCode(13, 10)
+
+    it('affected：CRLF 输出仍解析出 depth 与节点列表', async () => {
+      const cli = await fakeCli({
+        affected: [
+          'Affected nodes for validate()',
+          'Relations: calls, imports',
+          'Depth: 2',
+          '- handler() [calls] src/app.py:L2',
+          '- util.py [imports] src/util.py:L1',
+          '',
+        ].join(CRLF),
+      })
+      const result = await graphAffected('K:/proj', 'validate()', { env: { GRAPHIFY_BIN: cli } })
+      expect(result.depth).toBe(2)
+      expect(result.nodes).toEqual([
+        { label: 'handler()', relation: 'calls', location: 'src/app.py:L2' },
+        { label: 'util.py', relation: 'imports', location: 'src/util.py:L1' },
+      ])
+    })
+
+    it('query：CRLF 输出仍解析出 NODE / EDGE', async () => {
+      const cli = await fakeCli({
+        query: [
+          'NODE handler() [src=src/app.py loc=L2 community=0]',
+          'EDGE run() --calls--> handler()',
+          '',
+        ].join(CRLF),
+      })
+      const result = await graphQuery('K:/proj', 'run', { env: { GRAPHIFY_BIN: cli } })
+      expect(result.nodes).toEqual([
+        { label: 'handler()', source: 'src/app.py', loc: 'L2', community: '0' },
+      ])
+      expect(result.edges).toEqual(['run() --calls--> handler()'])
+    })
+
+    it('explain：CRLF 输出仍解析出字段与连接', async () => {
+      const cli = await fakeCli({
+        explain: [
+          'Node: handler()',
+          '  ID:        src_app_handler',
+          '  Source:    src/app.py L1',
+          '  Type:      code',
+          '  Community: Community 0',
+          '  Degree:    4',
+          '',
+          'Connections (4):',
+          '  --> validate() [calls] [EXTRACTED] src/app.py:L2',
+          '',
+        ].join(CRLF),
+      })
+      const result = await graphExplain('K:/proj', 'handler()', { env: { GRAPHIFY_BIN: cli } })
+      expect(result.id).toBe('src_app_handler')
+      expect(result.community).toBe('Community 0')
+      expect(result.degree).toBe(4)
+      expect(result.connections).toEqual([
+        { direction: 'out', label: 'validate()', relation: 'calls', location: 'src/app.py:L2' },
+      ])
+    })
   })
 
   it('god-nodes：解析 JSON 输出；非法 JSON 仅返回 raw', async () => {

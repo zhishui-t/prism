@@ -14,6 +14,8 @@ import {
   graphAffected as queryGraphAffected,
   graphGodNodes as queryGraphGodNodes,
   graphSummary as queryGraphSummary,
+  graphRelations as queryGraphRelations,
+  DEFAULT_GRAPH_RELATION_LIMIT,
   graphExport as runGraphExport,
   GRAPHIFY_EXPORT_FORMATS,
 } from '../../graph/graphify.js'
@@ -63,6 +65,7 @@ export function graphRoutes(deps: GraphDeps): {
   path: (ctx: RouteContext) => Promise<Envelope>
   explain: (ctx: RouteContext) => Promise<Envelope>
   affected: (ctx: RouteContext) => Promise<Envelope>
+  relations: (ctx: RouteContext) => Promise<Envelope>
   godNodes: (ctx: RouteContext) => Promise<Envelope>
   summary: (ctx: RouteContext) => Promise<Envelope>
   exportGraph: (ctx: RouteContext) => Promise<Envelope>
@@ -208,6 +211,36 @@ export function graphRoutes(deps: GraphDeps): {
     return ok({ project: project.project, ...result })
   }
 
+  /**
+   * 调用链关系查询（v8 F4）：`GET /api/graph/relations?project=&node=&dir=in|out[&relation=&limit=]`。
+   *
+   * 直读 `<root>/graphify-out/graph.json` 内存过滤（同 summary 先例），**不起 graphify 子进程**。
+   * `node` 为节点 id 或符号名（服务端按 `norm_label` 精确 → 唯一前缀解析；多义回 candidates）。
+   */
+  const relations = async (ctx: RouteContext): Promise<Envelope> => {
+    const node = ctx.query.get('node')?.trim() ?? ''
+    if (node === '') {
+      throw new PrismError('bad_request', '缺少 node 参数')
+    }
+    const dir = ctx.query.get('dir')?.trim() ?? ''
+    if (dir !== 'in' && dir !== 'out') {
+      throw new PrismError('bad_request', `dir 必须为 in 或 out: ${dir === '' ? '(缺省)' : dir}`)
+    }
+    const limitRaw = ctx.query.get('limit')?.trim() ?? ''
+    const limit =
+      limitRaw === '' ? DEFAULT_GRAPH_RELATION_LIMIT : parsePositiveInt(limitRaw, 'limit', MAX_RELATION_LIMIT)
+    const relationFilter = parseRelationFilter(ctx.query.get('relation'))
+    const project = await requireProject(ctx)
+    await ensureGraph(project)
+    const result = await queryGraphRelations(project.root, {
+      node,
+      dir,
+      limit,
+      ...(relationFilter !== undefined ? { relations: relationFilter } : {}),
+    })
+    return ok({ project: project.project, ...result })
+  }
+
   const godNodes = async (ctx: RouteContext): Promise<Envelope> => {
     const project = await requireProject(ctx)
     await ensureGraph(project)
@@ -263,7 +296,28 @@ export function graphRoutes(deps: GraphDeps): {
     return await deps.registry.get(name)
   }
 
-  return { projects, build, jobStatus, merge, query, path, explain, affected, godNodes, summary, exportGraph, status }
+  return { projects, build, jobStatus, merge, query, path, explain, affected, relations, godNodes, summary, exportGraph, status }
+}
+
+/**
+ * `limit` 上限（契约只规定「缺省 200」，未规定上限）：取 10000 —— 高于本仓全量边数
+ * （7103），故「想要全量」的调用不会被这道闸拦下，同时挡住畸形大数。
+ */
+const MAX_RELATION_LIMIT = 10_000
+
+/**
+ * `relation=calls,invokes` → `['calls','invokes']`（trim + 去空）；缺省/全空 → undefined（不过滤）。
+ *
+ * **不对未知名报错**：关系取值随图谱而变，UI 四模式默认 `calls,invokes` 里的 `invokes`
+ * 在部分图谱（如本仓）并不存在——报 400 会让默认查询直接失败。
+ */
+function parseRelationFilter(raw: string | null): string[] | undefined {
+  if (raw === null) return undefined
+  const list = raw
+    .split(',')
+    .map((item) => item.trim())
+    .filter((item) => item !== '')
+  return list.length > 0 ? list : undefined
 }
 
 /** 查询命令共用选项（cwd=项目根、超时与 env 透传）。 */

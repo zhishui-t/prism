@@ -1,0 +1,10 @@
+code-review-v8 门禁通过（2026-09-16）
+
+判定：有条件通过 → 复检全过，正式放行。
+- BLOCKER 0 / MAJOR 2（均已修复并核销）/ MINOR 7（全落）/ NIT 17（记录不派修）。
+- 门禁：pnpm typecheck / lint / build / test = 136 文件 1391 passed 2 skipped 0 失败；vitest apps/web/test = 33 文件 377 passed。
+- 复核：WorkBuddy deepseek-v4.1-flash / effort max（job-9329ec80c0b0）10/10 项核销通过。
+- 详情：.agent-team/code-review-v8.md（含两节修复记录与复检判定）。
+- 非阻断备注：MIN-7 修复记录的测试出处勘误（真锁 = packages/knowledge/test/scan.test.ts）；
+  Git Bash 下 vitest web 假红为 cwd 盘符大小写双 React 环境问题，非代码回归。
+- 验收条件仍开放（QA/e2e 批，不属本门禁）：F9 双主题黑盒截图、F2 >2 级真实目录实测。

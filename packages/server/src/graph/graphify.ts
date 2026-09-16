@@ -352,8 +352,20 @@ async function runGraphQuery(
     ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
     ...(options.env !== undefined ? { env: options.env } : {}),
   })
+  /**
+   * 行尾**单点归一**（F4-1，2026-09-16 黑盒）：Windows 下 Python CLI 的 stdout 是 **CRLF**，
+   * 而 JS 的 `.` 不匹配 `\r`——本文件里带 `$` 锚的行解析正则（query 的 `^NODE …$`、
+   * affected 的 `^- …$`、explain 的连接行）**一律**在没有 `m` 标志时锚到输入末尾，
+   * 于是每条命中行都差一个 `\r` 而失配 → 结构化字段恒空（`nodes:[]`），
+   * 只有不带 `$` 的 `Depth:` 能解析（黑盒现象即「raw 有命中行、nodes 恒空」）。
+   * 单元 fixture 若用 `\n` join 则看不出来，故按真实 CLI 形态用 `\r\n` 钉死（见 graphify.test.ts）。
+   *
+   * 只此一处归一，下游 graphQuery/graphPath/graphExplain/graphAffected 全部受益——
+   * **不要**在各解析点各自剥 `\r`。`raw` 回显随之变成 LF（调试用字段，跨平台稳定，可接受）。
+   */
+  const normalize = (text: string): string => text.replace(/\r\n/g, '\n')
   // Python 版会在 stderr 打 skill 版本告警，不视为错误
-  return { stdout: result.stdout, stderr: result.stderr }
+  return { stdout: normalize(result.stdout), stderr: normalize(result.stderr) }
 }
 
 /** BFS/DFS 遍历查询（`graphify query "<q>" --graph <path>`）。 */
@@ -563,6 +575,275 @@ export async function readCodeGraph(root: string): Promise<CodeGraph> {
       cause: error instanceof Error ? error.message : String(error),
     })
   }
+}
+
+// ===== 调用链关系查询（v8 F4：直读 graph.json 内存过滤，零子进程） =====
+
+/** 关系方向：`out` = 查询节点作为**发出方**（它调用谁）；`in` = **指向**查询节点（谁调用它）。 */
+export type GraphRelationDir = 'in' | 'out'
+
+/** items 缺省上限（hub 节点入边可上千；`total` 恒为过滤后全量计数，不受本值截断）。 */
+export const DEFAULT_GRAPH_RELATION_LIMIT = 200
+
+/** 一条关系（对端符号 + 调用发出侧 file:line；design-v8 §2 F4）。 */
+export interface GraphRelationItem {
+  /** 对端节点 id（**寻址一律用 id**——label 不唯一：本仓 2340 节点仅 2063 个唯一 label） */
+  other: string
+  /** 对端节点 label（渲染用；对端节点缺失 → 空串） */
+  other_label: string
+  /** 边上的 relation 原值（calls / imports_from / …） */
+  kind: string
+  /** 调用发出侧文件（相对项目根）；定位不到 → 空串 */
+  file: string
+  /** 调用发出侧行号（纯数字字符串，剥 `L` 前缀）；定位不到 → 空串 */
+  line: string
+}
+
+/** 符号名多义命中时的候选（UI 让用户挑）。 */
+export interface GraphNodeCandidate {
+  id: string
+  label: string
+}
+
+export interface GraphRelationsResult {
+  /**
+   * 命中节点 id；**多义时为查询原串**（无节点可回显，由 UI 用 candidates 二次寻址）。
+   * 渲染/追问一律以本字段与 `other`（都是 id）为准。
+   */
+  node: string
+  dir: GraphRelationDir
+  /** 过滤后全量边数（不受 `limit` 截断） */
+  total: number
+  limit: number
+  items: GraphRelationItem[]
+  /** **仅**多义命中时出现；此时 `node`=原串、`total`=0、`items`=[] */
+  candidates?: GraphNodeCandidate[]
+}
+
+export interface GraphRelationsQuery {
+  /** graph.json 节点 id，或符号名（按 `norm_label` 精确 → 唯一前缀解析） */
+  node: string
+  dir: GraphRelationDir
+  /** relation 白名单（精确匹配边的 `relation` 原值）；缺省/空 = 不过滤 */
+  relations?: string[]
+  /** items 上限；`total` 恒为全量计数 */
+  limit: number
+}
+
+/**
+ * 调用链关系查询（v8 F4）——**直读** `<root>/graphify-out/graph.json` 内存过滤，
+ * **不起 graphify 子进程**（同 `graphSummary` 先例；本仓 2340 节点 / 7103 边，毫秒级）。
+ *
+ * file:line 取**边上的调用发出侧**（`source_file` / `source_location`，形如 `"L52"`）：
+ * `dir=out` 即查询节点的调用处、`dir=in` 即调用方的调用处。边缺 location 时降级用
+ * **查询节点自身**的 location（file 同取该节点的 `source_file`，二者始终同源），都缺则留空串。
+ *
+ * @throws PrismError `graph_not_found` 产物缺失（既有先例）；`bad_request` 产物不可解析；
+ *                    `not_found` 节点解析 0 命中。
+ */
+export async function graphRelations(
+  root: string,
+  query: GraphRelationsQuery,
+): Promise<GraphRelationsResult> {
+  const document = await readGraphDocument(root)
+  const nodes = readGraphNodes(document)
+  const edges = readGraphEdges(document)
+
+  const resolved = resolveGraphNode(nodes, query.node)
+  if (resolved.kind === 'ambiguous') {
+    return {
+      node: query.node,
+      dir: query.dir,
+      total: 0,
+      limit: query.limit,
+      items: [],
+      candidates: resolved.candidates,
+    }
+  }
+  if (resolved.kind === 'missing') {
+    throw new PrismError('not_found', `图谱中没有节点: ${query.node}（可先在 /api/graph/query 里找符号名）`)
+  }
+
+  const target = resolved.node
+  const selfKey = query.dir === 'out' ? 'source' : 'target'
+  const peerKey = query.dir === 'out' ? 'target' : 'source'
+  const labelById = new Map(nodes.map((n) => [n.id, n.label]))
+  const allowed =
+    query.relations !== undefined && query.relations.length > 0 ? new Set(query.relations) : null
+
+  const items: GraphRelationItem[] = []
+  for (const edge of edges) {
+    if (asText(edge[selfKey]) !== target.id) continue
+    const kind = asText(edge['relation'])
+    if (allowed !== null && !allowed.has(kind)) continue
+    const other = asText(edge[peerKey])
+    const location = relationLocation(edge, target)
+    items.push({
+      other,
+      other_label: labelById.get(other) ?? '',
+      kind,
+      file: location.file,
+      line: location.line,
+    })
+  }
+  items.sort(compareRelationItems)
+  return {
+    node: target.id,
+    dir: query.dir,
+    total: items.length,
+    limit: query.limit,
+    items: items.slice(0, query.limit),
+  }
+}
+
+/** 读 graph.json（缺失 → graph_not_found；不可解析/非对象 → bad_request）。 */
+async function readGraphDocument(root: string): Promise<Record<string, unknown>> {
+  const path = defaultGraphPath(root)
+  let raw: string
+  try {
+    raw = await readFile(path, 'utf-8')
+  } catch {
+    throw new PrismError('graph_not_found', `图谱不存在: ${path}（请先建图）`, { path })
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch (error) {
+    throw new PrismError('bad_request', `图谱产物不可解析: ${path}`, {
+      path,
+      cause: error instanceof Error ? error.message : String(error),
+    })
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new PrismError('bad_request', `图谱产物结构不可识别: ${path}`, { path })
+  }
+  return parsed as Record<string, unknown>
+}
+
+/** 节点记录（容忍字段缺失/异形；无 id 的条目丢弃）。 */
+interface GraphNodeRecord {
+  id: string
+  label: string
+  norm_label: string
+  source_file: string
+  source_location: string
+}
+
+function readGraphNodes(document: Record<string, unknown>): GraphNodeRecord[] {
+  const nodes: GraphNodeRecord[] = []
+  for (const item of asRecords(document['nodes'])) {
+    const id = asText(item['id'])
+    if (id === '') continue
+    nodes.push({
+      id,
+      label: asText(item['label']),
+      norm_label: asText(item['norm_label']),
+      source_file: asText(item['source_file']),
+      source_location: asText(item['source_location']),
+    })
+  }
+  return nodes
+}
+
+/**
+ * 边：Python graphify（networkx node_link_data）实测写在 **`links`**（本仓 7103 条边），
+ * 旧版/合并产物可能写 `edges`——两处都认（同 `graphSummary` 口径）。
+ *
+ * 取**非空**的那一边：两键并存且 `edges` 为空数组时，简单 `??` 会静默返回空结果
+ * （「产物有边、接口报 0 条」这类静默降级最难查）。
+ */
+function readGraphEdges(document: Record<string, unknown>): Array<Record<string, unknown>> {
+  const edges = asRecords(document['edges'])
+  return edges.length > 0 ? edges : asRecords(document['links'])
+}
+
+function asRecords(value: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(value)) return []
+  return value.filter(
+    (item): item is Record<string, unknown> => item !== null && typeof item === 'object' && !Array.isArray(item),
+  )
+}
+
+function asText(value: unknown): string {
+  return typeof value === 'string' ? value : ''
+}
+
+type GraphNodeResolution =
+  | { kind: 'found'; node: GraphNodeRecord }
+  | { kind: 'ambiguous'; candidates: GraphNodeCandidate[] }
+  | { kind: 'missing' }
+
+/**
+ * 节点解析（契约顺序，逐级降级）：
+ * ① 精确 `id` 命中即用（**区分大小写**——id 是寻址主键）；
+ * ② 否则 `norm_label` 精确匹配（查询串先 `toLowerCase()` 归一：实测 `norm_label ≡ label.toLowerCase()`）；
+ * ③ 仍未命中 → `norm_label` **前缀**匹配；
+ * ④ 命中恰好 1 个 → 用它；⑤ ≥2 个 → 多义（候选交 UI 挑）；⑥ 0 个 → 无此节点。
+ * ②③ 都可能多义（本仓 2056 个唯一 norm_label / 2340 节点，164 个 label 重名）。
+ */
+function resolveGraphNode(nodes: GraphNodeRecord[], query: string): GraphNodeResolution {
+  const exactId = nodes.find((n) => n.id === query)
+  if (exactId !== undefined) {
+    return { kind: 'found', node: exactId }
+  }
+  const needle = query.toLowerCase()
+  const exact = nodes.filter((n) => n.norm_label === needle)
+  if (exact.length > 0) {
+    return singleResolution(exact)
+  }
+  return singleResolution(nodes.filter((n) => n.norm_label !== '' && n.norm_label.startsWith(needle)))
+}
+
+function singleResolution(matches: GraphNodeRecord[]): GraphNodeResolution {
+  if (matches.length === 0) return { kind: 'missing' }
+  if (matches.length === 1) return { kind: 'found', node: matches[0]! }
+  return {
+    kind: 'ambiguous',
+    candidates: matches
+      .map((n) => ({ id: n.id, label: n.label }))
+      .sort((a, b) => (a.label !== b.label ? (a.label < b.label ? -1 : 1) : a.id < b.id ? -1 : a.id > b.id ? 1 : 0)),
+  }
+}
+
+/** 调用点 file:line：**边 → 查询节点 → 都缺留空串**（file 与 line 始终同源，不拼两家）。 */
+function relationLocation(
+  edge: Record<string, unknown>,
+  node: GraphNodeRecord,
+): { file: string; line: string } {
+  const edgeLine = stripLinePrefix(asText(edge['source_location']))
+  if (edgeLine !== '') {
+    return { file: asText(edge['source_file']), line: edgeLine }
+  }
+  const nodeLine = stripLinePrefix(node.source_location)
+  if (nodeLine !== '') {
+    return { file: node.source_file, line: nodeLine }
+  }
+  return { file: '', line: '' }
+}
+
+/** `"L52"` → `"52"`（剥前缀得纯数字串）；已是纯数字原样；其它形态原样返回（不猜）。 */
+function stripLinePrefix(raw: string): string {
+  const match = /^[Ll]?(\d+)$/.exec(raw)
+  return match !== null ? match[1]! : raw
+}
+
+/** items 稳定排序 `(file, line, other)`——保证幂等响应。 */
+function compareRelationItems(a: GraphRelationItem, b: GraphRelationItem): number {
+  if (a.file !== b.file) return a.file < b.file ? -1 : 1
+  const byLine = compareLine(a.line, b.line)
+  if (byLine !== 0) return byLine
+  return a.other < b.other ? -1 : a.other > b.other ? 1 : 0
+}
+
+/** 行号按**数值**比较（L9 排在 L52 前；空行号居首），非数字形态回落字典序。 */
+function compareLine(a: string, b: string): number {
+  if (a === b) return 0
+  if (a === '') return -1
+  if (b === '') return 1
+  const left = Number(a)
+  const right = Number(b)
+  if (Number.isInteger(left) && Number.isInteger(right)) return left - right
+  return a < b ? -1 : 1
 }
 
 // ===== 导出命令封装（graphify export <format>） =====

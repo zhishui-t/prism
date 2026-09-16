@@ -2,9 +2,9 @@ import { readdir } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { PrismError } from '@prism/core'
+import { PrismError, prismHome } from '@prism/core'
 import { installSkills, listBuiltinSkills, uninstallSkills, validateSkill } from '@prism/skills'
-import { loadEffectiveSkills } from '@prism/server'
+import { loadEffectiveSkills, SkillCategoryStore } from '@prism/server'
 
 import type { ArgValues, CommandContext } from '../argv.js'
 import { dirProvenanceLabel, guardWriteTarget, resolveTargetDirs } from '../argv.js'
@@ -22,6 +22,9 @@ export async function runSkill(ctx: CommandContext, args: string[], values: ArgV
   switch (sub) {
     case 'effective':
       return await skillEffective(ctx, values, dirs)
+
+    case 'categorize':
+      return await skillCategorize(ctx, values, rest)
 
     case 'list': {
       const skills = listBuiltinSkills()
@@ -140,9 +143,46 @@ export async function runSkill(ctx: CommandContext, args: string[], values: ArgV
 
     default:
       ctx.stderr(
-        `未知子命令: skill ${sub ?? ''}\n用法: prism skill list | install | update | uninstall | validate [name...] | effective --role <r> [--team <t>] [--harness-root <dir>] [--force]`,
+        `未知子命令: skill ${sub ?? ''}\n用法: prism skill list | install | update | uninstall | validate [name...] | effective --role <r> [--team <t>] | categorize <name...> [--category <分类>] [--harness-root <dir>] [--force]`,
       )
       return 1
+  }
+}
+
+/**
+ * `prism skill categorize <name...> [--category <分类>] [--json]`（design-v8 §3 F7 CLI 面）。
+ *
+ * 多名称参数；`--category` **省略或空串 = 清除**这些技能的分类；`names` 必须非空
+ * （空 → 用法错误，退出非零）。写 `<PRISM_HOME>/skill-categories.json`——与 HTTP
+ * `POST /api/skills/categorize`、MCP `prism_skill_categorize` 共用 `SkillCategoryStore`
+ * （同一实现，故三入口写读一致由单点保证）。**不校验技能是否存在**（R3 不做审核）。
+ */
+async function skillCategorize(ctx: CommandContext, values: ArgValues, rest: string[]): Promise<number> {
+  const names = rest.filter((n) => !n.startsWith('-'))
+  const store = new SkillCategoryStore(ctx.home ?? prismHome())
+  try {
+    const result = await store.categorize(names, values.category)
+    if (ctx.json) {
+      ctx.stdout(JSON.stringify({ ok: true, value: { ...result, file: store.file } }))
+      return 0
+    }
+    for (const name of result.updated) {
+      ctx.stdout(`  已分类 ${name} → ${result.category}`)
+    }
+    for (const name of result.cleared) {
+      ctx.stdout(`  已清除 ${name} 的分类`)
+    }
+    ctx.stdout(
+      result.category === null
+        ? `已清除 ${result.cleared.length} 个技能的分类 → ${store.file}`
+        : `已分类 ${result.updated.length} 个技能 → ${result.category}（${store.file}）`,
+    )
+    return 0
+  } catch (error) {
+    const code = error instanceof PrismError ? error.code : 'bad_request'
+    ctx.stderr(`错误 [${code}] ${error instanceof Error ? error.message : String(error)}`)
+    ctx.stderr('用法: prism skill categorize <name...> [--category <分类>]（names 不能为空；省略 --category = 清除）')
+    return 1
   }
 }
 

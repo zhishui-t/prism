@@ -21,6 +21,30 @@ export function firstSentence(text: string, max = 90): string {
   return head.length > max ? `${head.slice(0, max).trimEnd()}…` : head
 }
 
+/**
+ * 剥掉强强调标记（F8-1：角色「核心第一原则」块渲染字面 `**`）。
+ *
+ * 背景：原则块是**纯文本**强调块——强调由 `--sheet-2` 底 + 左侧 `--buckram` 引线表达
+ * （`--fs-300`，**没有粗体语义**），渲染走 `firstSentence` 截断而**不是** `parseInline`；
+ * 源文本里的 `**…**` 只是作者的写作习惯。而抽取在**首个句号**处截断，于是
+ * `**方向未定不动手，抛光不改方向。** 每个视觉决定…` 只剩前导 `**`、闭合的 `**` 被截掉
+ * ⇒ 8 张角色卡里 7 张显示裸 `**`。
+ *
+ * 裁决（问句：不成对的 `**` 回退原样输出，还是清理？）——**清理**，且**成对也剥**：
+ * 1. `markdown.ts#parseInline` 对不成对标记的容错是「退回字面文本」——那是**给 markdown 正文**
+ *    的口径；本块是纯文本，字面输出**正是本缺陷本身**，不能拿它当挡箭牌；
+ * 2. 本块没有粗体语义：留着标记既不是渲染也不是原文，而是**半截标记**；「成对保留、不成对剥」
+ *    还会在同一块里造出两种口径（同一段文本因截断与否表现不同）；
+ * 3. ⇒ 标记一律不进这块文本：成对 / 不成对同待遇，删掉 `**`、留下里面的字。
+ *
+ * 实现上只吃**两个及以上连续**的星号（`***` 这类粗斜体也算标记，一并吃掉），**单个 `*` 不动**
+ * ——同一个字符在纯文本里可能是乘号 / 通配 / 脚注符，且它不是本缺陷的形态。
+ * 其余标记（`_` / 反引号 / 链接）不在本批范围，本函数只做这一件事。
+ */
+export function stripStrongMarkers(text: string): string {
+  return text.replace(/\*{2,}/g, '')
+}
+
 export function PageHead({
   title,
   sub,
@@ -140,12 +164,24 @@ export function Drawer({
   children,
   footer,
   width,
+  maxVw = 96,
 }: {
   title: ReactNode
   onClose: () => void
   children: ReactNode
   footer?: ReactNode
   width?: number
+  /**
+   * 宽度上限（视口宽百分比）。默认 96 保持既有口径（`width: Npx` + `max-width: 96vw`，
+   * 等价于原先的 `min(Npx, 96vw)`）。R-v8-1：角色**详情**抽屉改 `min(680px, 72vw)`
+   * ——`72vw` 这个上限原先表达不出来，故加此参数（宽度口径仍只有这一处，调用点不拼 CSS）。
+   * `width` 未给时不渲染 inline style，落回 `.drawer` 的 CSS 默认宽度。
+   *
+   * 为何不直接写 `width: min(Npx, Mvw)`：两个声明（`width` + `max-width`）在语义上完全等价，
+   * 但 `min()` 在 happy-dom 的 inline style 里会被整条丢掉（实测 `style` 属性为 null），
+   * 拆开后宽度契约才在 DOM 测试里可断言。
+   */
+  maxVw?: number
 }) {
   const t = useT()
   const box = useRef<HTMLElement>(null)
@@ -177,7 +213,7 @@ export function Drawer({
         ref={box}
         tabIndex={-1}
         className="drawer"
-        style={width !== undefined ? { width: `min(${width}px, 96vw)` } : undefined}
+        style={width !== undefined ? { width: `${width}px`, maxWidth: `${maxVw}vw` } : undefined}
       >
         <div className="drawer-head">
           <h3>{title}</h3>

@@ -19,6 +19,7 @@ export function CountLine({
   lamp = false,
   size = 'compact',
   bare = false,
+  title,
 }: {
   label: ReactNode
   /** 省略 = 只画「标签 + 引线」（纯分组标签）。 */
@@ -26,9 +27,14 @@ export function CountLine({
   lamp?: boolean
   size?: 'compact' | 'section'
   bare?: boolean
+  /**
+   * 口径说明（F8 §1.5 #4）：原先以 `--fs-100` 常驻在分段头下方的两行解释，降级到这里悬停可见
+   * ——信息不减，但不再占抽屉首屏。`Ref` 的 `title` 同此口径（`roles.knowledge.filter`）。
+   */
+  title?: string
 }) {
   return (
-    <div className={`count-line ${size}${bare ? ' bare' : ''}`}>
+    <div className={`count-line ${size}${bare ? ' bare' : ''}`} title={title}>
       <span className="count-label">{label}</span>
       <span className="count-leader" />
       {count !== undefined && <span className="count-num">{count}</span>}

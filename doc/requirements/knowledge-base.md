@@ -442,19 +442,43 @@ uploaded → converting → converted → previewing → active
 **边界**：Prism 不调 LLM、不做审核——宿主产出结果后直付回写（确定性写入）。
 无队列、无预算、无积压（原 §12.5 已废）。
 
-### 6.6 项目扫描的范围过滤（2026-09-14：接入 `.gitignore`）
+### 6.6 项目扫描的范围过滤（2026-09-14 接入 `.gitignore`；2026-09-16 按 F1 实现同步门序）
 
-`prism kb sync` / MCP `prism_kb_import` 走同一套 `scanProject`，逐层 walk 时按**三道**过滤：
+`prism kb sync` / MCP `prism_kb_import` 走同一套 `scanProject`，逐层 walk 时按以下顺序判定：
 
 | 顺序 | 过滤 | 说明 |
 | :--- | :--- | :--- |
-| 1 | 扩展名白名单 | `@prism/knowledge` 的 `isSupported`；不支持的格式**不读入内存** |
-| 2 | 内置目录名 `DEFAULT_IGNORE_DIRS` | 18 个通用名（`.git` / `.prism` / `node_modules` / `dist` / `build` / `out` / `target` / `.next` / `.nuxt` / `coverage` / `.venv` / `venv` / `__pycache__` / `graphify-out` / `.cache` / `.idea` / `.vscode` / `vendor`），**任意层级**生效 |
-| 3 | 项目根 `.gitignore` | 本次新增。见下 |
+| 0 | 目录级：内置目录名 + `ignoreDirs` | `DEFAULT_IGNORE_DIRS` 18 个通用名（`.git` / `.prism` / `node_modules` / `dist` / `build` / `out` / `target` / `.next` / `.nuxt` / `coverage` / `.venv` / `venv` / `__pycache__` / `graphify-out` / `.cache` / `.idea` / `.vscode` / `vendor`），**任意层级**生效；命中即不再往下走（该目录不计账） |
+| 1 | **文件名级跳过表** → `by_skip_reason.build_file` | `isBuildFileName()`：`CMakeLists.txt` 的扩展名恰好是 `.txt`（在默认集里）、`Makefile` 连扩展名都没有——**扩展门拦不住**，所以本表**先于**扩展门。判定**大小写不敏感**（`CMakeLists.TXT` 同样命中）。表见 `packages/server/src/kb/scan.ts` 的 `BUILD_FILE_NAMES` / `BUILD_FILE_SUFFIXES` / `BUILD_CONFIG_*` |
+| 2 | **扩展门** → `by_skip_reason.ext_not_included` | 生效集 = `DOC_ONLY_EXTENSIONS`（= anydoc 支持集 **− {html, htm}**，即 html/h5 **默认不扫**）**∪** `--include-ext` / `include_ext`（归一化：trim + 小写 + 去前导点，如 `' H '`/`.c`/`'CPP'` → `.h`/`.c`/`.cpp`）。不在集内即挡下 |
+| 3 | `.gitignore` | 逐层读**根 + 各级子目录**并叠加。见下 |
+
+**过了门之后（候选内，= `discovered`）怎么记账**：
+
+- **纳入**：默认集内的格式走 anydoc 转换；`include_ext` 纳入的**集外扩展**（`.h`/`.c` 等）
+  走**纯文本直读**——不能落 `toMarkdown`，那会报 `unsupported` 一律 skipped（参数就形同虚设）。
+  结果计入 `created` / `updated` / `unchanged`；
+- **处理失败**：`too_large` / `read_failed` / `decode_failed` / `convert_failed` / `needs_ocr` /
+  `index_failed` —— 计入 `skipped`，**同时**按原因计入 `by_skip_reason`（`files[].reason` 有逐文件文案）；
+- 纯文本直读的 utf-8 解码是 **`fatal`** 的：坏字节抛错 → `decode_failed`；
+  **无 BOM 的 UTF-16** 解不出错、但正文只剩 NUL 串 —— 同样按 `decode_failed` 挡下，不入库。
+
+**对账恒等式**（`--dry-run` 的口径）：
+
+```
+(created + updated + unchanged) + Σ by_skip_reason = 审视全量
+```
+
+`by_skip_reason` 分列**两类**：候选之外被门挡的（`ext_not_included` / `build_file`）与
+候选之内处理失败的（其余键）。CLI 人读输出据此拆成「处理失败」「未纳入」两行，故
+`纳入 + 处理失败 + 未纳入 = 审视全量`——**别**拿 `discovered` 去加**全量** `by_skip_reason`
+（候选内失败会双计）。「审视全量」只含**逐个子项判定过**的文件，**不含** `.gitignore` 剪枝
+（另计 `ignored_dirs` / `ignored_files`）、内置忽略目录、非普通文件（软链等）与被 `maxFiles` 截断的部分。
 
 **`.gitignore` 的口径**：
 
-- 只读**项目根**这一处（子目录里的多级 `.gitignore` **有意不做**——收益小、要先递归才发现）；
+- **逐层读根 + 各级子目录**并叠加（深层「命中」才覆盖浅层结论；每层只作用于该目录的**后代**，
+  管不到自己）——2026-09-14 当晚由「只读项目根」扩到多级；
 - 覆盖常用语义：注释 / 空行 / 行尾空格、`!` 取反、尾部 `/` 仅目录、含 `/` 锚定根、
   `*`（不跨 `/`）/ `?` / `[...]` / `**`；
 - **不覆盖**：`.git/info/exclude`、`core.excludesFile`（全局）、`--no-index` 等——需要时用 `ignoreDirs` 追加；
@@ -466,6 +490,29 @@ uploaded → converting → converted → previewing → active
 > **红线澄清**：`scan.ts` 原写「不读 git」，指的是**不介入版本控制**——不执行 `git` 命令、不读 `.git/`、
 > 不问分支与提交（对应 R8）。`.gitignore` 只是一个普通文本清单，描述「哪些路径不算项目内容」，
 > 属于**扫描范围**问题，不构成越界。
+
+### 6.7 已入库杂项的清理指引（不追删，只给配方）
+
+F1 的门序（§6.6）**只管新扫描**：门序上线前已入库的杂项（cmake / h5 / 旧 html / 配置等）
+**不追删**——R7 文件为真相，「删什么」是人的治理动作，Prism 不替用户决定（也不新增批量删除面）。
+要清就自己挑出来、逐条 `remove`：
+
+```bash
+prism kb tree --layer project        # ① 定位层/书（含各级 module 条目计数）
+# ② 按书取条目清单（catalog 带 id / path / type / status，limit ≤ 5000）：
+#    HTTP  GET /api/kb/catalog?layer=project&book=<书>&limit=5000
+#    MCP   prism_kb_catalog { layer, book, limit }
+#    扩展名过滤在输出上做（catalog 无扩展名参数，看 path 后缀筛 id）
+prism kb remove <id>                 # ③ 逐 id 软删：status=deprecated，保留审计与文件
+prism kb remove <id> --hard --yes    # ④ 确认连文件一并清掉时才硬删（被引用则拒绝）
+```
+
+- **CLI 面没有 `prism kb catalog`**（catalog 只有 HTTP `/api/kb/catalog` 与 MCP `prism_kb_catalog`
+  两面）；`prism kb tree` 只回书/模块计数，不列条目——故上表第 ② 步走 HTTP 或 MCP；
+- 软删随时可 `prism kb restore <id>` 恢复；硬删连版次/边/文件一起移除，且**有引用时禁止**
+  （先解引用，或改用默认软删）；
+- 软删**不会**被后续 `prism kb sync` / `prism kb reindex` 自动复活（索引更新保留 status；
+  见 `packages/knowledge/test/restore.test.ts`）。
 
 ---
 

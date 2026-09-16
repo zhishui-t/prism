@@ -6,12 +6,7 @@ import { useAsync } from '../components/useAsync.ts'
 import { EmptyBlock, PageHead, StatusTag } from '../components/ui.tsx'
 import { useT } from '../i18n.ts'
 import { navigate } from '../route.ts'
-
-/* C12：查询结果是**纯文本**（graphify 返回的行），这三个字形纯装饰，集中定义并注明，
-   避免散落在模板串里被当成内容读。 */
-const MARK_SECTION = '\u25B8' // ▸ 分组行首
-const MARK_ITEM = '\u2022' // • 列表项行首
-const MARK_MORE = '\u2026' // … 截断标记
+import { GraphQueryCard, GraphResultPanel, useGraphQuery } from './GraphQuery.tsx'
 
 /**
  * 代码图谱页（独立一级页，**只读**）：
@@ -24,13 +19,15 @@ const MARK_MORE = '\u2026' // … 截断标记
  *   1) 被标成「图谱可能已陈旧」（判定依据用错了 `stale`）；
  *   2) 在 Studio 面板里**直接渲染 404 信封原文** `{"ok":false,...}`（用户说的「一串 false」）。
  * 现在按 `graph_exists` 分支：没有图谱就只给空态 + 建图命令，不渲染 iframe、不给导出入口。
+ *
+ * 2026-09-16（v8 F4）：查询区改成**问题导向的四模式**（谁调用它 / 它调用谁 / A→B 调用链 /
+ * 改动影响谁），结果按调用关系结构化渲染（方向 + 对端符号 + file:line，点对端可追问）。
+ * 原先「自由文本 → graphify 原样输出」的那条路径退役——它正是用户说的「显示一堆咋看」；
+ * 状态与动作收在 `./GraphQuery.tsx`，本页只做摆放。邻域图（Studio iframe）与导出不变。
  */
 export function CodeGraphPage({ sel }: { sel?: string }) {
   const t = useT()
   const projects = useAsync(() => api.graphProjects(), [])
-  const [q, setQ] = useState('')
-  const [queryResult, setQueryResult] = useState<string>('')
-  const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<string>('')
   const [exporting, setExporting] = useState(false)
 
@@ -51,9 +48,8 @@ export function CodeGraphPage({ sel }: { sel?: string }) {
     navigate({ page: 'graph', sel: projects.data[0]!.project }, { replace: true })
   }, [projects.data, sel])
 
-  // 换项目即清掉上一个项目的查询结果与提示（否则会串台）
+  // 换项目即清掉提示（查询结果/错误由 `useGraphQuery` 按同一个 `project` 自清）
   useEffect(() => {
-    setQueryResult('')
     setNotice('')
   }, [current])
 
@@ -63,66 +59,8 @@ export function CodeGraphPage({ sel }: { sel?: string }) {
   const hasGraph = status.data?.graph_exists === true
   const buildCommand = project !== undefined ? `prism graph build "${project.root}" --name ${project.project}` : ''
 
-  const onQuery = async () => {
-    if (!current) return
-    const query = q.trim()
-    // 空检索词不再是「静默无反应」：给一句提示，用户知道按钮点到了。
-    if (query === '') {
-      setQueryResult('')
-      setNotice(t('graph.queryEmpty'))
-      return
-    }
-    setNotice('')
-    setBusy(true)
-    try {
-      const res = await api.graphQuery(current, query)
-      setQueryResult(formatQueryResult(res))
-    } catch (e) {
-      setQueryResult(t('graph.queryFailed', { msg: e instanceof Error ? e.message : String(e) }))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  /**
-   * 查询结果格式化：提取 graphify 已排版的正文，不 dump 原始 JSON。
-   *
-   * **字段口径必须跟后端实现走**：`GET /api/graph/query` 的 value 是
-   * `{ project, output, command }`（`packages/server/src/http/routes/graph.ts` 的 `query`），
-   * `output` 里已含 `NODE …` / `EDGE …` 文本。此前只认 `text`/`nodes`/`edges`（后端从没这么返过），
-   * 于是永远落到 JSON 兜底分支、把整段响应当原始 JSON 截断展示（DEF-03）。
-   * 保留 `text`/`nodes`/`edges` 分支以兼容 graphify 其它子命令的形状。
-   */
-  function formatQueryResult(res: Record<string, unknown>): string {
-    const parts: string[] = []
-    const output = res.output as string | undefined
-    if (typeof output === 'string' && output.trim() !== '') {
-      parts.push(output.trim())
-    }
-    const text = res.text as string | undefined
-    if (typeof text === 'string' && text.trim() !== '') {
-      parts.push(text.trim())
-    }
-    const nodes = res.nodes as Array<Record<string, unknown>> | undefined
-    if (Array.isArray(nodes) && nodes.length > 0) {
-      parts.push(`\n${MARK_SECTION} ${t('graph.queryNodeCount', { n: nodes.length })}`)
-      for (const n of nodes.slice(0, 20)) {
-        const label = n.label ?? n.id ?? '?'
-        const file = n.file ?? n.src ?? ''
-        parts.push(`  ${MARK_ITEM} ${label}${file !== '' ? `  (${file})` : ''}`)
-      }
-      if (nodes.length > 20) parts.push(`  ${MARK_MORE} ${t('graph.queryMoreNodes', { n: nodes.length - 20 })}`)
-    }
-    const edges = res.edges as Array<Record<string, unknown>> | undefined
-    if (Array.isArray(edges) && edges.length > 0) {
-      parts.push(`\n${MARK_SECTION} ${t('graph.queryEdgeCount', { n: edges.length })}`)
-    }
-    if (parts.length === 0) {
-      const json = JSON.stringify(res, null, 2)
-      return json.length > 2000 ? `${json.slice(0, 2000)}${MARK_MORE}${t('graph.truncated')}` : json
-    }
-    return parts.join('\n')
-  }
+  /** F4 查询状态（四模式 + 结果）：查询卡与结果面板是两处 DOM，故状态挂页面层。 */
+  const query = useGraphQuery(current)
 
   /** 导出为其他格式（obsidian/wiki/svg/graphml…）——只读变换，保留。 */
   const onExport = async (format: string) => {
@@ -243,32 +181,8 @@ export function CodeGraphPage({ sel }: { sel?: string }) {
         </div>
       )}
 
-      {hasGraph && (
-        <div className="pane graph-query-card swap-in">
-          <h3>{t('graph.query')}</h3>
-          <div className="row">
-            <input
-              className="grow"
-              placeholder={t('graph.queryPlaceholder')}
-              aria-label={t('graph.queryPlaceholder')}
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') void onQuery()
-              }}
-            />
-            <button onClick={onQuery} disabled={!current || busy} aria-busy={busy}>
-              {t('graph.query')}
-            </button>
-          </div>
-          {/* 明确的 loading 态：此前只把按钮置灰，查询（冷启动可能数秒）期间页面毫无反馈 */}
-          {busy && (
-            <div className="small muted" style={{ marginTop: 'var(--s-2)' }}>
-              {t('graph.querying')}
-            </div>
-          )}
-        </div>
-      )}
+      {/* F4：查询区 = 四模式（谁调用它 / 它调用谁 / A→B 调用链 / 改动影响谁） */}
+      {hasGraph && <GraphQueryCard q={query} />}
 
       {/*
         查询结果与图谱**左右分栏**：结果面板自己滚动，不参与纵向占位，
@@ -285,17 +199,8 @@ export function CodeGraphPage({ sel }: { sel?: string }) {
                 sandbox="allow-scripts allow-same-origin allow-popups"
               />
             </div>
-            {queryResult !== '' && (
-              <div className="query-panel swap-in">
-                <div className="query-panel-head">
-                  <span className="small muted">{t('graph.queryResult')}</span>
-                  <button className="tool-btn" onClick={() => setQueryResult('')}>
-                    {t('common.close')}
-                  </button>
-                </div>
-                <pre className="mono query-result">{queryResult}</pre>
-              </div>
-            )}
+            {/* F4：结果面板（结构化调用关系；无结果时不出面板，Studio 保持全宽） */}
+            <GraphResultPanel q={query} />
           </div>
           <div className="small muted studio-note">{t('graph.studioNote')}</div>
         </div>

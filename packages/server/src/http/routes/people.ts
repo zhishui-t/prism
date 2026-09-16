@@ -28,6 +28,8 @@ import {
   uninstallSkillDefinitions,
   updateRoleDefinition,
   updateTeamDefinition,
+  parseCategorizeInput,
+  SkillCategoryStore,
   type NewTeamBody,
   type RoleWriteBody,
   type SkillWriteBody,
@@ -73,6 +75,8 @@ export function peopleRoutes(deps: PeopleDeps): {
   team: (ctx: RouteContext) => Promise<Envelope>
   teamActivate: (ctx: RouteContext) => Promise<Envelope>
   skills: (ctx: RouteContext) => Promise<Envelope>
+  skillCategories: (ctx: RouteContext) => Promise<Envelope>
+  skillCategorize: (ctx: RouteContext) => Promise<Envelope>
   skill: (ctx: RouteContext) => Promise<Envelope>
   skillUsage: (ctx: RouteContext) => Promise<Envelope>
   skillsEffective: (ctx: RouteContext) => Promise<Envelope>
@@ -85,6 +89,8 @@ export function peopleRoutes(deps: PeopleDeps): {
   const dirs = resolveDirsFromHome(deps.home, { harnessRoot: deps.harnessRoot, rootExplicit: true })
   const rolesDir = dirs.rolesDir
   const teamsDir = dirs.teamsDir
+  /** 技能分类映射（design-v8 §3 F7）：`<PRISM_HOME>/skill-categories.json`，与 CLI/MCP 同一实现。 */
+  const categories = new SkillCategoryStore(deps.home)
 
   /** 已装 skill 名单（`<harnessRoot>/skills/*`，只读）；目录不存在 → undefined（跳过引用校验）。 */
   const knownSkills = (): Promise<string[] | undefined> => installedSkillNames(deps.harnessRoot, deps.home)
@@ -200,9 +206,42 @@ export function peopleRoutes(deps: PeopleDeps): {
    * 供控制台「安装 / 卸载」表单回填目标目录（服务端 `POST /api/skills/install|uninstall`
    * 的 body 里 `skills_dir` **必填**，绝不复用默认宿主目录）。
    * 容器由**裸数组**改为对象：只加字段、不丢信息（`skills` 仍是原数组）。
+   *
+   * v8 F7（design-v8 §3 / R-v8-5）：每个 skill **合并 `category` 字段**——技能页按分类分组
+   * 的**唯一数据源**（UI 不做「列表 + 独立映射表」二次拼接）。口径与 MCP `prism_skill_list`
+   * 完全一致：**映射里没有该技能 → 不加 `category` 键**（前端 `skill.category ?? null`）。
    */
-  const skills = async (): Promise<Envelope> =>
-    ok({ skills: listBuiltinSkills(), skills_dir: dirs.skillsDir })
+  const skills = async (): Promise<Envelope> => {
+    const categoryOf = await categories.all()
+    return ok({
+      skills: listBuiltinSkills().map((skill) => ({
+        ...skill,
+        ...(categoryOf[skill.name] !== undefined ? { category: categoryOf[skill.name] } : {}),
+      })),
+      skills_dir: dirs.skillsDir,
+    })
+  }
+
+  /**
+   * `GET /api/skills/categories`（v8 F7 / design-v8 §3）：全量分类映射表
+   * （`{ "<技能名>": "<分类>" }`，分组计数用；**不校验技能是否存在**——映射独立于技能台账）。
+   *
+   * ⚠ **注册顺序**：必须排在 `/api/skills/:name` **之前**（路由器首个匹配即命中，
+   * `:name` 会把静态路由吞掉）——见 `app.ts` 同名注释。
+   */
+  const skillCategories = async (): Promise<Envelope> => ok({ categories: await categories.all() })
+
+  /**
+   * `POST /api/skills/categorize`（v8 F7）：`{ names: string[], category?: string }` → 写入映射。
+   * 省略 / 空串 `category` = **清除**；`names` 空 → `bad_request`。
+   * 与 MCP `prism_skill_categorize`、CLI `prism skill categorize` 共用 `SkillCategoryStore`
+   * （入参归一化同为 `parseCategorizeInput`，故三入口同口径）。
+   */
+  const skillCategorize = async (ctx: RouteContext): Promise<Envelope> => {
+    const body = (await ctx.body()) as { names?: unknown; category?: unknown }
+    const input = parseCategorizeInput({ names: body.names, category: body.category })
+    return ok(await categories.categorize(input.names, input.category))
+  }
 
   /**
    * 技能使用视图（team-definition.md §6.3 合并公式）：
@@ -210,12 +249,19 @@ export function peopleRoutes(deps: PeopleDeps): {
    *
    * 设计裁决：Skill 本身不分层、不遮蔽；「层」只体现在**谁指定了它**。
    * 这里把三份数据（内置清单、角色 skills、团队 skills、宿主已装）合成一张视图。
+   *
+   * v8 F7-1（2026-09-16 黑盒）：本端点含**全部内置 + 宿主已装**技能，是技能页分组的
+   * **真实数据源**（`/api/skills` 只含内置）——此前 `category` 只并进 `/api/skills`，
+   * 于是外部技能分类成功而 UI 仍落「未分类」。此处按**同一口径**逐条合并：
+   * 映射里没有该技能 → **不加 `category` 键**（与 `/api/skills`、MCP `prism_skill_list` 一致）；
+   * store 复用闭包里的 `categories` 单例（与 categorize / skillCategories 同一实现，不另建实例）。
    */
   const skillUsage = async (): Promise<Envelope> => {
-    const [roleList, teamList, installed] = await Promise.all([
+    const [roleList, teamList, installed, categoryOf] = await Promise.all([
       loadRoles(rolesDir),
       loadTeams(teamsDir),
       knownSkills(),
+      categories.all(),
     ])
     const usage = new Map<string, { name: string; builtin: boolean; installed: boolean; roles: string[]; teams: string[] }>()
     const ensure = (name: string) => {
@@ -242,7 +288,14 @@ export function peopleRoutes(deps: PeopleDeps): {
         ensure(name).teams.push(team.team_id)
       }
     }
-    return ok([...usage.values()].sort((a, b) => a.name.localeCompare(b.name)))
+    return ok(
+      [...usage.values()]
+        .map((entry) => ({
+          ...entry,
+          ...(categoryOf[entry.name] !== undefined ? { category: categoryOf[entry.name] } : {}),
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    )
   }
 
   /** F-D2：有效 Skill 集（HTTP 面；三入口共用 `loadEffectiveSkills`）。 */
@@ -254,7 +307,8 @@ export function peopleRoutes(deps: PeopleDeps): {
    *
    * 正文来源两处：内置 Skill 取自 `@prism/skills` 的随包清单；只装在本地的 Skill
    * 读 `<skills_dir>/<name>/SKILL.md`。**只读**：不写盘、不改装/卸。
-   * 注册顺序必须在 `/api/skills/usage`、`/api/skills/effective` **之后**（路由器首个匹配即命中）。
+   * 注册顺序必须在 `/api/skills/usage`、`/api/skills/effective`、`/api/skills/categories`
+   * 与 `POST /api/skills/categorize` **之后**（路由器首个匹配即命中，`:name` 会吞掉静态路由）。
    */
   const skill = async (ctx: RouteContext): Promise<Envelope> => {
     const name = ctx.params.name ?? ''
@@ -315,6 +369,8 @@ export function peopleRoutes(deps: PeopleDeps): {
     team,
     teamActivate,
     skills,
+    skillCategories,
+    skillCategorize,
     skill,
     skillUsage,
     skillsEffective,

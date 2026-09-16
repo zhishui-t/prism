@@ -127,110 +127,115 @@ export function TeamsPage({
 
   return (
     <>
-      <PageHead title={t('teams.title')} sub={t('teams.desc')}>
-        <button
-          className="primary"
-          onClick={() => {
-            setFormIntent('create')
-            setBanner(null)
-          }}
-        >
-          {t('teams.new')}
-        </button>
-      </PageHead>
-
-      {banner !== null && (
-        <div className="banner">
-          <StatusTag kind={banner.kind === 'ok' ? 'ok' : 'err'}>
-            {banner.kind === 'ok' ? t('common.save') : t('status.failed')}
-          </StatusTag>
-          <span className="small">{banner.text}</span>
-        </div>
-      )}
-
-      {/* T8：角色库缺失/失败 → 列表页级 lamp 提示条 + 重试（与表单内重试共用同一状态源 roleIndex） */}
-      {(rolesBroken || rolesMissing) && (
-        <div className="banner lamp">
-          <span className="scope-lamp" />
-          <span className="small">
-            {rolesBroken ? t('teams.rolesFailed', { msg: roleIndex.error ?? '' }) : t('teams.rolesEmpty')}
-          </span>
-          <button className="rel-link" onClick={roleIndex.reload}>
-            {t('common.retry')}
+      {/* F3：`.page-fill` 吃满 `.page` 的**内容盒**（内容盒 = 视口 − 顶栏 − 页内边距，
+          故不必写 `100vh − …` 的减法）；页头与提示条按内容占高、`.md` 吃剩余高度
+          ⇒ 左列表与右详情各自在视口内滚动、整页不滚（见 styles.css 的 F3 段）。 */}
+      <div className="page-fill">
+        <PageHead title={t('teams.title')} sub={t('teams.desc')}>
+          <button
+            className="primary"
+            onClick={() => {
+              setFormIntent('create')
+              setBanner(null)
+            }}
+          >
+            {t('teams.new')}
           </button>
-        </div>
-      )}
+        </PageHead>
 
-      <State
-        loading={teams.loading}
-        error={teams.error}
-        empty={!teams.loading && !teams.error && list.length === 0}
-        emptyText={t('teams.empty')}
-      >
-        <div className="md">
-          <div className="md-list">
-            <div style={{ padding: 'var(--s-1) var(--s-1) var(--s-2)' }}>
-              <input
-                style={{ width: '100%' }}
-                placeholder={t('teams.filterPlaceholder')}
-                aria-label={t('teams.filterPlaceholder')}
-                value={filter}
-                onChange={(e) => setFilter(e.target.value)}
-              />
-            </div>
-            {shown.length === 0 && (
-              <div className="small muted" style={{ padding: 'var(--s-2)' }}>
-                {t('common.empty')}
-              </div>
-            )}
-            {shown.map((team) => (
-              <NavRow
-                key={team.team_id}
-                href={hrefOf({ page: 'teams', sel: team.team_id })}
-                selected={selected === team.team_id}
-                /* 导航靠 href（键盘 / 中键 / 复制深链都通）；onClick 只清上一次的写操作提示条 */
-                onClick={() => setBanner(null)}
-              >
-                <span className="t">
-                  {team.name}
-                  <span className="muted" style={{ fontWeight: 400 }}>
-                    {team.team_id}
-                  </span>
-                </span>
-                {team.description !== '' && <span className="s">{firstSentence(team.description, 76)}</span>}
-                <span className="tags">
-                  {team.default && <StatusTag kind="ok">{t('teams.default')}</StatusTag>}
-                  <StatusTag kind="info">{t('teams.membersCount', { n: team.members.length })}</StatusTag>
-                  <StatusTag kind="info">{t('teams.stages', { n: team.workflow.length })}</StatusTag>
-                </span>
-              </NavRow>
-            ))}
+        {banner !== null && (
+          <div className="banner">
+            <StatusTag kind={banner.kind === 'ok' ? 'ok' : 'err'}>
+              {banner.kind === 'ok' ? t('common.save') : t('status.failed')}
+            </StatusTag>
+            <span className="small">{banner.text}</span>
           </div>
+        )}
 
-          {/* v7.1 P2：换团队时右栏**轻过渡**（纯 opacity，`key` 让动画随换选中重放）。 */}
-          <div className="md-detail">
-            <div className="swap-in" key={selected}>
-              {selected === '' ? (
-                <Pane>
-                  <div className="small muted">{t('teams.selectHint')}</div>
-                </Pane>
-              ) : (
-                <TeamDetail
-                  key={selected}
-                  id={selected}
-                  detail={detail.data}
-                  loading={detail.loading}
-                  error={detail.error}
-                  teamsDir={teamsDir}
-                  onOpenUsage={onOpenUsageSkills}
-                  onEdit={() => setFormIntent('edit')}
-                  onDeleted={(text) => afterWrite('ok', text, { close: true })}
+        {/* T8：角色库缺失/失败 → 列表页级 lamp 提示条 + 重试（与表单内重试共用同一状态源 roleIndex） */}
+        {(rolesBroken || rolesMissing) && (
+          <div className="banner lamp">
+            <span className="scope-lamp" />
+            <span className="small">
+              {rolesBroken ? t('teams.rolesFailed', { msg: roleIndex.error ?? '' }) : t('teams.rolesEmpty')}
+            </span>
+            <button className="rel-link" onClick={roleIndex.reload}>
+              {t('common.retry')}
+            </button>
+          </div>
+        )}
+
+        <State
+          loading={teams.loading}
+          error={teams.error}
+          empty={!teams.loading && !teams.error && list.length === 0}
+          emptyText={t('teams.empty')}
+        >
+          <div className="md">
+            <div className="md-list">
+              <div style={{ padding: 'var(--s-1) var(--s-1) var(--s-2)' }}>
+                <input
+                  style={{ width: '100%' }}
+                  placeholder={t('teams.filterPlaceholder')}
+                  aria-label={t('teams.filterPlaceholder')}
+                  value={filter}
+                  onChange={(e) => setFilter(e.target.value)}
                 />
+              </div>
+              {shown.length === 0 && (
+                <div className="small muted" style={{ padding: 'var(--s-2)' }}>
+                  {t('common.empty')}
+                </div>
               )}
+              {shown.map((team) => (
+                <NavRow
+                  key={team.team_id}
+                  href={hrefOf({ page: 'teams', sel: team.team_id })}
+                  selected={selected === team.team_id}
+                  /* 导航靠 href（键盘 / 中键 / 复制深链都通）；onClick 只清上一次的写操作提示条 */
+                  onClick={() => setBanner(null)}
+                >
+                  <span className="t">
+                    {team.name}
+                    <span className="muted" style={{ fontWeight: 400 }}>
+                      {team.team_id}
+                    </span>
+                  </span>
+                  {team.description !== '' && <span className="s">{firstSentence(team.description, 76)}</span>}
+                  <span className="tags">
+                    {team.default && <StatusTag kind="ok">{t('teams.default')}</StatusTag>}
+                    <StatusTag kind="info">{t('teams.membersCount', { n: team.members.length })}</StatusTag>
+                    <StatusTag kind="info">{t('teams.stages', { n: team.workflow.length })}</StatusTag>
+                  </span>
+                </NavRow>
+              ))}
+            </div>
+
+            {/* v7.1 P2：换团队时右栏**轻过渡**（纯 opacity，`key` 让动画随换选中重放）。 */}
+            <div className="md-detail">
+              <div className="swap-in" key={selected}>
+                {selected === '' ? (
+                  <Pane>
+                    <div className="small muted">{t('teams.selectHint')}</div>
+                  </Pane>
+                ) : (
+                  <TeamDetail
+                    key={selected}
+                    id={selected}
+                    detail={detail.data}
+                    loading={detail.loading}
+                    error={detail.error}
+                    teamsDir={teamsDir}
+                    onOpenUsage={onOpenUsageSkills}
+                    onEdit={() => setFormIntent('edit')}
+                    onDeleted={(text) => afterWrite('ok', text, { close: true })}
+                  />
+                )}
+              </div>
             </div>
           </div>
-        </div>
-      </State>
+        </State>
+      </div>
 
       {formIntent !== null && (
         <Drawer

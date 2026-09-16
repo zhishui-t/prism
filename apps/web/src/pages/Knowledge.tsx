@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from 'react'
+import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
 
 import { api, type BookNode, type BookStructure, type CatalogEntry, type EntryVersion, type SearchResult } from '../api.ts'
 import { ConfirmModal } from '../components/ConfirmModal.tsx'
@@ -12,26 +12,35 @@ import { useT } from '../i18n.ts'
 import { parseMarkdown } from '../markdown.ts'
 import { hrefOf } from '../route.ts'
 import { fmtTime } from '../time.ts'
-import { isSelMiss, resolveBookDeepLink, selMissDetail } from './knowledge-logic.ts'
+import {
+  buildTree,
+  countTree,
+  filterTree,
+  isSelMiss,
+  resolveBookDeepLink,
+  selMissDetail,
+  type DirNode,
+} from './knowledge-logic.ts'
 import { SearchHitRow } from './SearchHitRow.tsx'
 
 /**
  * 知识库（左栏目录 + 右栏书页，v7 阅读室）。
  *
- * 左栏模型（design-brief-v7-a §4.1 K1/K2/K3/K13）：
- * - **3 层**：书 → 模块 → 条目；**层（global/project/role）不占树的一层**，
- *   降为两处 —— ① 每本书恒有副行「层 › 归属」（global 无归属只显示「全局」，
- *   同名书因此必然两行文本不同，K2）；② 顶部过滤 chips（全部/全局/项目/角色）。
- * - **数据源**：骨架走 `kbTree()`（无 limit，含 `modules[].count`/`total`）；
- *   **条目按书懒加载** —— 首次展开某书才 `kbCatalog({layer, owner, book, limit: 200})`，
- *   超 200 时该书末尾给「还有 N 条」。旧的 `kbCatalog({limit:5000})` 整页拉取模式**已废**。
- * - 目录引线（§2.9）：模块行的「标题 …… 计数」用 `border-bottom: 1px dotted var(--rule)`
- *   撑满弹性区，计数列 `tabular-nums` 右对齐。
+ * 左栏模型（design-brief-v7-a §4.1 K1/K2/K3/K13 + design-v8 §5 F2）：
+ * - **书 → 目录多级嵌套 → 条目**（F2 把原「书 → 压平模块」换成**真目录树**）；
+ *   **层（global/project/role）不占树的一层**，降为两处 —— ① 每本书恒有副行「层 › 归属」
+ *   （global 无归属只显示「全局」，同名书因此必然两行文本不同，K2）；② 顶部过滤 chips
+ *   （全部/全局/项目/角色）。
+ * - **数据源**：书列表骨架走 `kbTree()`（只回压平的 `modules[].count`/`total`，建不了树）；
+ *   **书内目录树由前端按该书条目的 `path` 建**（`knowledge-logic.ts#buildTree`）——
+ *   **条目按书懒加载**，首次展开某书才 `kbCatalog({layer, owner, book, limit: CATALOG_LIMIT})`，
+ *   仍被 5000 上限截断时该书末尾给「还有 N 条」。旧的模块行与 `kbTree` 的 `modules` 不再渲染。
+ * - 目录引线（§2.9）：目录行的「标题 …… 计数」用 `border-bottom: 1px dotted var(--rule)`
+ *   撑满弹性区，计数列 `tabular-nums` 右对齐；**层级缩进**由行内注入的 `--toc-depth`
+ *   驱动（`styles.css` 的 `.book-toc .toc-mod` / `.toc-item`），沿用既有零件、零新色。
  * - 深链：`?layer/?owner/?book` 初始化过滤与展开态；**`?book=` 命中时目录收敛到那一本**
  *   （D-3 / T6 边表：`Ref kind=book` 的落点必须收敛，判据见 `knowledge-logic.ts`）；
- *   点书/模块/条目回写 hash。
- *
- * 本批只重写左栏；右栏书页（结构化正文渲染、边注、层间冲突）留待下一批。
+ *   点书/目录/条目回写 hash。
  */
 
 const TYPE_COLOR: Record<string, string> = {
@@ -52,6 +61,12 @@ const LAYER_CHIPS = ['all', 'global', 'project', 'role'] as const
 type LayerFilter = (typeof LAYER_CHIPS)[number]
 /** 检索每页条数：请求 `limit + 1` 以判定截断（K6）。 */
 const SEARCH_PAGE = 50
+/**
+ * 建树拉取上限（F2）：目录树整棵由本书条目的 `path` 建，故一次要拿够——
+ * 取 catalog 的**服务端硬上限 5000**（`packages/knowledge/src/service.ts` 的
+ * `catalog()`：`Math.min(Math.max(1, limit ?? 2000), 5000)`）。仍被截断时书末给「还有 N 条」。
+ */
+const CATALOG_LIMIT = 5000
 
 /** 右侧面板展示所需的条目摘要（目录条目与搜索结果同形，取公共字段）。 */
 interface EntryMeta {
@@ -69,8 +84,9 @@ function bookKey(book: { layer: string; owner?: string; book: string }): string 
   return `${book.layer}/${book.owner ?? ''}/${book.book}`
 }
 
-function modKey(book: string, module: string): string {
-  return `${book}::${module}`
+/** 目录节点的折叠态键：书 + 节点段路径（段路径在同一本书内唯一）。 */
+function dirKey(book: string, nodeKey: string): string {
+  return `${book}::${nodeKey}`
 }
 
 export function KnowledgePage({
@@ -100,7 +116,8 @@ export function KnowledgePage({
   const [scope, setScope] = useState<'none' | 'layer' | 'book'>('none')
   const [selectedId, setSelectedId] = useState<string>(sel ?? '')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
-  const [collapsedMods, setCollapsedMods] = useState<Set<string>>(new Set())
+  /** 收起的**目录节点**（`<bookKey>::<节点段路径>`）；目录默认展开，与书默认收起相反（F2）。 */
+  const [collapsedDirs, setCollapsedDirs] = useState<Set<string>>(new Set())
   /** bookKey → 该书的条目（懒加载缓存；undefined = 尚未拉取）。 */
   const [entriesByBook, setEntriesByBook] = useState<Record<string, CatalogEntry[]>>({})
   const loadingRef = useRef<Set<string>>(new Set())
@@ -202,7 +219,7 @@ export function KnowledgePage({
       if (!expanded.has(key) || entriesByBook[key] !== undefined || loadingRef.current.has(key)) continue
       loadingRef.current.add(key)
       void api
-        .kbCatalog({ layer: bk.layer, owner: bk.owner, book: bk.book, limit: 200 })
+        .kbCatalog({ layer: bk.layer, owner: bk.owner, book: bk.book, limit: CATALOG_LIMIT })
         .then((list) => setEntriesByBook((prev) => ({ ...prev, [key]: list })))
         .catch(() => setEntriesByBook((prev) => ({ ...prev, [key]: [] })))
         .finally(() => loadingRef.current.delete(key))
@@ -261,31 +278,58 @@ export function KnowledgePage({
   }, [books, layer])
 
   /**
-   * 过滤视图：命中条目保留祖先路径（书/模块行不因未命中而消失）；
-   * 书名命中则整本书的模块全可见。未展开的书只能按书名/模块名命中 —— 懒加载的必然代价。
+   * 每书的完整目录树，**只跟「有哪些书 / 书里有哪些条目」变化**（与检索词无关）。
+   *
+   * 单独一层 memo 是 F2 把建树拉取上限提到 5000 的必然结果：建树要逐条解析 `path`，
+   * 若并进下面按检索词重算的 `view`，每敲一个字都要把所有已展开的书重解析一遍
+   * （上限 ×25 倍条目量）。拆开后打字只跑过滤。
+   */
+  const trees = useMemo(() => {
+    const map = new Map<string, DirNode<CatalogEntry>>()
+    for (const bk of scopedBooks) {
+      const key = bookKey(bk)
+      map.set(key, buildTree(entriesByBook[key] ?? [], bk.book))
+    }
+    return map
+  }, [scopedBooks, entriesByBook])
+
+  /**
+   * 过滤视图（F2）：**先按 `path` 建整棵目录树，再按检索词裁枝**——
+   * 命中条目保留祖先目录（目录行不因未命中而消失）、目录段名命中则整棵子树保留、
+   * 书名命中则整本书原样可见（与改造前的 `visible` 三档同口径，改由
+   * `knowledge-logic.ts#filterTree` 承担）。
+   *
+   * ⚠ **建树必须在裁枝之前**：`buildTree` 的根锚定/公共前缀是拿**整本书**的路径算的，
+   * 若先过滤条目再建树，剩下同处一目录的少数条目会把该目录也算成公共前缀剥掉，树会变形。
+   *
+   * 未展开的书只能按书名命中 —— 懒加载的必然代价（与改造前一致）。
    */
   const view = useMemo(() => {
     const nd = needle
     const isHit = (e: CatalogEntry): boolean =>
       e.title.toLowerCase().includes(nd) || e.id.toLowerCase().includes(nd) || e.tags.some((tag) => tag.toLowerCase().includes(nd))
+    const dirHit = (name: string): boolean => name.toLowerCase().includes(nd)
+    const empty: DirNode<CatalogEntry> = { name: '', key: '', dirs: [], entries: [] }
     return scopedBooks
       .map((bk) => {
         const key = bookKey(bk)
         const cached = entriesByBook[key]
         const bookHit = nd !== '' && bk.book.toLowerCase().includes(nd)
-        const modules = bk.modules.map((m) => {
-          const name = m.name === '' ? INBOX : m.name
-          const own = (cached ?? []).filter((e) => (e.module === '' ? INBOX : e.module) === name)
-          const entries = nd === '' || bookHit ? own : own.filter(isHit)
-          const modHit = nd !== '' && name.toLowerCase().includes(nd)
-          return { name: m.name, count: m.count, entries, visible: nd === '' || bookHit || modHit || entries.length > 0 }
-        })
-        return { node: bk, key, modules, visible: nd === '' || bookHit || modules.some((m) => m.visible), cached }
+        const full = trees.get(key) ?? empty
+        const kept = nd === '' || bookHit ? full : filterTree(full, isHit, dirHit)
+        return {
+          node: bk,
+          key,
+          cached,
+          tree: kept ?? empty,
+          visible: nd === '' || bookHit || kept !== undefined,
+        }
       })
       .filter((b) => b.visible)
-  }, [scopedBooks, entriesByBook, needle])
+  }, [scopedBooks, entriesByBook, trees, needle])
 
-  const hitCount = view.reduce((n, b) => n + b.modules.reduce((k, m) => k + m.entries.length, 0), 0)
+  /** 目录内收敛的命中条目数（过滤时底部计数行用）。 */
+  const hitCount = view.reduce((n, b) => n + countTree(b.tree), 0)
 
   const selectedMeta = useMemo<EntryMeta | null>(() => {
     if (selectedId === '') return null
@@ -372,9 +416,14 @@ export function KnowledgePage({
     })
     onQuery?.({ layer: bk.layer, owner: bk.owner, book: bk.book })
   }
-  const toggleModule = (bk: BookNode, name: string) => {
-    const key = modKey(bookKey(bk), name)
-    setCollapsedMods((prev) => {
+  /**
+   * 目录节点的展开/收起（F2）：默认**展开**（与「书默认收起」相反——目录是树的结构骨架，
+   * 默认全展开才看得到「多级」，收起是用户主动的收窄手段）。与旧的模块行一样顺带回写
+   * `?book=`（保持「点了某本书就在那本书里」的既有语义）。
+   */
+  const toggleDir = (bk: BookNode, nodeKey: string) => {
+    const key = dirKey(bookKey(bk), nodeKey)
+    setCollapsedDirs((prev) => {
       const next = new Set(prev)
       if (next.has(key)) next.delete(key)
       else next.add(key)
@@ -402,6 +451,72 @@ export function KnowledgePage({
     if (e.key !== 'Enter' && e.key !== ' ') return
     e.preventDefault()
     run()
+  }
+
+  /** 目录段名展示：`_inbox`（无 module 的条目）沿用「未归类」文案。 */
+  const dirLabel = (name: string): string => (name === INBOX ? t('knowledge.uncategorized') : name)
+
+  /**
+   * 目录树的缩进契约：行内注入 `--toc-depth`（根为 0），左内边距由 `styles.css` 的
+   * `.book-toc .toc-mod` / `.toc-item` 按层累加一档 `--s-3`。**不新增颜色/字号**，
+   * 层级只由缩进 + chev 表达。
+   */
+  const depthStyle = (depth: number): CSSProperties => ({ '--toc-depth': depth }) as CSSProperties
+
+  /** 叶子行（条目）：与改造前的 `.toc-item` 同形同交互（`<a href>` + 选中态 + 状态点）。 */
+  const renderEntry = (entry: CatalogEntry, depth: number): ReactNode => (
+    <a
+      key={entry.id}
+      href={entryHref(entry.id)}
+      className={`toc-item${selectedId === entry.id ? ' active' : ''}`}
+      style={depthStyle(depth)}
+      onClick={() => select(entry.id)}
+    >
+      <span className="toc-title">{entry.title}</span>
+      {/* 仅 status ≠ active 时画状态点 + 文字（K11） */}
+      {entry.status !== 'active' && (
+        <span className={`toc-status ${statusKind(entry.status)}`}>
+          <span className="toc-lamp" />
+          {statusLabel(entry.status)}
+        </span>
+      )}
+    </a>
+  )
+
+  /**
+   * 递归渲染目录层（F2）：每个目录节点 = 「可点的目录行 + `.collapse` 子层」，
+   * 与书行同构（`.toc-mod` 行 + `.collapse`），故收起时子层**常驻 DOM**
+   * （高度可过渡的前提，见 `collapse-dom.test.ts`）。计数取**子树条目总数**。
+   */
+  function renderDirs(nodes: DirNode<CatalogEntry>[], depth: number, bk: BookNode): ReactNode {
+    const bookK = bookKey(bk)
+    return nodes.map((node) => {
+      const open = !collapsedDirs.has(dirKey(bookK, node.key))
+      return (
+        <div key={node.key} className="toc-node">
+          <div
+            className="toc-mod"
+            role="button"
+            tabIndex={0}
+            aria-expanded={open}
+            style={depthStyle(depth)}
+            onClick={() => toggleDir(bk, node.key)}
+            onKeyDown={(e) => keyboardToggle(e, () => toggleDir(bk, node.key))}
+          >
+            <span className={`toc-chev${open ? ' open' : ''}`}>▸</span>
+            <span className="toc-modname">{dirLabel(node.name)}</span>
+            <span className="toc-leader" />
+            <span className="toc-count">{countTree(node)}</span>
+          </div>
+          <div className={`collapse${open ? ' open' : ''}`}>
+            <div>
+              {renderDirs(node.dirs, depth + 1, bk)}
+              {node.entries.map((entry) => renderEntry(entry, depth + 1))}
+            </div>
+          </div>
+        </div>
+      )
+    })
   }
 
   /** 把条目从已加载缓存里摘掉（软删后行内立即消失，不整页重拉）。 */
@@ -505,517 +620,481 @@ export function KnowledgePage({
 
   return (
     <>
-      {/* B1：页标题走 `<PageHead>`（`--fs-600`/600）——手写 `<h1>` 是 UA 默认 28px/700，§2.4 只认 20px。 */}
-      <PageHead title={t('knowledge.title')} sub={t('knowledge.desc')} />
+      {/* F3：整页不再长滚——`.page-fill` 吃满 `.page` 的**内容盒**（`.page` 是 border-box，
+          故这里已经是「视口 − 顶栏 − 页内边距」，不必写 `100vh − …` 的减法），
+          书架作剩余高度子项，两栏（`.book-sidebar` / `.book-content`）各自内滚。 */}
+      <div className="page-fill">
+        {/* B1：页标题走 `<PageHead>`（`--fs-600`/600）——手写 `<h1>` 是 UA 默认 28px/700，§2.4 只认 20px。 */}
+        <PageHead title={t('knowledge.title')} sub={t('knowledge.desc')} />
 
-      <State loading={tree.loading} error={tree.error ?? undefined}>
-        {books.length === 0 ? (
-          <EmptyBlock
-            title={t('knowledge.empty.title')}
-            desc={t('knowledge.empty.desc')}
-            command={t('knowledge.empty.command')}
-          />
-        ) : (
-          <div className="book-layout">
-            {/* 左栏：目录（或检索结果，二选一，永不并排） */}
-            <div className="book-sidebar">
-              <div className="book-search">
-                <input
-                  type="text"
-                  placeholder={t('knowledge.searchPlaceholder')}
-                  aria-label={t('knowledge.searchPlaceholder')}
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') enterSearch()
-                  }}
-                />
-              </div>
-
-              {/* 层过滤 chips：层不占树层，靠 chips + 书副行表达（K1） */}
-              {!searching && (
-                <div className="toc-chips">
-                  {LAYER_CHIPS.map((chip) => (
-                    <button
-                      key={chip}
-                      className={`toc-chip${layer === chip ? ' active' : ''}`}
-                      onClick={() => pickLayer(chip)}
-                    >
-                      {chip === 'all' ? t('knowledge.chip.all') : layerLabel(chip)}
-                    </button>
-                  ))}
+        <State loading={tree.loading} error={tree.error ?? undefined}>
+          {books.length === 0 ? (
+            <EmptyBlock
+              title={t('knowledge.empty.title')}
+              desc={t('knowledge.empty.desc')}
+              command={t('knowledge.empty.command')}
+            />
+          ) : (
+            <div className="book-layout">
+              {/* 左栏：目录（或检索结果，二选一，永不并排） */}
+              <div className="book-sidebar">
+                <div className="book-search">
+                  <input
+                    type="text"
+                    placeholder={t('knowledge.searchPlaceholder')}
+                    aria-label={t('knowledge.searchPlaceholder')}
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') enterSearch()
+                    }}
+                  />
                 </div>
-              )}
-              {!searching && layer !== 'all' && owners.length > 0 && (
-                <div className="toc-chips toc-chips-sub">
-                  <button className={`toc-chip${owner === undefined ? ' active' : ''}`} onClick={() => pickOwner(undefined)}>
-                    {t('knowledge.chip.all')}
-                  </button>
-                  {owners.map((name) => (
-                    <button
-                      key={name}
-                      className={`toc-chip${owner === name ? ' active' : ''}`}
-                      onClick={() => pickOwner(name)}
-                    >
-                      {name}
-                    </button>
-                  ))}
-                </div>
-              )}
 
-              <nav className="book-toc">
-                {searching && (
-                  <div className="toc-section">
-                    {/* 顶部行：← 返回目录 · N 条（显示前 N）；截断时才给收窄按钮（K6） */}
-                    <div className="toc-search-head">
-                      <button className="tool-btn" onClick={exitSearch}>
-                        {t('knowledge.search.back')}
-                      </button>
-                      <span className="toc-count">
-                        {t('knowledge.searchResults')} ›{' '}
-                        {truncated
-                          ? t('knowledge.search.truncated', { n: SEARCH_PAGE })
-                          : t('knowledge.search.count', { n: hits.length })}
-                        {/* B10：此处是**行内**在途标记（计数行右端），不是三态容器 —— 骨架条会与
-                            旧结果同屏、且每次击键都闪一次，故按 `graph.querying` 同制走 i18n 文案，
-                            不手写 `…`（`<State loading>` 用在上方目录/版本/正文三处）。 */}
-                        {searchRun.loading && (
-                          <span className="muted"> {t('knowledge.search.running')}</span>
-                        )}
-                      </span>
-                    </div>
-                    {truncated && (
-                      <div className="toc-scope">
-                        <button
-                          className={`toc-chip${scope === 'layer' ? ' active' : ''}`}
-                          disabled={layer === 'all'}
-                          onClick={() => setScope('layer')}
-                        >
-                          {t('knowledge.search.limitLayer')}
-                        </button>
-                        <button
-                          className={`toc-chip${scope === 'book' ? ' active' : ''}`}
-                          disabled={currentBook === undefined}
-                          onClick={() => setScope('book')}
-                        >
-                          {t('knowledge.search.limitBook')}
-                        </button>
-                      </div>
-                    )}
-                    {searchRun.error && <div className="error small toc-note">{searchRun.error}</div>}
-
-                    {/* 结果行（K7）：标题 + 副行「层 › 归属 › 书 › 模块」+ excerpt + 命中来源；不做高亮
-                        D-1：行抽成 `SearchHitRow`（原内联结构把标题压成 width:0），形状由
-                        `apps/web/test/knowledge-search-hit.test.ts` 锁。 */}
-                    {hits.map((r) => (
-                      <SearchHitRow
-                        key={r.id}
-                        entry={r}
-                        href={entryHref(r.id)}
-                        active={selectedId === r.id}
-                        onOpen={() => select(r.id)}
-                        layerText={layerLabel(r.layer)}
-                        moduleText={modLabel(r.module)}
-                      />
-                    ))}
-
-                    {/* 检索无结果：行内空态 + 出路（K13） */}
-                    {!searchRun.loading && hits.length === 0 && (
-                      <div className="small muted toc-note">
-                        {t('knowledge.search.none', { q: queryText })}
-                        <br />
-                        {t('knowledge.search.hint')}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {!searching &&
-                  view.map((bk) => {
-                    const isOpen = expanded.has(bk.key)
-                    return (
-                      <div key={bk.key} className="toc-section">
-                        {/* A2：书行是**展开切换**（不是导航实体），故不做 `<a>`：
-                            补 role/tabIndex/Enter·Space，键盘与读屏可用（DOM 结构不动，视觉零变化）。 */}
-                        <div
-                          className="toc-book"
-                          role="button"
-                          tabIndex={0}
-                          aria-expanded={isOpen}
-                          onClick={() => toggleBook(bk.node)}
-                          onKeyDown={(e) => keyboardToggle(e, () => toggleBook(bk.node))}
-                        >
-                          <div className="toc-book-main">
-                            <span className={`toc-chev${isOpen ? ' open' : ''}`}>▸</span>
-                            <span className="toc-bookname">{bk.node.book}</span>
-                            <span className="toc-leader" />
-                            <span className="toc-count">{bk.node.total}</span>
-                          </div>
-                          {/* 每本书恒有副行「层 › 归属」；global 无归属只显示「全局」（K2） */}
-                          <div className="toc-book-sub">
-                            <span>{layerLabel(bk.node.layer)}</span>
-                            {bk.node.owner !== undefined && bk.node.owner !== '' && (
-                              <>
-                                <span className="toc-sep">›</span>
-                                <span>{bk.node.owner}</span>
-                              </>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* v7.1 P1：书的展开收起改走 `.collapse`（`grid-template-rows: 0fr→1fr`，
-                            高度可过渡）。模块行因此**常驻 DOM** —— 折叠态靠 `.collapse` 的
-                            `visibility: hidden` 挡出 Tab 序列与无障碍树（见 styles.css）。
-                            代价可控：未缓存的书 `m.entries` 恒为空数组（懒加载，见 `view` 的 memo），
-                            所以「收起常驻」多出来的只有模块行，不含条目。 */}
-                        <div className={`collapse${isOpen ? ' open' : ''}`}>
-                          <div>
-                            {bk.modules
-                              .filter((m) => m.visible)
-                              .map((m) => {
-                                const modOpen = !collapsedMods.has(modKey(bk.key, m.name))
-                                return (
-                                  <div key={m.name}>
-                                    {/* A2：模块行同为展开切换，处理方式与书行一致。 */}
-                                    <div
-                                      className="toc-mod"
-                                      role="button"
-                                      tabIndex={0}
-                                      aria-expanded={modOpen}
-                                      onClick={() => toggleModule(bk.node, m.name)}
-                                      onKeyDown={(e) => keyboardToggle(e, () => toggleModule(bk.node, m.name))}
-                                    >
-                                      <span className={`toc-chev${modOpen ? ' open' : ''}`}>▸</span>
-                                      <span className="toc-modname">{modLabel(m.name)}</span>
-                                      <span className="toc-leader" />
-                                      <span className="toc-count">{m.count}</span>
-                                    </div>
-                                    <div className={`collapse${modOpen ? ' open' : ''}`}>
-                                      <div>
-                                        {m.entries.map((entry) => (
-                                          <a
-                                            key={entry.id}
-                                            href={entryHref(entry.id)}
-                                            className={`toc-item${selectedId === entry.id ? ' active' : ''}`}
-                                            onClick={() => select(entry.id)}
-                                          >
-                                            <span className="toc-title">{entry.title}</span>
-                                            {/* 仅 status ≠ active 时画状态点 + 文字（K11） */}
-                                            {entry.status !== 'active' && (
-                                              <span className={`toc-status ${statusKind(entry.status)}`}>
-                                                <span className="toc-lamp" />
-                                                {statusLabel(entry.status)}
-                                              </span>
-                                            )}
-                                          </a>
-                                        ))}
-                                      </div>
-                                    </div>
-                                  </div>
-                                )
-                              })}
-                          </div>
-                        </div>
-
-                        {/* B10：该书条目懒加载中 → 统一骨架（保留目录缩进容器） */}
-                        {isOpen && bk.cached === undefined && (
-                          <div className="toc-note">
-                            <State loading />
-                          </div>
-                        )}
-
-                        {/* 截断可见：超 200 时明示剩余条数（K3/K6） */}
-                        {isOpen && bk.cached !== undefined && bk.node.total - bk.cached.length > 0 && (
-                          <div className="small muted toc-note">
-                            {t('knowledge.book.remaining', { n: bk.node.total - bk.cached.length })}
-                          </div>
-                        )}
-                      </div>
-                    )
-                  })}
-
-                {/* 过滤无匹配：行内空态，不是整页空态（K13） */}
-                {!searching && view.length === 0 && (
-                  <div className="small muted toc-note">{t('knowledge.noResults')}</div>
-                )}
-              </nav>
-
-              {!searching && (
-                <div className="book-footer">
-                  {t('knowledge.total', { n: stats.data?.entries ?? 0 })}
-                  {needle === '' ? '' : ` › ${t('knowledge.moduleHits', { n: hitCount })}`}
-                </div>
-              )}
-            </div>
-
-            {/* 右栏：书页（K4 书头 + K8 渲染/源码 + K9 frontmatter + K11 页边 + K12 软删） */}
-            <div className="book-content">
-              {notice !== '' && <div className="banner small swap-in">{notice}</div>}
-              {/* K12：软删后就地反馈 + 12s 内可撤销（hash 不变） */}
-              {removed !== null && (
-                <div className="banner small swap-in">
-                  <span>{t('knowledge.entry.removed', { n: removed.references })}</span>
-                  <button className="tool-btn" onClick={() => void undoRemove()}>
-                    {t('knowledge.entry.undo')}
-                  </button>
-                </div>
-              )}
-
-              {/* K4 书头：定稿目录 rev + 继承链；not_found / bad_request 一律回落「按实际条目列目录」 */}
-              {bookRef !== undefined && (
-                <div className="book-head">
-                  <div className="book-head-row">
-                    <h2 className="book-head-title">{bookRef.book}</h2>
-                    <span className="small muted">
-                      {structure.data !== null && structure.data !== undefined
-                        ? `${t('knowledge.book.rev', { n: structure.data.revision })}${
-                            structure.data.frozen_at === null
-                              ? ''
-                              : ` › ${t('knowledge.book.frozenAt', { ts: fmtTime(structure.data.frozen_at) })}`
-                          }`
-                        : t('knowledge.book.derived')}
-                    </span>
-                  </div>
-                  {inherited.length > 0 && (
-                    <div className="book-head-inherit">
-                      <span className="small muted">{t('knowledge.book.inherited')}</span>
-                      {inherited.map((ref) => {
-                        const cut = ref.indexOf('/')
-                        const ly = cut === -1 ? ref : ref.slice(0, cut)
-                        const bk = cut === -1 ? '' : ref.slice(cut + 1)
-                        return (
-                          <button
-                            key={ref}
-                            className="toc-chip"
-                            onClick={() => onQuery?.({ layer: ly, owner: undefined, book: bk })}
-                          >
-                            {ref}
-                          </button>
-                        )
-                      })}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {notFound ? (
-                /* 深链未命中 / 已移出索引（§2.5）：带名称 + 出路（撤销 / 返回目录） */
-                <div className="pane swap-in">
-                  <h3>{t('knowledge.notFound.title')}</h3>
-                  <div className="small muted">{t('knowledge.notFound.desc', { id: selectedId })}</div>
-                  {missError !== undefined && (
-                    <div className="small muted" style={{ marginTop: 'var(--s-2)' }} role="alert">
-                      {missError}
-                    </div>
-                  )}
-                  <div style={{ display: 'flex', gap: 'var(--s-2)', marginTop: 'var(--s-3)' }}>
-                    <button className="tool-btn" onClick={() => void restoreEntry(selectedId)}>
-                      {t('knowledge.entry.undo')}
-                    </button>
-                    <button className="tool-btn" onClick={() => onSelect?.(undefined)}>
-                      {t('knowledge.search.back')}
-                    </button>
-                  </div>
-                </div>
-              ) : meta === null ? (
-                <div className="empty-hint swap-in">
-                  {/* B-2e §P3：📖 字形装饰已删（§3.D 默认禁 emoji）——空态只由两行文案承担。 */}
-                  <span>{t('knowledge.selectEntry')}</span>
-                  <span className="small" style={{ color: 'var(--mute)' }}>
-                    {t('knowledge.bookSummary', { entries: stats.data?.entries ?? 0, books: books.length })}
-                  </span>
-                </div>
-              ) : (
-                /* v7.1 P2：换条目时右栏内容**轻过渡**（纯 opacity，`key` 让动画随换条重放）。
-                   这里只加一层静态包裹盒：`.book-content` 内的既有规则全是后代选择器
-                    （≥1440 那条绝对定位的 `.entry-margin` 的 offsetParent 仍是 `.book-content`），
-                   故版式零位移。 */
-                <div className="swap-in" key={meta.id}>
-                  <div className="entry-head">
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--s-2)' }}>
-                      <h2 style={{ margin: 0, flex: 1 }}>{meta.title}</h2>
-                      {/* K8：渲染 | 源码 segmented（MINOR-12：tooLarge 时无解析结果可渲染，渲染档禁用） */}
-                      <div className="seg">
-                        <button
-                          className={renderMode === 'render' && !tooLarge ? 'active' : ''}
-                          disabled={tooLarge}
-                          onClick={() => setRenderMode('render')}
-                        >
-                          {t('knowledge.view.render')}
-                        </button>
-                        <button
-                          className={renderMode === 'source' || tooLarge ? 'active' : ''}
-                          onClick={() => setRenderMode('source')}
-                        >
-                          {t('knowledge.view.source')}
-                        </button>
-                      </div>
-                      <button className="tool-btn" onClick={() => setShowVersions((v) => !v)}>
-                        {t('knowledge.entry.history')}
-                      </button>
+                {/* 层过滤 chips：层不占树层，靠 chips + 书副行表达（K1） */}
+                {!searching && (
+                  <div className="toc-chips">
+                    {LAYER_CHIPS.map((chip) => (
                       <button
-                        className="tool-btn"
-                        disabled={busyRemove}
-                        onClick={() => setPendingRemove({ id: meta.id, title: meta.title })}
+                        key={chip}
+                        className={`toc-chip${layer === chip ? ' active' : ''}`}
+                        onClick={() => pickLayer(chip)}
                       >
-                        {busyRemove ? t('knowledge.entry.softDeleting') : t('knowledge.entry.softDelete')}
+                        {chip === 'all' ? t('knowledge.chip.all') : layerLabel(chip)}
                       </button>
-                    </div>
-                    <div className="entry-meta" style={{ marginTop: 'var(--s-2)' }}>
-                      {/* A3：类型徽标改「`--ink` 文字 + 类型色 15% 混色底」（样式见 `.tag-type`）。
-                          旧写法把主题反色文字压在实心类型色上，浅色主题 8/8 只有 1.76–3.48:1。
-                          这里只注入类型色变量，双主题由 token 自己切。 */}
-                      <span
-                        className="tag tag-type"
-                        style={{ '--type-color': TYPE_COLOR[meta.type] ?? 'var(--type-other)' } as CSSProperties}
-                      >
-                        {meta.type}
-                      </span>
-                      <span className="tag">{layerLabel(meta.layer)}</span>
-                      {/* K11 + R-6 Q5：owner 是**关系列**，统一走 `Ref` 零件（不再自绘 tag 链接）。
-                          role/project 两层的 owner 各指向自己的页；其余层（global 无归属）保持静态 tag。 */}
-                      {meta.owner !== undefined && meta.owner !== '' ? (
-                        meta.layer === 'role' || meta.layer === 'project' ? (
-                          <Ref kind={meta.layer} name={meta.owner} />
-                        ) : (
-                          <span className="tag">{meta.owner}</span>
-                        )
-                      ) : null}
-                      <span className="tag muted">
-                        {meta.book} / {modLabel(meta.module)}
-                      </span>
-                      <span className="tag muted">v{meta.version}</span>
-                    </div>
+                    ))}
                   </div>
-
-                  {viewVersion !== undefined && (
-                    <div className="banner">
-                      <span className="tag warn">
-                        {t('knowledge.entry.viewing')} v{viewVersion}
-                      </span>
-                      <button className="tool-btn" onClick={() => setViewVersion(undefined)}>
-                        {t('knowledge.entry.backToCurrent')}
+                )}
+                {!searching && layer !== 'all' && owners.length > 0 && (
+                  <div className="toc-chips toc-chips-sub">
+                    <button className={`toc-chip${owner === undefined ? ' active' : ''}`} onClick={() => pickOwner(undefined)}>
+                      {t('knowledge.chip.all')}
+                    </button>
+                    {owners.map((name) => (
+                      <button
+                        key={name}
+                        className={`toc-chip${owner === name ? ' active' : ''}`}
+                        onClick={() => pickOwner(name)}
+                      >
+                        {name}
                       </button>
-                    </div>
-                  )}
+                    ))}
+                  </div>
+                )}
 
-                  {showVersions && (
-                    <div className="pane">
-                      <h3>{t('knowledge.entry.versionsCount', { n: versions.data?.length ?? 0 })}</h3>
-                      {versions.loading && <State loading />}
-                      {versions.error && <div className="error small">{versions.error}</div>}
-                      {(versions.data ?? []).map((v) => (
-                        <button
-                          key={v.version}
-                          className="list-row"
-                          disabled={v.version === viewVersion}
-                          onClick={() => setViewVersion(v.version)}
-                        >
-                          <span className="list-main mono">
-                            v{v.version} › {v.status}
-                            {v.is_latest ? ` › ${t('knowledge.entry.current')}` : ''}
-                          </span>
-                          <span className="small muted">{fmtTime(v.updated_at)}</span>
+                <nav className="book-toc">
+                  {searching && (
+                    <div className="toc-section">
+                      {/* 顶部行：← 返回目录 · N 条（显示前 N）；截断时才给收窄按钮（K6） */}
+                      <div className="toc-search-head">
+                        <button className="tool-btn" onClick={exitSearch}>
+                          {t('knowledge.search.back')}
                         </button>
+                        <span className="toc-count">
+                          {t('knowledge.searchResults')} ›{' '}
+                          {truncated
+                            ? t('knowledge.search.truncated', { n: SEARCH_PAGE })
+                            : t('knowledge.search.count', { n: hits.length })}
+                          {/* B10：此处是**行内**在途标记（计数行右端），不是三态容器 —— 骨架条会与
+                              旧结果同屏、且每次击键都闪一次，故按 `graph.querying` 同制走 i18n 文案，
+                              不手写 `…`（`<State loading>` 用在上方目录/版本/正文三处）。 */}
+                          {searchRun.loading && (
+                            <span className="muted"> {t('knowledge.search.running')}</span>
+                          )}
+                        </span>
+                      </div>
+                      {truncated && (
+                        <div className="toc-scope">
+                          <button
+                            className={`toc-chip${scope === 'layer' ? ' active' : ''}`}
+                            disabled={layer === 'all'}
+                            onClick={() => setScope('layer')}
+                          >
+                            {t('knowledge.search.limitLayer')}
+                          </button>
+                          <button
+                            className={`toc-chip${scope === 'book' ? ' active' : ''}`}
+                            disabled={currentBook === undefined}
+                            onClick={() => setScope('book')}
+                          >
+                            {t('knowledge.search.limitBook')}
+                          </button>
+                        </div>
+                      )}
+                      {searchRun.error && <div className="error small toc-note">{searchRun.error}</div>}
+
+                      {/* 结果行（K7）：标题 + 副行「层 › 归属 › 书 › 模块」+ excerpt + 命中来源；不做高亮
+                          D-1：行抽成 `SearchHitRow`（原内联结构把标题压成 width:0），形状由
+                          `apps/web/test/knowledge-search-hit.test.ts` 锁。 */}
+                      {hits.map((r) => (
+                        <SearchHitRow
+                          key={r.id}
+                          entry={r}
+                          href={entryHref(r.id)}
+                          active={selectedId === r.id}
+                          onOpen={() => select(r.id)}
+                          layerText={layerLabel(r.layer)}
+                          moduleText={modLabel(r.module)}
+                        />
                       ))}
-                      {!versions.loading && (versions.data ?? []).length === 0 && (
-                        <div className="small muted">{t('knowledge.entry.none')}</div>
+
+                      {/* 检索无结果：行内空态 + 出路（K13） */}
+                      {!searchRun.loading && hits.length === 0 && (
+                        <div className="small muted toc-note">
+                          {t('knowledge.search.none', { q: queryText })}
+                          <br />
+                          {t('knowledge.search.hint')}
+                        </div>
                       )}
                     </div>
                   )}
 
-                  {/* K11 页边（§2.9）：关系计数 / tags / 版本史；冲突只读，不 resolve */}
-                  <aside className="entry-margin">
-                    <div className="small muted">
-                      {t('knowledge.entry.relations', { n: (metaEntry?.in_degree ?? 0) + (metaEntry?.out_degree ?? 0) })}
-                    </div>
-                    <div className="small mono muted">
-                      {t('knowledge.entry.degrees', { in: metaEntry?.in_degree ?? 0, out: metaEntry?.out_degree ?? 0 })}
-                    </div>
-                    {/* 条目自带 risk 字段（low/high…）：页边展示，与 tags/关系同层信息 */}
-                    {(metaEntry?.risk ?? '') !== '' && (
-                      <div className="small">
-                        <span className="muted">{t('knowledge.entry.risk', { level: metaEntry?.risk ?? '' })}</span>
-                      </div>
-                    )}
-                    {(metaEntry?.tags ?? []).length > 0 && (
-                      <div className="entry-margin-tags">
-                        <span className="small muted">{t('knowledge.tags')}</span>
-                        {(metaEntry?.tags ?? []).map((tag) => (
-                          <span key={tag} className="tag muted">
-                            {tag}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                    {myConflicts.length > 0 && (
-                      <button className="tool-btn" onClick={() => setShowConflicts((v) => !v)}>
-                        {t('knowledge.entry.conflicts', { n: myConflicts.length })}
-                      </button>
-                    )}
-                    {showConflicts &&
-                      myConflicts.map((c) => (
-                        <div key={c.id} className="entry-margin-conflict">
-                          <span className="small muted">{c.kind}</span>
-                          <button className="toc-chip" onClick={() => select(c.high_id)}>
-                            {c.high_id}
-                          </button>
-                          <button className="toc-chip" onClick={() => select(c.low_id)}>
-                            {c.low_id}
-                          </button>
-                        </div>
-                      ))}
-                  </aside>
-
-                  {/* B3：`entry-body` 类已删（它的等宽带底框规则压过正文的衬线 17px），正文外观只由 `.md-read` 决定。 */}
-                  <div className="md-read">
-                    {selectedContent.loading && <State loading />}
-                    {selectedContent.error !== undefined && !notFound && (
-                      <div className="error">{selectedContent.error}</div>
-                    )}
-                    {selectedContent.data &&
-                      (renderMode === 'source' || parsed === null ? (
-                        /* 源码视图：行号 + 复制 + 横向滚动（K8） */
-                        <div className="md-source-wrap">
-                          <div className="md-source-bar">
-                            <CopyButton text={content} label={t('common.copy')} />
-                            {tooLarge && <span className="small muted">{t('knowledge.entry.tooLarge')}</span>}
+                  {!searching &&
+                    view.map((bk) => {
+                      const isOpen = expanded.has(bk.key)
+                      return (
+                        <div key={bk.key} className="toc-section">
+                          {/* A2：书行是**展开切换**（不是导航实体），故不做 `<a>`：
+                              补 role/tabIndex/Enter·Space，键盘与读屏可用（DOM 结构不动，视觉零变化）。 */}
+                          <div
+                            className="toc-book"
+                            role="button"
+                            tabIndex={0}
+                            aria-expanded={isOpen}
+                            onClick={() => toggleBook(bk.node)}
+                            onKeyDown={(e) => keyboardToggle(e, () => toggleBook(bk.node))}
+                          >
+                            <div className="toc-book-main">
+                              <span className={`toc-chev${isOpen ? ' open' : ''}`}>▸</span>
+                              <span className="toc-bookname">{bk.node.book}</span>
+                              <span className="toc-leader" />
+                              <span className="toc-count">{bk.node.total}</span>
+                            </div>
+                            {/* 每本书恒有副行「层 › 归属」；global 无归属只显示「全局」（K2） */}
+                            <div className="toc-book-sub">
+                              <span>{layerLabel(bk.node.layer)}</span>
+                              {bk.node.owner !== undefined && bk.node.owner !== '' && (
+                                <>
+                                  <span className="toc-sep">›</span>
+                                  <span>{bk.node.owner}</span>
+                                </>
+                              )}
+                            </div>
                           </div>
-                          <pre className="md-source">
-                            {content.split('\n').map((line, i) => (
-                              <span key={i} className="md-line">
-                                <span className="md-lineno">{i + 1}</span>
-                                {line}
-                                {'\n'}
-                              </span>
-                            ))}
-                          </pre>
-                        </div>
-                      ) : (
-                        <>
-                          {/* K9：frontmatter 结构化 kv（等宽键 + 正文值）置于正文之上，未知键原样列出 */}
-                          {parsed.frontmatter !== undefined && (
-                            <table className="md-frontmatter">
-                              <tbody>
-                                {Object.entries(parsed.frontmatter).map(([key, value]) => (
-                                  <tr key={key}>
-                                    <th>{key}</th>
-                                    <td>{value}</td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
+
+                          {/* v7.1 P1：书的展开收起改走 `.collapse`（`grid-template-rows: 0fr→1fr`，
+                              高度可过渡）；**F2 起子层是 `path` 建的目录树**（`renderDirs`），
+                              目录行与条目行因此**常驻 DOM** —— 折叠态靠 `.collapse` 的
+                              `visibility: hidden` 挡出 Tab 序列与无障碍树（见 styles.css）。
+                              代价可控：未缓存的书 `tree` 恒为空树（懒加载，见 `view` 的 memo），
+                              所以「收起常驻」多出来的只有目录行，不含条目。 */}
+                          <div className={`collapse${isOpen ? ' open' : ''}`}>
+                            <div>
+                              {renderDirs(bk.tree.dirs, 0, bk.node)}
+                              {bk.tree.entries.map((entry) => renderEntry(entry, 0))}
+                            </div>
+                          </div>
+
+                          {/* B10：该书条目懒加载中 → 统一骨架（保留目录缩进容器） */}
+                          {isOpen && bk.cached === undefined && (
+                            <div className="toc-note">
+                              <State loading />
+                            </div>
                           )}
-                          <MarkdownBlocks blocks={parsed.blocks} />
-                        </>
-                      ))}
+
+                          {/* 截断可见：超过 catalog 的 5000 上限时明示剩余条数（K3/K6 → F2） */}
+                          {isOpen && bk.cached !== undefined && bk.node.total - bk.cached.length > 0 && (
+                            <div className="small muted toc-note">
+                              {t('knowledge.book.truncated', { n: bk.node.total - bk.cached.length })}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+
+                  {/* 过滤无匹配：行内空态，不是整页空态（K13） */}
+                  {!searching && view.length === 0 && (
+                    <div className="small muted toc-note">{t('knowledge.noResults')}</div>
+                  )}
+                </nav>
+
+                {!searching && (
+                  <div className="book-footer">
+                    {t('knowledge.total', { n: stats.data?.entries ?? 0 })}
+                    {needle === '' ? '' : ` › ${t('knowledge.moduleHits', { n: hitCount })}`}
                   </div>
-                </div>
-              )}
+                )}
+              </div>
+
+              {/* 右栏：书页（K4 书头 + K8 渲染/源码 + K9 frontmatter + K11 页边 + K12 软删） */}
+              <div className="book-content">
+                {notice !== '' && <div className="banner small swap-in">{notice}</div>}
+                {/* K12：软删后就地反馈 + 12s 内可撤销（hash 不变） */}
+                {removed !== null && (
+                  <div className="banner small swap-in">
+                    <span>{t('knowledge.entry.removed', { n: removed.references })}</span>
+                    <button className="tool-btn" onClick={() => void undoRemove()}>
+                      {t('knowledge.entry.undo')}
+                    </button>
+                  </div>
+                )}
+
+                {/* K4 书头：定稿目录 rev + 继承链；not_found / bad_request 一律回落「按实际条目列目录」 */}
+                {bookRef !== undefined && (
+                  <div className="book-head">
+                    <div className="book-head-row">
+                      <h2 className="book-head-title">{bookRef.book}</h2>
+                      <span className="small muted">
+                        {structure.data !== null && structure.data !== undefined
+                          ? `${t('knowledge.book.rev', { n: structure.data.revision })}${
+                              structure.data.frozen_at === null
+                                ? ''
+                                : ` › ${t('knowledge.book.frozenAt', { ts: fmtTime(structure.data.frozen_at) })}`
+                            }`
+                          : t('knowledge.book.derived')}
+                      </span>
+                    </div>
+                    {inherited.length > 0 && (
+                      <div className="book-head-inherit">
+                        <span className="small muted">{t('knowledge.book.inherited')}</span>
+                        {inherited.map((ref) => {
+                          const cut = ref.indexOf('/')
+                          const ly = cut === -1 ? ref : ref.slice(0, cut)
+                          const bk = cut === -1 ? '' : ref.slice(cut + 1)
+                          return (
+                            <button
+                              key={ref}
+                              className="toc-chip"
+                              onClick={() => onQuery?.({ layer: ly, owner: undefined, book: bk })}
+                            >
+                              {ref}
+                            </button>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {notFound ? (
+                  /* 深链未命中 / 已移出索引（§2.5）：带名称 + 出路（撤销 / 返回目录） */
+                  <div className="pane swap-in">
+                    <h3>{t('knowledge.notFound.title')}</h3>
+                    <div className="small muted">{t('knowledge.notFound.desc', { id: selectedId })}</div>
+                    {missError !== undefined && (
+                      <div className="small muted" style={{ marginTop: 'var(--s-2)' }} role="alert">
+                        {missError}
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', gap: 'var(--s-2)', marginTop: 'var(--s-3)' }}>
+                      <button className="tool-btn" onClick={() => void restoreEntry(selectedId)}>
+                        {t('knowledge.entry.undo')}
+                      </button>
+                      <button className="tool-btn" onClick={() => onSelect?.(undefined)}>
+                        {t('knowledge.search.back')}
+                      </button>
+                    </div>
+                  </div>
+                ) : meta === null ? (
+                  <div className="empty-hint swap-in">
+                    {/* B-2e §P3：📖 字形装饰已删（§3.D 默认禁 emoji）——空态只由两行文案承担。 */}
+                    <span>{t('knowledge.selectEntry')}</span>
+                    <span className="small" style={{ color: 'var(--mute)' }}>
+                      {t('knowledge.bookSummary', { entries: stats.data?.entries ?? 0, books: books.length })}
+                    </span>
+                  </div>
+                ) : (
+                  /* v7.1 P2：换条目时右栏内容**轻过渡**（纯 opacity，`key` 让动画随换条重放）。
+                     这里只加一层静态包裹盒：`.book-content` 内的既有规则全是后代选择器
+                      （≥1440 那条绝对定位的 `.entry-margin` 的 offsetParent 仍是 `.book-content`），
+                     故版式零位移。 */
+                  <div className="swap-in" key={meta.id}>
+                    <div className="entry-head">
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--s-2)' }}>
+                        <h2 style={{ margin: 0, flex: 1 }}>{meta.title}</h2>
+                        {/* K8：渲染 | 源码 segmented（MINOR-12：tooLarge 时无解析结果可渲染，渲染档禁用） */}
+                        <div className="seg">
+                          <button
+                            className={renderMode === 'render' && !tooLarge ? 'active' : ''}
+                            disabled={tooLarge}
+                            onClick={() => setRenderMode('render')}
+                          >
+                            {t('knowledge.view.render')}
+                          </button>
+                          <button
+                            className={renderMode === 'source' || tooLarge ? 'active' : ''}
+                            onClick={() => setRenderMode('source')}
+                          >
+                            {t('knowledge.view.source')}
+                          </button>
+                        </div>
+                        <button className="tool-btn" onClick={() => setShowVersions((v) => !v)}>
+                          {t('knowledge.entry.history')}
+                        </button>
+                        <button
+                          className="tool-btn"
+                          disabled={busyRemove}
+                          onClick={() => setPendingRemove({ id: meta.id, title: meta.title })}
+                        >
+                          {busyRemove ? t('knowledge.entry.softDeleting') : t('knowledge.entry.softDelete')}
+                        </button>
+                      </div>
+                      <div className="entry-meta" style={{ marginTop: 'var(--s-2)' }}>
+                        {/* A3：类型徽标改「`--ink` 文字 + 类型色 15% 混色底」（样式见 `.tag-type`）。
+                            旧写法把主题反色文字压在实心类型色上，浅色主题 8/8 只有 1.76–3.48:1。
+                            这里只注入类型色变量，双主题由 token 自己切。 */}
+                        <span
+                          className="tag tag-type"
+                          style={{ '--type-color': TYPE_COLOR[meta.type] ?? 'var(--type-other)' } as CSSProperties}
+                        >
+                          {meta.type}
+                        </span>
+                        <span className="tag">{layerLabel(meta.layer)}</span>
+                        {/* K11 + R-6 Q5：owner 是**关系列**，统一走 `Ref` 零件（不再自绘 tag 链接）。
+                            role/project 两层的 owner 各指向自己的页；其余层（global 无归属）保持静态 tag。 */}
+                        {meta.owner !== undefined && meta.owner !== '' ? (
+                          meta.layer === 'role' || meta.layer === 'project' ? (
+                            <Ref kind={meta.layer} name={meta.owner} />
+                          ) : (
+                            <span className="tag">{meta.owner}</span>
+                          )
+                        ) : null}
+                        <span className="tag muted">
+                          {meta.book} / {modLabel(meta.module)}
+                        </span>
+                        <span className="tag muted">v{meta.version}</span>
+                      </div>
+                    </div>
+
+                    {viewVersion !== undefined && (
+                      <div className="banner">
+                        <span className="tag warn">
+                          {t('knowledge.entry.viewing')} v{viewVersion}
+                        </span>
+                        <button className="tool-btn" onClick={() => setViewVersion(undefined)}>
+                          {t('knowledge.entry.backToCurrent')}
+                        </button>
+                      </div>
+                    )}
+
+                    {showVersions && (
+                      <div className="pane">
+                        <h3>{t('knowledge.entry.versionsCount', { n: versions.data?.length ?? 0 })}</h3>
+                        {versions.loading && <State loading />}
+                        {versions.error && <div className="error small">{versions.error}</div>}
+                        {(versions.data ?? []).map((v) => (
+                          <button
+                            key={v.version}
+                            className="list-row"
+                            disabled={v.version === viewVersion}
+                            onClick={() => setViewVersion(v.version)}
+                          >
+                            <span className="list-main mono">
+                              v{v.version} › {v.status}
+                              {v.is_latest ? ` › ${t('knowledge.entry.current')}` : ''}
+                            </span>
+                            <span className="small muted">{fmtTime(v.updated_at)}</span>
+                          </button>
+                        ))}
+                        {!versions.loading && (versions.data ?? []).length === 0 && (
+                          <div className="small muted">{t('knowledge.entry.none')}</div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* K11 页边（§2.9）：关系计数 / tags / 版本史；冲突只读，不 resolve */}
+                    <aside className="entry-margin">
+                      <div className="small muted">
+                        {t('knowledge.entry.relations', { n: (metaEntry?.in_degree ?? 0) + (metaEntry?.out_degree ?? 0) })}
+                      </div>
+                      <div className="small mono muted">
+                        {t('knowledge.entry.degrees', { in: metaEntry?.in_degree ?? 0, out: metaEntry?.out_degree ?? 0 })}
+                      </div>
+                      {/* 条目自带 risk 字段（low/high…）：页边展示，与 tags/关系同层信息 */}
+                      {(metaEntry?.risk ?? '') !== '' && (
+                        <div className="small">
+                          <span className="muted">{t('knowledge.entry.risk', { level: metaEntry?.risk ?? '' })}</span>
+                        </div>
+                      )}
+                      {(metaEntry?.tags ?? []).length > 0 && (
+                        <div className="entry-margin-tags">
+                          <span className="small muted">{t('knowledge.tags')}</span>
+                          {(metaEntry?.tags ?? []).map((tag) => (
+                            <span key={tag} className="tag muted">
+                              {tag}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      {myConflicts.length > 0 && (
+                        <button className="tool-btn" onClick={() => setShowConflicts((v) => !v)}>
+                          {t('knowledge.entry.conflicts', { n: myConflicts.length })}
+                        </button>
+                      )}
+                      {showConflicts &&
+                        myConflicts.map((c) => (
+                          <div key={c.id} className="entry-margin-conflict">
+                            <span className="small muted">{c.kind}</span>
+                            <button className="toc-chip" onClick={() => select(c.high_id)}>
+                              {c.high_id}
+                            </button>
+                            <button className="toc-chip" onClick={() => select(c.low_id)}>
+                              {c.low_id}
+                            </button>
+                          </div>
+                        ))}
+                    </aside>
+
+                    {/* B3：`entry-body` 类已删（它的等宽带底框规则压过正文的衬线 17px），正文外观只由 `.md-read` 决定。 */}
+                    <div className="md-read">
+                      {selectedContent.loading && <State loading />}
+                      {selectedContent.error !== undefined && !notFound && (
+                        <div className="error">{selectedContent.error}</div>
+                      )}
+                      {selectedContent.data &&
+                        (renderMode === 'source' || parsed === null ? (
+                          /* 源码视图：行号 + 复制 + 横向滚动（K8） */
+                          <div className="md-source-wrap">
+                            <div className="md-source-bar">
+                              <CopyButton text={content} label={t('common.copy')} />
+                              {tooLarge && <span className="small muted">{t('knowledge.entry.tooLarge')}</span>}
+                            </div>
+                            <pre className="md-source">
+                              {content.split('\n').map((line, i) => (
+                                <span key={i} className="md-line">
+                                  <span className="md-lineno">{i + 1}</span>
+                                  {line}
+                                  {'\n'}
+                                </span>
+                              ))}
+                            </pre>
+                          </div>
+                        ) : (
+                          <>
+                            {/* K9：frontmatter 结构化 kv（等宽键 + 正文值）置于正文之上，未知键原样列出 */}
+                            {parsed.frontmatter !== undefined && (
+                              <table className="md-frontmatter">
+                                <tbody>
+                                  {Object.entries(parsed.frontmatter).map(([key, value]) => (
+                                    <tr key={key}>
+                                      <th>{key}</th>
+                                      <td>{value}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            )}
+                            <MarkdownBlocks blocks={parsed.blocks} />
+                          </>
+                        ))}
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
-        )}
-      </State>
+          )}
+        </State>
+      </div>
 
       {/* K12 统一确认模态（B5：改走 `<ConfirmModal>`，Esc / 遮罩 / 滚动锁 / 焦点 / 危险色全站一套）。
           正文含条目名 + 影响说明（references 由 kbRemove 返回，故在事后 banner 里给数）。 */}

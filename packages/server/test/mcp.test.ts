@@ -40,7 +40,7 @@ describe('MCP stdio（手写 JSON-RPC，design.md §4 最小 5 工具 + design-v
     expect(info?.version).toBe(ownVersion)
   })
 
-  it('tools/list → 固定 44 个工具（kb 17 + graph 8 + arch 1 + 角色/团队/技能/上下文 18；v5 增 graph_merge；v6 角色/团队补齐增删改 + team_create→team_new；v6.2 skill 写入口；v10 arch_generate）', async () => {
+  it('tools/list → 固定 45 个工具（kb 17 + graph 8 + arch 1 + 角色/团队/技能/上下文 19；v5 增 graph_merge；v6 角色/团队补齐增删改 + team_create→team_new；v6.2 skill 写入口；v10 arch_generate；v8 F7 skill_categorize）', async () => {
     const tools = createMcpTools({ home: await makeTempDir('prism-mcp-') })
     const res = await handleRpcRequest(rpc('tools/list'), tools)
     const names = ((res?.result as { tools: Array<{ name: string }> }).tools).map((t) => t.name)
@@ -81,6 +81,7 @@ describe('MCP stdio（手写 JSON-RPC，design.md §4 最小 5 工具 + design-v
       'prism_skill_list',
       'prism_skill_install',
       'prism_skill_uninstall',
+      'prism_skill_categorize',
       'prism_role_render',
       'prism_team_list',
       'prism_team_get',

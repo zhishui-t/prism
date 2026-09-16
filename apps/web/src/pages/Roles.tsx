@@ -13,21 +13,25 @@ import { CountLine } from '../components/CountLine.tsx'
 import { NavRow } from '../components/NavRow.tsx'
 import { Ref } from '../components/ref.tsx'
 import { State } from '../components/State.tsx'
-import { CopyCommand, Drawer, EmptyBlock, PageHead, firstSentence } from '../components/ui.tsx'
+import { CopyCommand, Drawer, EmptyBlock, PageHead, firstSentence, stripStrongMarkers } from '../components/ui.tsx'
 import { useAsync } from '../components/useAsync.ts'
 import { hrefOf, navigate } from '../route.ts'
 import { useT, type DictKey } from '../i18n.ts'
 import { buildRoleInput } from './roles-form-logic.ts'
 
 /**
- * 角色页（v7 §4.2 R1-R8）：卡片目录 + 统一 Drawer + 真 CRUD。
+ * 角色页（v7 §4.2 R1-R8；F8 §一 层级重排）。
  *
- * 三条纪律：
+ * 四条纪律：
  * 1. **hash 是唯一选中真相**（R8）：点卡片 = 改 hash，关抽屉 = 清 sel；
  *    深链未命中 → notFound pane，`sel` 一变即自动恢复（不再延迟清 `notFoundName`）。
- * 2. **卡片正面回答三个问题**（R1）：技能 / 团队 / 校验问题三计数（引线对齐），
- *    `model`/`thought` 移入抽屉，不再留孤立 `⚠ N` 徽标。
- * 3. **`roles_dir` 必填且来自读回值**（design-v7 §2.4）：表单预填 `GET /api/roles`
+ * 2. **三档层级只用字号/字重/间距/折叠表达**（F8 §0.1）：第一眼带 = 名字行 → 一句话职责 →
+ *    原则强调块 → 徽章行；常用带 = `CountLine section` 分段头 + `Ref` 列；深挖带 = `<details>`。
+ *    不新增任何颜色/灰阶/字号档——着色只出现在状态（卡片底行校验 `lamp` = `--warn`、
+ *    校验问题 error 级文本 = `--madder`）。
+ * 3. **卡片底行三计数压成同行**（F8 §1.4）：技能 / 团队 / 校验（lamp 仅 >0 点灯），
+ *    `margin-top: auto` 把它钉在卡片底部。
+ * 4. **`roles_dir` 必填且来自读回值**（design-v7 §2.4）：表单预填 `GET /api/roles`
  *    的 `rolesDir`、可改、显式提交；读回为空则禁用提交，绝不猜宿主目录。
  */
 
@@ -96,6 +100,9 @@ export function RolesPage({ sel }: { sel?: string }) {
     }
     return map
   }, [teamList])
+
+  /** 本角色的所属团队（`roleTeams` 的反查）——卡片与抽屉共用一处，避免四处重复 `?? []`。 */
+  const teamRefsOf = (r: RoleDefinition): TeamRef[] => roleTeams.get(r.name) ?? []
 
   const key = sel?.trim() ?? ''
   /**
@@ -217,7 +224,7 @@ export function RolesPage({ sel }: { sel?: string }) {
       ) : (
         <div className="role-grid">
           {shown.map((r) => {
-            const teamRefs = roleTeams.get(r.name) ?? []
+            const teamRefs = teamRefsOf(r)
             const issues = r.issues ?? []
             return (
               <NavRow key={r.name} variant="card" href={hrefOf({ page: 'roles', sel: r.name })}>
@@ -225,8 +232,8 @@ export function RolesPage({ sel }: { sel?: string }) {
                   <span className="role-dot" style={{ background: colorOf(r.color) }} />
                   {r.name}
                 </div>
-                <div className="role-desc">{firstSentence(r.description)}</div>
-                {/* R1 固定底行：三计数 + 引线对齐（B7：引线零件统一为 `<CountLine>`） */}
+                <RoleGlance role={r} />
+                {/* F8 §1.1 固定底行：三计数**同行**（`margin-top: auto` 钉底）；lamp 仅 >0 点灯 */}
                 <div className="role-metrics">
                   <CountLine label={t('roles.card.skills')} count={r.skills.length} />
                   <CountLine label={t('roles.card.teams')} count={teamRefs.length} />
@@ -240,7 +247,11 @@ export function RolesPage({ sel }: { sel?: string }) {
 
       {role !== null && (
         <Drawer
-          width={560}
+          /* R-v8-1：详情抽屉加宽到 `min(680px, 72vw)`（编辑表单抽屉维持 560）。
+             ⚠ 宽度**不作为层级手段**（F8 §1.6）——层级仍由三段带子表达，加宽只影响常用带
+             一行的 `Ref` 个数。`.drawer-body` 内部滚动，窄屏由 `72vw` 兜住。 */
+          width={680}
+          maxVw={72}
           title={
             <span className="row">
               <span className="role-dot" style={{ background: colorOf(role.color) }} />
@@ -265,120 +276,112 @@ export function RolesPage({ sel }: { sel?: string }) {
             </>
           }
         >
-          {/* v7.1 P2：换角色时抽屉正文**轻过渡**（纯 opacity，`key` 让动画随换选中重放）。 */}
-          <div className="swap-in" key={role.name}>
-            <p className="role-drawer-desc">{role.description}</p>
+          {/* v7.1 P2：换角色时抽屉正文**轻过渡**（纯 opacity，`key` 让动画随换选中重放）。
+              `role-detail` = R-v8-1 的「内容列 66ch 居中」落点（MIN-4）：它必须挂在滚动容器
+              `.drawer-body` 的**内层**——那容器是详情 / 编辑表单 / 团队页三处共用的，改它越权。 */}
+          <div className="swap-in role-detail" key={role.name}>
+            {/* 第一眼带（F8 §1.3 同构）：与卡片正面**同一个组件**、同一顺序、同一视觉手段
+                —— 点开是放大，不是换重心。 */}
+            <RoleGlance role={role} />
 
-            <div className={`role-principle${role.principle.trim() === '' ? ' missing' : ''}`}>
-            <div className="rp-label">{t('roles.principle')}</div>
-            <div className="rp-text">{role.principle.trim() === '' ? t('roles.principleMissing') : role.principle}</div>
-          </div>
+            {/* 常用带·一：所属团队（R4 段一；`CountLine section` + `Ref kind="team"`） */}
+            <section>
+              <CountLine size="section" label={t('roles.teams')} count={teamRefsOf(role).length} />
+              {teamRefsOf(role).length === 0 ? (
+                <div className="rsec-empty">
+                  {t('roles.teams.empty')}{' '}
+                  <a className="ref" href={hrefOf({ page: 'teams' })}>{t('roles.teams.go')}</a>
+                </div>
+              ) : (
+                <div className="rsec-list">
+                  {teamRefsOf(role).map((tm) => (
+                    <Ref key={tm.teamId} kind="team" name={tm.teamId} title={tm.teamName} />
+                  ))}
+                </div>
+              )}
+            </section>
 
-          <div className="role-tags">
-            {role.model !== undefined && role.model !== '' && <span className="tag">{t('roles.form.model')}: {role.model}</span>}
-            {role.thoughtLevel !== undefined && role.thoughtLevel !== '' && <span className="tag">{t('roles.form.thought')}: {role.thoughtLevel}</span>}
-            {role.color !== undefined && role.color !== '' && <span className="tag">{t('roles.form.color')}: {role.color}</span>}
-            <span className="tag">{role.installed === true ? t('common.installed') : t('common.notInstalled')}</span>
-          </div>
-
-          {/* R4 段一：所属团队 */}
-          <section>
-            <CountLine size="section" label={t('roles.teams')} count={(roleTeams.get(role.name) ?? []).length} />
-            {(roleTeams.get(role.name) ?? []).length === 0 ? (
-              <div className="rsec-empty">
-                {t('roles.teams.empty')}{' '}
-                <a className="ref" href={hrefOf({ page: 'teams' })}>{t('roles.teams.go')}</a>
-              </div>
-            ) : (
+            {/* 常用带·二：白名单技能。
+                F5 落点：**只列 `role.skills`**（全局/团队带进来的那部分不在本页罗列）；
+                原先常驻的「声明 vs 有效」两行口径说明降级为分段头的 `title`（§1.5 #4）；
+                「有效 Skill」差集清单整段删除（§1.5 #3）——`effective` 请求保留，只供计数。 */}
+            <section>
+              <CountLine
+                size="section"
+                label={t('roles.capabilities')}
+                count={role.skills.length}
+                title={`${t('roles.effectiveHint')} · ${t('roles.skills.counts', {
+                  declared: role.skills.length,
+                  effective: effectiveSet?.skills.length ?? 0,
+                })}`}
+              />
               <div className="rsec-list">
-                {(roleTeams.get(role.name) ?? []).map((tm) => (
-                  <Ref key={tm.teamId} kind="team" name={tm.teamId} title={tm.teamName} />
+                {role.skills.length === 0 ? (
+                  <EmptyRef text={t('roles.skills.none')} />
+                ) : (
+                  role.skills.map((s) => <Ref key={s} kind="skill" name={s} />)
+                )}
+              </div>
+            </section>
+
+            {/* 常用带·三：知识范围（R-v8-4：落「常用」，不再是带说明行的小段）。
+                §1.5 #5：过滤串 `role/<name>` 降级为 `Ref` 的 `title`（`Ref` 自带 layer/owner 跳转）。 */}
+            <section>
+              <CountLine
+                size="section"
+                label={t('roles.knowledgeScope')}
+                count={(role.knowledge?.books?.length ?? 0) + (role.knowledge?.layers?.length ?? 0)}
+              />
+              <div className="rsec-list">
+                {(role.knowledge?.layers ?? []).map((l) => (
+                  <span key={l} className="tag">layer: {l}</span>
+                ))}
+                {(role.knowledge?.books ?? []).map((b) => (
+                  <Ref
+                    key={b}
+                    kind="book"
+                    name={b}
+                    layer="role"
+                    owner={role.name}
+                    title={`${t('roles.knowledge.filter')}: role/${role.name}`}
+                  />
                 ))}
               </div>
-            )}
-          </section>
-
-          {/* R4 段二：技能（声明 vs 有效） */}
-          <section>
-            <CountLine size="section" label={t('roles.capabilities')} count={role.skills.length} />
-            <div className="rsec-hint">{t('roles.effectiveHint')}</div>
-            <div className="rsec-sub">
-              {t('roles.skills.counts', { declared: role.skills.length, effective: effective.data?.skills.length ?? 0 })}
-            </div>
-            <div className="rsec-label">{t('roles.skills.declared')}</div>
-            <div className="rsec-list">
-              {role.skills.length === 0 ? (
-                <EmptyRef text={t('roles.skills.none')} />
-              ) : (
-                role.skills.map((s) => <Ref key={s} kind="skill" name={s} />)
-              )}
-            </div>
-            {(effectiveSet?.skills ?? []).some((s) => !role.skills.includes(s.name)) && (
-              <>
-                <div className="rsec-label">{t('roles.effectiveSkills')}</div>
-                <div className="rsec-list">
-                  {(effectiveSet?.skills ?? [])
-                    .filter((s) => !role.skills.includes(s.name))
-                    .map((s) => (
-                      <span key={s.name} className="rsec-eff">
-                        <Ref kind="skill" name={s.name} />
-                        <span className="rsec-mark">{s.available ? t('common.installed') : t('common.notInstalled')}</span>
-                      </span>
-                    ))}
-                </div>
-              </>
-            )}
-          </section>
-
-          {/* R4 段三：知识范围（按角色过滤目录，R5） */}
-          <section>
-            <CountLine
-              size="section"
-              label={t('roles.knowledgeScope')}
-              count={(role.knowledge?.books?.length ?? 0) + (role.knowledge?.layers?.length ?? 0)}
-            />
-            <div className="rsec-hint">
-              {t('roles.knowledge.filter')}: role/{role.name}
-              <a className="ref" href={hrefOf({ page: 'knowledge', query: { layer: 'role', owner: role.name } })}>
-                {t('roles.knowledge.all')}
-              </a>
-            </div>
-            <div className="rsec-list">
-              {(role.knowledge?.layers ?? []).map((l) => (
-                <span key={l} className="tag">layer: {l}</span>
-              ))}
-              {(role.knowledge?.books ?? []).map((b) => (
-                <Ref key={b} kind="book" name={b} layer="role" owner={role.name} />
-              ))}
-            </div>
-          </section>
-
-          {/* R7 校验段：code + 人话 + 出口 */}
-          {(role.issues ?? []).length > 0 && (
-            <section>
-              <CountLine size="section" label={t('roles.issues')} count={(role.issues ?? []).length} />
-              {(role.issues ?? []).map((issue: ValidationIssue, i: number) => (
-                <div key={i} className="rsec-issue">
-                  <code className="mono">{issue.code}</code>
-                  <span className={`rsec-issue-text${issue.level === 'error' ? ' err' : ''}`}>
-                    {ISSUE_KEYS[issue.code] !== undefined ? t(ISSUE_KEYS[issue.code]) : issue.message}
-                  </span>
-                  {FORM_FIXABLE.has(issue.code) ? (
-                    <button type="button" className="tool-btn" onClick={() => setForm({ mode: 'edit', initial: role })}>
-                      {t('roles.issue.fixInForm')}
-                    </button>
-                  ) : (
-                    <CopyCommand command={`prism role new ${role.name}`} label={t('roles.issue.copyCommand')} />
-                  )}
-                </div>
-              ))}
             </section>
-          )}
 
-          <details className="role-body">
-            <summary>{t('common.showDetails')}</summary>
-            <pre>{role.body}</pre>
-          </details>
+            {/* 深挖带·一：校验问题清单（R-v8-4：状态位由卡片底行 lamp 承担，清单**默认折叠**）。
+                error 级文本走 `--madder`（唯一的层级外着色之一，与层级无关）。 */}
+            {(role.issues ?? []).length > 0 && (
+              <details className="role-issues">
+                <summary>
+                  <CountLine size="section" bare label={t('roles.issues')} count={(role.issues ?? []).length} lamp />
+                </summary>
+                {(role.issues ?? []).map((issue: ValidationIssue, i: number) => (
+                  <div key={i} className="rsec-issue">
+                    <code className="mono">{issue.code}</code>
+                    <span className={`rsec-issue-text${issue.level === 'error' ? ' err' : ''}`}>
+                      {ISSUE_KEYS[issue.code] !== undefined ? t(ISSUE_KEYS[issue.code]) : issue.message}
+                    </span>
+                    {FORM_FIXABLE.has(issue.code) ? (
+                      <button type="button" className="tool-btn" onClick={() => setForm({ mode: 'edit', initial: role })}>
+                        {t('roles.issue.fixInForm')}
+                      </button>
+                    ) : (
+                      <CopyCommand command={`prism role new ${role.name}`} label={t('roles.issue.copyCommand')} />
+                    )}
+                  </div>
+                ))}
+              </details>
+            )}
+
+            {/* 深挖带·二：完整定义正文（§1.1：折叠是唯一去处）。
+                §1.5 #6：第一眼与卡面只留一句话职责，**描述全文**落到这里
+                （`role.body` 是 frontmatter 之后的正文，不含 `description`，故单独补一行）。 */}
+            <details className="role-body">
+              <summary>{t('common.showDetails')}</summary>
+              <p className="role-body-desc">{role.description}</p>
+              <pre>{role.body}</pre>
+            </details>
           </div>
         </Drawer>
       )}
@@ -415,6 +418,49 @@ export function RolesPage({ sel }: { sel?: string }) {
 
 /** 卡片底行一格与抽屉分段头（B7）此前是本页自带的 `Metric`/`SecHead` 两套引线零件，
  *  现已收进 `components/CountLine.tsx`（`.rm-*`/`.rsec-head` 两条 CSS 同步删除）。 */
+
+/**
+ * 第一眼带的**后三件**（F8 §1.1 / §1.3）：一句话职责 → 原则强调块 → 徽章行。
+ *
+ * 卡片正面与抽屉正文**共用这同一个组件**——这是「点开卡片 = 放大而不是换重心」的实现方式
+ * （顺序与视觉手段只有一处定义，改一处两边同时变）。
+ *
+ * 三档语法全靠字号/字重/间距表达（§0.1），不引入任何新颜色：
+ * - 职责 `.role-desc`：`--fs-200`/`--mute`，**1 行**、`firstSentence(desc, 22)`，全文进 `title`；
+ * - 原则 `.role-principle`：`--sheet-2` 底 + 左 3px `--buckram` 边 + `--r-2`，`--fs-300` 正文
+ *   **2 行截断**（`firstSentence(principle, 38)`）；空值走 `.missing` 变体（`--rule` 边 + `--mute` 标签）；
+ *   **F8-1**：渲染前先 `stripStrongMarkers` 剥掉强强调标记——本块是纯文本强调块（无粗体语义），
+ *   截断在首个句号会把成对的 `**…**` 截成半截标记，字面输出就是缺陷本身；
+ * - 徽章 `.role-tags`：中性 `.tag`（`--fs-100`）**≤ 3 个**——引擎 / 强度 / 装载。
+ *   ⚠ §1.5 #1：原先的 `color` 标签已删（颜色已由标题行的 `.role-dot` 表达，是同一信息的第二次陈述）。
+ */
+function RoleGlance({ role }: { role: RoleDefinition }) {
+  const t = useT()
+  /* F8-1：原则块是**纯文本**强调块（无粗体语义），`**` 进不了渲染 ⇒ 但截断会留下半截标记
+     （首个句号常把闭合的 `**` 截掉）。渲染前一律剥掉，成对 / 不成对同待遇；`missing` 也据
+     剥完的文本判——只剩标记的原则等于没写原则（走 `.missing` 变体，不显示一堆星号）。
+     `title` 用同一份剥完的**全文**：悬停看到的和块里看到的口径必须一致。 */
+  const principle = stripStrongMarkers(role.principle)
+  const missing = principle.trim() === ''
+  return (
+    <>
+      <div className="role-desc" title={role.description}>
+        {firstSentence(role.description, 22)}
+      </div>
+      <div className={`role-principle${missing ? ' missing' : ''}`}>
+        <div className="rp-label">{t('roles.principle')}</div>
+        <div className="rp-text" title={missing ? undefined : principle}>
+          {missing ? t('roles.principleMissing') : firstSentence(principle, 38)}
+        </div>
+      </div>
+      <div className="role-tags">
+        {role.model !== undefined && role.model !== '' && <span className="tag">{t('roles.form.model')}: {role.model}</span>}
+        {role.thoughtLevel !== undefined && role.thoughtLevel !== '' && <span className="tag">{t('roles.form.thought')}: {role.thoughtLevel}</span>}
+        <span className="tag">{role.installed === true ? t('common.installed') : t('common.notInstalled')}</span>
+      </div>
+    </>
+  )
+}
 
 function EmptyRef({ text }: { text: string }) {
   return <span className="rsec-empty">{text}</span>

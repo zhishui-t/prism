@@ -25,15 +25,19 @@ import type { BookNode } from '../src/api.ts'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-/** 知识库树只吃 `kbTree`（骨架）+ 统计 + 冲突 + 命中那本的 catalog（懒加载）。 */
-const data = vi.hoisted(() => ({ tree: [] as unknown[] }))
+/**
+ * 知识库：书列表骨架只吃 `kbTree` + 统计 + 冲突 + 命中那本的 catalog（懒加载）。
+ * ⚠ F2 起**目录行来自 catalog 的 `path`**（不再是 `kbTree.modules`），故这里必须给 catalog
+ * 真条目，否则书内是空树、目录行一个都渲染不出来。
+ */
+const data = vi.hoisted(() => ({ tree: [] as unknown[], catalog: [] as unknown[] }))
 
 vi.mock('../src/api.ts', () => ({
   api: {
     kbTree: () => Promise.resolve(data.tree),
     kbStats: () => Promise.resolve({ layers: {}, books: 1, entries: 1 }),
     kbConflicts: () => Promise.resolve([]),
-    kbCatalog: () => Promise.resolve([]),
+    kbCatalog: () => Promise.resolve(data.catalog),
     kbSearch: () => Promise.resolve([]),
     kbGet: () => Promise.resolve(null),
     kbVersions: () => Promise.resolve([]),
@@ -62,6 +66,35 @@ function book(name: string): BookNode {
   return { layer: 'project', owner: 'prism', book: name, modules: [{ name: 'm1', count: 2 }], total: 2 }
 }
 
+/**
+ * F2 的目录行由条目 `path` 建：`<...>/prism/doc/a.md` 与 `<...>/prism/doc/req/b.md`
+ * → 书内树 `doc › req`（doc 计 2、req 计 1）。书锚 = 最后一个与书名相等的段（`prism`）。
+ */
+function entry(id: string, title: string, path: string) {
+  return {
+    id,
+    version: 1,
+    title,
+    type: 'doc',
+    layer: 'project',
+    owner: 'prism',
+    book: 'prism',
+    module: 'doc',
+    status: 'active',
+    risk: '',
+    tags: [],
+    path,
+    in_degree: 0,
+    out_degree: 0,
+    updated_at: '2026-09-17T00:00:00.000Z',
+  }
+}
+
+const CATALOG = [
+  entry('kb-1', 'A', 'K:\\work\\project\\prism\\doc\\a.md'),
+  entry('kb-2', 'B', 'K:\\work\\project\\prism\\doc\\req\\b.md'),
+]
+
 let container: HTMLDivElement
 let root: Root
 
@@ -79,16 +112,22 @@ function one<T extends Element>(selector: string): T | null {
   return container.querySelector<T>(selector)
 }
 
-/** 点一下（阶段卡与目录行都不是 `<button>` 的场景各自在用例里走对应的事件）。 */
+/**
+ * 点一下（阶段卡与目录行都不是 `<button>` 的场景各自在用例里走对应的事件）。
+ * 第二次 `act` 冲刷微任务：书的条目是**懒加载**的（`kbCatalog().then(setState)`），
+ * 点开后要等这一轮落地才能看到目录行。
+ */
 async function click(target: Element): Promise<void> {
   await act(async () => {
     target.dispatchEvent(new MouseEvent('click', { bubbles: true }))
   })
+  await act(async () => {})
 }
 
 beforeEach(() => {
   setLang('zh')
   data.tree = [book('prism')]
+  data.catalog = CATALOG
   window.location.hash = ''
   container = document.createElement('div')
   document.body.appendChild(container)
@@ -145,17 +184,37 @@ describe('v7.1 工作流阶段：折叠态内容常驻，开合只由 `.open` �
   })
 })
 
-describe('v7.1 知识库目录树：书/模块收起后内容常驻 DOM', () => {
-  it('书未展开时模块行已在 DOM 里（DOM 常驻是高度可过渡的前提）', async () => {
-    await render(createElement(KnowledgePage, { query: { layer: 'project' } }))
+/**
+ * ⚠ **F2 契约变更（本段随实现重写，非「改测试迁就实现」）**：任务书把左栏从
+ * 「书 → 压平模块 → 条目」改成「书 → 目录多级嵌套 → 条目」，目录行不再来自
+ * `kbTree.modules`，而是该书 `kbCatalog` 条目的 `path` 现建的树
+ * （`knowledge-logic.ts#buildTree`，判据另有 node 单测）。
+ *
+ * 于是**旧断言的取数前提消失**：书未展开时该书条目还没懒加载 ⇒ 一条目录行都没有。
+ * `collapse` 的「收起后内容常驻 DOM」这条**红线本身没变**，只是被断言的对象从
+ * 「模块行」换成「目录行」，并且要先把书展开（触发懒加载）才存在。
+ */
+describe('v7.1 知识库目录树：书/目录收起后内容常驻 DOM', () => {
+  /** 目录行名（`.toc-modname`）：树形的可读证据。 */
+  function dirNames(): string[] {
+    return all('.toc-mod').map((n) => n.querySelector('.toc-modname')?.textContent ?? '')
+  }
 
-    expect(all('.toc-mod').length).toBeGreaterThan(0)
-    const wrap = one('.toc-section .collapse')
-    expect(wrap, '书行缺折叠容器').not.toBeNull()
-    expect(wrap?.classList.contains('open')).toBe(false)
+  it('展开书 → 按 `path` 现建目录树（doc › req），计数取子树条目数', async () => {
+    await render(createElement(KnowledgePage, { query: { layer: 'project' } }))
+    // 收起态：该书条目尚未懒加载 ⇒ 书内还建不出树
+    expect(dirNames()).toEqual([])
+
+    await click(one('.toc-book')!)
+    expect(dirNames()).toEqual(['doc', 'req'])
+    expect(all('.toc-mod')[0]?.querySelector('.toc-count')?.textContent).toBe('2')
+    expect(all('.toc-mod')[1]?.querySelector('.toc-count')?.textContent).toBe('1')
+    // 树要求「多级可辨」：层级由行内 `--toc-depth` 表达（根 0、子 1）
+    expect(all('.toc-mod')[0]?.getAttribute('style')).toContain('--toc-depth: 0')
+    expect(all('.toc-mod')[1]?.getAttribute('style')).toContain('--toc-depth: 1')
   })
 
-  it('点书 → 折叠容器加 `.open` 且 `aria-expanded` 为真；再点 → 模块行**仍在** DOM', async () => {
+  it('点书 → 折叠容器加 `.open` 且 `aria-expanded` 为真；再点 → 目录行**仍在** DOM（同一节点）', async () => {
     await render(createElement(KnowledgePage, { query: { layer: 'project' } }))
     const bookRow = one('.toc-book')
     expect(bookRow?.getAttribute('aria-expanded')).toBe('false')
@@ -164,25 +223,26 @@ describe('v7.1 知识库目录树：书/模块收起后内容常驻 DOM', () => 
     expect(one('.toc-section .collapse')?.classList.contains('open')).toBe(true)
     expect(one('.toc-book')?.getAttribute('aria-expanded')).toBe('true')
 
-    const mod = one('.toc-mod')
-    expect(mod).not.toBeNull()
+    const dir = one('.toc-mod')
+    expect(dir).not.toBeNull()
     await click(one('.toc-book')!)
     expect(one('.toc-section .collapse')?.classList.contains('open')).toBe(false)
-    expect(one('.toc-mod')).toBe(mod) // 收起不卸载：既有「模块行存在」类断言不会因动效失真
+    expect(one('.toc-mod')).toBe(dir) // 收起不卸载：既有「目录行存在」类断言不会因动效失真
   })
 
-  it('模块行收起同样只切 `.open`（条目行常驻，`aria-expanded` 不依赖过渡）', async () => {
+  it('目录行收起同样只切 `.open`（子层常驻，`aria-expanded` 不依赖过渡）', async () => {
     await render(createElement(KnowledgePage, { query: { layer: 'project' } }))
     await click(one('.toc-book')!)
 
-    const mod = one('.toc-mod')
-    expect(mod?.getAttribute('aria-expanded')).toBe('true')
-    await click(mod!)
+    const dir = one('.toc-mod')
+    expect(dir?.getAttribute('aria-expanded')).toBe('true')
+    const child = one('.toc-item')
+    await click(dir!)
     expect(one('.toc-mod')?.getAttribute('aria-expanded')).toBe('false')
-    // 目录树里只有两层折叠容器：书级 + 模块级（条目行是模块级容器的**直接内容**，
-    // 不再各自包一层——多一层就多一次溢出裁剪，条目行的悬停底与焦点环都会被切）
-    const wraps = all('.toc-section .collapse')
-    expect(wraps.length).toBe(2)
-    expect(wraps[1]?.classList.contains('open')).toBe(false)
+    // 折叠容器数 = 书级 1 + 目录节点数（每个目录节点自带一层；条目行是叶层的**直接内容**，
+    // 不再各自包一层——多一层就多一次溢出裁剪，悬停底与焦点环都会被切）
+    expect(all('.toc-section .collapse').length).toBe(1 + all('.toc-mod').length)
+    expect(one('.toc-node .collapse')?.classList.contains('open')).toBe(false)
+    expect(one('.toc-item')).toBe(child) // 子层不卸载
   })
 })

@@ -31,6 +31,8 @@
 > **两处口径说明**（都不是缺陷，是有理由的拒画或改名）：① `dataflow` 图谱里**没有 reads/writes 边**，无法画真正的数据读写流，故改口径为**依赖流向视图**（按目录角色分层 + 依赖边跨层流动，层次压缩后只留命中层）；② 生成器在真实图谱上**可能明确拒画**并给出理由（同目录扁平仓库无处分层、图谱无跨文件 CALLS 边、层数不足两级），此时报错而非产出坏图。派生逻辑硬约束见 `knowledge-base.md §4.4`。
 > **渲染器踩坑已被生成器吸收**（不再要求使用者知道）：节点文本不换行需自收敛、连线侧向契约（给了 `via` 即跳过 `endpoint-side-direction` 校验）、`edge-through-node` 无法靠命名通道避让（唯一解是自给 `via`）、标签默认落线段中点常压节点（需自定 `labelAt`）、各类最短段阈值（architecture 24px / dataflow 34px / lifecycle 32px）、同层节点净空 10px。生成器内部用「Hanan 网格 + Dijkstra（折点优先）」正交布线自动解这些约束。
 >
+> **v8 F7 技能分类三入口（2026-09-16，design-v8 §3）**：新增 `skill categorize <name...> [--category <分类>]`（CLI）、`prism_skill_categorize`（MCP）、`GET /api/skills/categories` + `POST /api/skills/categorize`（HTTP）；`GET /api/skills` 与 `prism_skill_list` 响应**合并 `category` 字段**（R-v8-5，技能页语义分组的唯一数据源；映射里没有的技能**不加该键**）。映射落 `<PRISM_HOME>/skill-categories.json`（tmp + rename 原子写、每次访问重读磁盘、坏文件降级空表），**不校验技能是否存在**（R3 不做审核——分类判断归宿主；也不碰宿主技能文件）。`category` 省略 / 空串 = 清除；`names` 必填非空。⚠ `GET /api/skills/categories` 必须注册在 `/api/skills/:name` **之前**（路由器首个匹配即命中）。
+>
 > **已废弃**：工作队列（`prism_work_*` 工具、`work` 命令、`/api/work/*`）——见 `work-queue.md` 顶部；下方 §1 的 `work` 分组与 §2.7 已失效。同理 `uninit` / `harness detect` / `skill sync` 均未实现。
 
 ---
@@ -85,6 +87,7 @@ prism
 │   ├── update              强制覆盖重装（v4）
 │   ├── uninstall           删除已装 Skill（v4）
 │   ├── effective           有效集（global ∪ team ∪ role；v4）
+│   ├── categorize          技能分类映射（写 <PRISM_HOME>/skill-categories.json；v8 F7）
 │   ├── sync                同步复制到 ~/.zcode/skills/  ❌ 未实现
 │   └── validate            校验 SKILL.md frontmatter
 │
@@ -146,7 +149,7 @@ prism
 
 ## 2. MCP 工具清单
 
-> **v6.2 取齐说明**（2026-09-12）：工具总数 = **44**（`packages/server/src/mcp/server.ts` 内
+> **v6.2 取齐说明**（2026-09-12）：工具总数 = **45**（`packages/server/src/mcp/server.ts` 内
 > `name: 'prism_*'` 逐条计数）。v4 由 31 增至 35；v5 多项目图谱合并（F-C2）新增 `prism_graph_merge`
 > （代码图谱 7 → 8）到 **36**；v6 把「角色 / 团队」补齐成**增删改查**（`new|edit|rm` 在 CLI / HTTP / MCP
 > 三入口**同名同位**）——新增 `prism_role_new|edit|rm`、`prism_team_list|edit|rm|render` 共 7 个，
@@ -160,6 +163,8 @@ prism
 > `❌ 未实现` = 全仓 grep 0 命中、**从未存在**的工具。
 > **任务中心（任务台账）整体移除**：`prism_task_register|report|status` 三工具随任务中心
 > 一并删除（第七轮 F2），**47 → 44**。
+> **v8 F7 技能分类**：新增 `prism_skill_categorize`（Skill 4 → 5），**44 → 45**；
+> 同时 `prism_skill_list` 响应合并 `category` 字段（与 HTTP `GET /api/skills` 同口径）。
 >
 > **口径已入守卫**：本文件与 `README.md` 的「总数 + 分组小计」由
 > `packages/server/test/tool-surface-drift.test.ts` 对着 `createMcpTools` 实测锁定——
@@ -254,14 +259,15 @@ prism
 | :--- | :--- |
 | `prism_context_pack` | 生成带预算的上下文包（v4 增 `layers/books/symbols/max_excerpt_chars`） |
 
-### 2.6 Skill（4）
+### 2.6 Skill（5）
 
 | 工具 | 作用 |
 | :--- | :--- |
 | `prism_skill_effective` | Skill 有效集（global ∪ 团队声明 ∪ 角色声明；v4 新增） |
-| `prism_skill_list` | 列出内置 Skill + 宿主是否已装；返回 `skills_dir`（= 写参数名，读回即可回填；v6.2 新增） |
+| `prism_skill_list` | 列出内置 Skill + 宿主是否已装；返回 `skills_dir`（= 写参数名，读回即可回填；v6.2 新增）。**v8 F7**：每个 skill 合并 `category` 字段（映射里没有则**不加键**；与 `GET /api/skills` 同口径） |
 | `prism_skill_install` | 安装内置 Skill 到显式 `skills_dir`（人写的同名 Skill 不覆盖，写 `.prism-new` 供对比；v6.2 新增） |
 | `prism_skill_uninstall` | 卸载 Skill（**只删 Prism 产物**；人写的保留并记入 `kept`；v6.2 新增） |
+| `prism_skill_categorize` | 技能分类映射（v8 F7）：写 `<PRISM_HOME>/skill-categories.json` 的 Prism 侧映射，**不校验技能是否存在、不碰宿主技能文件**；`category` 省略/空串 = 清除，`names` 必填非空 |
 
 ### 2.7 工作队列 ⚠ 已废弃（0）
 

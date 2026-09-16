@@ -87,4 +87,13 @@ describe('README / cli-mcp-surface 工具口径 vs 实际 MCP 工具（防漂移
     const missing = actualNames.filter((n) => !named.has(n))
     expect(missing, `cli-mcp-surface 未收录的工具: ${missing.join(', ')}`).toEqual([])
   })
+
+  // MIN-1（v8 代码检视）：`mcp/server.ts` 头注曾停在「共 44 个工具」而实测已是 45——
+  // 源码注释也是**对外口径**（读代码的人会当真），故一并纳入守卫。
+  it('mcp/server.ts 头注「共 N 个工具」= 实测工具数', () => {
+    const src = readRepoFile('packages/server/src/mcp/server.ts')
+    const m = src.match(/共\s*(\d+)\s*个工具/)
+    expect(m, 'mcp/server.ts 未找到「共 N 个工具」头注').not.toBeNull()
+    expect(Number(m![1])).toBe(actual.length)
+  })
 })

@@ -165,3 +165,12 @@ export {
   type SkillInstallOutcome,
   type SkillUninstallOutcome,
 } from './skill-create.js'
+
+// 技能分类映射（design-v8 §3 F7：HTTP `/api/skills/categorize` / MCP `prism_skill_categorize`
+// / CLI `prism skill categorize` 三入口共用同一存储实现）
+export {
+  SkillCategoryStore,
+  parseCategorizeInput,
+  type SkillCategoryMap,
+  type SkillCategorizeResult,
+} from './skill-categories.js'

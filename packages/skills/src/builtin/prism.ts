@@ -122,14 +122,14 @@ prism serve --ensure               # 后台幂等起控制台（已在跑则复�
 - **不编边**：图谱没有的关系不要推断；\`confidence\` 字段（EXTRACTED/INFERRED）照实呈现；
 - **不读全图**：用查询拿子图（\`limit\`/\`depth\` 有界），避免把整张图塞进上下文。
 
-## 5. 工具速查（44 个 MCP 工具）
+## 5. 工具速查（45 个 MCP 工具）
 
 | 分组 | 工具 |
 | :--- | :--- |
 | 知识库（17） | \`prism_kb_search\` \`prism_kb_get\` \`prism_kb_deposit\` \`prism_kb_convert\` \`prism_kb_import\` \`prism_kb_enrich\` \`prism_kb_graph\` \`prism_kb_tree\` \`prism_kb_stats\` \`prism_kb_catalog\` \`prism_kb_path\` \`prism_kb_remove\` \`prism_kb_restore\` \`prism_kb_conflicts\` \`prism_kb_resolve_conflict\` \`prism_kb_versions\` \`prism_kb_book_structure\` |
 | 代码图谱（8） | \`prism_graph_query\` \`prism_graph_path\` \`prism_graph_explain\` \`prism_graph_affected\` \`prism_graph_god_nodes\` \`prism_graph_summary\` \`prism_graph_status\` \`prism_graph_merge\` |
 | 架构图谱（1） | \`prism_arch_generate\`（五类图统一入口：workflow 传 \`team\`，architecture/sequence/dataflow 传 \`project\`，lifecycle 无入参） |
-| 角色团队（18） | \`prism_role_list\` \`prism_role_get\` \`prism_role_new\` \`prism_role_edit\` \`prism_role_rm\` \`prism_role_render\` \`prism_team_list\` \`prism_team_get\` \`prism_team_new\` \`prism_team_edit\` \`prism_team_rm\` \`prism_team_render\` \`prism_team_activate\` \`prism_context_pack\` \`prism_skill_effective\` \`prism_skill_list\` \`prism_skill_install\` \`prism_skill_uninstall\` |
+| 角色团队（19） | \`prism_role_list\` \`prism_role_get\` \`prism_role_new\` \`prism_role_edit\` \`prism_role_rm\` \`prism_role_render\` \`prism_team_list\` \`prism_team_get\` \`prism_team_new\` \`prism_team_edit\` \`prism_team_rm\` \`prism_team_render\` \`prism_team_activate\` \`prism_context_pack\` \`prism_skill_effective\` \`prism_skill_list\` \`prism_skill_install\` \`prism_skill_uninstall\` \`prism_skill_categorize\` |
 
 > **导入三件套**：\`prism_kb_convert\`（文档→Markdown，本地 anydoc 转换）→ 你提炼 →
 > \`prism_kb_deposit\` 逐条落库；或 \`prism_kb_import\` 一次扫描整个项目目录建引用索引。
@@ -411,6 +411,7 @@ Prism 不持有第二份副本 —— 因此**不存在"把角色/团队装进�
 | 删 | \`prism_team_rm\` / \`prism_role_rm\`（**不可逆**；CLI 删除默认宿主目录需 \`--yes\`） |
 | 查在不在 | \`prism_role_list\`（角色库）/ \`prism_team_list\`（团队库）/ \`prism_team_get { team_id }\`（单个团队定义全文） |
 | 校验 | \`prism team validate <id>\` / \`prism role validate\`（MCP 侧无独立校验工具，看 list/detail 的 \`issues\`） |
+| 给技能分类 | \`prism_skill_categorize { names, category? }\`：写 Prism 侧分类映射（\`<PRISM_HOME>/skill-categories.json\`），**不校验技能是否存在、不碰宿主技能文件**；\`category\` 省略/空串 = **清除**；读回走 \`prism_skill_list\`（每条技能带 \`category\`）或 \`GET /api/skills\` |
 
 > 增删改三动作在 CLI / HTTP / MCP **同名同位**（\`new|edit|rm\` ↔ \`prism_role_new|edit|rm\` ↔ \`POST|PATCH|DELETE /api/roles\`）。
 > 写路径的目录参数（\`teams_dir\` / \`roles_dir\`）**必填**——一律显式参数化，防误写真实宿主目录。
@@ -418,6 +419,7 @@ Prism 不持有第二份副本 —— 因此**不存在"把角色/团队装进�
 > \`<roles_dir>\`/\`<teams_dir>\` 由激活的适配器声明（如 WorkBuddy：\`~/.workbuddy/agents\`、\`~/.workbuddy/teams\`），
 > \`prism.yaml\` 可覆盖；用 \`prism harness show\` 看当前适配器。
 > **Skill 的装/卸三入口齐**：CLI \`prism skill install|uninstall|update\` ↔ MCP \`prism_skill_install|uninstall\` ↔ HTTP \`POST /api/skills/install|uninstall\`；写路径 \`skills_dir\` 必填（防误写真实宿主），先用 \`prism_skill_list\` 拿 \`skills_dir\` 回填。
+> **技能分类三入口齐**（v8 F7）：CLI \`prism skill categorize <name...> [--category <分类>]\` ↔ MCP \`prism_skill_categorize { names, category? }\` ↔ HTTP \`POST /api/skills/categorize\`；全量表 \`GET /api/skills/categories\`。映射独立于技能台账——**Prism 不管该不该分类，只管存**。
 
 ## 沉淀规则（团队定义里）
 

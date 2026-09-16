@@ -57,10 +57,25 @@
   --type-summary: #e06ba0;
   --type-other: #8b93a7;
 
-  /* ---- 字体族（brief-A §2.3，只用系统栈） ---- */
+  /* ---- 字体族（brief-A §2.3，只用系统栈） ----
+     F9 病因 1：`--font-read` 原为 `ui-serif, Georgia, "Songti SC", "SimSun", …`，
+     在 Windows 上中文回退 **SimSun（宋体）**——17px 下发灰发虚，且宋体无粗字重，
+     标题的 bold 是浏览器**合成粗**（笔画糊成双影）。修法：中文无衬线三档排到 SimSun 之前
+     ⇒ Windows 中文正文落 **Microsoft YaHei**（有真粗字重）。
+     - 只列**本机字体名**：不引网络字体、不随包分发字体（零版权风险；没装就自动跳下一个）。
+     - 栈首的 `ui-serif` / Georgia 不动：它们不含 CJK 字形，与本次中文回退无关。
+     - macOS 的 `"Songti SC"` **保留**（置于三档无衬线之后）：本机是 Windows、无法实测 macOS，
+       而 macOS 本就渲染正常（Songti SC 是 brief-A 为「衬线正文档」选的 CJK 面，且有真 Bold，
+       不存在合成粗）；在**无法实测**的平台上改观感，风险大于「两平台中文面孔统一」的收益。
+       删掉它也解决不了问题——栈尾泛型 `serif` 在 macOS 上照样回退到 Songti，
+       删除只是把「显式声明」换成「隐式回退」，更不可推理。要统一改无衬线时，这里是一处 token 改动。 */
   --font-ui: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
-  --font-read: ui-serif, Georgia, "Songti SC", "SimSun", "Noto Serif CJK SC", serif;
-  --font-code: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-read: ui-serif, Georgia, "Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei", "Songti SC", "Noto Serif CJK SC", serif;
+  /* 代码栈补中文同样三档（F9 病因 5/10：代码块内中文原样回退宋体，与 Consolas 混排后
+     注释列发虚）。ASCII 仍由 ui-monospace/Consolas 承担，等宽性质不变；
+     中文表意字在任一中文字体里都是**全角（1em）**，成串中文仍落在格线上，故不需要
+     真等宽的中文面；刻意**不选** `NSimSun`——它是宋体面孔，正是病因 1 要避开的那一档。 */
+  --font-code: ui-monospace, SFMono-Regular, Menlo, Consolas, "Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei", monospace;
 
   /* ---- 字号阶梯（brief-A §2.4：7 档 + 1 阅读档） ---- */
   --fs-100: 11px; /* 角标 / 计数 / 状态点同行小字 */
@@ -71,6 +86,17 @@
   --fs-600: 20px; /* 页面标题 */
   --fs-700: 26px; /* 书页题名 */
   --fs-read: 17px; /* 正文阅读（配 --lh-read） */
+
+  /* ---- 正文档字号（F9 病因 3/5：**阅读尺度**，仅 `.md-read` 消费）----
+     brief-A §2.4 的 7 档是**界面**尺度（页面标题 20 / 书页题名 26）；正文档的 `#`–`####`
+     与代码块另属阅读尺度（要压进 66ch 栏宽），故单列，值取自 design-v8 §1①。
+     不与界面档位互换、不被界面消费。h4 刻意 = 17px（正文同号）：h4 靠 `--font-ui`
+     + 600 字重与正文区分，而不是靠字号（诊断病因 3 的「h4 与正文同大」正是缺了族/重这两条）。 */
+  --fs-h1: 26px;
+  --fs-h2: 21px;
+  --fs-h3: 18px;
+  --fs-h4: 17px;
+  --fs-code: 13.5px; /* 围栏代码块（12px 在 17px 正文旁比例失衡，病因 5） */
 
   /* ---- 行高阶梯 ---- */
   --lh-tight: 1.25; /* 标题 */
@@ -256,6 +282,24 @@ body {
 /* B8：`.card` 与 `.pane` 视觉几乎相同（同 sheet / `--r-2` / rule / padding `--s-4`），§2.8 只定义一档容器
    → 5 处消费方（CodeGraph ×4 + EffectiveSkills 警告块）改走 `.pane`，本规则整块删除。 */
 
+/* ===== F3：长列表页「视口内双栏各自滚动」（无整页长滚） =====
+   口径（task-brief-v8 F3 / design-v8 §6.3）：知识库页 / 技能页 / 团队页的左右两栏
+   **各自在视口内独立滚动**，整页不再长滚。
+
+   高度链：`.layout` 是 `height: 100vh` 的网格（第 2 行 1fr）→ `.main`（`overflow: hidden`）
+   → `.page`（`height: 100%` + `box-sizing: border-box`，**内容盒** = 视口 − 顶栏 `--topbar-h`
+   − 页内边距）→ `.page-fill`（`height: 100%` = 上式的结果本身）。
+   故这里**不需要** `100vh − 顶栏 − 内边距` 那种减法（每改一次间距就要人工同步三处，§2.7
+   锚点 9 已废止），与 `.graph-page`（DEF-02）同一套结构。
+
+   `.page-fill` 是页内容区的**列向弹性盒**：页头 / 提示条按内容占高，主从区（`.md` /
+   `.book-layout`）吃剩余高度并在**各栏内部**滚动。两栏高度由同一行轨道决定 ⇒ 天然对齐视口。
+   小视口：主从区 `min-height: 0` 可被压扁，两栏各自的滚动条接手，不会溢出整页。 */
+.page-fill { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.page-fill > .page-head,
+.page-fill > .scope-head,
+.page-fill > .banner { flex: 0 0 auto; }
+
 .row { display: flex; gap: var(--s-2); align-items: center; flex-wrap: wrap; }
 .grow { flex: 1; min-width: 180px; }
 
@@ -384,6 +428,21 @@ tr:last-child td { border-bottom: 0; }
 .query-panel-head .tool-btn { padding: 2px var(--s-2); font-size: var(--fs-200); }
 .query-result { flex: 1 1 auto; min-height: 0; margin: 0; padding: var(--s-2); overflow: auto; white-space: pre-wrap; word-break: break-word; }
 
+/* ===== F4 调用链查询结果（`graph-rel-*` / `graph-cand`） =====
+   结果面板复用 `.query-panel` + `.query-result` 的壳与滚动；这里只补四类**布局**，
+   不自造颜色与字号档：对端符号的链接质感沿用既有 `.rel-link`。
+   - `white-space: normal`：`.query-result` 是给 `<pre>` 写的 `pre-wrap`，结构化行要复位；
+   - `.graph-rel-loc` 右对齐（宽面板里 file:line 贴右，扫读时与符号分栏）；
+   - 多义候选**不截断**（1 字符前缀可能上百条）：限高 + 自滚，不把面板撑成无限长。 */
+.graph-rel-list { white-space: normal; }
+.graph-rel-node { font-family: var(--font-code); margin-bottom: var(--s-1); }
+.graph-rel-dir { color: var(--mute); font-family: var(--font-code); }
+.graph-rel-peer { text-align: left; word-break: break-all; }
+.graph-rel-loc { margin-left: auto; }
+.graph-chain { line-height: var(--lh-ui); word-break: break-all; }
+.graph-cand { display: flex; flex-direction: column; gap: var(--s-1); }
+.graph-cand-list { max-height: 40vh; overflow-y: auto; }
+
 /* 窄屏：结果面板改到图谱下方并自带滚动，避免左右分栏过窄 */
 @media (max-width: 1000px) {
   .studio-split { flex-direction: column; }
@@ -392,8 +451,10 @@ tr:last-child td { border-bottom: 0; }
 
 /* ===== 知识库（书架式布局） ===== */
 
-/* 书架：至少吃满一屏（`min-height: 100%` 指 `.page` 内容区；内容更高时照常撑高由 `.page` 滚） */
-.book-layout { display: flex; gap: 0; border: 1px solid var(--rule); border-radius: var(--r-2); overflow: hidden; min-height: 100%; }
+/* 书架（F3）：`.page-fill` 的**剩余高度子项**——原 `min-height: 100%` 会在内容高于视口时
+   把那部分高度交给 `.page` 去滚（= 整页长滚）。改作弹性子项后两栏各自内滚：
+   `.book-sidebar`（目录树）与 `.book-content`（书页）都已有 `overflow-y: auto`。 */
+.book-layout { display: flex; gap: 0; border: 1px solid var(--rule); border-radius: var(--r-2); overflow: hidden; flex: 1 1 auto; min-height: 0; }
 
 /* 侧栏宽度 320 固定、`flex-shrink: 0` ⇒ 原 `min-width` 永不生效（死声明），删除；
    顺带满足 §2.7 锚点 9 的「CSS 内不得出现该像素字面量」验收。 */
@@ -404,7 +465,10 @@ tr:last-child td { border-bottom: 0; }
 
 .book-toc { padding: var(--s-2) 0 var(--s-5); }
 .book-toc .toc-section { margin-bottom: 2px; } /* <4px 微调豁免：V-8 */
-.book-toc .toc-item { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-1) var(--s-3) var(--s-1) var(--s-5); font-size: var(--fs-300); color: var(--mute); cursor: pointer; border-left: 2px solid transparent; }
+/* F2 目录树缩进：左内边距 = `--s-5`（既有基数）+ 层级 × `--s-3`；`--toc-depth` 由行内注入
+   （根层为 0，见 `Knowledge.tsx` 的 `depthStyle`）。**不新增颜色/字号**——父子只靠缩进与
+   chev 旋转区分。`var(--toc-depth, 0)` 的兜底让没有注入层级的调用点（如检索结果行）保持原值。 */
+.book-toc .toc-item { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-1) var(--s-3) var(--s-1) calc(var(--s-5) + var(--toc-depth, 0) * var(--s-3)); font-size: var(--fs-300); color: var(--mute); cursor: pointer; border-left: 2px solid transparent; }
 /* A2：条目行改真链接（可中键 / 可复制 hash）后复位 UA 下划线，颜色沿用上面的 `--mute`。 */
 .book-toc a.toc-item { text-decoration: none; }
 .book-toc .toc-item:hover { color: var(--ink); background: var(--sheet-2); }
@@ -427,12 +491,16 @@ tr:last-child td { border-bottom: 0; }
 .book-toc .toc-book-sub { display: flex; align-items: center; gap: var(--s-1); padding-left: calc(var(--s-3) + var(--s-2)); font-size: var(--fs-200); color: var(--mute); }
 /* 分隔符用 `--mute`：`--rule` 是发丝线色（1.3:1），当文字用等于不可见。 */
 .book-toc .toc-sep { color: var(--mute); }
-.book-toc .toc-mod { display: flex; align-items: baseline; gap: var(--s-2); padding: 3px var(--s-3) 3px var(--s-5); font-size: var(--fs-200); color: var(--mute); font-weight: 600; cursor: pointer; }
+/* 目录节点行（F2）：原「模块行」——同一条规则承载多级目录，缩进口径与 `.toc-item` 一致。 */
+.book-toc .toc-mod { display: flex; align-items: baseline; gap: var(--s-2); padding: 3px var(--s-3) 3px calc(var(--s-5) + var(--toc-depth, 0) * var(--s-3)); font-size: var(--fs-200); color: var(--mute); font-weight: 600; cursor: pointer; }
 .book-toc .toc-mod:hover { color: var(--ink); }
 .book-toc .toc-modname { flex-shrink: 0; }
 .book-toc .toc-note { padding: 3px var(--s-3) 3px var(--s-5); }
-.book-toc .toc-chev { display: inline-block; flex-shrink: 0; width: var(--fs-200); color: var(--mute); transition: transform var(--t-mid) var(--ease); }
-.book-toc .toc-chev.open { transform: rotate(90deg); }
+/* 折叠箭头是**全站唯一一处旋转箭头零件**：知识库目录树（`.book-toc`）与技能页分类组头
+   （`.skill-group`，F7 §3.5「复用既有类」）共用**同一条规则**——只加选择器、不复制取值，
+   免得两处的旋转时长 / 字号 / 字色各漂一处。 */
+.book-toc .toc-chev, .skill-group .toc-chev { display: inline-block; flex-shrink: 0; width: var(--fs-200); color: var(--mute); transition: transform var(--t-mid) var(--ease); }
+.book-toc .toc-chev.open, .skill-group .toc-chev.open { transform: rotate(90deg); }
 .book-toc .toc-leader { flex: 1; min-width: var(--s-2); border-bottom: 1px dotted var(--rule); transform: translateY(-3px); }
 .book-toc .toc-count { font-size: var(--fs-100); color: var(--mute); flex-shrink: 0; font-variant-numeric: tabular-nums; }
 
@@ -473,26 +541,77 @@ tr:last-child td { border-bottom: 0; }
    书页特有版式（≥1440 页边线）仍由后面的 `.book-content` 规则后置覆盖。
    阅读字体 / 字号行高 / 列宽 66ch（§2.8）；禁止两端对齐。 */
 .md-read { max-width: 66ch; font-family: var(--font-read); font-size: var(--fs-read); line-height: var(--lh-read); text-align: left; }
-.md-read .md-h1, .md-read .md-h2, .md-read .md-h3, .md-read .md-h4 { margin: var(--s-4) 0 var(--s-2); line-height: 1.3; }
+/* 标题阶梯（F9 病因 3）：此前只定义 margin/line-height，字号全交给 UA 默认
+   （h1 34px / h2 25.5px / h3 19.9px / h4 17px = 正文同大）⇒ 下半段阶梯塌平、大节顶距不足。
+   这里显式给 4 档字号 + 字重，族改 `--font-ui`（宋体无粗字重，h1/h2 的 bold 是**合成粗**；
+   雅黑有真粗字重——病因 1 的另一半）。顶距按层级拉开：h2 `--s-6`、h3 `--s-5`；
+   h1 取 `--s-5`（文档题名多出现在文首，上距大半被容器内边距吃掉，不必再大）。 */
+.md-read .md-h1, .md-read .md-h2, .md-read .md-h3, .md-read .md-h4 {
+  font-family: var(--font-ui);
+  line-height: var(--lh-tight);
+  color: var(--ink);
+}
+.md-read .md-h1 { margin: var(--s-5) 0 var(--s-2); font-size: var(--fs-h1); font-weight: 700; }
+.md-read .md-h2 { margin: var(--s-6) 0 var(--s-2); font-size: var(--fs-h2); font-weight: 600; }
+.md-read .md-h3 { margin: var(--s-5) 0 var(--s-2); font-size: var(--fs-h3); font-weight: 600; }
+.md-read .md-h4 { margin: var(--s-4) 0 var(--s-2); font-size: var(--fs-h4); font-weight: 600; }
 .md-read .md-p { margin: 0 0 var(--s-3); }
+/* h5/h6（组件降级为「加粗段落」，标记 `md-p md-h-plain`）：与正文可辨 —— UI 族 + 600 字重
+   + 16px；此前是「宋体 17px + 合成粗」，与正文只差一个糊乎乎的粗细（病因 3 的尾巴）。
+   选择器写成 `.md-p.md-h-plain`（0,3,0）：组件给的是 `md-p md-h-plain` 两个类，
+   复合写法压过 `.md-p` 而**不依赖源码顺序**（就近放在 `.md-p` 之后只是好读）。 */
+.md-read .md-p.md-h-plain { margin: var(--s-3) 0 var(--s-3); font-family: var(--font-ui); font-size: var(--fs-500); font-weight: 600; line-height: var(--lh-tight); }
 .md-read .md-ul, .md-read .md-ol { margin: 0 0 var(--s-3); padding-left: var(--s-5); }
 .md-read .md-li-plain { list-style: none; color: var(--mute); }
-.md-read .md-code { font-family: var(--font-code); font-size: var(--fs-300); }
+/* 行内 code（病因 5）：原来是 `--fs-300`=13px，楔进 17px 正文里偏小；改 0.85em（≈14.5px）
+   跟随正文档缩放。**只改字号**：`.md-code` 本身没有 color 规则，探针测到的 `--mute` 值来自
+   **引用块**的 color 继承（诊断举例正处引用块内）——加 color 会把引用块内的弱化打破
+   （design-review-v8 修订 #14）。与代码块的 `--fs-code`(13.5px) 不必同号：行内嵌在正文里、
+   块级自成一段，各有各的甜点。 */
+.md-read .md-code { font-family: var(--font-code); font-size: 0.85em; }
 .md-read .md-pre { background: var(--sheet-2); border: 1px solid var(--rule); border-radius: var(--r-1); padding: var(--s-2); overflow-x: auto; }
-.md-read .md-code-block { font-family: var(--font-code); font-size: var(--fs-200); white-space: pre; }
+.md-read .md-code-block { font-family: var(--font-code); font-size: var(--fs-code); line-height: 1.6; white-space: pre; }
 .md-read .md-lang { display: block; font-size: var(--fs-100); color: var(--mute); }
 .md-read .md-quote { margin: 0 0 var(--s-3); padding-left: var(--s-3); border-left: 3px solid var(--buckram); color: var(--mute); }
 .md-read .md-hr { border: 0; border-top: 1px solid var(--rule); margin: var(--s-4) 0; }
-.md-read .md-table { border-collapse: collapse; margin: 0 0 var(--s-3); }
+/* 表格（F9 病因 6）：原 `table-layout: auto` + 中文逐字可断 ⇒ 首列被压到 3 字宽、**逐字竖排**、
+   行高炸开、右列大片留白（英文表格正常 ⇒ 是 CJK 断行策略问题，不是宽度问题）。三条修法：
+   1. `fixed` + 首列 25%：列宽不再由「最短可断行」决定；首列多为短标识/字段名（决策项、名称、键），
+      1/4 够放 5–6 个汉字，其余列等分剩余（GFM 表格无合并单元格，fixed 不引入新损失）；
+   2. `word-break: keep-all` 禁 CJK 逐字断行（只在空格/标点后换行）；`overflow-wrap: anywhere`
+      兜底——超长不可断 token（URL / 长 code）仍能被折断，不撑破列。两者是**配合**关系：
+      `anywhere` 会参与 min-content 计算（`break-word` 不会），故 keep-all 不会把列撑成不可收缩；
+   3. 表头字号/色对齐 td：全局 `th { font-size: var(--fs-200); color: var(--mute) }`（本文件 §表格段）
+      让表头比正文小 5px 又发灰（头轻脚重），这里 `inherit` + `--ink` 拉回，只留 600 字重。
+   长表头/长 code 在固定列内正常换行；`.md-table-wrap` 的横滚保留（列内不可断内容仍可能顶出表宽）。 */
+.md-read .md-table { table-layout: fixed; border-collapse: collapse; margin: 0 0 var(--s-3); }
 .md-read .md-table-wrap { overflow-x: auto; }
-.md-read .md-th, .md-read .md-td { border: 1px solid var(--rule); padding: 2px var(--s-2); text-align: left; }
+.md-read .md-table th:first-child, .md-read .md-table td:first-child { width: 25%; }
+.md-read .md-th, .md-read .md-td { border: 1px solid var(--rule); padding: 2px var(--s-2); text-align: left; word-break: keep-all; overflow-wrap: anywhere; }
+.md-read .md-th { font-size: inherit; color: var(--ink); }
 .md-read .md-num { font-variant-numeric: tabular-nums; text-align: right; }
 .md-read .md-image { color: var(--mute); font-size: var(--fs-200); }
 .md-read .md-link { color: var(--buckram); }
 
-/* K9 frontmatter：等宽键 + 正文值（B4：同样提到全局，Skills 详情共用） */
+/* K9 frontmatter：等宽键 + 正文值（B4：同样提到全局，Skills 详情共用）。
+   F9-2（键列逐字母竖排，实测 **20px × 251px**）——**病因 6 的同一个病，落在另一个组件上**：
+   上面 `.md-table` 的 fixed/keep-all 修法覆盖不到这里，因为把键列压扁的不是「最短可断行」，
+   是**继承来的断行许可**——Skills 详情把整列包在 `.skill-detail { overflow-wrap: anywhere }` 里，
+   而 `anywhere` 会参与 min-content 计算（见上方 §表格段第 2 条），`table-layout: auto` 于是把
+   键列压到单字符宽，`description` 竖成 11 行。两主题同一条规则，故两主题同修。
+   修法与表格**同因不同形**：键是短标识（`name` / `description` / `allowed-tools`），横排是它
+   唯一的读法，不必再谈「断在哪」——
+   1. `white-space: nowrap` 断掉一切换行机会（含中文键名），`overflow-wrap: normal` 反向声明把
+      继承来的 `anywhere` 清掉：键列**自己说了算**，不再依赖 `.skill-detail` / `.book-content`
+      这些祖先作用域（祖先改了不会静默回退）；
+   2. `width: 1%` 在 auto 布局里是「尽可能窄」的提示，与 nowrap 配合 = 列宽贴合键宽，剩余宽度
+      全给值列。不用定宽百分比（`.md-table` 的 25%）：键长 4–13 字符不等，定宽要么给短键留白、
+      要么让长键白折，而这正是本缺陷的形状；
+   3. 值列（td）**保留**兜底断行：长 URL / 无空格串仍能在列内折断，不撑破详情 66ch 居中列
+      （刚性只加在键列——键是 YAML 键，短标识是它的输入面；值才是自由文本）。 */
 .md-frontmatter { border-collapse: collapse; margin-bottom: var(--s-4); font-size: var(--fs-200); }
-.md-frontmatter th { padding: 2px var(--s-2) 2px 0; color: var(--mute); font-family: var(--font-code); font-weight: 400; text-align: left; vertical-align: top; }
+.md-frontmatter th { padding: 2px var(--s-2) 2px 0; color: var(--mute); font-family: var(--font-code); font-weight: 400; text-align: left; vertical-align: top; white-space: nowrap; overflow-wrap: normal; width: 1%; }
+.md-frontmatter td { overflow-wrap: anywhere; }
 
 /* 源码视图：行号 + 横向滚动（B4：全局 —— Skills 详情的源码视图此前同样零样式） */
 .md-source-wrap { position: relative; }
@@ -563,12 +682,17 @@ tr:last-child td { border-bottom: 0; }
 .role-card:hover { border-color: var(--buckram); }
 .role-card .role-name { font-size: var(--fs-500); font-weight: 600; margin-bottom: var(--s-1); display: flex; align-items: center; gap: var(--s-2); }
 .role-card .role-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
-.role-card .role-desc { font-size: var(--fs-200); color: var(--mute); line-height: var(--lh-ui); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.role-card .role-tags { display: flex; gap: var(--s-1); flex-wrap: wrap; margin-top: var(--s-2); }
+/* F8 §1.1 第一眼带（卡面与抽屉**同构**，故不再按容器分写）：
+   一句话职责收 **1 行**（§1.5 #2，原 2 行），全文进 `title`。 */
+.role-desc { margin: 0 0 var(--s-3); font-size: var(--fs-200); color: var(--mute); line-height: var(--lh-ui); display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+/* 徽章行：中性 `.tag`（`--fs-100`）≤ 3 个，`--s-1` 间距（§1.1） */
+.role-tags { display: flex; gap: var(--s-1); flex-wrap: wrap; margin-top: var(--s-2); }
 /* B9：`.role-tag`（无边框且只在 `.role-card` 内命中 ⇒ 卡外 7 处等于零样式）已并入 `.tag` 一族。 */
 
-/* 卡片固定底行：标签 ······ 计数（引线 / 数字对齐 / 校验 lamp，§2.9） */
-.role-metrics { margin-top: auto; padding-top: var(--s-2); border-top: 1px solid var(--rule); display: flex; flex-direction: column; gap: 2px; }
+/* F8 §1.1 卡片固定底行：三计数**压成同行 1 行**（§1.4 高度代价里那 −40px 的来源）。
+   `margin-top: auto` 仍把它钉在卡片底部；引线由 `.count-line` 自带（B7 口径不变）。 */
+.role-metrics { margin-top: auto; padding-top: var(--s-2); border-top: 1px solid var(--rule); display: flex; flex-direction: row; gap: var(--s-3); }
+.role-metrics .count-line { flex: 1; min-width: 0; }
 /* 卡片三计数此前是本地的 `.rm-*`，已并入 `.count-line.compact`（B7）。 */
 
 /* 统一互链（§3.3）：1px 虚线，hover 转 buckram；空名字不可点 */
@@ -595,27 +719,56 @@ tr:last-child td { border-bottom: 0; }
 .pane-head .count-line.section { font-size: var(--fs-500); color: var(--ink); }
 .count-line .count-lamp { width: 8px; height: 8px; border-radius: 50%; background: var(--warn); flex: none; }
 
-/* 抽屉四段（R4） */
-.role-drawer-desc { margin: 0 0 var(--s-3); font-size: var(--fs-300); color: var(--mute); line-height: var(--lh-ui); }
+/* 抽屉三段带（F8 §0.1）——第一眼带的 `.role-desc` / `.role-principle` / `.role-tags` 见上方共用规则。 */
 .role-principle { margin-bottom: var(--s-3); padding: var(--s-3); background: var(--sheet-2); border-left: 3px solid var(--buckram); border-radius: var(--r-2); }
 .role-principle.missing { border-left-color: var(--rule); }
 .role-principle .rp-label { margin-bottom: var(--s-1); font-size: var(--fs-100); font-weight: 600; color: var(--buckram); }
 .role-principle.missing .rp-label { color: var(--mute); }
-.role-principle .rp-text { font-size: var(--fs-300); line-height: var(--lh-ui); }
+/* 原则正文 **2 行截断 ≤ 38 字**（§1.1）；全文随 `role.body` 进深挖折叠。 */
+.role-principle .rp-text { font-size: var(--fs-300); line-height: var(--lh-ui); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 /* 分段头此前是本地的 `.rsec-head/-leader/-count`，已并入 `.count-line.section`（B7）。 */
-.rsec-hint, .rsec-sub, .rsec-label { margin-bottom: var(--s-1); font-size: var(--fs-100); color: var(--mute); }
-.rsec-sub { font-variant-numeric: tabular-nums; }
-.rsec-label { margin-top: var(--s-2); }
+/* `.rsec-hint`/`.rsec-sub`（声明 vs 有效两行常驻说明）与 `.rsec-eff`/`.rsec-mark`（有效 Skill 差集行）
+   随 F8 §1.5 #3/#4 一并删除——口径说明降级为分段头 `title`，差集清单整段不再渲染。
+   `.rsec-label` 保留：`components/SkillScopeList.tsx` 仍在用。 */
+.rsec-label { margin: var(--s-2) 0 var(--s-1); font-size: var(--fs-100); color: var(--mute); }
 .rsec-list { display: flex; flex-wrap: wrap; gap: var(--s-1) var(--s-3); font-size: var(--fs-200); }
 .rsec-empty { font-size: var(--fs-200); color: var(--mute); }
 .rsec-issue { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; padding: var(--s-1) 0; font-size: var(--fs-200); }
 .rsec-issue-text { flex: 1; min-width: 12ch; }
+/* 唯一的层级外着色之一：error 级校验文本（与层级无关，§0.1） */
 .rsec-issue-text.err { color: var(--madder); }
-.rsec-eff { display: inline-flex; align-items: center; gap: var(--s-1); }
-.rsec-mark { font-size: var(--fs-100); color: var(--mute); }
-.role-body { margin-top: var(--s-4); }
-.role-body summary { cursor: pointer; font-size: var(--fs-200); color: var(--mute); }
+/* 深挖带（§0.1：**默认折叠**，summary 一行常驻）——校验问题清单与完整定义正文共用同一 summary 口径。 */
+.role-issues, .role-body { margin-top: var(--s-4); }
+.role-issues > summary, .role-body > summary { cursor: pointer; font-size: var(--fs-200); color: var(--mute); }
+/* F8 §2.1 团队页深挖带（沉淀规则 / 仲裁链）：**与上面两条同口径**（`--fs-200` + `--mute` 的 summary、
+   `--s-4` 顶距）——单独成条而非并入上面的组选择器，是为了让「角色页深挖带」那两条规则的范围
+   与 `styles-role-hierarchy.test.ts` 的断言一字不动（同值不同选择器，不是第二套口径）。 */
+.team-deep { margin-top: var(--s-4); }
+.team-deep > summary { cursor: pointer; font-size: var(--fs-200); color: var(--mute); }
+/* F8 §3.1 技能页第一眼②：描述**直接作为详情正文**（§3.4 #6 删「关于」段头）——不截断，
+   左侧列表行那 32 字摘要（`.md-row .s`）只是它的入口。字色不声明（继承 `--ink`，
+   第一眼正文不上色，§0.1）。 */
+.skill-desc { margin: 0 0 var(--s-2); font-size: var(--fs-300); line-height: var(--lh-ui); }
+/* F8 §3.1 技能页深挖带（§3.4 #1/#4）：安装路径 + SKILL.md 全文（含 render｜源码档位）默认折叠；
+   summary 口径与角色页 `.role-body` 逐值相同——同样单独成条而非并入上面的组选择器，
+   免得动到 `styles-role-hierarchy.test.ts` 的断言面（同值不同选择器，不是第二套口径）。 */
+.skill-deep { margin-top: var(--s-4); }
+.skill-deep > summary { cursor: pointer; font-size: var(--fs-200); color: var(--mute); }
+/* F8 §2.1 团队第一眼②：干什么（description）——2 行截断，全文进 `title`。
+   与卡片的 `.role-desc`（1 行）同族但不同档：团队页这里是首屏唯一正文行，给 2 行 `--fs-300`。 */
+.pane-desc { margin: 0; font-size: var(--fs-300); line-height: var(--lh-ui); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.role-issues .rsec-issue:first-of-type { margin-top: var(--s-1); }
+/* §1.5 #6：描述全文（第一眼只留一句话职责）落在深挖折叠里，与深挖档同口径。 */
+.role-body-desc { margin: var(--s-2) 0 0; font-size: var(--fs-200); color: var(--mute); line-height: var(--lh-ui); }
 .role-body pre { margin-top: var(--s-2); padding: var(--s-3); background: var(--sheet-2); border-radius: var(--r-2); white-space: pre-wrap; font-size: var(--fs-200); line-height: var(--lh-ui); }
+/* v8 R-v8-1 闭合点（评审 MIN-4）：角色**详情**抽屉的内容列 66ch 居中。宽度改 680/72vw 只兑现了
+   「常用带一行多放几个 Ref」，设计明文的「内容列 66ch 居中」此前没落（正文仍满宽贴边）。
+   口径与 `.skill-detail`（技能详情）同源：`max-width: 66ch` + `margin: 0 auto`（块级触顶后
+   auto 外边距均分剩余宽度），**不新增列宽档**。
+   ⚠ 刻意**不写进共用的 `.drawer-body`**：那是详情 / 编辑表单（560）/ 团队页三处抽屉共用的
+   滚动容器，改默认等于越权改另两处版式；且上限落在滚动容器上会让滚动条贴到 66ch 列边
+   （`.skill-detail` 同样是滚动容器 `.md-detail` 的**内层**包裹，此处照抄该结构）。 */
+.role-detail { max-width: 66ch; margin: 0 auto; }
 .field > span { font-size: var(--fs-200); color: var(--mute); }
 .field .hint { font-size: var(--fs-100); color: var(--mute); }
 
@@ -729,9 +882,12 @@ tr:last-child td { border-bottom: 0; }
 .page-head .page-actions { margin-left: auto; display: flex; align-items: center; gap: var(--s-2); }
 
 /* 主从布局：左列表 + 右详情（brief-A §2.8：≥1280 唯一主档，不做窄屏塌缩）。
-   高度：`.md` 吃满「页面内容区 − 页头预留（--s-7）」，列表用 `max-height: 100%` 内部滚动
-   （与旧的 `视口 − 顶栏 − 内边距 − s-7` 逐值相同，但改间距时不必再人工同步）。 */
-.md { display: grid; grid-template-columns: minmax(220px, 300px) minmax(0, 1fr); gap: var(--s-3); align-items: start; height: calc(100% - var(--s-7)); min-height: 0; }
+   高度（F3）：`.md` 是 `.page-fill` 的**剩余高度子项**（`flex: 1 1 auto` + `min-height: 0`），
+   两栏由 `align-items: stretch` 拉齐到同一行高 ⇒ 左右等高且都对齐视口；
+   左列表 `overflow-y: auto`、右详情 `overflow-y: auto`（见下）**各自**滚动。
+   原 `height: calc(100% - var(--s-7))` 是「按页头预留 48px」的减法：技能页还多一条
+   `.scope-head`、团队页还多提示条，逐页各算一个值必然失准，故交给弹性盒。 */
+.md { display: grid; grid-template-columns: minmax(220px, 300px) minmax(0, 1fr); gap: var(--s-3); align-items: stretch; flex: 1 1 auto; min-height: 0; }
 
 .md-list {
   background: var(--sheet);
@@ -741,7 +897,10 @@ tr:last-child td { border-bottom: 0; }
   max-height: 100%;
   overflow-y: auto;
 }
-.md-detail { min-width: 0; }
+/* F3：右详情自己滚（左列表已在 `.md-list` 上滚）——两栏各自独立，整页不滚。
+   内部横向滚动容器（`.md-source` / `.md-read .md-pre` / `.table-scroll` / `.flow-scroll`）
+   只滚 X 轴，不与这里的 Y 轴嵌套成双滚动条。 */
+.md-detail { min-width: 0; min-height: 0; overflow-y: auto; }
 
 .md-row {
   display: block;
@@ -771,7 +930,7 @@ tr:last-child td { border-bottom: 0; }
   font-size: var(--fs-200);
   line-height: var(--lh-ui);
   display: -webkit-box;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 1; /* F8 §3.4 #5：2 行 → **1 行**（配 `firstSentence(desc, 32)`；全文进详情第一眼） */
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
@@ -861,7 +1020,8 @@ tr:last-child td { border-bottom: 0; }
 .md-row .src, .md-row .host { display: inline-block; margin-left: var(--s-2); font-size: var(--fs-100); color: var(--mute); }
 .md-row .src { font-family: var(--font-code); }
 
-/* 页头三轴计数（每组两行引线，B7）+ 只看未装 + 过滤 */
+/* 页头计数（每组两行引线，B7）+ 只看未装 + 过滤。
+   F8 §3.4 #3：原「内置 / 外部」一列已删（三轴 → 两轴），本组规则本身不变。 */
 .scope-head { display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap; margin-bottom: var(--s-2); }
 .scope-head .spacer { margin-left: auto; }
 .scope-counts { display: flex; gap: var(--s-5); flex: 1 1 auto; min-width: 0; }
@@ -878,6 +1038,10 @@ tr:last-child td { border-bottom: 0; }
 
 /* 有效集列表（未装 = lamp + 边线，不上第二个徽标） */
 .scope-groups { display: flex; flex-direction: column; gap: var(--s-2); }
+/* R-v8-7：只有列进 `SkillScopeList.foldedSources` 的来源组走 `<details>`（默认收起）；
+   组头就是 `summary.rsec-label`（原生三角即折叠的可发现入口，计数 `{label}（{n}）` 常驻）。
+   其余组仍是 `<div>` + `.rsec-label`——**skills 页零变更**（不传该参数即不折叠）。 */
+.scope-group > summary { cursor: pointer; }
 .scope-item { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; padding: var(--s-1) var(--s-2); font-size: var(--fs-200); border-left: 3px solid transparent; }
 .scope-item.missing { border-left-color: var(--warn); }
 .scope-cmd { flex-basis: 100%; font-size: var(--fs-100); color: var(--mute); }
@@ -888,6 +1052,45 @@ tr:last-child td { border-bottom: 0; }
 /* B4：`.md-read{max-width:72ch}` 已删——§2.8 正文列宽上限 66ch，与上面的全局 `.md-read` 争同权重，
    留着就等于把知识正文与 SKILL.md 正文都定到 72ch。 */
 .scope-body .ref { font-family: var(--font-code); font-size: var(--fs-100); }
+
+/* ── F7 技能分类分组（design-v8 §3 / 层级稿 §3.5）─────────────────────────────
+   组头 = `CountLine size="section"`（组名 + 引线 + 计数，`bare` 让引线吃满本行）+ `.toc-chev`
+   （复用知识库目录树的旋转箭头）；组内行容器 = `.collapse`（工作流阶段已在用的高度过渡），
+   **默认全展开**（折叠是用户主动的收窄手段，不是默认态）。
+   **不新增颜色**：组头走 `.count-line` 自带的 `--mute`，未分类组的 lamp 走 `--warn`（既有状态色）。 */
+.skill-group { margin-bottom: var(--s-2); }
+/* 组头是**展开切换**不是导航实体——`role="button"` + `aria-expanded`（同知识库目录树
+   `.toc-mod` 的交互口径），故 cursor 与 hover 底就是它「能点」的视觉信号；
+   左 3px 透明边与 `.md-row` 取同宽，让**组名与组内行名左对齐**（引线这才成一条纵向节奏）。 */
+.skill-group-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-1) var(--s-2);
+  border-left: 3px solid transparent;
+  border-radius: var(--r-2);
+  cursor: pointer;
+}
+.skill-group-head:hover { background: var(--sheet-2); }
+
+/* ── F7 技能详情居中（层级稿 §3.5 实施要点 1–3）──────────────────────────────
+   居中的单位是**详情整体**：命令块 / scope / 深挖折叠三层都在同一个居中列内
+   （只给正文段 `.md-body.md-read` 加居中会变成「正文居中、命令块与 scope 左贴」的错位）。
+   列宽沿用 `.md-read` 的**既有 66ch 口径**（不新增列宽档）；`max-width` + `margin: 0 auto`
+   即水平居中（块级元素触顶 max-width 时，auto 外边距均分剩余宽度）。
+   ⚠ 它是 `.md-detail` **内层**的包裹：滚动容器仍是 `.md-detail`（F3 的 `overflow-y` 不动），
+   左列表宽度也仍是 `.md` 网格的 `minmax(220px, 300px)`（居中列不反向撑宽左栏）。 */
+.skill-detail {
+  max-width: 66ch;
+  margin: 0 auto;
+  /* 长串在该列内自适应、不撑破列宽（要点 2）：
+     - `min-width: 0` —— 本列作为网格 / 弹性子项可被压扁，不把父容器顶宽；
+     - `overflow-wrap: anywhere` —— 「没有空格可断」的长串（角色名 join、纯符号路径）的兜底断点。
+     ⚠ 命令块 `.cmd` 自己的 `white-space: nowrap` + `overflow-x: auto` 优先（仍横滚不折行）；
+     安装路径的行内 `break-all` 同样是行内优先，这里只是兜底。 */
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 
 /* 渲染 | 源码（知识页用的是 .book-content 作用域，这里给全局同名类） */
 .seg { display: inline-flex; border: 1px solid var(--rule); border-radius: var(--r-1); overflow: hidden; }

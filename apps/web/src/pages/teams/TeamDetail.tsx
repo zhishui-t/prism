@@ -1,9 +1,19 @@
 /**
- * 团队详情（8b：T3 启用结果就地 / T6 知识范围与声明技能 / T2 删除需输入 team_id / S8 团队有效集合并）。
+ * 团队详情（8b：T3 启用结果就地 / T6 知识范围 / T2 删除需输入 team_id / S8 团队有效集合并）。
  *
- * 组合顺序：头部动作 → **启用结果条（就地）** → 概览 kv → 工作流（横向 + 点阶段展开）
- * → 知识范围 ∥ 声明技能 → 名册 → 团队有效集；硬删走统一确认模态（B5，不再是内联危险区）。
- * 角色/技能/书一律走 `<Ref>`（Shell 不认识实体）。
+ * **F8 §2 层级重排后的组合顺序**（三档：第一眼 → 常用 → 深挖，见 v8-hierarchy-sketch §0.1）：
+ *
+ * 1. 第一眼带：`.pane-head`（团队名 + team_id + 默认标记 + 动作位/`.spacer`）→ 启用结果条（就地）
+ *    → 描述 `firstSentence(desc, 60)` 2 行（全文进 `title`）；
+ * 2. 第一眼带：**工作流**（`WorkflowFlow`，灵魂，必须落在概览之上）——阶段计数并入它的 Pane 头；
+ * 3. 常用带：成员表（`.form-grid` + `.list-row` 紧凑网格，`rosterHint` 降级为 Pane 头 `title`）
+ *    → `.two-col`：左「知识范围」∥ 右「**成员技能集**」（F6：原「声明技能」栏与底部「团队有效集」
+ *    同源，合并成一处，见 §2.5）；
+ * 4. 深挖带：沉淀规则 / 仲裁链进 `<details>`（默认折叠，summary 口径同 `.role-body`）。
+ *
+ * 原「概览 `kv`」六行至此全部各有归属（§2.4 #1–#4）：名称→pane-head（已在那）、描述→第一眼条、
+ * 成员串→名册（逐成员可点）、阶段数→工作流 Pane 头计数、沉淀/仲裁→深挖折叠 —— 故 kv 整块删除。
+ * 硬删走统一确认模态（B5，不再是内联危险区）。角色/技能/书一律走 `<Ref>`（Shell 不认识实体）。
  */
 
 import { useEffect, useState } from 'react'
@@ -13,7 +23,7 @@ import { ConfirmModal } from '../../components/ConfirmModal.tsx'
 import { CountLine } from '../../components/CountLine.tsx'
 import { Ref } from '../../components/ref.tsx'
 import { State } from '../../components/State.tsx'
-import { Pane, StatusTag } from '../../components/ui.tsx'
+import { Pane, StatusTag, firstSentence } from '../../components/ui.tsx'
 import { useT, type DictKey } from '../../i18n.ts'
 import { describeFailure } from './errors.ts'
 import { TeamEffectiveSkills } from './parts/TeamEffectiveSkills.tsx'
@@ -199,56 +209,73 @@ export function TeamDetail({
         )}
 
         <State loading={loading} error={error}>
-          {detail !== undefined && (
-            <>
-              <h4>{t('teams.overview')}</h4>
-              <dl className="kv">
-                <dt>{t('common.name')}</dt>
-                <dd>{detail.name !== '' ? detail.name : t('common.unset')}</dd>
-                {detail.description !== '' && (
-                  <>
-                    <dt>{t('common.description')}</dt>
-                    <dd>{detail.description}</dd>
-                  </>
-                )}
-                <dt>{t('teams.col.members')}</dt>
-                <dd className="mono">{detail.members.map((m) => `${m.role}×${m.count}`).join(', ') || t('common.unset')}</dd>
-                <dt>{t('teams.col.stages')}</dt>
-                <dd className="mono">{t('teams.stages', { n: detail.workflow.length })}</dd>
-                <dt>{t('teams.deposit')}</dt>
-                <dd>
-                  <StatusTag kind={detail.deposit.enabled ? 'ok' : 'info'}>
-                    {detail.deposit.enabled ? t('common.yes') : t('common.no')}
-                  </StatusTag>
-                  {detail.deposit.enabled && (
-                    <span className="small muted" style={{ marginLeft: 'var(--s-2)' }}>
-                      {detail.deposit.default_layer} › {detail.deposit.default_type} › {detail.deposit.priority}
-                      {detail.deposit.require_note ? ` › ${t('teams.deposit.note')}` : ''}
-                    </span>
-                  )}
-                </dd>
-                {detail.arbitration.length > 0 && (
-                  <>
-                    <dt>{t('teams.arbitration')}</dt>
-                    <dd className="mono small">{detail.arbitration.join(' > ')}</dd>
-                  </>
-                )}
-              </dl>
-            </>
+          {/* F8 §2.1 第一眼②：干什么（description）——一句话 2 行、全文进 `title`。
+              原「概览 `kv`」六行见文件头注：各自归位后 kv 整块删除（§2.4 #1–#4）。 */}
+          {detail !== undefined && detail.description !== '' && (
+            <p className="pane-desc" title={detail.description}>
+              {firstSentence(detail.description, 60)}
+            </p>
           )}
         </State>
       </Pane>
 
+      {/* F8 §2.1/§2.2：**工作流提到概览之上**——它是团队的灵魂，保持第一眼，不得降级/折叠。
+          §2.4 #2：「阶段 N」不再单列一行，计数并入本 Pane 头的 `CountLine`（与名册同槽）。 */}
       {detail !== undefined && (
-        <Pane head={<div className="pane-head"><h3>{t('teams.workflow')}</h3></div>}>
+        <Pane
+          head={
+            <div className="pane-head">
+              <CountLine size="section" bare label={t('teams.workflow')} count={detail.workflow.length} />
+            </div>
+          }
+        >
           <WorkflowFlow workflow={detail.workflow} />
         </Pane>
       )}
 
-      {/* T6：知识范围 ∥ 声明技能（两个可点区块；知识是 teams 唯一能一次推给多成员的实体） */}
+      {/* F8 §2.1 常用带①：成员表（紧凑网格：`Ref kind="role"` + `×N` 的 `StatusTag`）。
+          §2.4 #6：`teams.rosterHint` 由常驻说明行降级为 Pane 头 `CountLine` 的 `title`。 */}
+      {detail !== undefined && (
+        <Pane
+          head={
+            <div className="pane-head">
+              <CountLine
+                size="section"
+                bare
+                label={t('teams.roster')}
+                count={detail.members.length}
+                title={t('teams.rosterHint')}
+              />
+            </div>
+          }
+        >
+          <div className="form-grid">
+            {detail.members.map((m) => (
+              <div key={m.role} className="list-row">
+                <Ref kind="role" name={m.role} />
+                <StatusTag kind="info">×{m.count}</StatusTag>
+              </div>
+            ))}
+          </div>
+        </Pane>
+      )}
+
+      {/* F8 §2.5 两栏区：左 = 知识范围（层 `.tag` + `Ref kind="book"`），
+          右 = **成员技能集**（F6 收窄后的唯一技能视图——原「声明技能」栏的位置被它接管）。 */}
       {detail !== undefined && (
         <div className="two-col">
-          <Pane title={t('teams.knowledge')}>
+          <Pane
+            head={
+              <div className="pane-head">
+                <CountLine
+                  size="section"
+                  bare
+                  label={t('teams.knowledge')}
+                  count={detail.knowledge.layers.length + (detail.knowledge.books ?? []).length}
+                />
+              </div>
+            }
+          >
             {detail.knowledge.layers.length === 0 && (detail.knowledge.books ?? []).length === 0 ? (
               <div className="small muted">{t('teams.knowledge.empty')}</div>
             ) : (
@@ -270,51 +297,47 @@ export function TeamDetail({
               </div>
             )}
           </Pane>
-          <Pane title={t('teams.declaredSkills')}>
-            {detail.skills.length === 0 ? (
-              <div className="small muted">{t('teams.declaredSkills.empty')}</div>
-            ) : (
-              <div className="scope-body">
-                {detail.skills.map((s) => (
-                  <span key={s} className="scope-item">
-                    <Ref kind="skill" name={s} />
-                  </span>
-                ))}
-              </div>
-            )}
+          {/* F6 合并（§2.4 #5）：原独立「声明技能」Pane（团队 frontmatter 的 `team.skills`）与
+              原底部独立「团队有效集」Pane **同源**（成员角色有效集并集），此处只画一次。
+              团队显式声明的可见性不丢：走 Pane 头 `CountLine` 的 `title`（R-v8-6）。 */}
+          <Pane>
+            <TeamEffectiveSkills
+              team={id}
+              members={detail.members}
+              declared={detail.skills.length}
+              onOpenUsage={onOpenUsage}
+            />
           </Pane>
         </div>
       )}
 
+      {/* F8 §2.1 深挖带（§2.4 #3）：沉淀规则 / 仲裁链默认折叠，summary 口径沿用 `.role-body`
+          （`--fs-200` + `--mute`）。`DepositRules` 是**表单**零件（只被 `TeamForm` 消费），
+          不在此折叠容器内，其内部交互不受影响。 */}
       {detail !== undefined && (
-        /* B7：名册条数走统一引线零件（原为 `Pane title="标题 · N"`，是第 3 种计数排法）。
-           放进 `.pane-head` 与紧邻的工作流面板同槽（该槽的字号由 CSS 对齐）。 */
-        <Pane
-          head={
-            <div className="pane-head">
-              <CountLine size="section" bare label={t('teams.roster')} count={detail.members.length} />
-            </div>
-          }
-        >
-          <div className="small muted" style={{ marginBottom: 'var(--s-2)' }}>
-            {t('teams.rosterHint')}
-          </div>
-          <div className="form-grid">
-            {detail.members.map((m) => (
-              <div key={m.role} className="list-row">
-                <Ref kind="role" name={m.role} />
-                <StatusTag kind="info">×{m.count}</StatusTag>
-              </div>
-            ))}
-          </div>
-        </Pane>
-      )}
-
-      {/* S8：团队有效集 = 团队声明 ∪ 全体成员角色有效集（客户端合并，≤12 成员角色） */}
-      {detail !== undefined && (
-        <Pane>
-          <TeamEffectiveSkills team={id} members={detail.members} onOpenUsage={onOpenUsage} />
-        </Pane>
+        <details className="team-deep">
+          <summary>{t('teams.deepDive')}</summary>
+          <dl className="kv">
+            <dt>{t('teams.deposit')}</dt>
+            <dd>
+              <StatusTag kind={detail.deposit.enabled ? 'ok' : 'info'}>
+                {detail.deposit.enabled ? t('common.yes') : t('common.no')}
+              </StatusTag>
+              {detail.deposit.enabled && (
+                <span className="small muted" style={{ marginLeft: 'var(--s-2)' }}>
+                  {detail.deposit.default_layer} › {detail.deposit.default_type} › {detail.deposit.priority}
+                  {detail.deposit.require_note ? ` › ${t('teams.deposit.note')}` : ''}
+                </span>
+              )}
+            </dd>
+            {detail.arbitration.length > 0 && (
+              <>
+                <dt>{t('teams.arbitration')}</dt>
+                <dd className="mono small">{detail.arbitration.join(' > ')}</dd>
+              </>
+            )}
+          </dl>
+        </details>
       )}
 
       {/* T2：硬删确认走统一模态（B5：Esc / 遮罩 / 滚动锁 / 焦点 / `--err` 危险色全站一套）。

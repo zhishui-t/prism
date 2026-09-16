@@ -38,6 +38,9 @@ function InlineRuns({ nodes }: { nodes: Inline[] }): ReactNode {
         return <strong key={idx}>{node.text}</strong>
       case 'em':
         return <em key={idx}>{node.text}</em>
+      case 'del':
+        // GFM 删除线（F9 病因 7）：`<del>` 自带 UA 删除线，不另配样式。
+        return <del key={idx}>{node.text}</del>
       case 'link':
         return isExternal(node.href) ? (
           <a key={idx} className="md-link" href={node.href} target="_blank" rel="noopener noreferrer">
