@@ -306,7 +306,20 @@ export function SkillsPage({ sel }: { sel?: string }) {
             ))}
           </div>
 
-          <div className="md-detail">{detailPane}</div>
+          {/* v7.1 P2：换技能 / 换视图（详情 ⇄ 有效集）时右栏**轻过渡**（纯 opacity）。
+              `key` 让内容重挂 ⇒ 动画重放；顺带修掉一处旧语义：`SkillBody` 的
+              「渲染 | 源码」档位此前跨技能保留（换了本书还停在上一本的源码档），
+              重挂后回到默认的渲染档。
+
+              关于「技能分组展开」：本页左列是**扁平台账**，没有可折叠的分组结构；
+              分组的只有「有效集」视图里的 全局/团队/角色 三段，它们是**常驻信息**而非可折叠层
+              ——为满足清单而给它加折叠会把「一眼看全」改成「再点一下」，属改信息架构，故不做。
+              等效落点是这里：切进有效集时整块淡入（取舍见报告 §5 开放项）。 */}
+          <div className="md-detail">
+            <div className="swap-in" key={`${key}|${view}`}>
+              {detailPane}
+            </div>
+          </div>
         </div>
       </State>
 
@@ -367,6 +380,7 @@ function SkillBody({
               type="button"
               className="tool-btn"
               disabled={busy || !skillsDir}
+              aria-busy={busy}
               title={dirMissing ? t('skills.dirMissing') : undefined}
               onClick={onInstall}
             >

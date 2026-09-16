@@ -663,48 +663,59 @@ export function KnowledgePage({
                           </div>
                         </div>
 
-                        {isOpen &&
-                          bk.modules
-                            .filter((m) => m.visible)
-                            .map((m) => {
-                              const modOpen = !collapsedMods.has(modKey(bk.key, m.name))
-                              return (
-                                <div key={m.name}>
-                                  {/* A2：模块行同为展开切换，处理方式与书行一致。 */}
-                                  <div
-                                    className="toc-mod"
-                                    role="button"
-                                    tabIndex={0}
-                                    aria-expanded={modOpen}
-                                    onClick={() => toggleModule(bk.node, m.name)}
-                                    onKeyDown={(e) => keyboardToggle(e, () => toggleModule(bk.node, m.name))}
-                                  >
-                                    <span className={`toc-chev${modOpen ? ' open' : ''}`}>▸</span>
-                                    <span className="toc-modname">{modLabel(m.name)}</span>
-                                    <span className="toc-leader" />
-                                    <span className="toc-count">{m.count}</span>
+                        {/* v7.1 P1：书的展开收起改走 `.collapse`（`grid-template-rows: 0fr→1fr`，
+                            高度可过渡）。模块行因此**常驻 DOM** —— 折叠态靠 `.collapse` 的
+                            `visibility: hidden` 挡出 Tab 序列与无障碍树（见 styles.css）。
+                            代价可控：未缓存的书 `m.entries` 恒为空数组（懒加载，见 `view` 的 memo），
+                            所以「收起常驻」多出来的只有模块行，不含条目。 */}
+                        <div className={`collapse${isOpen ? ' open' : ''}`}>
+                          <div>
+                            {bk.modules
+                              .filter((m) => m.visible)
+                              .map((m) => {
+                                const modOpen = !collapsedMods.has(modKey(bk.key, m.name))
+                                return (
+                                  <div key={m.name}>
+                                    {/* A2：模块行同为展开切换，处理方式与书行一致。 */}
+                                    <div
+                                      className="toc-mod"
+                                      role="button"
+                                      tabIndex={0}
+                                      aria-expanded={modOpen}
+                                      onClick={() => toggleModule(bk.node, m.name)}
+                                      onKeyDown={(e) => keyboardToggle(e, () => toggleModule(bk.node, m.name))}
+                                    >
+                                      <span className={`toc-chev${modOpen ? ' open' : ''}`}>▸</span>
+                                      <span className="toc-modname">{modLabel(m.name)}</span>
+                                      <span className="toc-leader" />
+                                      <span className="toc-count">{m.count}</span>
+                                    </div>
+                                    <div className={`collapse${modOpen ? ' open' : ''}`}>
+                                      <div>
+                                        {m.entries.map((entry) => (
+                                          <a
+                                            key={entry.id}
+                                            href={entryHref(entry.id)}
+                                            className={`toc-item${selectedId === entry.id ? ' active' : ''}`}
+                                            onClick={() => select(entry.id)}
+                                          >
+                                            <span className="toc-title">{entry.title}</span>
+                                            {/* 仅 status ≠ active 时画状态点 + 文字（K11） */}
+                                            {entry.status !== 'active' && (
+                                              <span className={`toc-status ${statusKind(entry.status)}`}>
+                                                <span className="toc-lamp" />
+                                                {statusLabel(entry.status)}
+                                              </span>
+                                            )}
+                                          </a>
+                                        ))}
+                                      </div>
+                                    </div>
                                   </div>
-                                  {modOpen &&
-                                    m.entries.map((entry) => (
-                                      <a
-                                        key={entry.id}
-                                        href={entryHref(entry.id)}
-                                        className={`toc-item${selectedId === entry.id ? ' active' : ''}`}
-                                        onClick={() => select(entry.id)}
-                                      >
-                                        <span className="toc-title">{entry.title}</span>
-                                        {/* 仅 status ≠ active 时画状态点 + 文字（K11） */}
-                                        {entry.status !== 'active' && (
-                                          <span className={`toc-status ${statusKind(entry.status)}`}>
-                                            <span className="toc-lamp" />
-                                            {statusLabel(entry.status)}
-                                          </span>
-                                        )}
-                                      </a>
-                                    ))}
-                                </div>
-                              )
-                            })}
+                                )
+                              })}
+                          </div>
+                        </div>
 
                         {/* B10：该书条目懒加载中 → 统一骨架（保留目录缩进容器） */}
                         {isOpen && bk.cached === undefined && (
@@ -739,10 +750,10 @@ export function KnowledgePage({
 
             {/* 右栏：书页（K4 书头 + K8 渲染/源码 + K9 frontmatter + K11 页边 + K12 软删） */}
             <div className="book-content">
-              {notice !== '' && <div className="banner small">{notice}</div>}
+              {notice !== '' && <div className="banner small swap-in">{notice}</div>}
               {/* K12：软删后就地反馈 + 12s 内可撤销（hash 不变） */}
               {removed !== null && (
-                <div className="banner small">
+                <div className="banner small swap-in">
                   <span>{t('knowledge.entry.removed', { n: removed.references })}</span>
                   <button className="tool-btn" onClick={() => void undoRemove()}>
                     {t('knowledge.entry.undo')}
@@ -789,7 +800,7 @@ export function KnowledgePage({
 
               {notFound ? (
                 /* 深链未命中 / 已移出索引（§2.5）：带名称 + 出路（撤销 / 返回目录） */
-                <div className="pane">
+                <div className="pane swap-in">
                   <h3>{t('knowledge.notFound.title')}</h3>
                   <div className="small muted">{t('knowledge.notFound.desc', { id: selectedId })}</div>
                   {missError !== undefined && (
@@ -807,7 +818,7 @@ export function KnowledgePage({
                   </div>
                 </div>
               ) : meta === null ? (
-                <div className="empty-hint">
+                <div className="empty-hint swap-in">
                   {/* B-2e §P3：📖 字形装饰已删（§3.D 默认禁 emoji）——空态只由两行文案承担。 */}
                   <span>{t('knowledge.selectEntry')}</span>
                   <span className="small" style={{ color: 'var(--mute)' }}>
@@ -815,7 +826,11 @@ export function KnowledgePage({
                   </span>
                 </div>
               ) : (
-                <>
+                /* v7.1 P2：换条目时右栏内容**轻过渡**（纯 opacity，`key` 让动画随换条重放）。
+                   这里只加一层静态包裹盒：`.book-content` 内的既有规则全是后代选择器
+                    （≥1440 那条绝对定位的 `.entry-margin` 的 offsetParent 仍是 `.book-content`），
+                   故版式零位移。 */
+                <div className="swap-in" key={meta.id}>
                   <div className="entry-head">
                     <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--s-2)' }}>
                       <h2 style={{ margin: 0, flex: 1 }}>{meta.title}</h2>
@@ -995,7 +1010,7 @@ export function KnowledgePage({
                         </>
                       ))}
                   </div>
-                </>
+                </div>
               )}
             </div>
           </div>

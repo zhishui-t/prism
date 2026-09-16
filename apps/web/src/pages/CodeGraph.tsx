@@ -213,7 +213,7 @@ export function CodeGraphPage({ sel }: { sel?: string }) {
         {noProjects && <div style={{ marginTop: 'var(--s-3)' }}><EmptyBlock title={t('graph.noProject')} desc={t('graph.noProjectHint')} /></div>}
 
         {notice !== '' && (
-          <div className="small muted" style={{ marginTop: 'var(--s-2)' }}>
+          <div className="small muted swap-in" style={{ marginTop: 'var(--s-2)' }}>
             {notice}
           </div>
         )}
@@ -238,13 +238,13 @@ export function CodeGraphPage({ sel }: { sel?: string }) {
 
       {/* 没有图谱：只给空态与建图命令，绝不渲染 iframe（否则会把 404 信封原文画出来） */}
       {current !== '' && status.data !== undefined && !hasGraph && (
-        <div className="pane">
+        <div className="pane swap-in">
           <EmptyBlock title={t('graph.noGraph.title')} desc={t('graph.noGraph.desc')} command={buildCommand} />
         </div>
       )}
 
       {hasGraph && (
-        <div className="pane graph-query-card">
+        <div className="pane graph-query-card swap-in">
           <h3>{t('graph.query')}</h3>
           <div className="row">
             <input
@@ -286,7 +286,7 @@ export function CodeGraphPage({ sel }: { sel?: string }) {
               />
             </div>
             {queryResult !== '' && (
-              <div className="query-panel">
+              <div className="query-panel swap-in">
                 <div className="query-panel-head">
                   <span className="small muted">{t('graph.queryResult')}</span>
                   <button className="tool-btn" onClick={() => setQueryResult('')}>

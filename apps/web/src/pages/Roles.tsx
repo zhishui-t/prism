@@ -265,9 +265,11 @@ export function RolesPage({ sel }: { sel?: string }) {
             </>
           }
         >
-          <p className="role-drawer-desc">{role.description}</p>
+          {/* v7.1 P2：换角色时抽屉正文**轻过渡**（纯 opacity，`key` 让动画随换选中重放）。 */}
+          <div className="swap-in" key={role.name}>
+            <p className="role-drawer-desc">{role.description}</p>
 
-          <div className={`role-principle${role.principle.trim() === '' ? ' missing' : ''}`}>
+            <div className={`role-principle${role.principle.trim() === '' ? ' missing' : ''}`}>
             <div className="rp-label">{t('roles.principle')}</div>
             <div className="rp-text">{role.principle.trim() === '' ? t('roles.principleMissing') : role.principle}</div>
           </div>
@@ -377,6 +379,7 @@ export function RolesPage({ sel }: { sel?: string }) {
             <summary>{t('common.showDetails')}</summary>
             <pre>{role.body}</pre>
           </details>
+          </div>
         </Drawer>
       )}
 

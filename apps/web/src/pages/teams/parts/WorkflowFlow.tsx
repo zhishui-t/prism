@@ -15,8 +15,23 @@ import { modeLabel } from '../templates.ts'
 export function WorkflowFlow({ workflow }: { workflow: WorkflowStage[] }) {
   const t = useT()
   const [open, setOpen] = useState<number | null>(null)
+  /**
+   * v7.1 P1：展开/收起改走 `.collapse`（`grid-template-rows: 0fr→1fr`，见 styles.css）。
+   * 高度过渡要求内容在**收起动画期间仍在 DOM 里**，否则一收起内容就卸载、高度早已是 0，
+   * 动画无从观察 —— 故另记「最后一次展开的阶段」：`open` 管开合与 `aria-expanded`，
+   * `lastOpen` 管画什么。两个 setState 在同一事件里批处理，不会多一帧。
+   */
+  const [lastOpen, setLastOpen] = useState<number | null>(null)
+  const toggle = (order: number): void => {
+    if (open === order) {
+      setOpen(null)
+      return
+    }
+    setOpen(order)
+    setLastOpen(order)
+  }
   if (workflow.length === 0) return <div className="small muted">{t('common.unset')}</div>
-  const active = workflow.find((s) => s.order === open)
+  const active = workflow.find((s) => s.order === lastOpen)
   /* B12②：「无回流」在团队定义表里写作填充符（`packages/agents/src/team/templates.ts` 的列约定，
      服务端 `parse.ts` 原样回读）——展示层与空串一视同仁，只认「空」这一种状态；
      不把它当作 UI 的「空」标记（UI 侧空值一律走 `common.unset`，B12①）。 */
@@ -36,7 +51,7 @@ export function WorkflowFlow({ workflow }: { workflow: WorkflowStage[] }) {
                 className={`flow-stage${open === stage.order ? ' open' : ''}`}
                 aria-expanded={open === stage.order}
                 title={t('teams.flow.expand')}
-                onClick={() => setOpen(open === stage.order ? null : stage.order)}
+                onClick={() => toggle(stage.order)}
               >
                 <span className="stage-num">{stage.order}</span>
                 <span className="stage-name">{stage.stage}</span>
@@ -47,46 +62,52 @@ export function WorkflowFlow({ workflow }: { workflow: WorkflowStage[] }) {
         </div>
       </div>
 
-      {/* accordion：原地展开，不再另画一张明细表 */}
-      {active !== undefined && (
-        <div className="flow-detail">
-          <div className="flow-detail-row">
-            <span className="scope-label">{t('teams.col.owner')}</span>
-            <span className="scope-leader" />
-            <span className="flow-detail-val">
-              {active.roles.map((r) => (
-                <Ref key={r} kind="role" name={r} />
-              ))}
-            </span>
-          </div>
-          <div className="flow-detail-row">
-            <span className="scope-label">{t('teams.col.mode')}</span>
-            <span className="scope-leader" />
-            <span className="flow-detail-val">{modeLabel(t, active.mode)}</span>
-          </div>
-          <div className="flow-detail-row">
-            <span className="scope-label">{t('teams.flow.io')}</span>
-            <span className="scope-leader" />
-            <span className="flow-detail-val mono small">
-              {active.input} → {active.output}
-            </span>
-          </div>
-          <div className="flow-detail-row">
-            <span className="scope-label">{t('teams.col.done')}</span>
-            <span className="scope-leader" />
-            <span className="flow-detail-val small">{active.done}</span>
-          </div>
-          {showReflow && (
-            <div className="flow-detail-row">
-              <span className="scope-label">{t('teams.col.reflow')}</span>
-              <span className="scope-leader" />
-              <span className="flow-detail-val small" style={{ color: 'var(--warn)' }}>
-                ↩ {reflow}
-              </span>
+      {/* accordion：原地展开，不再另画一张明细表。
+          v7.1 P1：外层 `.collapse` 承担高度 + 透明度过渡（180ms）；内容按 `lastOpen` 常驻，
+          收起时靠 `.collapse` 的 `visibility: hidden` 退出 Tab 序列与无障碍树。 */}
+      <div className={`collapse${open !== null ? ' open' : ''}`}>
+        <div>
+          {active !== undefined && (
+            <div className="flow-detail">
+              <div className="flow-detail-row">
+                <span className="scope-label">{t('teams.col.owner')}</span>
+                <span className="scope-leader" />
+                <span className="flow-detail-val">
+                  {active.roles.map((r) => (
+                    <Ref key={r} kind="role" name={r} />
+                  ))}
+                </span>
+              </div>
+              <div className="flow-detail-row">
+                <span className="scope-label">{t('teams.col.mode')}</span>
+                <span className="scope-leader" />
+                <span className="flow-detail-val">{modeLabel(t, active.mode)}</span>
+              </div>
+              <div className="flow-detail-row">
+                <span className="scope-label">{t('teams.flow.io')}</span>
+                <span className="scope-leader" />
+                <span className="flow-detail-val mono small">
+                  {active.input} → {active.output}
+                </span>
+              </div>
+              <div className="flow-detail-row">
+                <span className="scope-label">{t('teams.col.done')}</span>
+                <span className="scope-leader" />
+                <span className="flow-detail-val small">{active.done}</span>
+              </div>
+              {showReflow && (
+                <div className="flow-detail-row">
+                  <span className="scope-label">{t('teams.col.reflow')}</span>
+                  <span className="scope-leader" />
+                  <span className="flow-detail-val small" style={{ color: 'var(--warn)' }}>
+                    ↩ {reflow}
+                  </span>
+                </div>
+              )}
             </div>
           )}
         </div>
-      )}
+      </div>
     </>
   )
 }

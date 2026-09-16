@@ -35,7 +35,11 @@ export function ProjectsPage() {
           <div className="pane-head">
             <h3>{t('projects.registered')}</h3>
             <span className="spacer">
-              <button onClick={projects.reload}>{t('common.refresh')}</button>
+              {/* v7.1 P2：刷新此前点了毫无动静（按钮不置灰、不换文案、也没有任何在途标记）。
+                  这里只补「在途」这一件事：置灰防双击 + `aria-busy` 让读屏也知道在拉。 */}
+              <button onClick={projects.reload} disabled={projects.loading} aria-busy={projects.loading}>
+                {t('common.refresh')}
+              </button>
             </span>
           </div>
         }
@@ -118,7 +122,10 @@ function ScanHistoryCard() {
         <div className="pane-head">
           <h3>{t('projects.scanHistory')}</h3>
           <span className="spacer">
-            <button onClick={history.reload}>{t('common.refresh')}</button>
+            {/* v7.1 P2：与上面「已登记项目」的刷新同一口径（在途置灰 + `aria-busy`）。 */}
+            <button onClick={history.reload} disabled={history.loading} aria-busy={history.loading}>
+              {t('common.refresh')}
+            </button>
           </span>
         </div>
       }

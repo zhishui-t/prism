@@ -94,6 +94,26 @@
   --s-6: 32px;
   --s-7: 48px;
 
+  /* ---- 动效（v7.1 交互质感专项）----
+     MOTION_INTENSITY = 4：只做「可感知但不表演」的反馈。全部过渡**只动 transform / opacity
+     与颜色**（颜色由 :where(...) 那条统一 transition 承担）。唯二例外各有一条注记：
+     滚动条外观（P0，非动画）与 `.collapse` 的 `grid-template-rows` 高度技巧（P1）。
+     时长三档足够，不引入第 4 档：120ms 是「顺着手指」的上限，180ms 是「看得见但不拖」。 */
+  --t-fast: 120ms; /* 悬停 / 按压 / 焦点 / 过滤切换 */
+  --t-mid: 180ms; /* 展开收起 / 抽屉滑入 / 模态淡入 / 内容切换 */
+
+  /* 缓动：起步快、收尾极慢（`ease-out` 家族里最不「弹」的一条），无回弹、无 overshoot。 */
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* 按压位移：全站唯一口径，**不用 scale**（行/卡/按钮三种尺度下 scale 的观感不统一）。 */
+  --press: 1px;
+
+  /* ---- 滚动条（P0）----
+     thumb 由 `--ink` 混出透明色 ⇒ 深色主题得到「半透明浅灰」、浅色主题自动反向，
+     两主题各写一份显式值（本文件约定：两块必须覆盖同一组 token）。track 一律透明。 */
+  --scroll-thumb: color-mix(in srgb, var(--ink) 16%, transparent);
+  --scroll-thumb-hover: color-mix(in srgb, var(--ink) 30%, transparent);
+
   /* ---- 外壳尺寸：顶栏高度 ----
      V-2 口径自陈：本值是 `.topbar` 的**完整渲染高**——`height:` 直接取本值，全站
      `box-sizing: border-box` ⇒ 已含那条 1px 底边框（顶栏没有上边框）。因此实测 54px
@@ -141,6 +161,10 @@
 
   --scrim: rgba(28, 33, 31, 0.35);
   --on-buckram: #ffffff;
+
+  /* 滚动条（P0）：浅色主题反向 —— 半透明深灰 thumb，悬停加深。 */
+  --scroll-thumb: color-mix(in srgb, var(--ink) 20%, transparent);
+  --scroll-thumb-hover: color-mix(in srgb, var(--ink) 34%, transparent);
 }
 
 * { box-sizing: border-box; }
@@ -247,11 +271,14 @@ input, select, textarea, button, .btn-link {
 }
 input:focus, select:focus, textarea:focus { border-color: var(--buckram); }
 /* A1（WCAG 2.4.7）：键盘/程序化聚焦一律可见。`:focus-visible` 不命中鼠标点击，
-   故与上面的 `outline: none` 不冲突；`[tabindex]` 覆盖目录里 role="button" 的非原生控件。 */
+   故与上面的 `outline: none` 不冲突；`[tabindex]` 覆盖目录里 role="button" 的非原生控件。
+   v7.1：补 `a` —— 目录条目 / 列表行 / 徽标互链此前吃的是 UA 默认环（同样可见但与全站
+   焦点色不一致，Tab 穿行时焦点环会「换色」）。补进本组后全站焦点环同色同粗细。 */
 button:focus-visible,
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible,
+a:focus-visible,
 [tabindex]:focus-visible,
 a.btn-link:focus-visible {
   outline: 2px solid var(--buckram);
@@ -311,9 +338,11 @@ a.btn-link:hover { border-color: var(--buckram); }
 }
 .error { color: var(--err); border-color: color-mix(in srgb, var(--err) 35%, transparent); }
 
-/* B10：加载骨架 —— 三条静态 `--sheet-2` 圆角条（**零动画**，简报 MOTION=1），
-   与空态的虚线框、错误的红框是三副面孔；不画文字（无障碍名走 `role=status` 的 aria-label）。 */
-.skeleton { display: flex; flex-direction: column; gap: var(--s-2); padding: var(--s-2) 0; }
+/* B10：加载骨架 —— 三条静态 `--sheet-2` 圆角条，与空态的虚线框、错误的红框是三副面孔；
+   不画文字（无障碍名走 `role=status` 的 aria-label）。
+   v7.1：加**一次轻呼吸**（opacity 1→0.5→1，1.2s × 2 次）——刷新时「在拉」这件事有一处
+   可感知的动静；跑完即停，不无限循环抖动（简报「极少次」口径）。 */
+.skeleton { display: flex; flex-direction: column; gap: var(--s-2); padding: var(--s-2) 0; animation: prism-breath 1.2s var(--ease) 2; }
 .skeleton > span { display: block; height: var(--s-4); border-radius: var(--r-1); background: var(--sheet-2); }
 .skeleton > span:nth-child(2) { width: 82%; }
 .skeleton > span:nth-child(3) { width: 64%; }
@@ -402,7 +431,7 @@ tr:last-child td { border-bottom: 0; }
 .book-toc .toc-mod:hover { color: var(--ink); }
 .book-toc .toc-modname { flex-shrink: 0; }
 .book-toc .toc-note { padding: 3px var(--s-3) 3px var(--s-5); }
-.book-toc .toc-chev { display: inline-block; flex-shrink: 0; width: var(--fs-200); color: var(--mute); transition: transform .15s; }
+.book-toc .toc-chev { display: inline-block; flex-shrink: 0; width: var(--fs-200); color: var(--mute); transition: transform var(--t-mid) var(--ease); }
 .book-toc .toc-chev.open { transform: rotate(90deg); }
 .book-toc .toc-leader { flex: 1; min-width: var(--s-2); border-bottom: 1px dotted var(--rule); transform: translateY(-3px); }
 .book-toc .toc-count { font-size: var(--fs-100); color: var(--mute); flex-shrink: 0; font-variant-numeric: tabular-nums; }
@@ -487,9 +516,12 @@ tr:last-child td { border-bottom: 0; }
   .book-content .entry-margin { position: absolute; top: calc(var(--s-5) + 64px); left: 0; width: 220px; border-top: 0; }
 }
 
-/* K12 统一确认模态（最小实现） */
-.modal-mask { position: fixed; inset: 0; z-index: 40; display: flex; align-items: center; justify-content: center; background: rgb(0 0 0 / 45%); }
-.modal { width: min(420px, calc(100vw - var(--s-6))); background: var(--sheet); border: 1px solid var(--rule); border-radius: var(--r-2); padding: var(--s-4); }
+/* K12 统一确认模态（最小实现）
+   v7.1：遮罩淡入（120ms）+ 面板轻缩淡入（180ms，`scale 0.98→1`，无回弹）。
+   只有**进场**动画：退场需要延迟卸载，「点确认后模态立刻消失」这条既有行为会被改成
+   「先等动画」，得不偿失（取舍见报告开放项）。 */
+.modal-mask { position: fixed; inset: 0; z-index: 40; display: flex; align-items: center; justify-content: center; background: rgb(0 0 0 / 45%); animation: prism-scrim-in var(--t-fast) var(--ease); }
+.modal { width: min(420px, calc(100vw - var(--s-6))); background: var(--sheet); border: 1px solid var(--rule); border-radius: var(--r-2); padding: var(--s-4); animation: prism-modal-in var(--t-mid) var(--ease); }
 .modal h3 { margin: 0 0 var(--s-2); font-size: var(--fs-400); font-weight: 600; }
 /* `pre-line`：确认正文里的换行（如「删除后…\n引用将失效」）原样成行，不再靠行内 style（B5）。 */
 .modal-body { font-size: var(--fs-300); line-height: var(--lh-read); white-space: pre-line; }
@@ -781,7 +813,8 @@ tr:last-child td { border-bottom: 0; }
   white-space: nowrap;
 }
 
-/* 通用抽屉（角色/团队/技能 的新建与详情） */
+/* 通用抽屉（角色/团队/技能 的新建与详情）
+   v7.1：遮罩淡入 + 抽屉自右滑入（`translateX(24px)` + fade，180ms）。同模态：只有进场。 */
 .drawer-mask {
   position: fixed;
   inset: 0;
@@ -789,6 +822,7 @@ tr:last-child td { border-bottom: 0; }
   background: var(--scrim);
   display: flex;
   justify-content: flex-end;
+  animation: prism-scrim-in var(--t-fast) var(--ease);
 }
 .drawer {
   width: min(640px, 96vw);
@@ -797,6 +831,7 @@ tr:last-child td { border-bottom: 0; }
   border-left: 1px solid var(--rule);
   display: flex;
   flex-direction: column;
+  animation: prism-drawer-in var(--t-mid) var(--ease);
 }
 .drawer-head {
   display: flex;
@@ -870,3 +905,145 @@ tr:last-child td { border-bottom: 0; }
 
 /* ===== §3.5 graph / projects 两页互链：徽标可点（保持徽标外观，只去掉链接下划线） ===== */
 .badge-link { display: inline-flex; text-decoration: none; color: inherit; }
+
+/* ============================================================================
+   v7.1 交互质感专项（P0 滚动条 / P1 动效 / P2 反馈即时性）
+   —— 只补「反馈层」。色板 / 字体 / 版式 / 信息架构一律未动（本区块不含任何新颜色语义，
+      新增的两个 scrollbar token 由 `--ink` 混出，深/浅主题各写一份显式值）。
+   MOTION_INTENSITY = 4：克制的流畅。所有过渡只动 transform / opacity 与颜色。
+   ========================================================================== */
+
+/* ---- 关键帧（全局唯一命名前缀 `prism-`，避免与将来的第三方样式撞名） ----
+   只写 `from`/`50%`：省掉的档位取元素**计算值**，所以骨架条不必被固定在某个灰阶上。 */
+@keyframes prism-scrim-in { from { opacity: 0; } }
+@keyframes prism-drawer-in { from { opacity: 0; transform: translateX(24px); } }
+@keyframes prism-modal-in { from { opacity: 0; transform: scale(0.98); } }
+@keyframes prism-breath { 50% { opacity: 0.5; } }
+@keyframes prism-content-in { from { opacity: 0; } }
+
+/* ---- P0 滚动条：双轨 ----
+   Webkit/Blink 走 `::-webkit-scrollbar` 伪元素族；Firefox 走标准的 `scrollbar-width` /
+   `scrollbar-color`（它**不认**伪元素族，两轨缺一即两边观感不一致）。
+
+   ⚠ 优先级陷阱（按 CSS Scrollbars 规范）：只要标准属性取了**非 `auto`** 的值，
+   浏览器就**忽略** `::-webkit-scrollbar` 族。Chrome 121+ / Safari 18.2+ 都已实现标准属性，
+   所以今天的三条轨实际是：
+     Chrome 121+ / Safari 18.2+ / Firefox → 标准属性（细 + 我们的 thumb 色，原生圆角）
+     Safari 18.2 以下的 Chrome/Safari      → webkit 伪元素（10px 轨道内让 2px 透明边 ⇒ 视觉 6px，
+                                              自绘圆角）
+   两轨的**颜色与粗细同源**（同一对 token、同样是「细」），所以观感不会因浏览器分叉；
+   差别只在圆角由谁画。
+
+   覆盖面 = 全站兜底（下面两条不带任何容器前缀），因此下列容器一次性全生效：
+     `.page`（v7 §2.7 锚点 9 之后的根级滚动容器）
+     `.md-list`（技能/团队左列）、`.book-sidebar`（知识库目录树）、`.book-content`（书页）
+     `.drawer-body`（抽屉）、`.md-source` 与 `.md-read .md-pre`（代码块）、
+     `.query-result`（代码图谱查询结果面板）、`.cmd`、`.table-scroll`、`.flow-scroll` */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scroll-thumb) transparent;
+}
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-thumb {
+  /* `background` 简写会把 `background-clip` 重置回 border-box，故它必须写在其后 */
+  background: var(--scroll-thumb);
+  background-clip: content-box;
+  border: 2px solid transparent;
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scroll-thumb-hover);
+  background-clip: content-box;
+}
+
+/* ---- P1.1 悬停 / 按压：可点元素的统一契约 ----
+   一个 `:where()` 覆盖全部「能点」的东西（`a` / `button` / 目录与模块行的
+   `role="button"` / `<summary>`），并保持 **0 特异性**——任何既有规则都能就近覆盖它，
+   不会因为「多了一条全局过渡」而被迫加 `!important`。 */
+:where(a, button, [role='button'], summary) {
+  transition:
+    color var(--t-fast) var(--ease),
+    background-color var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease),
+    opacity var(--t-fast) var(--ease),
+    transform var(--t-fast) var(--ease);
+}
+/* 按压反馈：全站统一 `translateY(--press)`（1px），**不混用 scale**——行、卡、按钮三种
+   尺度下 scale 的观感差得太远。`transform` 对非替换行内元素无效（如 `.ref`），故行内链接
+   天然只保留颜色反馈，不产生错位。 */
+:where(a, button, [role='button'], summary):active:not(:disabled) {
+  transform: translateY(var(--press));
+}
+
+/* ---- P1.2 展开 / 收起：`grid-template-rows: 0fr → 1fr` ----
+   纯高度动画会 reflow 抖动（且不许动 `height`），grid 行轨道可以。用法固定两层：
+     <div class="collapse open"><div>…内容…</div></div>
+   折叠态额外 `visibility: hidden`——内容**常驻 DOM**（高度才可过渡），若不隐藏，
+   收起的条目仍留在 Tab 序列与无障碍树里。
+   ⚠ 末行那条 `:not(.open) *` 不能省：`visibility` 会被后代**覆盖回 `visible`**
+   （与 `display: none` 不同），嵌套的内层 `.collapse.open` 会把外层「已收起」重新点亮；
+   用后代选择器 + 放最后一行（同特异性靠源序取胜）把整棵子树按住。
+   该行同时声明了 `transition: visibility 0s linear var(--t-mid)`，所以收起时子树的
+   可见性是**跟着高度走**的（不是先消失再收盒）——它只在折叠态生效，不影响展开态的悬停过渡。 */
+.collapse {
+  display: grid;
+  grid-template-rows: 0fr;
+  visibility: hidden;
+  transition:
+    grid-template-rows var(--t-mid) var(--ease),
+    visibility 0s linear var(--t-mid);
+}
+.collapse > * { min-height: 0; overflow: hidden; }
+.collapse.open {
+  grid-template-rows: 1fr;
+  visibility: visible;
+  transition:
+    grid-template-rows var(--t-mid) var(--ease),
+    visibility 0s;
+}
+/* 内容层与高度同时淡入：「长出来」而不是「先占位再显字」 */
+.collapse > * > * { opacity: 0; transition: opacity var(--t-mid) var(--ease); }
+.collapse.open > * > * { opacity: 1; }
+/* 上面两层 `overflow: hidden` 会切掉 `outline-offset: 2px` 的焦点环外侧余量 ——
+   折叠容器内的焦点环改成内描（仍是 2px `--buckram`，可见性不变，只是画在盒内）。 */
+.collapse :focus-visible { outline-offset: -2px; }
+.collapse:not(.open) * {
+  visibility: hidden;
+  transition:
+    visibility 0s linear var(--t-mid),
+    opacity var(--t-mid) var(--ease);
+}
+
+/* ---- P1.3 内容切换淡入 ----
+   同一容器内换内容（换条目 / 换技能 / 换团队 / 查询结果面板出现）时给一次 opacity 过渡。
+   React 侧配 `key` 触发重挂，动画才会重放；**不参与布局**，故不改变任何尺寸断言。 */
+.swap-in { animation: prism-content-in var(--t-mid) var(--ease); }
+/* 列表行 / 卡片**首次挂载**时才淡入：过滤出新的命中行会各淡入一次，已在屏上的行不重放
+   ——「只有新出现的才淡入」正是过滤要的反馈，也是它和「整列表每次重绘都闪一下」的分界。 */
+.md-row,
+.role-card { animation: prism-content-in var(--t-mid) var(--ease); }
+
+/* ---- P2 在途状态 ----
+   提交中/刷新中的按钮此前只靠 `:disabled { opacity: .5 }` 表达，屏幕阅读器读不到「忙着」。
+   这里给 `aria-busy` 一处统一说明：过 `?` 是有意为之——它只在配了该属性的调用点生效，
+   没配的地方（绝大多数）零影响。 */
+:where(button, a)[aria-busy='true'] { cursor: progress; }
+
+/* ---- P1.4 reduced-motion：一刀切 ----
+   本轮动效变多了，这条从「可选」升级为「必须」：系统要求减少动态时，所有过渡与动画
+   时长归零（不是简单删掉规则——归零能让 `.collapse` 立刻落到终态、`.swap-in` 立刻不透明，
+   而删除规则会让它们停在初始态：折叠的展不开、淡入的不显示）。 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -207,24 +207,27 @@ export function TeamsPage({
             ))}
           </div>
 
+          {/* v7.1 P2：换团队时右栏**轻过渡**（纯 opacity，`key` 让动画随换选中重放）。 */}
           <div className="md-detail">
-            {selected === '' ? (
-              <Pane>
-                <div className="small muted">{t('teams.selectHint')}</div>
-              </Pane>
-            ) : (
-              <TeamDetail
-                key={selected}
-                id={selected}
-                detail={detail.data}
-                loading={detail.loading}
-                error={detail.error}
-                teamsDir={teamsDir}
-                onOpenUsage={onOpenUsageSkills}
-                onEdit={() => setFormIntent('edit')}
-                onDeleted={(text) => afterWrite('ok', text, { close: true })}
-              />
-            )}
+            <div className="swap-in" key={selected}>
+              {selected === '' ? (
+                <Pane>
+                  <div className="small muted">{t('teams.selectHint')}</div>
+                </Pane>
+              ) : (
+                <TeamDetail
+                  key={selected}
+                  id={selected}
+                  detail={detail.data}
+                  loading={detail.loading}
+                  error={detail.error}
+                  teamsDir={teamsDir}
+                  onOpenUsage={onOpenUsageSkills}
+                  onEdit={() => setFormIntent('edit')}
+                  onDeleted={(text) => afterWrite('ok', text, { close: true })}
+                />
+              )}
+            </div>
           </div>
         </div>
       </State>
