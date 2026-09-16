@@ -768,7 +768,7 @@ tr:last-child td { border-bottom: 0; }
    ⚠ 刻意**不写进共用的 `.drawer-body`**：那是详情 / 编辑表单（560）/ 团队页三处抽屉共用的
    滚动容器，改默认等于越权改另两处版式；且上限落在滚动容器上会让滚动条贴到 66ch 列边
    （`.skill-detail` 同样是滚动容器 `.md-detail` 的**内层**包裹，此处照抄该结构）。 */
-.role-detail { max-width: 66ch; margin: 0 auto; }
+.role-detail { max-width: min(75rem, 100%); margin: 0 auto; }
 .field > span { font-size: var(--fs-200); color: var(--mute); }
 .field .hint { font-size: var(--fs-100); color: var(--mute); }
 
@@ -1081,7 +1081,10 @@ tr:last-child td { border-bottom: 0; }
    ⚠ 它是 `.md-detail` **内层**的包裹：滚动容器仍是 `.md-detail`（F3 的 `overflow-y` 不动），
    左列表宽度也仍是 `.md` 网格的 `minmax(220px, 300px)`（居中列不反向撑宽左栏）。 */
 .skill-detail {
-  max-width: 66ch;
+  /* 2026-09-17 用户反馈修正：66ch 是西文度量（≈33 汉字 ≈540px），宽屏上只剩中间一小条。
+     技能详情是**文档参照**不是长文阅读——放宽到 75rem（≈1200px）撑满详情栏，
+     窄屏由 min() 自然回落 100%。长文阅读度量（66ch）只保留给知识库正文 `.md-read`。 */
+  max-width: min(75rem, 100%);
   margin: 0 auto;
   /* 长串在该列内自适应、不撑破列宽（要点 2）：
      - `min-width: 0` —— 本列作为网格 / 弹性子项可被压扁，不把父容器顶宽；

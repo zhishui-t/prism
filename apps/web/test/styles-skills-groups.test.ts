@@ -75,11 +75,12 @@ describe('F7 组头：可点行（同知识库目录树的行口径）', () => {
 })
 
 describe('F7 详情居中：居中的单位是详情整体', () => {
-  it('`.skill-detail` 用 `.md-read` 的既有 66ch 口径 + `margin: 0 auto`（不新增列宽档）', () => {
-    expect(decl('.skill-detail', 'max-width')).toBe('66ch')
+  it('`.skill-detail` 放宽为 min(75rem, 100%) + `margin: 0 auto`（2026-09-17 用户反馈：66ch 在宽屏只剩中间一小条）', () => {
+    expect(decl('.skill-detail', 'max-width')).toBe('min(75rem, 100%)')
     expect(decl('.skill-detail', 'margin')).toBe('0 auto')
-    // 「沿用既有口径」是可验证的：两处取同一个值，不是各写一个数字
-    expect(decl('.skill-detail', 'max-width')).toBe(decl('.md-read', 'max-width'))
+    // 「同口径」是可验证的：技能/角色详情取同一个值；知识库阅读度量 `.md-read` 仍保持 66ch（长文阅读页）
+    expect(decl('.skill-detail', 'max-width')).toBe(decl('.role-detail', 'max-width'))
+    expect(decl('.md-read', 'max-width')).toBe('66ch')
   })
 
   it('正文段自己**没有**居中（居中是详情整体，不是正文段——否则命令块与 scope 会左贴）', () => {

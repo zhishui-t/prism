@@ -119,13 +119,13 @@ describe('F8 §1.5 砍单：死掉的规则整条删除', () => {
   })
 })
 
-describe('R-v8-1 内容列 66ch 居中（MIN-4）', () => {
-  it('角色详情抽屉内容列 = 66ch + auto 外边距（与技能详情 `.skill-detail` 同口径）', () => {
+describe('R-v8-1 内容列居中（MIN-4，2026-09-17 用户反馈后放宽）', () => {
+  it('角色详情抽屉内容列 = min(75rem, 100%) + auto 外边距（与技能详情 `.skill-detail` 同口径）', () => {
     const rule = body('.role-detail')
-    expect(rule).toContain('max-width: 66ch')
+    expect(rule).toContain('max-width: min(75rem, 100%)')
     expect(rule).toContain('margin: 0 auto')
-    // 「不新增列宽档」的可证伪形式：两边取的是同一个值
-    expect(body('.skill-detail')).toContain('max-width: 66ch')
+    // 「同口径」的可证伪形式：两边取的是同一个值
+    expect(body('.skill-detail')).toContain('max-width: min(75rem, 100%)')
   })
 
   it('居中列**不落到共用** `.drawer-body`：编辑表单（560）与团队页抽屉不受影响', () => {
