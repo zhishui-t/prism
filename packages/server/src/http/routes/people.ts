@@ -73,6 +73,8 @@ export interface PeopleDeps {
  *   并新增只读 `GET /api/trash`（响应 snake_case 逐字段冻结）。
  * - v10 F3：新增 `DELETE /api/skills/external/:name`（外部技能整目录进回收站）与
  *   `/api/skills/usage` 的只读 `external_removable`。
+ * - v12 F4：新增分类 CRUD 三条 `POST|PATCH|DELETE /api/skills/categories[/:name]`
+ *   （重名 409 / 改名级联 / 删除回未分类），与 `SkillCategoryStore` 单点共用。
  */
 export function peopleRoutes(deps: PeopleDeps): {
   roles: (ctx: RouteContext) => Promise<Envelope>
@@ -85,6 +87,9 @@ export function peopleRoutes(deps: PeopleDeps): {
   teamActivate: (ctx: RouteContext) => Promise<Envelope>
   skills: (ctx: RouteContext) => Promise<Envelope>
   skillCategories: (ctx: RouteContext) => Promise<Envelope>
+  skillCategoryCreate: (ctx: RouteContext) => Promise<Envelope>
+  skillCategoryRename: (ctx: RouteContext) => Promise<Envelope>
+  skillCategoryDelete: (ctx: RouteContext) => Promise<Envelope>
   skillCategorize: (ctx: RouteContext) => Promise<Envelope>
   skill: (ctx: RouteContext) => Promise<Envelope>
   skillUsage: (ctx: RouteContext) => Promise<Envelope>
@@ -246,7 +251,7 @@ export function peopleRoutes(deps: PeopleDeps): {
    * 完全一致：**映射里没有该技能 → 不加 `category` 键**（前端 `skill.category ?? null`）。
    */
   const skills = async (): Promise<Envelope> => {
-    const categoryOf = await categories.all()
+    const { mapping: categoryOf } = await categories.all()
     return ok({
       skills: listBuiltinSkills().map((skill) => ({
         ...skill,
@@ -257,17 +262,67 @@ export function peopleRoutes(deps: PeopleDeps): {
   }
 
   /**
-   * `GET /api/skills/categories`（v8 F7 / design-v8 §3）：全量分类映射表
-   * （`{ "<技能名>": "<分类>" }`，分组计数用；**不校验技能是否存在**——映射独立于技能台账）。
+   * `GET /api/skills/categories`（v8 F7 / design-v8 §3；v12 F4 形状迁移）：分类**双节**——
+   * `{ categories: string[], mapping: { "<技能名>": "<分类>" } }`（分组计数用；`categories`
+   * 保序，界面空分类成组的清单即取这里；**不校验技能是否存在**——映射独立于技能台账）。
    *
-   * ⚠ **注册顺序**：必须排在 `/api/skills/:name` **之前**（路由器首个匹配即命中，
-   * `:name` 会把静态路由吞掉）——见 `app.ts` 同名注释。
+   * ⚠ **注册顺序**：本路由与下面三条 `categories` 写路由（POST / PATCH / DELETE）
+   * 必须排在 `/api/skills/:name` **之前**（路由器首个匹配即命中，`:name` 会把静态路由吞掉）
+   * ——见 `app.ts` 同名注释。
    */
-  const skillCategories = async (): Promise<Envelope> => ok({ categories: await categories.all() })
+  const skillCategories = async (): Promise<Envelope> => ok(await categories.all())
+
+  /**
+   * `POST /api/skills/categories`（v12 F4 / SPEC-4.4）：新建分类。
+   *
+   * - body `{ name: string }`：trim 后为空（含缺省 / 非字符串）→ 400 `bad_request`；
+   *   重名 → 409 `id_conflict`；
+   * - 只写 `categories`、**不写** `mapping`——空分类要存得住（design-v12 F4「运行时写入规则」：
+   *   「categories = mapping 值去重导出」**仅限读旧形态迁移时**）；
+   * - 响应 = `ok(SkillCategoryData)`，与 `GET /api/skills/categories` **同形**（前端可整表替换）。
+   *
+   * 实现单点 `SkillCategoryStore.addCategory`（CLI/MCP 三入口共用本实现，不另写一份）。
+   */
+  const skillCategoryCreate = async (ctx: RouteContext): Promise<Envelope> => {
+    const body = (await ctx.body()) as { name?: unknown }
+    return ok(await categories.addCategory(typeof body.name === 'string' ? body.name : ''))
+  }
+
+  /**
+   * `PATCH /api/skills/categories/:name`（v12 F4 / SPEC-4.5）：分类改名。
+   *
+   * 路径段 = **旧名**，body `{ name: string }` = **新名**（与 `POST` 同字段名，语义由方法定界）。
+   * - 新名 trim 后为空 / 路径旧名为空 → 400 `bad_request`；
+   * - 旧名不在 `categories` → 404 `not_found`；
+   * - 新名与**另一个**现存分类重名 → 409 `id_conflict`；旧名 === 新名 → 幂等 no-op（不写盘）；
+   * - **级联**改 `mapping`（指向旧名的技能全部改指新名），分类在原位置就地替换以**保序**。
+   */
+  const skillCategoryRename = async (ctx: RouteContext): Promise<Envelope> => {
+    const body = (await ctx.body()) as { name?: unknown }
+    return ok(
+      await categories.renameCategory(
+        ctx.params.name ?? '',
+        typeof body.name === 'string' ? body.name : '',
+      ),
+    )
+  }
+
+  /**
+   * `DELETE /api/skills/categories/:name`（v12 F4 / SPEC-4.5）：删除分类。
+   *
+   * 从 `categories` 移除，并清掉指向它的 `mapping` 条目——**组内技能回「未分类」**
+   * （不是把技能一起删掉）。分类不存在 → 404 `not_found`。
+   * 响应 = `ok(SkillCategoryData)`（删除**后**的全量双节，前端整表替换）。
+   * 「未分类」组是 UI 概念，不在 `categories` 里，故无从删起。
+   */
+  const skillCategoryDelete = async (ctx: RouteContext): Promise<Envelope> =>
+    ok(await categories.removeCategory(ctx.params.name ?? ''))
 
   /**
    * `POST /api/skills/categorize`（v8 F7）：`{ names: string[], category?: string }` → 写入映射。
    * 省略 / 空串 `category` = **清除**；`names` 空 → `bad_request`。
+   * 响应 `SkillCategorizeResult`（v12 F4 形状迁移）：`categories` 变**分类名数组**、映射搬到
+   * `mapping` 字段。
    * 与 MCP `prism_skill_categorize`、CLI `prism skill categorize` 共用 `SkillCategoryStore`
    * （入参归一化同为 `parseCategorizeInput`，故三入口同口径）。
    */
@@ -295,12 +350,13 @@ export function peopleRoutes(deps: PeopleDeps): {
    * `DELETE /api/skills/external/:name` 共用 `isExternalSkillRemovable`（同一单点，不各自判）。
    */
   const skillUsage = async (): Promise<Envelope> => {
-    const [roleList, teamList, installed, categoryOf] = await Promise.all([
+    const [roleList, teamList, installed, categoryData] = await Promise.all([
       loadRoles(rolesDir),
       loadTeams(teamsDir),
       knownSkills(),
       categories.all(),
     ])
+    const categoryOf = categoryData.mapping
     const usage = new Map<string, { name: string; builtin: boolean; installed: boolean; roles: string[]; teams: string[] }>()
     const ensure = (name: string) => {
       let entry = usage.get(name)
@@ -346,7 +402,8 @@ export function peopleRoutes(deps: PeopleDeps): {
    * 正文来源两处：内置 Skill 取自 `@prism/skills` 的随包清单；只装在本地的 Skill
    * 读 `<skills_dir>/<name>/SKILL.md`。**只读**：不写盘、不改装/卸。
    * 注册顺序必须在 `/api/skills/usage`、`/api/skills/effective`、`/api/skills/categories`
-   * 与 `POST /api/skills/categorize` **之后**（路由器首个匹配即命中，`:name` 会吞掉静态路由）。
+   * （含 v12 F4 的 `POST` / `PATCH :name` / `DELETE :name` 三条写路由）与
+   * `POST /api/skills/categorize` **之后**（路由器首个匹配即命中，`:name` 会吞掉静态路由）。
    */
   const skill = async (ctx: RouteContext): Promise<Envelope> => {
     const name = ctx.params.name ?? ''
@@ -445,6 +502,9 @@ export function peopleRoutes(deps: PeopleDeps): {
     teamActivate,
     skills,
     skillCategories,
+    skillCategoryCreate,
+    skillCategoryRename,
+    skillCategoryDelete,
     skillCategorize,
     skill,
     skillUsage,

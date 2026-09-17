@@ -443,3 +443,17 @@ describe('R-v8-1 / v10 F2 宽度：详情走 `.modal-lg`（CSS），编辑表单
     expect(drawer.style.maxWidth).toBe('')
   })
 })
+
+describe('W-4 延伸（v12 F3「UI 零展示团队 name」的最后一处）', () => {
+  it('所属团队的 `Ref` 只显示 team_id：name 既不进文本、也不进 hover `title`', async () => {
+    await render('dev-1')
+    // 前置自证：团队数据里 name ≠ id（否则「不含 name」可能只是因为它俩本来就一样）
+    expect(data.teams[0]!.name as string).toBe('Team A')
+    const ref = all(`${DETAIL} .ref`).find((a) => a.textContent === 't-a')
+    expect(ref, '团队引用没渲染').toBeDefined()
+    expect(ref!.textContent).not.toContain('Team A')
+    expect(ref!.getAttribute('title')).toBeNull()
+    // 落点仍是 team 深链（去掉的只是展示面，不是导航）
+    expect(ref!.getAttribute('href')).toBe('#/teams/t-a')
+  })
+})

@@ -74,7 +74,8 @@ import { trashStoreFor } from '../trash.js'
 
 /**
  * MCP stdio 服务（design.md §4 最小集 + design-v3 §3.4 P6 增量，手写 JSON-RPC 2.0）：
- * 知识库 / 图谱 / 角色 / 团队 / 技能，共 45 个工具（v6：角色与团队补齐增删改查）。
+ * 知识库 / 图谱 / 角色 / 团队 / 技能，共 48 个工具（v6：角色与团队补齐增删改查；
+ * v12 F4：技能分类清单增删改 `prism_skill_category_add|rename|rm`）。
  * ⚠ 上面这个数是**对外口径**，由 `packages/server/test/tool-surface-drift.test.ts` 锁定（MIN-1）。
  * 独立进程运行（`node dist/mcp/server.js`），与 prism serve 经 SQLite WAL 并存。
  */
@@ -459,7 +460,7 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
    */
   const skillList = async (): Promise<unknown> => {
     const installed = new Set((await installedSkillNames(harnessRoot, deps.home)) ?? [])
-    const categoryOf = await skillCategories.all()
+    const { mapping: categoryOf } = await skillCategories.all()
     const skills = listBuiltinSkills().map((s) => ({
       name: s.name,
       description: s.description,
@@ -479,6 +480,26 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
     const input = parseCategorizeInput({ names: args.names, category: args.category })
     return await skillCategories.categorize(input.names, input.category)
   }
+
+  /**
+   * 技能分类清单的增 / 改名 / 删（v12 F4 / SPEC-4.9）——三个动作与 HTTP 三条路由
+   * （`POST|PATCH|DELETE /api/skills/categories[/:name]`）、CLI `prism skill category add|rename|rm`
+   * **同名同位**；实现一律转发 `SkillCategoryStore`（`roles/skill-categories.ts` 是唯一读写逻辑，
+   * 此处**不镜像第二份**——仓库红线「镜像契约」）。
+   *
+   * 错误码与 HTTP 同码（`PrismError` → MCP 侧带 `[code]` 前缀的 `isError` 文本）：
+   * 重名 / 改名目标重名 = `id_conflict`；源分类不存在 = `not_found`；名字 trim 后为空 = `bad_request`。
+   * `rename` 的入参取 `{ from, to }`（与 `prism_kb_path` / `prism_graph_path` 及 store 的
+   * `renameCategory(from, to)` 同惯例）；`from === to` 幂等 no-op。
+   */
+  const skillCategoryAdd = async (args: Record<string, unknown>): Promise<unknown> =>
+    await skillCategories.addCategory(asString(args.name) ?? '')
+
+  const skillCategoryRename = async (args: Record<string, unknown>): Promise<unknown> =>
+    await skillCategories.renameCategory(asString(args.from) ?? '', asString(args.to) ?? '')
+
+  const skillCategoryRm = async (args: Record<string, unknown>): Promise<unknown> =>
+    await skillCategories.removeCategory(asString(args.name) ?? '')
 
   /**
    * 安装内置 Skill（写）：与 CLI `prism skill install`、HTTP `POST /api/skills/install`
@@ -1520,6 +1541,42 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
         required: ['names'],
       },
       call: skillCategorize,
+    },
+    {
+      name: 'prism_skill_category_add',
+      description:
+        '新建技能分类（v12 F4）：写 <PRISM_HOME>/skill-categories.json 的 categories 清单（**只登记分类名、不写 mapping**——空分类要存得住）。name trim 后为空 → bad_request；重名 → id_conflict。与 HTTP POST /api/skills/categories、CLI `prism skill category add` 同一实现',
+      inputSchema: {
+        type: 'object',
+        properties: { name: { type: 'string', description: '分类名（trim 后非空；重名报 id_conflict）' } },
+        required: ['name'],
+      },
+      call: skillCategoryAdd,
+    },
+    {
+      name: 'prism_skill_category_rename',
+      description:
+        '技能分类改名（v12 F4）：级联改 mapping（分类在原位置就地替换，保序）——组内技能自动跟到新名下。from 不存在 → not_found；to 与**另一个**现存分类重名 → id_conflict；from === to 幂等 no-op。与 HTTP PATCH /api/skills/categories/:name、CLI `prism skill category rename` 同一实现',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          from: { type: 'string', description: '旧分类名（不存在报 not_found）' },
+          to: { type: 'string', description: '新分类名（与另一现存分类重名报 id_conflict）' },
+        },
+        required: ['from', 'to'],
+      },
+      call: skillCategoryRename,
+    },
+    {
+      name: 'prism_skill_category_rm',
+      description:
+        '删除技能分类（v12 F4）：从 categories 移除，并清掉指向它的 mapping 条目（**组内技能回未分类**，不是指向空串）。name 不存在 → not_found。与 HTTP DELETE /api/skills/categories/:name、CLI `prism skill category rm` 同一实现',
+      inputSchema: {
+        type: 'object',
+        properties: { name: { type: 'string', description: '分类名（不存在报 not_found）' } },
+        required: ['name'],
+      },
+      call: skillCategoryRm,
     },
     {
       name: 'prism_role_render',

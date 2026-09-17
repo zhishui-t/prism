@@ -40,16 +40,35 @@ function decl(selector: string, prop: string): string {
   return m![1]!.trim()
 }
 
-describe('v10 F2 居中模态的大版（`.modal-lg`）', () => {
+/** `:root`（深色默认块）里某个 token 的值——尺寸 token 非颜色，只此一块定义。 */
+function token(name: string): string {
+  const at = BARE.indexOf(':root {')
+  expect(at, 'styles.css 里找不到 :root').toBeGreaterThan(-1)
+  const open = BARE.indexOf('{', at)
+  const block = BARE.slice(open + 1, BARE.indexOf('}', open))
+  const m = new RegExp(`(?:^|;)\\s*${name}:\\s*([^;]+);`).exec(block)
+  expect(m, `:root 里没有 ${name}`).not.toBeNull()
+  return m![1]!.trim()
+}
+
+describe('v10 F2 / v12 F2 居中模态的大版（`.modal-lg`）', () => {
   it('面板是列向弹性盒 + 有**高度上限**（居中版式不能像抽屉那样吃满屏高）', () => {
     const rule = body('.modal.modal-lg')
     expect(rule).toContain('display: flex')
     expect(rule).toContain('flex-direction: column')
     expect(rule).toContain('max-height: 85vh')
-    // 尺寸：撑住「一条定义的全文」，窄屏回落 `100vw − --s-6`
-    expect(rule).toContain('width: min(880px, calc(100vw - var(--s-6)))')
+    // v12 F2：宽度取同一 CSS 变量 `--modal-w`（三处详情同值；值定义见下条）
+    expect(rule).toContain('width: var(--modal-w)')
     // 面板自身不收内边距（头 / 内容 / 脚各自给），否则脚上的上边框会内缩
     expect(rule).toContain('padding: 0')
+  })
+
+  it('v12 F2 宽度 token：`--modal-w` 定义与 `.modal-lg` 的 width 引用同值；确认框 / 选取器不谈这个 token', () => {
+    expect(decl('.modal.modal-lg', 'width')).toBe('var(--modal-w)')
+    expect(token('--modal-w')).toBe('min(88vw, 72rem)')
+    // 硬约束：基类 420px 确认框与 `.modal-md` 560px 选取器都保持原值（不吃 token）
+    expect(body('.modal')).toContain('width: min(420px, calc(100vw - var(--s-6)))')
+    expect(body('.modal.modal-md')).toContain('width: min(560px, calc(100vw - var(--s-6)))')
   })
 
   it('内容区吃剩余高度并**自滚**（长正文不把面板顶出视口）', () => {

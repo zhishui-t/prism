@@ -3,13 +3,17 @@
  *
  * 覆盖 `pages/graph-logic.ts` 的全部导出：
  *  1. 形状判据（三档映射，`data-shape` 的唯一来源）；
- *  2. 辐射布局（起点在正上方、顺时针均分、入图节点两两不重叠、全在画布内）；
- *  3. 纵向链布局（等距、行距 > 节点高、画布高度含落白）；
+ *  2. 辐射布局（起点在正上方、顺时针均分、入图节点两两不重叠、全在算出的 viewBox 内）；
+ *  3. 纵向链布局（等距、行距 > 节点高、横向居中）；
+ *  3b. 节点几何包围盒 → viewBox（v12 F1：单/多/负坐标/空输入，星形与纵向链都走它）；
  *  4. 标签截断（按**码点**切，代理对不成半个字符；不足长原样返回）；
  *  5. `affected` 分组（保序、同键相邻、空关系归一组）；
  *  6. 导出寻址（**只有** relations 的命中节点可寻址；多义 / path / affected 拿不到 id）；
  *  7. 导出错误 → 文案键（两类 bad_request 各自命中，其余返回 null 走原文透出）；
- *  8. `formatLocation`（自 `GraphQuery.tsx` 迁入的既有纯函数）。
+ *  8. `formatLocation`（自 `GraphQuery.tsx` 迁入的既有纯函数）；
+ *  9. **v12 F1 缩放平移**：适应窗口（双向比取 min + 居中）、倍率 clamp 与百分比、
+ *     指针锚缩放、平移、`<g transform>` 归一化（含「不叠加两次」的复合不变式）、
+ *     第二行标注（阈值 / 不猜 / 不截断）。
  *
  * 环境：默认 node（不写环境 pragma，同 `graph-query-styles.test.ts` 的既有做法）——
  * `graph-logic.ts` 只 `import type` 别处的东西，运行时零依赖。
@@ -19,6 +23,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { GraphAffected, GraphPath, GraphRelations } from '../src/api.ts'
 import {
+  ANNOTATION_SCALE,
   CHAIN_MAX,
   CHAIN_NODE,
   CHAIN_VIEW_W,
@@ -26,18 +31,33 @@ import {
   RADIAL_CENTER,
   RADIAL_MAX,
   RADIAL_PEER,
-  RADIAL_VIEW,
+  VIEW_PAD,
+  ZOOM_STEP,
+  annotationLine,
+  annotationVisible,
+  chainBoxes,
   chainShape,
-  chainViewH,
   chainY,
+  clampZoom,
   clipLabel,
+  contentViewBox,
+  fitTransform,
   formatLocation,
   groupAffected,
+  panBy,
+  radialBoxes,
   radialPoint,
   segmentBetweenBoxes,
   sequenceAddress,
   sequenceExportErrorKey,
+  transformAttr,
+  userTransform,
+  viewBoxAttr,
+  zoomAt,
+  zoomPercent,
+  zoomRatio,
 } from '../src/pages/graph-logic.ts'
+import type { Point } from '../src/pages/graph-logic.ts'
 
 /** relations 结果（只铺被测函数读到的那几个字段）。 */
 function rel(node: string, extra: Partial<GraphRelations> = {}): GraphRelations {
@@ -81,14 +101,16 @@ describe('F5 辐射布局', () => {
     expect(radialPoint(0, 0).x).toBe(RADIAL_CENTER.x)
   })
 
-  it(`满员 ${RADIAL_MAX} 个时：两两不重叠、且全在画布内`, () => {
+  it(`满员 ${RADIAL_MAX} 个时：两两不重叠、且全在**算出的** viewBox 内`, () => {
     const points = Array.from({ length: RADIAL_MAX }, (_, i) => radialPoint(i, RADIAL_MAX))
-    for (const p of points) {
-      // 节点框（含中心框）完整落在 viewBox 内——否则贴边节点会被裁掉一半
-      expect(p.x - RADIAL_PEER.w / 2).toBeGreaterThanOrEqual(0)
-      expect(p.x + RADIAL_PEER.w / 2).toBeLessThanOrEqual(RADIAL_VIEW.w)
-      expect(p.y - RADIAL_PEER.h / 2).toBeGreaterThanOrEqual(0)
-      expect(p.y + RADIAL_PEER.h / 2).toBeLessThanOrEqual(RADIAL_VIEW.h)
+    const boxes = radialBoxes(RADIAL_MAX)
+    // v12 F1：viewBox 不再是固定画布，而是节点包围盒——节点框必须完整落在它里面
+    const vb = contentViewBox(boxes)
+    for (const b of boxes) {
+      expect(b.x).toBeGreaterThanOrEqual(vb.x)
+      expect(b.x + b.w).toBeLessThanOrEqual(vb.x + vb.w)
+      expect(b.y).toBeGreaterThanOrEqual(vb.y)
+      expect(b.y + b.h).toBeLessThanOrEqual(vb.y + vb.h)
     }
     for (let i = 0; i < points.length; i++) {
       for (let j = i + 1; j < points.length; j++) {
@@ -110,11 +132,64 @@ describe('F5 纵向链布局', () => {
     expect(chainY(1) - chainY(0)).toBeGreaterThan(CHAIN_NODE.h)
   })
 
-  it('画布高度 = 末行中心 + 半节点 + 落白；节点横向居中于画布', () => {
-    expect(chainViewH(3)).toBe(chainY(2) + CHAIN_NODE.h / 2 + 24)
+  it('节点横向居中于布局宽度；节点宽落在布局宽度之内', () => {
     expect(CHAIN_NODE.w).toBeLessThan(CHAIN_VIEW_W)
-    // count 0/负数也落在合法区域（不返回 NaN，也说明调用方不必先分支）
-    expect(chainViewH(0)).toBeGreaterThan(0)
+    const cx = CHAIN_VIEW_W / 2
+    for (const b of chainBoxes(3)) expect(b.x + b.w / 2).toBe(cx)
+    // count 0 / 负数 → 空框集（不返回 NaN，调用方不必先分支）
+    expect(chainBoxes(0)).toEqual([])
+  })
+})
+
+describe('v12 F1 节点几何包围盒 → viewBox（纯函数，不做 DOM 测量）', () => {
+  it('单节点：四边各外扩 pad', () => {
+    const vb = contentViewBox([{ x: 10, y: 20, w: 30, h: 40 }], 5)
+    expect(vb).toEqual({ x: 5, y: 15, w: 40, h: 50 })
+  })
+
+  it('多节点：取并集；**负坐标**照样外扩（不夹到 0——夹了会切掉左/上节点）', () => {
+    const vb = contentViewBox(
+      [
+        { x: -30, y: 0, w: 10, h: 10 },
+        { x: 0, y: 20, w: 10, h: 10 },
+      ],
+      4,
+    )
+    expect(vb).toEqual({ x: -34, y: -4, w: 48, h: 38 })
+  })
+
+  it('空输入 → 零矩形（不返回 NaN / ±Infinity）', () => {
+    expect(contentViewBox([])).toEqual({ x: 0, y: 0, w: 0, h: 0 })
+  })
+
+  it('`viewBoxAttr` 保留两位小数：三角函数浮点噪声不进属性契约', () => {
+    // 值取自 `radialPoint` 的实况量级（cos/sin 的 1e-15 级误差）；
+    // 字面量取 15 位有效数字——再长就触发 `no-loss-of-precision`（双精度存不下，写多少位都是噪声）
+    expect(viewBoxAttr({ x: 16.7949192431123, y: 20, w: 526.4101615137756, h: 235.99999999999997 })).toBe(
+      '16.79 20 526.41 236',
+    )
+  })
+
+  it('纵向链：viewBox 高度随节点数增长（12 节点 > 3 节点），宽度只由节点宽 + 两侧留白定', () => {
+    const few = contentViewBox(chainBoxes(3))
+    const many = contentViewBox(chainBoxes(12))
+    expect(many.h).toBeGreaterThan(few.h)
+    expect(many.w).toBe(few.w)
+    expect(few.w).toBe(CHAIN_NODE.w + VIEW_PAD * 2)
+    // 首行距顶恰等于留白 ⇒ 链图 viewBox 的 y 为 0（与旧画布口径的连续性）
+    expect(few.y).toBe(0)
+  })
+
+  it('星形与纵向链都走同一函数：节点框全落在算出 viewBox 内（两种形态无一固定画布）', () => {
+    for (const boxes of [radialBoxes(3), radialBoxes(RADIAL_MAX), chainBoxes(1), chainBoxes(RADIAL_MAX)]) {
+      const vb = contentViewBox(boxes)
+      for (const b of boxes) {
+        expect(b.x).toBeGreaterThanOrEqual(vb.x)
+        expect(b.y).toBeGreaterThanOrEqual(vb.y)
+        expect(b.x + b.w).toBeLessThanOrEqual(vb.x + vb.w)
+        expect(b.y + b.h).toBeLessThanOrEqual(vb.y + vb.h)
+      }
+    }
   })
 })
 
@@ -291,6 +366,219 @@ describe('F5 导出错误 → 文案键（按消息关键字分派）', () => {
   it('bad_request 但没有这两条特征词 → null（陌生错误不猜）', () => {
     expect(sequenceExportErrorKey('bad_request: 缺少 node 参数')).toBeNull()
     expect(sequenceExportErrorKey('网络不可达')).toBeNull()
+  })
+})
+
+/* ===== v12 F1 缩放平移（纯函数，SPEC-1.2–1.5 / 1.8） ===== */
+
+/** 「适应窗口」的实况量级：900×600 的盒 + 12 节点纵向链的内容盒（宽 348 / 高 596）。 */
+const CHAIN_VB = contentViewBox(chainBoxes(12))
+/** 未测量（happy-dom / 首帧）→ 单位映射。 */
+const UNIT = { scale: 1, tx: 0, ty: 0 }
+
+describe('v12 F1 适应窗口（`fitTransform`，SPEC-1.1/1.4）', () => {
+  it('宽受限：取宽度比，纵向居中', () => {
+    const fit = fitTransform({ w: 800, h: 400 }, { x: 0, y: 0, w: 400, h: 400 })
+    expect(fit).toEqual({ scale: 1, tx: 200, ty: 0 })
+  })
+
+  it('高受限（纵向长链的实况）：取高度比 + 横向居中 —— **不是** 1/0/0', () => {
+    const fit = fitTransform({ w: 900, h: 600 }, CHAIN_VB)
+    expect(fit.scale).toBeCloseTo(600 / CHAIN_VB.h, 10)
+    expect(fit.scale).toBeLessThan(900 / CHAIN_VB.w) // 高度这一侧才是 min
+    expect(fit.tx).toBeCloseTo((900 - CHAIN_VB.w * fit.scale) / 2 - CHAIN_VB.x * fit.scale, 10)
+    expect(fit.ty).toBeCloseTo(0, 10)
+    // 「适应窗口」是算出来的、不是常量：内容宽 348 而盒宽 900 —— 写死 1/0/0 会把它铺满整幅宽度
+    expect(fit).not.toEqual(UNIT)
+  })
+
+  it('viewBox 原点偏移（W-1 之后 x/y 常为负）要减掉，否则内容整体推偏', () => {
+    const fit = fitTransform({ w: 100, h: 100 }, { x: -10, y: -20, w: 50, h: 50 })
+    expect(fit.scale).toBe(2)
+    // 内容左上角 (-10,-20) 应落在盒内 (0,0)：tx = 0 - (-10)×2
+    expect(fit.tx).toBe(20)
+    expect(fit.ty).toBe(40)
+  })
+
+  it('退化输入（未测量 / 空内容）→ 单位映射，绝不产出 NaN / Infinity', () => {
+    for (const bad of [
+      { w: 0, h: 0 },
+      { w: 800, h: 0 },
+      { w: Number.NaN, h: 400 },
+    ]) {
+      expect(fitTransform(bad, CHAIN_VB)).toEqual(UNIT)
+    }
+    expect(fitTransform({ w: 800, h: 400 }, { x: 0, y: 0, w: 0, h: 0 })).toEqual(UNIT)
+  })
+})
+
+describe('v12 F1 倍率：clamp 与百分比（SPEC-1.2/1.5）', () => {
+  it('clamp 0.3–3，NaN / ±Infinity 回落 1（不让脏输入把视图钉死在边界）', () => {
+    expect(clampZoom(0.1)).toBe(0.3)
+    expect(clampZoom(9)).toBe(3)
+    expect(clampZoom(0.3)).toBe(0.3)
+    expect(clampZoom(3)).toBe(3)
+    expect(clampZoom(Number.NaN)).toBe(1)
+    expect(clampZoom(Number.POSITIVE_INFINITY)).toBe(1)
+  })
+
+  it('倍率 = 状态 / 适应窗口；`fit` 退化（未测量）时按 1（百分比 100%）', () => {
+    const fit = fitTransform({ w: 900, h: 600 }, CHAIN_VB)
+    expect(zoomRatio(fit, fit)).toBe(1)
+    expect(zoomPercent(fit, fit)).toBe(100)
+    expect(zoomRatio({ scale: fit.scale * 1.5, tx: 0, ty: 0 }, fit)).toBeCloseTo(1.5, 10)
+    expect(zoomPercent({ scale: fit.scale * 1.5, tx: 0, ty: 0 }, fit)).toBe(150)
+    expect(zoomRatio({ scale: 2, tx: 0, ty: 0 }, UNIT)).toBe(2)
+  })
+})
+
+describe('v12 F1 指针锚缩放（`zoomAt`，SPEC-1.2）', () => {
+  const fit = fitTransform({ w: 900, h: 600 }, CHAIN_VB)
+  /** 指针底下的内容坐标（元素像素 → 内容单位）：缩放前后必须一致。 */
+  const under = (t: { scale: number; tx: number; ty: number }, at: Point): Point => ({
+    x: (at.x - t.tx) / t.scale,
+    y: (at.y - t.ty) / t.scale,
+  })
+
+  it('步进 1.1×：一轮放大 + 一轮缩小回到原状态', () => {
+    const at = { x: 300, y: 200 }
+    const bigger = zoomAt(fit, ZOOM_STEP, at, fit)
+    expect(zoomRatio(bigger, fit)).toBeCloseTo(1.1, 10)
+    const back = zoomAt(bigger, 1 / ZOOM_STEP, at, fit)
+    expect(zoomRatio(back, fit)).toBeCloseTo(1, 10)
+    expect(back.tx).toBeCloseTo(fit.tx, 10)
+    expect(back.ty).toBeCloseTo(fit.ty, 10)
+  })
+
+  it('锚点 = 指针位置：指针底下的内容点缩放前后落在同一位置（含已平移的态）', () => {
+    const moved = panBy(fit, -40, 25)
+    for (const at of [{ x: 0, y: 0 }, { x: 300, y: 200 }, { x: 899, y: 599 }]) {
+      const next = zoomAt(moved, ZOOM_STEP, at, fit)
+      const before = under(moved, at)
+      const after = under(next, at)
+      expect(after.x).toBeCloseTo(before.x, 9)
+      expect(after.y).toBeCloseTo(before.y, 9)
+    }
+  })
+
+  it('锚点不变式扫掠（tester-whitebox 补）：任意起始倍率 × 偏移 × 指针组合，指针下内容点恒不动', () => {
+    // 确定性网格（不用随机数，失败可复现）：起始倍率扫 clamp 全域、偏移扫正负、
+    // 指针扫盒内含角点——把「手算成立」锁成任意组合下的不变式，而非 3 个样本点。
+    for (const ratio of [0.3, 0.5, 1, 1.37, 2, 3]) {
+      for (const [dx, dy] of [[0, 0], [-123, 47], [811, -90]] as const) {
+        const start = panBy({ ...fit, scale: clampZoom(ratio) * fit.scale }, dx, dy)
+        for (const at of [{ x: 0, y: 0 }, { x: 7, y: 513 }, { x: 450, y: 300 }, { x: 900, y: 600 }]) {
+          const next = zoomAt(start, ZOOM_STEP, at, fit)
+          const before = under(start, at)
+          const after = under(next, at)
+          expect(after.x, `ratio=${ratio} d=${dx},${dy} at=${at.x},${at.y}`).toBeCloseTo(before.x, 8)
+          expect(after.y, `ratio=${ratio} d=${dx},${dy} at=${at.x},${at.y}`).toBeCloseTo(before.y, 8)
+          if (ratio >= 3) {
+            // 边界档：放大被钳位 ⇒ 整个变换是 no-op（scale 与偏移都不动）
+            expect(next.scale).toBe(start.scale)
+            expect(next.tx).toBeCloseTo(start.tx, 8)
+            expect(next.ty).toBeCloseTo(start.ty, 8)
+          } else {
+            // 非边界档：反向步回，锚点不变式 + 倍率往返双闭合
+            const back = zoomAt(next, 1 / ZOOM_STEP, at, fit)
+            expect(back.tx, `round-trip tx ratio=${ratio}`).toBeCloseTo(start.tx, 8)
+            expect(back.ty, `round-trip ty ratio=${ratio}`).toBeCloseTo(start.ty, 8)
+            expect(back.scale, `round-trip scale ratio=${ratio}`).toBeCloseTo(start.scale, 8)
+          }
+        }
+      }
+    }
+  })
+
+  it('`userTransform` 往返（tester-whitebox 补）：fit 态归一化为单位变换；任意态归一化后可由 fit 复原', () => {
+    // fit 态 ⇒ <g> 单位变换（meet 已承载适应窗口——D4-1 口径的数学面）
+    expect(userTransform(fit, fit)).toEqual(UNIT)
+    // 任意缩放平移态：归一化结果与「fit 映射 ∘ 归一化变换」复合 = 原状态映射（不丢信息）
+    const view = panBy(zoomAt(fit, ZOOM_STEP, { x: 120, y: 340 }, fit), -66, 18)
+    const g = userTransform(view, fit)
+    const composite = (p: Point): Point => ({
+      x: fit.scale * (g.scale * p.x + g.tx) + fit.tx,
+      y: fit.scale * (g.scale * p.y + g.ty) + fit.ty,
+    })
+    for (const p of [{ x: 0, y: 0 }, { x: 30, y: -210 }, { x: 480, y: 96 }]) {
+      expect(composite(p).x).toBeCloseTo(view.scale * p.x + view.tx, 8)
+      expect(composite(p).y).toBeCloseTo(view.scale * p.y + view.ty, 8)
+    }
+  })
+
+  it('clamp 到 0.3 / 3：连按步进不会越界（指针锚在边界上仍然成立）', () => {
+    let view = fit
+    for (let i = 0; i < 30; i++) view = zoomAt(view, ZOOM_STEP, { x: 450, y: 300 }, fit)
+    expect(zoomRatio(view, fit)).toBe(3)
+    for (let i = 0; i < 30; i++) view = zoomAt(view, 1 / ZOOM_STEP, { x: 450, y: 300 }, fit)
+    expect(zoomRatio(view, fit)).toBeCloseTo(0.3, 10)
+  })
+
+  it('未测量（fit 退化）时照常工作：倍率相对单位映射，不除零', () => {
+    const next = zoomAt(UNIT, ZOOM_STEP, { x: 100, y: 50 }, UNIT)
+    expect(next.scale).toBeCloseTo(1.1, 10)
+    expect(next.tx).toBeCloseTo(100 - 100 * 1.1, 10)
+    expect(Number.isFinite(next.tx)).toBe(true)
+  })
+})
+
+describe('v12 F1 平移与 `<g transform>` 归一化（SPEC-1.1/1.3）', () => {
+  const fit = fitTransform({ w: 900, h: 600 }, CHAIN_VB)
+
+  it('`panBy`：位移直接相加、倍率不变（1px 拖拽 = 图上 1px）', () => {
+    const moved = panBy(fit, 12, -5)
+    expect(moved).toEqual({ scale: fit.scale, tx: fit.tx + 12, ty: fit.ty - 5 })
+    expect(zoomRatio(moved, fit)).toBe(1)
+  })
+
+  it('`userTransform`：fit 态 ⇒ 单位变换（写进 `<g>` 的就是它，渲染与 W-1 一致）', () => {
+    expect(userTransform(fit, fit)).toEqual(UNIT)
+  })
+
+  it('`userTransform` ∘ 浏览器自己那条 meet 映射 = 状态定义的屏幕映射（不叠加两次）', () => {
+    const view = zoomAt(panBy(fit, 30, -20), ZOOM_STEP, { x: 100, y: 100 }, fit)
+    const g = userTransform(view, fit)
+    for (const v of [{ x: CHAIN_VB.x, y: CHAIN_VB.y }, { x: 0, y: 0 }, { x: 400, y: 500 }]) {
+      // 浏览器：viewBox 用户坐标 → 元素像素（meet）；内层 `<g>`：用户坐标里再叠一次
+      const onScreen = fit.scale * (g.scale * v.x + g.tx) + fit.tx
+      expect(onScreen).toBeCloseTo(view.scale * v.x + view.tx, 8)
+      const onScreenY = fit.scale * (g.scale * v.y + g.ty) + fit.ty
+      expect(onScreenY).toBeCloseTo(view.scale * v.y + view.ty, 8)
+    }
+  })
+
+  it('`transformAttr`：保留 3 位小数（1.1 的幂带长尾），顺序是 translate 后 scale', () => {
+    expect(transformAttr({ scale: 1, tx: 0, ty: 0 })).toBe('translate(0 0) scale(1)')
+    expect(transformAttr({ scale: 1 / 1.1, tx: -10.00000001, ty: 2.5 })).toBe('translate(-10 2.5) scale(0.909)')
+  })
+})
+
+describe('v12 F1 第二行标注（SPEC-1.8 / R-1 闭合点）', () => {
+  it('阈值 1.5：1.49 不画、1.5 起画', () => {
+    expect(annotationVisible(1.49)).toBe(false)
+    expect(annotationVisible(1.5)).toBe(true)
+    expect(annotationVisible(3)).toBe(true)
+    expect(ANNOTATION_SCALE).toBe(1.5)
+  })
+
+  it('`id · file:line` 三段齐全；缺一段只给那一段（不拼空壳）', () => {
+    expect(annotationLine('pkg/a.ts#alpha', 'src/a.ts', '52')).toBe('pkg/a.ts#alpha · src/a.ts:52')
+    expect(annotationLine('n#a', 'src/a.ts', '')).toBe('n#a · src/a.ts')
+    expect(annotationLine('n#a', '', '52')).toBe('n#a · 52')
+    // id 拿不到（理论上不该发生：能画第二行的节点都带 id）就不硬拼分隔符
+    expect(annotationLine('  ', 'src/a.ts', '52')).toBe('src/a.ts:52')
+  })
+
+  it('没有 file/line 就**没有**第二行（`path` 链 / `relations` 中心节点都不带定位）', () => {
+    expect(annotationLine('someSymbol', '', '')).toBeNull()
+    expect(annotationLine('', '', '')).toBeNull()
+  })
+
+  it('**不截断**：长路径原样留在第二行（R-1 要的就是「放大后看清 file:line」）', () => {
+    const file = 'packages/agents/src/arch/graph-ir.ts'
+    const line = annotationLine('pkg/x.ts#veryLongSymbolName', file, '715')
+    expect(line).toBe(`pkg/x.ts#veryLongSymbolName · ${file}:715`)
+    expect(line).not.toContain('…')
   })
 })
 

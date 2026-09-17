@@ -154,6 +154,13 @@
      是本批刻意的沿用（本批不动布局，页面批次改 grid 外壳时一并收口）：下一轮若要按
      52px 排版，请直接改本值，不要在别处再减 2px。 */
   --topbar-h: 54px;
+
+  /* ---- 浮层尺寸：详情模态的宽度上限（v12 F2） ----
+     角色 / 团队 / 技能三处**详情**弹窗统一走这一个上限：随窗口变宽、超宽封顶
+     （`min(88vw, 72rem)`）。**只 `.modal.modal-lg` 消费**——基类 `.modal` 的 420px
+     确认框与 `.modal-md` 的 560px 选取器都不动。与 `--topbar-h` 同族：尺寸 token 非颜色，
+     不随主题切换，故只在深色默认块定义一次。 */
+  --modal-w: min(88vw, 72rem);
 }
 
 :root[data-theme='light'] {
@@ -545,7 +552,23 @@ tr:last-child td { border-bottom: 0; }
    - 几何（viewBox 坐标 / 节点尺寸）由 `pages/graph-logic.ts` 按数据算出，**不进本文件**
      ——样式只管颜色 / 字族 / 字号 / 过渡，改布局不必同时改两处。 */
 .chain-graph-wrap { margin-bottom: var(--s-2); }
-.chain-graph { display: block; width: 100%; height: auto; }
+/* v12 F1：viewBox 随节点包围盒收窄后，纵向长链若仍按 `width:100%` 等比撑开会很高；
+   `max-height` 给一个上限，`preserveAspectRatio` 保持默认 `xMidYMid meet`
+   ⇒ 宁 letterbox（内容居中留白）也不拉伸、不爆高。宽 / 高 auto 保留：比例由 viewBox 定。
+   `touch-action: none`：触控在图上做的是「拖拽平移」（SPEC-1.3），别被浏览器抢去滚页面；
+   `cursor: grab/grabbing` 是同一件事的桌面端提示。 */
+.chain-graph { display: block; width: 100%; height: auto; max-height: 70vh; touch-action: none; cursor: grab; }
+.chain-graph.dragging { cursor: grabbing; }
+/* 缩放平移层（v12 F1）：`transform` 由 `graph-logic.ts` 的 `userTransform` 算出、写在属性上。
+   **故意不给过渡与动画**——SPEC-1.6 要的是「平移瞬移、缩放不因 reduced-motion 失效」；
+   加过渡反而会让 reduced-motion 的全局归零把「跟手」变成「慢半拍」。
+   `transform-origin: 0 0` 显式钉住变换原点：换算（`userTransform`）假定原点在 viewBox 原点，
+   写死它就不必依赖各引擎的兜底值。 */
+.chain-zoom-layer { transform-origin: 0 0; }
+/* 工具条（SPEC-1.4/1.5）：按钮复用既有 `.tool-btn`；百分比只读、右对齐、等宽数字
+   （数字跳动时宽度不抖）。 */
+.chain-zoom { display: flex; align-items: center; gap: var(--s-1); margin-bottom: var(--s-1); }
+.chain-zoom-pct { margin-left: auto; font-variant-numeric: tabular-nums; }
 /* SVG 的 `<text>` 拿不到 `.mono` 那套（那个类还带 padding/背景一族的语义），
    故这里显式给字族 / 字号 / 填充；居中靠 `text-anchor` + `dominant-baseline`。 */
 .chain-graph text {
@@ -810,13 +833,12 @@ tr:last-child td { border-bottom: 0; }
 .modal-body { font-size: var(--fs-300); line-height: var(--lh-read); white-space: pre-line; }
 .modal-foot { display: flex; justify-content: flex-end; align-items: center; gap: var(--s-2); margin-top: var(--s-3); }
 
-/* v10 F2：居中模态的**大版**（角色详情）——`<Modal>` 用，与上面的确认框共用
-   `.modal-mask`（遮罩 + 居中）与 `.modal`（面板 / 进场动画），只加尺寸与滚动结构。
-   口径：`min(880px, 100vw − --s-6)` 撑住「一条定义的全文」，窄屏由 `100vw − --s-6` 回落；
-   `max-height: 85vh` 是**面板**上限（`.drawer` 那时是整屏高，居中版式必须有上限，
-   否则长正文会把面板顶出视口）——内容区在面板内自滚，头 / 脚常驻。
-   ⚠ `.modal-lg` 只作用于本组件；K12 的确认框保持 420px 不动（它是「一句话确认」的版式）。 */
-.modal.modal-lg { display: flex; flex-direction: column; width: min(880px, calc(100vw - var(--s-6))); max-height: 85vh; padding: 0; }
+/* v10 F2 / v12 F2：居中模态的**大版**（角色 / 团队 / 技能详情）——`<Modal>` 用，与上面的确认框
+   共用 `.modal-mask`（遮罩 + 居中）与 `.modal`（面板 / 进场动画），只加尺寸与滚动结构。
+   口径（v12 F2）：宽度 = 同一 CSS 变量 `--modal-w`（`min(88vw, 72rem)`，随窗口变宽、超宽封顶），
+   三处详情取同一个值；`max-height: 85vh` 是**面板**上限（内容区在面板内自滚，头 / 脚常驻）。
+   ⚠ `.modal-lg` 只作用于**详情档**；K12 的确认框保持 420px、`.modal-md` 选取器保持 560px 不动。 */
+.modal.modal-lg { display: flex; flex-direction: column; width: var(--modal-w); max-height: 85vh; padding: 0; }
 /* F1（v11）：`<Modal>` 的**中版**（560px，库内选取器）——与 560px 的表单抽屉同宽
    （选取器是从抽屉里弹出来的，比抽屉还宽会显得重心跑掉）。
    ⚠ 不把两条并成组选择器：`styles-role-modal.test.ts` 的规则体断言按**字面选择器**
@@ -873,7 +895,10 @@ tr:last-child td { border-bottom: 0; }
 .role-count { padding: 0; border: 0; background: none; cursor: pointer; font-size: var(--fs-200); color: var(--mute); text-decoration: underline dotted var(--rule); text-underline-offset: 2px; }
 .role-count:hover, .role-count.active { color: var(--buckram); text-decoration-color: var(--buckram); }
 
-.role-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: var(--s-3); }
+/* 卡片网格：**一条规则两个挂载点**（角色页 / 技能页，v12 F4 起）——同 `.toc-chev` 的既有做法，
+   只加选择器、不复制取值（两个挂载点漂一处就红）。技能页的组内卡片用它，卡片版式仍复用
+   `.role-card`（`<NavRow variant="card">`）：竖排卡片这套版式全仓只有一处定义。 */
+.role-grid, .skill-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: var(--s-3); }
 /* 竖排卡片版式（B6：交互契约见 `.nav-row`，这里只管版式） */
 .role-card { background: var(--sheet); border: 1px solid var(--rule); border-radius: var(--r-2); padding: var(--s-4); display: flex; flex-direction: column; }
 .role-card:hover { border-color: var(--buckram); }
@@ -1107,8 +1132,19 @@ tr:last-child td { border-bottom: 0; }
 }
 /* F3：右详情自己滚（左列表已在 `.md-list` 上滚）——两栏各自独立，整页不滚。
    内部横向滚动容器（`.md-source` / `.md-read .md-pre` / `.table-scroll` / `.flow-scroll`）
-   只滚 X 轴，不与这里的 Y 轴嵌套成双滚动条。 */
+   只滚 X 轴，不与这里的 Y 轴嵌套成双滚动条。
+   ⚠ v12 W-5：技能详情迁入弹窗后**本页不再是它的消费方**（团队页自 W-4 起也已迁走），
+   当前全仓无挂载点；规则与其测试按「不删覆盖」保留（它仍是通用「详情栏」的定义，
+   高度链与横向滚动约束都在这里）。 */
+
 .md-detail { min-width: 0; min-height: 0; overflow-y: auto; }
+
+/* W-4（v12 F3）团队页 / W-5（v12 F4）技能页：详情迁入弹窗后，主从网格**只剩列表** ——
+   单列铺满（`.md` 的两栏只在「列表 ∥ 详情」同时在场时成立）。高度链一个字没改：`.md` 仍是
+   `.page-fill` 的剩余高度子项（`flex: 1 1 auto` / `min-height: 0`），滚动仍由 `.md-list` 承担。
+   ⚠ `.md` 自身的两列 `grid-template-columns` 一字未动（仍是「列表 ∥ 详情」同时在场时的口径，
+   `styles-scroll-containers` 锁着它）。 */
+.md.solo { grid-template-columns: minmax(0, 1fr); }
 
 .md-row {
   display: block;
@@ -1340,19 +1376,52 @@ tr:last-child td { border-bottom: 0; }
    取值仍在 `--fs` 阶梯内（不新增字号档）；`bare` 变体的其余声明（引线 `flex: 1`）不动，
    故只覆盖字号，规则单独成条而不是改写全局 `.count-line.section`（角色/团队页共用它）。 */
 .skill-group-head .count-line.section { font-size: var(--fs-300); }
-/* v10 F4：组内技能行**缩进一档**（`--s-3`，拼在 `.md-row` 既有的 `--s-2` 左内边距上）——
-   组名与行名之间出现一个档位的纵向节奏，「这行属于哪个分类」不靠猜。
+/* v10 F4：组内项**缩进一档**（`--s-3`，与组头自身的 `--s-2` 左内边距拉开一个档位）——
+   组名与组内内容之间出现一个档位的纵向节奏，「这些卡片属于哪个分类」不靠猜。
+   v12 W-5：组内从 `.md-row` 行列表换成 `.skill-grid` 卡片网格，**值一字未改**，只换挂载点
+   （旧选择器 `.skill-group .md-row` 随行列表一并退役）。
    写法遵守既有先例（`.toc-item` 的 `calc(var(--s-5) + var(--toc-depth,0) * var(--s-3))`）：
    只做 token 组合，不写死像素。 */
-.skill-group .md-row { padding-left: calc(var(--s-2) + var(--s-3)); }
+.skill-group .skill-grid { padding-left: calc(var(--s-2) + var(--s-3)); }
+
+/* ── v12 F4（W-6）分类管理：组头一行 = 折叠切换（左）+ 管理动作（右）──────────────────────
+   切换节点 `.skill-group-head` 与动作按钮是**兄弟**（交互元素不嵌套）：靠外层这条 flex 行
+   把两者排在一条线上；切换节点 `flex: 1` 吃满剩余宽度，故引线（`.count-line.bare`）仍能撑到
+   动作区左缘。动作区不换行、不压缩（`flex-shrink: 0`），窄屏时组名先让位（`min-width: 0`）。 */
+.skill-group-bar { display: flex; align-items: center; gap: var(--s-1); }
+.skill-group-bar .skill-group-head { flex: 1; min-width: 0; }
+.skill-group-actions { display: flex; align-items: center; gap: var(--s-1); flex-shrink: 0; }
+
+/* 分类的**就地表单**（新建在列表顶部、改名在组头之下）：两处挂载点共用一条排版，
+   不各写一套（新建/改名的输入与按钮从此不会漂）。输入宽度沿用 `.role-filter` 的既有取值。 */
+.skill-cat-manage { padding: var(--s-1) var(--s-2); }
+.skill-cat-form { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; padding: var(--s-1) var(--s-2); }
+.skill-cat-form .skill-cat-input { min-width: 12.5rem; flex: 0 1 320px; }
+
+/* 空分类组的空态：卡片网格是 grid，这句要让文案吃满整行（否则只占一个列宽）。 */
+.skill-group-empty { grid-column: 1 / -1; margin: 0; }
+
+/* ── v12 F4（W-7）拖拽归类（SPEC-4.6）：拖起态 + 可落点高亮 ─────────────────────────────
+   两处都只**加类**、取值全走既有 token（不新造颜色）：
+   - `.role-card.dragging`：被拖的那张卡片降透明度（`opacity` 不是颜色，且已在动效白名单里）；
+   - `.skill-group.drop-target`：可落点用 `--buckram` 的虚线外框——与选中行的左 3px 引线
+     同一语义色（「这个对象被当前操作瞄准」），`outline-offset: -1px` 让框画在组内、不撑动布局。
+   本区块不声明过渡（无需 reduced-motion 单列）；文件末尾的通配块会归零全站过渡与动画。 */
+.role-card.dragging { opacity: 0.5; }
+.skill-group.drop-target { outline: 1px dashed var(--buckram); outline-offset: -1px; border-radius: var(--r-2); }
+
+/* W-7：详情弹窗内的分类下拉——只补宽度下限（与 `.role-filter` / `.skill-cat-form` 的既有取值
+   同档），控件外观与焦点态一律走 `input, select, …` 基类那条（不新造表单样式）。 */
+.skill-cat-select { min-width: 12.5rem; }
 
 /* ── F7 技能详情居中（层级稿 §3.5 实施要点 1–3）──────────────────────────────
    居中的单位是**详情整体**：命令块 / scope / 深挖折叠三层都在同一个居中列内
    （只给正文段 `.md-body.md-read` 加居中会变成「正文居中、命令块与 scope 左贴」的错位）。
    列宽沿用 `.md-read` 的**既有 66ch 口径**（不新增列宽档）；`max-width` + `margin: 0 auto`
    即水平居中（块级元素触顶 max-width 时，auto 外边距均分剩余宽度）。
-   ⚠ 它是 `.md-detail` **内层**的包裹：滚动容器仍是 `.md-detail`（F3 的 `overflow-y` 不动），
-   左列表宽度也仍是 `.md` 网格的 `minmax(220px, 300px)`（居中列不反向撑宽左栏）。 */
+   ⚠ v12 W-5：技能详情迁入 `<Modal size="lg">` 后，这条**一字未动**——滚动容器换成
+   `.modal-content`（不再有 `.md-detail`），内层这层居中包裹的结构与约束理由都同原样
+   （与 `.role-detail` 嵌在 `.modal-content` 里同源）。 */
 .skill-detail {
   /* 2026-09-17 用户反馈修正：66ch 是西文度量（≈33 汉字 ≈540px），宽屏上只剩中间一小条。
      技能详情是**文档参照**不是长文阅读——放宽到 75rem（≈1200px）撑满详情栏，

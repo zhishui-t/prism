@@ -9,6 +9,7 @@ import { harnessPaths, defaultHarnessRoot } from '@prism/server'
 
 import type { ArgValues, CommandContext } from '../argv.js'
 import { expandHome } from '../argv.js'
+import { formatCliLine, registerCli, type InitCliReport } from './init-cli.js'
 
 export const DEFAULT_CONFIG = (home: string): Record<string, unknown> => ({
   version: 1,
@@ -30,10 +31,13 @@ export interface InitReport {
     entry?: unknown
     backup?: string
   }
+  /** CLI 全局注册（design-v12 §F5 / SPEC-5.1–5.6；`--skip-cli` → status=skipped） */
+  cli: InitCliReport
 }
 
 /**
- * `prism init [--home] [--harness-root] [--force]`（design-v3 §3.6 五步）：
+ * `prism init [--home] [--harness-root] [--force] [--skip-cli]`（design-v3 §3.6 五步
+ * + design-v12 §F5 第六步）：
  * ① 探测宿主目录（默认取**激活适配器**的 defaultRoot，不存在则警告但继续）
  * ② 建 <PRISM_HOME> 骨架：roles/ skills/ knowledge/ state/ catalog/ audit/
  *    （**不落任何团队**——是否建团队、建几个、用什么编制，是使用者的事，
@@ -44,7 +48,9 @@ export interface InitReport {
  * ③ 安装内置 Skill 到 <harnessRoot>/skills/（目标目录来自 --harness-root 推导，不硬编码）
  * ④ 写 MCP 注册到 <harnessRoot>/cli/config.json（合并、写前备份；已有 prism 项指向
  *    不同路径时不覆盖，提示 --force）
- * ⑤ 输出报告 + 提示「重启会话生效」
+ * ⑤ **CLI 全局注册**（发行态 `npm install -g <发行根>`；仓库态写全局 bin shim；
+ *    `--skip-cli` 跳过）——失败只记 `cli.status=failed` + 手动指引，**不中断其余步骤**
+ * ⑥ 输出报告 + 提示「重启会话生效」
  * 幂等：重复执行结果一致。
  */
 export async function runInit(ctx: CommandContext, _args: string[], values: ArgValues): Promise<number> {
@@ -113,6 +119,10 @@ export async function runInit(ctx: CommandContext, _args: string[], values: ArgV
     mcpEntry: resolveMcpEntry(),
   })
 
+  // ⑤ CLI 全局注册（design-v12 §F5）：默认执行，`--skip-cli` 跳过。
+  //    失败**不中断** init——spec 5.4 要求其余步骤照常完成且 exit 0。
+  const cli = await registerCli({ skip: values['skip-cli'] === true })
+
   const report: InitReport = {
     home,
     harnessRoot,
@@ -121,6 +131,7 @@ export async function runInit(ctx: CommandContext, _args: string[], values: ArgV
     homeConfig: configPath,
     skills,
     mcp,
+    cli,
   }
 
   if (ctx.json) {
@@ -155,7 +166,8 @@ export async function runInit(ctx: CommandContext, _args: string[], values: ArgV
       unsupported: '当前 harness 无 MCP 注册机制（跳过；Skill 仍已安装）',
     }
     ctx.stdout(`④ ${mcpLine[mcp.status]}${mcp.backup !== undefined ? `（备份: ${mcp.backup}）` : ''}`)
-    ctx.stdout('⑤ 完成。请重启宿主会话使 MCP 与 Skill 生效')
+    ctx.stdout(formatCliLine(cli))
+    ctx.stdout('⑥ 完成。请重启宿主会话使 MCP 与 Skill 生效')
   }
   return 0
 }

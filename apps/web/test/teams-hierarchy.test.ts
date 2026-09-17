@@ -5,8 +5,9 @@
  * 锁五条**层级契约**（不是像素）：
  * 1. **工作流在第一眼且不被降级**——它是第二个 Pane、在成员表 Pane **之前**（§2.2 线框 ③ 在 ④ 之上），
  *    「阶段 N」不再单列一行（§2.4 #2），计数并入它的 Pane 头 `CountLine`；
- * 2. **第一眼条**——`.pane-head`（名 + team_id + 默认标记 + 动作位）+ `.pane-desc` 一句话 2 行、
- *    全文进 `title`；原「概览 `kv`」六行全部各有归属后整块删除（§2.4 #1–#4）；
+ * 2. **第一眼条**——`.pane-head`（默认标记 + 动作位；身份 team_id 由外层 `<Modal>` 标题承担）
+ *    + `.pane-desc` 一句话 2 行、全文进 `title`；原「概览 `kv`」六行全部各有归属后整块删除
+ *    （§2.4 #1–#4）；**W-4**：详情自页内右栏迁入居中弹窗，团队 `name` UI 零展示（SPEC-3.1）；
  * 3. **F6 合并**——独立「声明技能」Pane 与其底部同源的「团队有效集」Pane 都不见了，
  *    只剩「成员技能集」一处；团队显式声明的可见性走 Pane 头 `CountLine` 的 `title`（R-v8-6）；
  * 4. **R-v8-7 分组默认态**——`global` 组在 `<details>` 里且**默认收起**（计数常驻组头）；
@@ -119,9 +120,10 @@ function countLine(label: string): Element | undefined {
   return all('.count-line').find((n) => n.querySelector('.count-label')?.textContent === label)
 }
 
-/** `.swap-in`（详情根）的直接子节点标签序列——一条断言看完整页顺序。 */
+/** `.swap-in`（详情根）的直接子节点标签序列——一条断言看完整页顺序。
+ *  W-4：详情自页内右栏迁入居中弹窗，包裹层级变为 `.modal-content > .swap-in`。 */
 function bandOrder(): string[] {
-  const root = one('.md-detail .swap-in')
+  const root = one('.modal-content .swap-in')
   if (root === null) throw new Error('详情根 .swap-in 不在 DOM 里')
   // 取首个 class token（`pane` / `two-col` / `team-deep`…）；无 class 时退回标签名
   return [...root.children].map((c) => (c.getAttribute('class') ?? '').split(' ')[0] || c.tagName.toLowerCase())
@@ -157,7 +159,7 @@ describe('F8 §2.2 工作流在第一眼：提到概览之上，且不得降级/
 
   it('工作流 Pane **在成员表 Pane 之前**（此前它是第 4 块，被概览挤到下面）', async () => {
     await render('t-a')
-    const panes = all('.md-detail .swap-in > .pane')
+    const panes = all('.modal-content .swap-in > .pane')
     expect(panes.length).toBe(3)
     expect(panes[1]!.querySelector('.flow-scroll'), '第二个 Pane 不是工作流').not.toBeNull()
     expect(panes[2]!.querySelector('.form-grid'), '第三个 Pane 不是成员表').not.toBeNull()
@@ -182,11 +184,16 @@ describe('F8 §2.2 工作流在第一眼：提到概览之上，且不得降级/
 })
 
 describe('F8 §2.1 第一眼带：pane-head + 一句话描述；概览 kv 六行全部归位', () => {
-  it('团队名（`.pane-head h3.mono`）+ team_id + 默认团队中性档', async () => {
+  it('身份 = team_id（弹窗标题 + 面板 head 的默认档 + 动作位）；**团队名零展示**（spec-3.1）', async () => {
     await render('t-a')
-    const head = one('.md-detail .swap-in > .pane > .pane-head')!
-    expect(head.querySelector('h3')?.textContent).toBe('团队甲')
-    expect(head.querySelector('.mono.small.muted')?.textContent).toBe('t-a')
+    // W-4：身份由外层弹窗标题承担（`.modal-head h3`），团队 `name`（'团队甲'）不再出现在任何位置
+    const modal = one('.modal.modal-lg')!
+    expect(modal.querySelector('.modal-head h3')?.textContent).toBe('t-a')
+    expect(modal.textContent).not.toContain('团队甲')
+    // 面板 head 里只剩默认档 + 动作位（不再是「名字 + team_id」两行）
+    const head = one('.modal-content .swap-in > .pane > .pane-head')!
+    expect(head.querySelector('h3')).toBeNull()
+    expect(head.querySelector('.mono.small.muted')).toBeNull()
     const tags = [...head.querySelectorAll('.tag')]
     expect(tags.map((n) => n.textContent)).toEqual([t('teams.default')])
     // 动作位仍在（`.pane-head .spacer`），且启用/编辑/删除三颗都在
@@ -199,6 +206,13 @@ describe('F8 §2.1 第一眼带：pane-head + 一句话描述；概览 kv 六行
     ])
   })
 
+  it('列表行主标题**只有 team_id**；团队 `name` 在整页文本里零命中', async () => {
+    await render('t-a')
+    const row = one('.md-list .md-row')!
+    expect(row.querySelector('.t')?.textContent).toBe('t-a')
+    expect(container.textContent).not.toContain('团队甲')
+  })
+
   it('描述收成一句话（`firstSentence(desc, 60)`），全文进 `title`', async () => {
     await render('t-a')
     const desc = one('.pane-desc')!
@@ -207,9 +221,9 @@ describe('F8 §2.1 第一眼带：pane-head + 一句话描述；概览 kv 六行
     expect(desc.getAttribute('title')).toBe(LONG_DESC)
   })
 
-  it('§2.4 #4：`teams.overview` 标题与 kv 整块删除（名称已在 pane-head）', async () => {
+  it('§2.4 #4：`teams.overview` 标题与 kv 整块删除（身份已在弹窗标题）', async () => {
     await render('t-a')
-    expect(all('.md-detail h4').length).toBe(0)
+    expect(all('.modal-content h4').length).toBe(0)
     // 深挖折叠里的 `.kv` 是唯一一处（下一步单独断言其归属）
     expect(all('.pane .kv').length).toBe(0)
   })
@@ -439,7 +453,7 @@ describe('v11 F2：工作流 Pane 的三态与缺列降级（渲染码一字未�
       },
     ]
     await render('t-a')
-    const panes = all('.md-detail .swap-in > .pane')
+    const panes = all('.modal-content .swap-in > .pane')
     expect(panes).toHaveLength(3)
     expect(panes[1]!.textContent).toContain(t('teams.wf.missing.title'))
     expect(one('.flow-scroll')).toBeNull()

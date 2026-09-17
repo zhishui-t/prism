@@ -10,8 +10,8 @@
  *
  * 本文件锁三件事：
  *  1. **高度链**——`.layout` → `.main` → `.page` → `.page-fill` → 主从区，每一环都得在；
- *  2. **两栏各自 overflow-y**——知识库是 `.book-sidebar` / `.book-content`，
- *     技能页与团队页是 `.md-list` / `.md-detail`；
+ *  2. **列表栏自己 overflow-y**——知识库是 `.book-sidebar` / `.book-content`，
+ *     技能页与团队页是 `.md-list`（两页的详情自 W-4/W-5 起都迁入弹窗，主从网格只剩单列）；
  *  3. **不回退**——`.book-layout` 的 `min-height: 100%`、`.md` 的 `height: calc(…)`
  *     是 F3 前的「整页长滚」成因，必须保持缺席（这两条是回归红线）。
  *
@@ -104,7 +104,7 @@ describe('F3 知识库页两栏（书架：目录树 / 书页）', () => {
   })
 })
 
-describe('F3 技能页 / 团队页两栏（主从：列表 / 详情）', () => {
+describe('F3 技能页 / 团队页列表栏（主从网格的单列形态）', () => {
   it('`.md` 是两列栅格 + `stretch`：两栏由同一行轨道定高 ⇒ 天然等高、对齐视口', () => {
     const md = body('.md')
     expect(md).toContain('display: grid')
@@ -117,13 +117,18 @@ describe('F3 技能页 / 团队页两栏（主从：列表 / 详情）', () => {
     expect(md).not.toMatch(/height:\s*calc\(/)
   })
 
+  it('W-4/W-5：`.md.solo` 单列铺满——技能页与团队页详情迁入弹窗后只剩列表（高度链由 `.md` 基类继承）', () => {
+    // 只改列定义，不动基类的 flex / min-height / stretch（两页仍靠它们吃满 `.page-fill`）
+    expect(body('.md.solo')).toContain('grid-template-columns: minmax(0, 1fr)')
+  })
+
   it('左列表 `overflow-y: auto` 且不超出本行高（`max-height: 100%`）', () => {
     const list = body('.md-list')
     expect(list).toContain('overflow-y: auto')
     expect(list).toContain('max-height: 100%')
   })
 
-  it('右详情自己滚，且可被压扁（`min-height: 0`，小视口不撑破整页）', () => {
+  it('右详情栏规则仍在（`.md-detail`，当前无挂载点：技能页 W-5 / 团队页 W-4 均已迁入弹窗）', () => {
     const detail = body('.md-detail')
     expect(detail).toContain('overflow-y: auto')
     expect(detail).toContain('min-height: 0')
@@ -151,8 +156,9 @@ describe('F3 无嵌套双滚动条（横滚容器只许滚 X 轴）', () => {
 describe('F3 三页接线（源码级存在性：容器被真的挂上了）', () => {
   const PAGES: ReadonlyArray<[string, string, readonly string[]]> = [
     ['知识库', '../src/pages/Knowledge.tsx', ['page-fill', 'book-layout', 'book-sidebar', 'book-content']],
-    ['技能', '../src/pages/Skills.tsx', ['page-fill', 'md-list', 'md-detail']],
-    ['团队', '../src/pages/teams/TeamsPage.tsx', ['page-fill', 'md-list', 'md-detail']],
+    ['技能', '../src/pages/Skills.tsx', ['page-fill', 'md-list', 'md solo']],
+    /* W-4：团队详情迁入弹窗 ⇒ 团队页不再是「列表 ∥ 详情」两栏，只剩单列列表（`.md.solo`）。 */
+    ['团队', '../src/pages/teams/TeamsPage.tsx', ['page-fill', 'md-list', 'md solo']],
   ]
 
   it.each(PAGES)('%s 页挂了 `.page-fill` 与两栏容器', (_label, rel, classes) => {

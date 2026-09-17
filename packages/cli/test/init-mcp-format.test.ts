@@ -85,7 +85,7 @@ describe('prism init：MCP 注册形态分派', () => {
 
   it('默认宿主（zcode）：写嵌套 mcp.servers，且幂等', async () => {
     const { home, root, ctx } = await makeHarness()
-    const first = await runCommand(ctx, ['init', '--home', home, '--harness-root', root, '--json'])
+    const first = await runCommand(ctx, ['init', '--home', home, '--harness-root', root, '--skip-cli', '--json'])
     expect(first).toBe(0)
 
     const configPath = join(root, 'cli', 'config.json')
@@ -105,7 +105,7 @@ describe('prism init：MCP 注册形态分派', () => {
     // 幂等：第二次运行报告 unchanged
     const lines: string[] = []
     const ctx2: CommandContext = { ...ctx, stdout: (l) => lines.push(l) }
-    expect(await runCommand(ctx2, ['init', '--home', home, '--harness-root', root])).toBe(0)
+    expect(await runCommand(ctx2, ['init', '--home', home, '--harness-root', root, '--skip-cli'])).toBe(0)
     expect(lines.join('\n')).toContain('MCP 注册未变化')
   })
 
@@ -114,7 +114,7 @@ describe('prism init：MCP 注册形态分派', () => {
     await installPlugin(home)
     process.env['PRISM_HARNESS'] = 'workbuddy'
 
-    const code = await runCommand(ctx, ['init', '--home', home, '--harness-root', root, '--json'])
+    const code = await runCommand(ctx, ['init', '--home', home, '--harness-root', root, '--skip-cli', '--json'])
     expect(code).toBe(0)
 
     const configPath = join(root, 'mcp.json')
@@ -148,7 +148,7 @@ describe('prism init：MCP 注册形态分派', () => {
       'utf-8',
     )
 
-    const code = await runCommand(ctx, ['init', '--home', home, '--harness-root', root, '--json'])
+    const code = await runCommand(ctx, ['init', '--home', home, '--harness-root', root, '--skip-cli', '--json'])
     expect(code).toBe(0)
 
     const cfg = await readJson(configPath)
@@ -169,11 +169,11 @@ describe('prism init：MCP 注册形态分派', () => {
 
     const lines1: string[] = []
     const ctx1: CommandContext = { ...ctx, stdout: (l) => lines1.push(l) }
-    expect(await runCommand(ctx1, ['init', '--home', home, '--harness-root', root])).toBe(0)
+    expect(await runCommand(ctx1, ['init', '--home', home, '--harness-root', root, '--skip-cli'])).toBe(0)
 
     const lines2: string[] = []
     const ctx2: CommandContext = { ...ctx, stdout: (l) => lines2.push(l) }
-    expect(await runCommand(ctx2, ['init', '--home', home, '--harness-root', root])).toBe(0)
+    expect(await runCommand(ctx2, ['init', '--home', home, '--harness-root', root, '--skip-cli'])).toBe(0)
     expect(lines2.join('\n')).toContain('MCP 注册未变化')
     expect(lines2.join('\n')).not.toContain('备份')
   })
@@ -188,7 +188,7 @@ describe('prism init：MCP 注册形态分派', () => {
     // 关键：不设 PRISM_HARNESS / PRISM_HARNESS_ROOT，只靠 prism.yaml 声明
     await writeFile(join(home, 'prism.yaml'), 'harness: workbuddy\n', 'utf-8')
 
-    expect(await runCommand(ctx, ['init', '--home', home, '--yes', '--json'])).toBe(0)
+    expect(await runCommand(ctx, ['init', '--home', home, '--yes', '--skip-cli', '--json'])).toBe(0)
 
     const { existsSync } = await import('node:fs')
     // MCP 注册与 Skill 都落在**插件自述的默认根**下（若回落 zcode，两者都会写到 ~/.zcode）
@@ -203,7 +203,7 @@ describe('prism init：MCP 注册形态分派', () => {
     // 关键：**不设** PRISM_HARNESS，只靠 <PRISM_HOME>/prism.yaml 声明
     await writeFile(join(home, 'prism.yaml'), 'harness: workbuddy\n', 'utf-8')
 
-    expect(await runCommand(ctx, ['init', '--home', home, '--harness-root', root, '--json'])).toBe(0)
+    expect(await runCommand(ctx, ['init', '--home', home, '--harness-root', root, '--skip-cli', '--json'])).toBe(0)
 
     const cfg = await readJson(join(root, 'mcp.json'))
     expect((cfg['mcpServers'] as Record<string, unknown>)['prism']).toBeDefined()
@@ -223,7 +223,7 @@ describe('prism init：MCP 注册形态分派', () => {
       'utf-8',
     )
 
-    expect(await runCommand(ctx, ['init', '--home', home, '--harness-root', root])).toBe(0)
+    expect(await runCommand(ctx, ['init', '--home', home, '--harness-root', root, '--skip-cli'])).toBe(0)
     const output = lines.join('\n')
     expect(output).toContain('MCP 注册冲突')
     expect(output).toContain('mcpServers.prism')
@@ -238,7 +238,7 @@ describe('prism init：MCP 注册形态分派', () => {
     const ctx: CommandContext = { ...baseCtx, stdout: (l) => lines.push(l) }
     // 先把真实条目写出来，再按「等价但写法不同」派生：`type`（平铺形态 Prism 不写）、
     // args 换一种分隔符写法、宿主自加的 `disabled`
-    expect(await runCommand(ctx, ['init', '--home', home, '--harness-root', root])).toBe(0)
+    expect(await runCommand(ctx, ['init', '--home', home, '--harness-root', root, '--skip-cli'])).toBe(0)
     const configPath = join(root, 'mcp.json')
     const written = await readJson(configPath)
     const entry = (written['mcpServers'] as Record<string, unknown>)['prism'] as Record<string, unknown>
@@ -252,7 +252,7 @@ describe('prism init：MCP 注册形态分派', () => {
     const before = await readFile(configPath, 'utf-8')
 
     lines.length = 0
-    expect(await runCommand(ctx, ['init', '--home', home, '--harness-root', root])).toBe(0)
+    expect(await runCommand(ctx, ['init', '--home', home, '--harness-root', root, '--skip-cli'])).toBe(0)
     expect(lines.join('\n')).toContain('MCP 注册未变化')
     expect(await readFile(configPath, 'utf-8')).toBe(before)
   })
@@ -263,7 +263,7 @@ describe('prism init：MCP 注册形态分派', () => {
     process.env['PRISM_HARNESS'] = 'workbuddy'
     const lines: string[] = []
     const ctx: CommandContext = { ...baseCtx, stdout: (l) => lines.push(l) }
-    expect(await runCommand(ctx, ['init', '--home', home, '--harness-root', root])).toBe(0)
+    expect(await runCommand(ctx, ['init', '--home', home, '--harness-root', root, '--skip-cli'])).toBe(0)
     const configPath = join(root, 'mcp.json')
     const written = await readJson(configPath)
     const entry = (written['mcpServers'] as Record<string, unknown>)['prism'] as Record<string, unknown>
@@ -275,7 +275,7 @@ describe('prism init：MCP 注册形态分派', () => {
     )
 
     lines.length = 0
-    expect(await runCommand(ctx, ['init', '--home', home, '--harness-root', root, '--force'])).toBe(0)
+    expect(await runCommand(ctx, ['init', '--home', home, '--harness-root', root, '--force', '--skip-cli'])).toBe(0)
     expect(lines.join('\n')).toContain('MCP 注册已按 --force 覆盖')
 
     const after = (await readJson(configPath))['mcpServers'] as Record<string, unknown>

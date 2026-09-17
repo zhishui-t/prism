@@ -22,13 +22,17 @@
  *
  * 时序图导出（F5）：见本文件末尾的 `SequenceExport`。
  *
+ * v12 F1（缩放平移）：`relations` / `path` 两档的 SVG 包在 `ZoomPane` 里（`affected` 是列表语义，
+ * 不启用——SPEC-1.7）。缩放平移只改内层 `<g transform>`，viewBox 与 `preserveAspectRatio`
+ * 都不动；几何与换算全在 `graph-logic.ts` 的纯函数里（组件只负责量容器、挂事件）。
+ *
  * ✅ **端点已对账**（本批实施期间后端批同工作树落地）：导出走
  * `POST /api/arch/render` 的 `mode: 'from-graph'` 分支（请求体含 `mode` / `type: 'sequence'`），
  * 与 design-v10 设想的「新路径」不同——实况与理由见 `api.ts` 的 `ARCH_RENDER_ENDPOINT`。
  * 路径与 mode 常量只在该处，UI 的失败分支已全部兜住。
  */
 
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type SVGProps } from 'react'
 
 import {
   api,
@@ -46,17 +50,30 @@ import {
   RADIAL_CENTER,
   RADIAL_MAX,
   RADIAL_PEER,
-  RADIAL_VIEW,
+  ZOOM_STEP,
+  annotationLine,
+  annotationVisible,
+  chainBoxes,
   chainShape,
-  chainViewH,
   chainY,
   clipLabel,
+  contentViewBox,
+  fitTransform,
   formatLocation,
   groupAffected,
+  panBy,
+  radialBoxes,
   radialPoint,
   segmentBetweenBoxes,
   sequenceExportErrorKey,
+  transformAttr,
+  userTransform,
+  viewBoxAttr,
+  zoomAt,
+  zoomPercent,
+  zoomRatio,
 } from './graph-logic.ts'
+import type { Rect, Size, ZoomTransform } from './graph-logic.ts'
 import type { GraphQueryResult } from './GraphQuery.tsx'
 
 /**
@@ -93,6 +110,152 @@ function body(result: GraphQueryResult, onNodePick: NodePick): ReactNode {
   }
 }
 
+/* ===== 缩放平移（v12 F1 / SPEC-1.1–1.8） ===== */
+
+/** 未测量时的容器盒（happy-dom 下 `getBoundingClientRect()` 恒为 0；真机首帧布局前也是 0）。 */
+const NO_BOX: Size = { w: 0, h: 0 }
+
+interface Zoom {
+  /** SPEC-1.8：倍率 ≥ 1.5 → 节点 `<text>` 追加 `id · file:line` 第二行。 */
+  annotate: boolean
+  /** 内层 `<g>` 的 transform（**用户坐标**；fit 态 = `translate(0 0) scale(1)`，见 `userTransform`）。 */
+  transform: string
+  /** 挂到 `<svg>` 上的 props（ref / 类名 / wheel / pointer）；调用方把 viewBox / role / aria 写在它**后面**。 */
+  svgProps: SVGProps<SVGSVGElement>
+  /** 工具条：放大 / 缩小 / 适应窗口（SPEC-1.4/1.5）。 */
+  toolbar: ReactNode
+}
+
+/**
+ * 缩放平移（v12 F1）：`relations` / `path` 两档共用；`affected` 是列表语义，**不挂**（SPEC-1.7）。
+ *
+ * 分工：本 hook 只管「量容器、挂事件、给属性和工具条」，换算（fit / 指针锚 / clamp / 归一化）
+ * 全在 `graph-logic.ts` 的纯函数里——happy-dom 量不到盒（恒 0），纯函数以显式尺寸入参才测得动。
+ *
+ * 状态 `view` 的单位是**元素像素**：内容点 v → 屏幕 `view.scale · v + view.tx`。
+ * 初始态与「适应窗口」都取 `fitTransform(量到的盒, viewBox)`——**不是**写死的 1/0/0：
+ * 那组数由「容器与内容双向比取 min + 居中」算出，窗口尺寸或内容一变就重算
+ * （`userTransform` 里解释了写进 `<g>` 时为什么还要归一化一次）。
+ */
+function useZoom(vb: Rect): Zoom {
+  const t = useT()
+  const ref = useRef<SVGSVGElement | null>(null)
+  const [box, setBox] = useState<Size>(NO_BOX)
+  const [view, setView] = useState<ZoomTransform>(() => fitTransform(NO_BOX, vb))
+  const drag = useRef<{ x: number; y: number } | null>(null)
+  const [dragging, setDragging] = useState(false)
+
+  /** 元素自身那条 meet 映射：「适应窗口」的答案就是它，归一化 `<g transform>` 也拿它当基准。 */
+  const fit = fitTransform(box, vb)
+  /** 内容换了（viewBox 变）就得重新适应窗口——旧图的缩放平移不该带到新图上。 */
+  const vbKey = viewBoxAttr(vb)
+
+  /** 量当前元素盒；量不到（未布局 / happy-dom）→ `NO_BOX`，下游纯函数给单位映射兜底。 */
+  const measure = (): Size => {
+    const rect = ref.current?.getBoundingClientRect()
+    return rect === undefined ? NO_BOX : { w: rect.width, h: rect.height }
+  }
+
+  /** 适应窗口（SPEC-1.4）：**当下**重新量一遍再算 fit——窗口尺寸变了也按现在的算。 */
+  const refit = (): void => {
+    const next = measure()
+    setBox(next)
+    setView(fitTransform(next, vb))
+  }
+
+  useLayoutEffect(() => {
+    const next = measure()
+    setBox(next)
+    setView(fitTransform(next, vb))
+    // ⚠ 依赖只写 vbKey：`vb` 每次渲染都是新对象，进依赖会每次渲染重跑
+  }, [vbKey])
+
+  useEffect(() => {
+    const el = ref.current
+    if (el === null) return
+    /* ⚠ **原生** `addEventListener` + `{ passive: false }`：React 合成 `onWheel` 是 passive 的，
+       `preventDefault()` 在里面不生效（SPEC-1.2 明确要「页面不滚」）。倍率 1.1× / ÷1.1 与指针锚
+       都在纯函数里；这里只把指针位置换算成元素盒坐标。 */
+    const onWheel = (e: WheelEvent): void => {
+      e.preventDefault()
+      const rect = el.getBoundingClientRect()
+      setView((cur) =>
+        zoomAt(
+          cur,
+          e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP,
+          { x: e.clientX - rect.left, y: e.clientY - rect.top },
+          fit,
+        ),
+      )
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [vbKey, box.w, box.h])
+
+  /** 按钮缩放以**容器中心**为锚：只有滚轮才有指针位置（键盘用户也拿得到可预期的一步）。 */
+  const step = (factor: number): void => {
+    setView((cur) => zoomAt(cur, factor, { x: box.w / 2, y: box.h / 2 }, fit))
+  }
+
+  const endDrag = (): void => {
+    drag.current = null
+    setDragging(false)
+  }
+
+  const pct = zoomPercent(view, fit)
+
+  return {
+    annotate: annotationVisible(zoomRatio(view, fit)),
+    transform: transformAttr(userTransform(view, fit)),
+    toolbar: (
+      /* SPEC-1.5：± 走原生 `<button>`（可聚焦，Enter / Space 天然可触发）；百分比只读 */
+      <div className="chain-zoom" role="group" aria-label={t('graph.zoom.label')}>
+        <button type="button" className="tool-btn" onClick={() => step(1 / ZOOM_STEP)}>
+          {t('graph.zoom.out')}
+        </button>
+        <button type="button" className="tool-btn" onClick={() => step(ZOOM_STEP)}>
+          {t('graph.zoom.in')}
+        </button>
+        <button type="button" className="tool-btn" onClick={refit}>
+          {t('graph.zoom.fit')}
+        </button>
+        <span className="small muted chain-zoom-pct" title={t('graph.zoom.current', { pct })}>
+          {pct}%
+        </span>
+      </div>
+    ),
+    svgProps: {
+      ref,
+      className: dragging ? 'chain-graph dragging' : 'chain-graph',
+      /* 拖拽平移（SPEC-1.3，pointer 事件：按下 → 移动 → 抬起）。`touch-action: none` 写在
+         styles.css 上（触控不被浏览器抢去滚页面）；页面滚动不受影响——这里不碰 document。 */
+      onPointerDown: (e) => {
+        if (e.button !== 0) return
+        // 从可点节点上起手不算拖拽：那是「以该 id 追问」的点击目标
+        if ((e.target as Element).closest?.('[role="button"]') != null) return
+        drag.current = { x: e.clientX, y: e.clientY }
+        setDragging(true)
+        try {
+          ref.current?.setPointerCapture(e.pointerId)
+        } catch {
+          /* 指针捕获不是所有环境都给（happy-dom、非活跃指针）：退化成容器内跟手，功能不减 */
+        }
+      },
+      onPointerMove: (e) => {
+        const from = drag.current
+        if (from === null) return
+        const dx = e.clientX - from.x
+        const dy = e.clientY - from.y
+        from.x = e.clientX
+        from.y = e.clientY
+        setView((cur) => panBy(cur, dx, dy))
+      },
+      onPointerUp: endDrag,
+      onPointerCancel: endDrag,
+    },
+  }
+}
+
 /* ===== 中心-辐射（relations） ===== */
 
 function RadialDiagram({
@@ -106,8 +269,18 @@ function RadialDiagram({
 }) {
   const t = useT()
   // 多义：还没有「命中的节点」，没有中心可画（候选清单由面板既有 UI 承担）
-  if (value.candidates !== undefined && value.candidates.length > 0) return null
-  const peers = value.items.slice(0, RADIAL_MAX)
+  const ambiguous = value.candidates !== undefined && value.candidates.length > 0
+  const peers = ambiguous ? [] : value.items.slice(0, RADIAL_MAX)
+  /* v12 F1：viewBox 随**节点几何包围盒**走（不再取固定的 `RADIAL_VIEW`）——固定小画布
+     在宽容器里被整图等比放大（节点气泡化、空边大）正是用户感知的「比例问题」。
+     框坐标与本组 box 同源，避免「画的框」与「算的盒」两处口径分叉。 */
+  const boxes = radialBoxes(peers.length)
+  const centerBox = boxes[0]!
+  const vb = contentViewBox(boxes)
+  // 检视 M-1：useZoom 须无条件调用（Rules of Hooks）——置于早退之前；空输入由
+  // contentViewBox 的退化盒 + fitTransform 的单位映射兜底，早退分支不渲染任何图形。
+  const zoom = useZoom(vb)
+  if (ambiguous) return null
   if (peers.length === 0) return null
 
   const dirKey = dir === 'in' ? 'graph.mode.in' : 'graph.mode.out'
@@ -115,120 +288,134 @@ function RadialDiagram({
 
   return (
     <>
+      {zoom.toolbar}
       <svg
-        className="chain-graph"
-        viewBox={`0 0 ${RADIAL_VIEW.w} ${RADIAL_VIEW.h}`}
+        {...zoom.svgProps}
+        viewBox={viewBoxAttr(vb)}
         role="img"
         aria-label={t('graph.viz.radialAria', { dir: t(dirKey), n: peers.length })}
       >
-        <defs>
-          {/* 两个标记分开定义：`marker` 的上下文不继承被引用元素的 `currentColor`，
-              故箭头各自的填充色只能由类给（值仍是 styles.css 的 token）。 */}
-          <marker
-            id="chain-arrow-out"
-            viewBox="0 0 8 8"
-            refX="7"
-            refY="4"
-            markerWidth="8"
-            markerHeight="8"
-            orient="auto"
-          >
-            <path className="chain-arrow out" d="M0,0 L8,4 L0,8 z" />
-          </marker>
-          <marker
-            id="chain-arrow-in"
-            viewBox="0 0 8 8"
-            refX="7"
-            refY="4"
-            markerWidth="8"
-            markerHeight="8"
-            orient="auto"
-          >
-            <path className="chain-arrow in" d="M0,0 L8,4 L0,8 z" />
-          </marker>
-        </defs>
-
-        {peers.map((item, index) => {
-          const point = radialPoint(index, peers.length)
-          /* 箭头朝向 = 方向：出边（本节点 → 对端）从中心画到对端，箭头落对端；
-             入边（对端 → 本节点）**反向画**，箭头落回中心——`orient="auto"` 只认路径
-             行进方向，故方向不能靠 marker-start/end 表达，得靠端点顺序（**框也跟着换**）。
-             两端各退到节点框外（`segmentBetweenBoxes`）：不退的话箭头会被节点框盖住。 */
-          const outward = dir === 'out'
-          const line = segmentBetweenBoxes(
-            outward ? RADIAL_CENTER : point,
-            outward ? RADIAL_CENTER : RADIAL_PEER,
-            outward ? point : RADIAL_CENTER,
-            outward ? RADIAL_PEER : RADIAL_CENTER,
-          )
-          return (
-            <line
-              key={`edge|${item.other}|${index}`}
-              className={`chain-edge ${dir}`}
-              x1={line.x1}
-              y1={line.y1}
-              x2={line.x2}
-              y2={line.y2}
-              markerEnd={`url(#chain-arrow-${dir})`}
-            />
-          )
-        })}
-
-        <g className="chain-node center">
-          <title>{t('graph.viz.centerAria', { id: centerId })}</title>
-          <rect
-            x={RADIAL_CENTER.x - RADIAL_CENTER.w / 2}
-            y={RADIAL_CENTER.y - RADIAL_CENTER.h / 2}
-            width={RADIAL_CENTER.w}
-            height={RADIAL_CENTER.h}
-            rx="3"
-          />
-          <text x={RADIAL_CENTER.x} y={RADIAL_CENTER.y}>
-            {clipLabel(centerId, 26)}
-          </text>
-        </g>
-
-        {peers.map((item, index) => {
-          const point = radialPoint(index, peers.length)
-          const label = item.other_label !== '' ? item.other_label : item.other
-          const detail = [item.kind, formatLocation(item.file, item.line)].filter((s) => s !== '').join(' · ')
-          /* 悬停全文 = `标签 · id · kind · file:line`：标签在框里是被**截断**的，
-             故全文必须留在这里（id 也在这里，寻址主键看得见）；链上的 `<title>` 同此口径。 */
-          const full = [label, item.other, detail].filter((s) => s !== '').join(' · ')
-          return (
-            <g
-              key={`node|${item.other}|${index}`}
-              className="chain-node pick"
-              tabIndex={0}
-              role="button"
-              aria-label={
-                detail === ''
-                  ? t('graph.viz.pickAria', { name: label })
-                  : `${t('graph.viz.pickAria', { name: label })} · ${detail}`
-              }
-              onClick={() => onNodePick(item.other, label)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault()
-                  onNodePick(item.other, label)
-                }
-              }}
+        {/* v12 F1：缩放平移只动这一层 `<g>`（viewBox 与 preserveAspectRatio 都不动，SPEC-1.1） */}
+        <g className="chain-zoom-layer" transform={zoom.transform}>
+          <defs>
+            {/* 两个标记分开定义：`marker` 的上下文不继承被引用元素的 `currentColor`，
+                故箭头各自的填充色只能由类给（值仍是 styles.css 的 token）。 */}
+            <marker
+              id="chain-arrow-out"
+              viewBox="0 0 8 8"
+              refX="7"
+              refY="4"
+              markerWidth="8"
+              markerHeight="8"
+              orient="auto"
             >
-              {/* `<title>` 与 aria-label 同源：标签被截断时全文仍可读（SVG 无 title 属性） */}
-              <title>{full}</title>
-              <rect
-                x={point.x - RADIAL_PEER.w / 2}
-                y={point.y - RADIAL_PEER.h / 2}
-                width={RADIAL_PEER.w}
-                height={RADIAL_PEER.h}
-                rx="3"
+              <path className="chain-arrow out" d="M0,0 L8,4 L0,8 z" />
+            </marker>
+            <marker
+              id="chain-arrow-in"
+              viewBox="0 0 8 8"
+              refX="7"
+              refY="4"
+              markerWidth="8"
+              markerHeight="8"
+              orient="auto"
+            >
+              <path className="chain-arrow in" d="M0,0 L8,4 L0,8 z" />
+            </marker>
+          </defs>
+
+          {peers.map((item, index) => {
+            const point = radialPoint(index, peers.length)
+            /* 箭头朝向 = 方向：出边（本节点 → 对端）从中心画到对端，箭头落对端；
+               入边（对端 → 本节点）**反向画**，箭头落回中心——`orient="auto"` 只认路径
+               行进方向，故方向不能靠 marker-start/end 表达，得靠端点顺序（**框也跟着换**）。
+               两端各退到节点框外（`segmentBetweenBoxes`）：不退的话箭头会被节点框盖住。 */
+            const outward = dir === 'out'
+            const line = segmentBetweenBoxes(
+              outward ? RADIAL_CENTER : point,
+              outward ? RADIAL_CENTER : RADIAL_PEER,
+              outward ? point : RADIAL_CENTER,
+              outward ? RADIAL_PEER : RADIAL_CENTER,
+            )
+            return (
+              <line
+                key={`edge|${item.other}|${index}`}
+                className={`chain-edge ${dir}`}
+                x1={line.x1}
+                y1={line.y1}
+                x2={line.x2}
+                y2={line.y2}
+                markerEnd={`url(#chain-arrow-${dir})`}
               />
-              <text x={point.x} y={point.y}>
-                {clipLabel(label, 16)}
-              </text>
-            </g>
-          )
-        })}
+            )
+          })}
+
+          {/* 中心节点**没有** file/line 数据（响应里只有 id）——故不画第二行（SPEC-1.8「不猜」） */}
+          <g className="chain-node center">
+            <title>{t('graph.viz.centerAria', { id: centerId })}</title>
+            <rect
+              x={centerBox.x}
+              y={centerBox.y}
+              width={centerBox.w}
+              height={centerBox.h}
+              rx="3"
+            />
+            <text x={RADIAL_CENTER.x} y={RADIAL_CENTER.y}>
+              {clipLabel(centerId, 26)}
+            </text>
+          </g>
+
+          {peers.map((item, index) => {
+            const point = radialPoint(index, peers.length)
+            const box = boxes[index + 1]!
+            const label = item.other_label !== '' ? item.other_label : item.other
+            const detail = [item.kind, formatLocation(item.file, item.line)].filter((s) => s !== '').join(' · ')
+            /* 悬停全文 = `标签 · id · kind · file:line`：标签在框里是被**截断**的，
+               故全文必须留在这里（id 也在这里，寻址主键看得见）；链上的 `<title>` 同此口径。 */
+            const full = [label, item.other, detail].filter((s) => s !== '').join(' · ')
+            // SPEC-1.8：倍率 ≥ 1.5 才画第二行；数据里没有 file/line 就返回 null（不编造）
+            const annotation = annotationLine(item.other, item.file, item.line)
+            return (
+              <g
+                key={`node|${item.other}|${index}`}
+                className="chain-node pick"
+                tabIndex={0}
+                role="button"
+                aria-label={
+                  detail === ''
+                    ? t('graph.viz.pickAria', { name: label })
+                    : `${t('graph.viz.pickAria', { name: label })} · ${detail}`
+                }
+                onClick={() => onNodePick(item.other, label)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    onNodePick(item.other, label)
+                  }
+                }}
+              >
+                {/* `<title>` 与 aria-label 同源：标签被截断时全文仍可读（SVG 无 title 属性） */}
+                <title>{full}</title>
+                <rect
+                  x={box.x}
+                  y={box.y}
+                  width={box.w}
+                  height={box.h}
+                  rx="3"
+                />
+                <text x={point.x} y={point.y}>
+                  {clipLabel(label, 16)}
+                  {/* 第二行**不截断**（不过 `clipLabel`）：R-1 要的正是「放大后看清 file:line」 */}
+                  {zoom.annotate && annotation !== null && (
+                    <tspan x={point.x} dy="1.15em">
+                      {annotation}
+                    </tspan>
+                  )}
+                </text>
+              </g>
+            )
+          })}
+        </g>
       </svg>
 
       <div className="chain-legend">
@@ -253,73 +440,84 @@ function RadialDiagram({
 
 function ChainDiagram({ value }: { value: GraphPath }) {
   const t = useT()
-  // 没找到路径 / 链没解析出来：都不画图（两种情形各有既有文案，在 `PathBody` 里）
-  if (!value.found || value.chain.length === 0) return null
+  // 没找到路径 / 链没解析出来：都不画图（两种情形各有既有文案，在 `PathBody` 里）；
   // 太长不画：截断的链看起来就是「到这就断了」（口径见 `graph-logic.ts` 的 `CHAIN_MAX`）
-  if (value.chain.length > CHAIN_MAX) return null
+  const drawable = value.found && value.chain.length > 0 && value.chain.length <= CHAIN_MAX
+  /* v12 F1：viewBox 随**节点几何包围盒**走（不再取固定的 `CHAIN_VIEW_W` × 手算高度）——
+     链越长包围盒越高，宽容器下不再整图放大。 */
+  const boxes = chainBoxes(drawable ? value.chain.length : 0)
+  const vb = contentViewBox(boxes)
+  // 检视 M-1：useZoom 须无条件调用（Rules of Hooks）——置于早退之前；空链由
+  // contentViewBox 的退化盒 + fitTransform 的单位映射兜底，早退分支不渲染任何图形。
+  const zoom = useZoom(vb)
+  if (!drawable) return null
 
   const cx = CHAIN_VIEW_W / 2
-  const h = chainViewH(value.chain.length)
 
   return (
-    <svg
-      className="chain-graph"
-      viewBox={`0 0 ${CHAIN_VIEW_W} ${h}`}
-      role="img"
-      aria-label={t('graph.viz.chainAria', { n: value.chain.length })}
-    >
-      <defs>
-        <marker
-          id="chain-arrow-down"
-          viewBox="0 0 8 8"
-          refX="7"
-          refY="4"
-          markerWidth="8"
-          markerHeight="8"
-          orient="auto"
-        >
-          <path className="chain-arrow down" d="M0,0 L8,4 L0,8 z" />
-        </marker>
-      </defs>
+    <>
+      {zoom.toolbar}
+      <svg
+        {...zoom.svgProps}
+        viewBox={viewBoxAttr(vb)}
+        role="img"
+        aria-label={t('graph.viz.chainAria', { n: value.chain.length })}
+      >
+        {/* v12 F1：缩放平移只动这一层 `<g>`（viewBox 与 preserveAspectRatio 都不动，SPEC-1.1） */}
+        <g className="chain-zoom-layer" transform={zoom.transform}>
+          <defs>
+            <marker
+              id="chain-arrow-down"
+              viewBox="0 0 8 8"
+              refX="7"
+              refY="4"
+              markerWidth="8"
+              markerHeight="8"
+              orient="auto"
+            >
+              <path className="chain-arrow down" d="M0,0 L8,4 L0,8 z" />
+            </marker>
+          </defs>
 
-      {value.chain.slice(0, -1).map((hop, index) => {
-        // 段端点同样退到节点框外（不退箭头会被框盖住），自上而下
-        const line = segmentBetweenBoxes(
-          { x: cx, y: chainY(index) },
-          CHAIN_NODE,
-          { x: cx, y: chainY(index + 1) },
-          CHAIN_NODE,
-        )
-        return (
-          <line
-            key={`hop|${hop}|${index}`}
-            className="chain-edge down"
-            x1={line.x1}
-            y1={line.y1}
-            x2={line.x2}
-            y2={line.y2}
-            markerEnd="url(#chain-arrow-down)"
-          />
-        )
-      })}
+          {value.chain.slice(0, -1).map((hop, index) => {
+            // 段端点同样退到节点框外（不退箭头会被框盖住），自上而下
+            const line = segmentBetweenBoxes(
+              { x: cx, y: chainY(index) },
+              CHAIN_NODE,
+              { x: cx, y: chainY(index + 1) },
+              CHAIN_NODE,
+            )
+            return (
+              <line
+                key={`hop|${hop}|${index}`}
+                className="chain-edge down"
+                x1={line.x1}
+                y1={line.y1}
+                x2={line.x2}
+                y2={line.y2}
+                markerEnd="url(#chain-arrow-down)"
+              />
+            )
+          })}
 
-      {value.chain.map((hop, index) => (
-        <g className="chain-node" key={`node|${hop}|${index}`}>
-          {/* 链上节点**不可点**：`chain` 是 graphify 输出切出来的符号串，没有 id（口径见头注 2） */}
-          <title>{hop}</title>
-          <rect
-            x={cx - CHAIN_NODE.w / 2}
-            y={chainY(index) - CHAIN_NODE.h / 2}
-            width={CHAIN_NODE.w}
-            height={CHAIN_NODE.h}
-            rx="3"
-          />
-          <text x={cx} y={chainY(index)}>
-            {clipLabel(hop, 30)}
-          </text>
+          {/* 链上节点**没有**第二行可画：`chain` 是 graphify 切出来的符号串，无 id、无 file:line
+              （SPEC-1.8「不猜」）——缩放只改比例，不凭空造标注 */}
+          {value.chain.map((hop, index) => {
+            const box = boxes[index]!
+            return (
+              <g className="chain-node" key={`node|${hop}|${index}`}>
+                {/* 链上节点**不可点**：`chain` 是 graphify 输出切出来的符号串，没有 id（口径见头注 2） */}
+                <title>{hop}</title>
+                <rect x={box.x} y={box.y} width={box.w} height={box.h} rx="3" />
+                <text x={cx} y={chainY(index)}>
+                  {clipLabel(hop, 30)}
+                </text>
+              </g>
+            )
+          })}
         </g>
-      ))}
-    </svg>
+      </svg>
+    </>
   )
 }
 

@@ -48,6 +48,8 @@ vi.mock('../src/api-team.ts', () => ({
       data.usageCalls += 1
       return Promise.resolve(data.usage)
     },
+    // W-6：清单为空（本文件不涉及分类管理；缺失该键会让技能页在 useEffect 里同步抛错）
+    skillCategories: () => Promise.resolve({ categories: [], mapping: {} }),
     skill: (name: string) =>
       Promise.resolve({
         name,
@@ -110,9 +112,14 @@ function button(label: string): HTMLButtonElement {
   return hit
 }
 
-/** 确认框（`ConfirmModal`，`.modal` 窄版）。 */
+/**
+ * 确认框（`ConfirmModal`，**无尺寸档**的窄版 `.modal`）。
+ *
+ * W-5：详情迁入 `.modal.modal-lg` 后，弹窗与确认框同时在场会有两个 `.modal`，
+ * 故按「不含 `-lg`」分流（`roles-delete-drawer.test.ts` 的既有权法）。
+ */
 function confirmModal(): Element | null {
-  return el('.modal')
+  return all('.modal').find((m) => !m.classList.contains('modal-lg')) ?? null
 }
 
 async function click(target: Element): Promise<void> {

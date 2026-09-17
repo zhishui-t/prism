@@ -228,8 +228,10 @@ export function Drawer({
  * ⚠ 与 `ConfirmModal` 的分工：那个是**唯一确认零件**（danger 色确认钮、busy、二选一出口）；
  * 本组件是**阅读 / 选取容器**，不替调用方决定动作语义（footer 由调用方给）。
  *
- * `size` 是**同一版式的两个上限**（F1：`md` 给选取器，与 560px 的表单抽屉同宽；
- * 尺寸差异只在 CSS 的 `width`，头 / 内容 / 脚三段结构与 `.modal` 的进场动画两档共用）。
+ * `size` 是**同一版式的两个上限**（v12 F2：`lg` = 详情档，宽度 = CSS 变量 `--modal-w`
+ * 的 `min(88vw, 72rem)`（随窗口变宽、超宽封顶），三处详情同值；`md` 给选取器，与 560px 的
+ * 表单抽屉同宽）。尺寸差异只在 CSS 的 `width`，头 / 内容 / 脚三段结构与 `.modal` 的进场
+ * 动画两档共用。
  */
 export function Modal({
   title,
@@ -246,7 +248,7 @@ export function Modal({
   onClose: () => void
   children: ReactNode
   footer?: ReactNode
-  /** 面板尺寸档：`lg`（880px，读全文）/ `md`（560px，选取器）。 */
+  /** 面板尺寸档：`lg`（详情，宽度 `--modal-w`）/ `md`（560px，选取器）。 */
   size?: 'lg' | 'md'
 }) {
   const t = useT()

@@ -338,10 +338,11 @@ export {
   type CreateTeamResult,
 } from './roles/index.js'
 
-// 技能分类映射（design-v8 §3 F7：`<PRISM_HOME>/skill-categories.json`；三入口共用）
+// 技能分类存储（v12 F4 双节形态：`<PRISM_HOME>/skill-categories.json`；三入口共用）
 export {
   SkillCategoryStore,
   parseCategorizeInput,
+  type SkillCategoryData,
   type SkillCategoryMap,
   type SkillCategorizeResult,
 } from './roles/index.js'

@@ -68,8 +68,11 @@ prism init --yes
 prism serve
 ```
 
-`prism init` 会：① 探测宿主目录 ② 建 `<PRISM_HOME>` 骨架 ③ 安装 Prism Skill ④ 写 MCP 注册到宿主配置 ⑤ 提示重启会话。
+`prism init` 会：① 探测宿主目录 ② 建 `<PRISM_HOME>` 骨架 ③ 安装 Prism Skill ④ 写 MCP 注册到宿主配置 ⑤ 注册 CLI 全局命令 `prism` ⑥ 提示重启会话。
 正常接入只走**默认落点**；`--harness-root <路径>` 覆盖落点是**测试/CI 专用**（把配置写到临时目录，宿主不读那里）。
+第 ⑤ 步按包形态选择安装物：发行包内跑 `npm install -g <发行根>`；仓库内跑写**全局 bin shim**
+（`prism` / `prism.cmd` / `prism.ps1` → `node <仓库根>/packages/cli/dist/index.js`，零网络）。
+不需要它（CI、容器、只临时用一次）时加 `--skip-cli`；注册失败只记报告 `cli` 节并给手动指引，不影响其余步骤。
 
 > **写守卫**：目标是默认宿主目录且未显式指定时，所有写命令会拒绝执行（`guard_required`）。`prism init` 加 `--yes` 确认写入默认宿主配置（role/team/skill 等写命令另可用 `--harness-root` 或 `--yes`）。防止误写你的真实宿主配置。
 >
@@ -336,7 +339,7 @@ prism
 ├── harness    list | show                              宿主适配器（内置 + 运行期插件）
 ├── role       list | show | new | edit | rm | validate | render
 ├── team       list | show | new | edit | rm | validate | render | activate
-├── skill      list | install | update | uninstall | validate | effective | categorize
+├── skill      list | install | update | uninstall | validate | effective | categorize | category
 ├── kb         import | sync | search | get | tree | stats | graph | path
 │              | export | remove | restore | conflicts | resolve | history | reindex
 │              | convert | enrich | structure | versions | deposit
@@ -347,7 +350,7 @@ prism
 └── harness / audit
 ```
 
-**MCP 工具 45 个**：知识库 17 · 代码图谱 8 · 架构图谱 1 · 角色/团队/技能 18 · 上下文包 1（`tools/list` 实测）。
+**MCP 工具 48 个**：知识库 17 · 代码图谱 8 · 架构图谱 1 · 角色/团队/技能 21 · 上下文包 1（`tools/list` 实测）。
 
 ---
 

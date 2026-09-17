@@ -64,15 +64,24 @@ describe('prism skill categorize（F7 CLI）', () => {
     await rm(tmp, { recursive: true, force: true }).catch(() => {})
   })
 
-  it('CLI 写 → HTTP 读：GET /api/skills 合并 category、GET /api/skills/categories 有映射', async () => {
+  it('CLI 写 → HTTP 读：GET /api/skills 合并 category、GET /api/skills/categories 双节形态', async () => {
     expect(await run('prism', 'code-review', '--category', '质量', '--json')).toBe(0)
     const out = JSON.parse(lines[lines.length - 1]) as {
-      value: { category: string; updated: string[]; cleared: string[]; categories: Record<string, string>; file: string }
+      value: {
+        category: string
+        updated: string[]
+        cleared: string[]
+        categories: string[]
+        mapping: Record<string, string>
+        file: string
+      }
     }
     expect(out.value.category).toBe('质量')
     expect(out.value.updated).toEqual(['prism', 'code-review'])
     expect(out.value.cleared).toEqual([])
-    expect(out.value.categories).toEqual({ prism: '质量', 'code-review': '质量' })
+    // v12 F4：`categories` 是分类名数组，映射在 `mapping`
+    expect(out.value.categories).toEqual(['质量'])
+    expect(out.value.mapping).toEqual({ prism: '质量', 'code-review': '质量' })
     expect(out.value.file.replaceAll('\\', '/')).toBe(categoriesFile().replaceAll('\\', '/'))
 
     // —— HTTP 读（真实 server，同一 home）——
@@ -82,8 +91,9 @@ describe('prism skill categorize（F7 CLI）', () => {
     expect(skills.filter((s) => 'category' in s).map((s) => s.name).sort()).toEqual(['prism'])
 
     const res = await fetch(`${base}/api/skills/categories`)
-    const body = (await res.json()) as { value: { categories: Record<string, string> } }
-    expect(body.value.categories).toEqual({ prism: '质量', 'code-review': '质量' })
+    const body = (await res.json()) as { value: { categories: string[]; mapping: Record<string, string> } }
+    expect(body.value.categories).toEqual(['质量'])
+    expect(body.value.mapping).toEqual({ prism: '质量', 'code-review': '质量' })
   })
 
   it('人类可读回显（非 --json）：逐条 + 汇总行', async () => {
@@ -96,15 +106,27 @@ describe('prism skill categorize（F7 CLI）', () => {
     ])
   })
 
-  it('省略 --category = 清除；--category "" 与省略同义', async () => {
+  it('省略 --category = 清除；--category "" 与省略同义（分类本身保留在 categories）', async () => {
     expect(await run('a', 'b')).toBe(0)
     expect(lines).toEqual(['  已清除 a 的分类', '  已清除 b 的分类', `已清除 2 个技能的分类 → ${categoriesFile()}`])
-    let onDisk = JSON.parse(await readFile(categoriesFile(), 'utf-8')) as Record<string, string>
-    expect(onDisk).toEqual({ prism: '质量', 'code-review': '质量', c: 'X' })
+    let onDisk = JSON.parse(await readFile(categoriesFile(), 'utf-8')) as {
+      categories: string[]
+      mapping: Record<string, string>
+    }
+    expect(onDisk).toEqual({
+      categories: ['质量', 'X'],
+      mapping: { prism: '质量', 'code-review': '质量', c: 'X' },
+    })
 
     expect(await run('c', '--category', '')).toBe(0)
-    onDisk = JSON.parse(await readFile(categoriesFile(), 'utf-8')) as Record<string, string>
-    expect(onDisk).toEqual({ prism: '质量', 'code-review': '质量' })
+    onDisk = JSON.parse(await readFile(categoriesFile(), 'utf-8')) as {
+      categories: string[]
+      mapping: Record<string, string>
+    }
+    expect(onDisk).toEqual({
+      categories: ['质量', 'X'],
+      mapping: { prism: '质量', 'code-review': '质量' },
+    })
   })
 
   it('names 必须非空：空 → 用法错误 + 退出非零，且不写盘', async () => {
@@ -118,8 +140,11 @@ describe('prism skill categorize（F7 CLI）', () => {
 
   it('不校验技能存在性（R3 不做审核）：不存在的技能名照写', async () => {
     expect(await run('ghost-skill', '--category', '鬼')).toBe(0)
-    const onDisk = JSON.parse(await readFile(categoriesFile(), 'utf-8')) as Record<string, string>
-    expect(onDisk['ghost-skill']).toBe('鬼')
+    const onDisk = JSON.parse(await readFile(categoriesFile(), 'utf-8')) as {
+      categories: string[]
+      mapping: Record<string, string>
+    }
+    expect(onDisk.mapping['ghost-skill']).toBe('鬼')
     // 它不会出现在技能清单里（映射独立于技能台账）
     const skills = await readSkills()
     expect(skills.map((s) => s.name)).not.toContain('ghost-skill')

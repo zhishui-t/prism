@@ -194,11 +194,13 @@ export {
   type ExternalSkillState,
 } from './skill-create.js'
 
-// 技能分类映射（design-v8 §3 F7：HTTP `/api/skills/categorize` / MCP `prism_skill_categorize`
-// / CLI `prism skill categorize` 三入口共用同一存储实现）
+// 技能分类存储（v12 F4 双节形态 `{categories, mapping}`；design-v8 §3 F7 的迁移版——
+// HTTP `/api/skills/categorize` / MCP `prism_skill_categorize` / CLI `prism skill categorize`
+// 三入口共用同一存储实现）
 export {
   SkillCategoryStore,
   parseCategorizeInput,
+  type SkillCategoryData,
   type SkillCategoryMap,
   type SkillCategorizeResult,
 } from './skill-categories.js'

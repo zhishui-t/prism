@@ -87,9 +87,14 @@ const FORM_FIXABLE = new Set([
   'knowledge_layers_empty', 'knowledge_layers_invalid', 'color_invalid', 'thoughtLevel_invalid',
 ])
 
+/**
+ * 角色所属团队的引用（F3「UI 零展示团队 name」的收尾，W-4 延伸）：
+ * **只有 id**——`Ref kind="team"` 的落点是 `#/teams/<id>`，`team.name` 此前只被拿来做 hover
+ * `title`，那正是 F3 要清掉的最后一处「name 展示面」（详情/卡片/面包屑/确认弹窗已在 W-4 清完）。
+ * 无 `title` 时 `Ref` 自然只显示 `name`（= id），无需在组件里再分一次支。
+ */
 interface TeamRef {
   teamId: string
-  teamName: string
 }
 
 export function RolesPage({ sel }: { sel?: string }) {
@@ -114,7 +119,7 @@ export function RolesPage({ sel }: { sel?: string }) {
     for (const team of teamList) {
       for (const member of team.members ?? []) {
         const list = map.get(member.role) ?? []
-        list.push({ teamId: team.team_id, teamName: team.name ?? team.team_id })
+        list.push({ teamId: team.team_id })
         map.set(member.role, list)
       }
     }
@@ -274,8 +279,9 @@ export function RolesPage({ sel }: { sel?: string }) {
 
       {role !== null && (
         <Modal
-          /* v10 F2：详情 = **居中模态**（宽度口径随之从 `min(680px, 72vw)` 抽屉改为
-             `.modal-lg` 的 `min(880px, 100vw − --s-6)`——居中版式不再受「侧栏百分比」约束）。
+          /* v10 F2 / v12 F2：详情 = **居中模态**（宽度口径随之从 `min(680px, 72vw)` 抽屉改为
+             `.modal-lg` 的 CSS 变量 `--modal-w`（`min(88vw, 72rem)`）——居中版式不再受
+             「侧栏百分比」约束，且随窗口变宽、超宽封顶）。
              `aria-label` 显式给名字：标题是「色点 + 名字」的节点形态，读屏取不到纯文本。 */
           title={
             <span className="row">
@@ -323,7 +329,7 @@ export function RolesPage({ sel }: { sel?: string }) {
               ) : (
                 <div className="rsec-list">
                   {teamRefsOf(role).map((tm) => (
-                    <Ref key={tm.teamId} kind="team" name={tm.teamId} title={tm.teamName} />
+                    <Ref key={tm.teamId} kind="team" name={tm.teamId} />
                   ))}
                 </div>
               )}

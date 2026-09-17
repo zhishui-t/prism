@@ -33,13 +33,6 @@ export function chainShape(kind: GraphQueryResult['kind']): ChainShape {
 
 /* ===== 中心-辐射布局 ===== */
 
-/**
- * 辐射图的画布（viewBox 坐标）。容器宽度无关：SVG 以 `width: 100%` 自适应，
- * 这里只定**内部比例**。560×340 选得比较紧：面板最窄约 380px 时缩放比 ≈0.68，
- * `--fs-200` 的 12px 会落到 ~8px——再宽就挤不进侧栏，再窄就该改布局了（记在报告里）。
- */
-export const RADIAL_VIEW = { w: 560, h: 340 } as const
-
 /** 中心节点（当前节点）的坐标与尺寸。 */
 export const RADIAL_CENTER = { x: 280, y: 165, w: 190, h: 30 } as const
 
@@ -67,6 +60,12 @@ export function radialPoint(index: number, count: number): { x: number; y: numbe
 
 /* ===== 纵向链路布局 ===== */
 
+/**
+ * 纵向链的**布局宽度**：节点横向居中于它的中线（`CHAIN_VIEW_W / 2`）。
+ *
+ * v12 F1：viewBox 不再取本值，而由节点几何包围盒算出（`contentViewBox`）——
+ * 本值仍决定节点在坐标空间里的水平位置（改布局时才动它）。
+ */
 export const CHAIN_VIEW_W = 560
 const CHAIN_TOP = 24
 const CHAIN_ROW_H = 46
@@ -85,9 +84,77 @@ export function chainY(index: number): number {
   return CHAIN_TOP + CHAIN_NODE.h / 2 + index * CHAIN_ROW_H
 }
 
-/** 画布高度：末行之下留一档（`--s-5` 的 24px）落白。 */
-export function chainViewH(count: number): number {
-  return chainY(Math.max(0, count - 1)) + CHAIN_NODE.h / 2 + 24
+/* ===== 节点几何包围盒 → viewBox（v12 F1） ===== */
+
+/**
+ * viewBox 坐标下的轴对齐矩形（`x` / `y` 是左上角）。
+ *
+ * 与下面的 `Box` 分开：那个只有尺寸（连线退让用），这个带位置（包围盒用）。
+ */
+export interface Rect {
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+/**
+ * 节点框到 viewBox 边缘的留白。取既有间距档 `--s-5`（24px），与纵向链首行距顶
+ * （`CHAIN_TOP`）同值——故链图的包围盒顶边恰落在 y=0，viewBox 高度与旧画布一致。
+ */
+export const VIEW_PAD = 24
+
+/** 框心 + 框尺寸 → viewBox 矩形。 */
+export function boxAt(center: Point, size: Box): Rect {
+  return { x: center.x - size.w / 2, y: center.y - size.h / 2, w: size.w, h: size.h }
+}
+
+/**
+ * 节点几何包围盒 + padding → viewBox（**纯函数，不做 DOM 测量**）。
+ *
+ * 为什么是「节点包围盒」而不是「内容包围盒」：图上只有节点框有几何——边是端点连线
+ * （两端退到框外，不超出节点簇）、文字由 `<title>` 与节点的第二行承担而不参与布局；
+ * 量文本必须 DOM。故包围盒由节点坐标纯函数可得，这正是 SPEC-1.1 的口径。
+ *
+ * 空输入返回零矩形（本组件两档在无节点时本就整图不画；调用方不必先分支，但也不许
+ * 拿它去当有效视口）。
+ */
+export function contentViewBox(boxes: readonly Rect[], pad = VIEW_PAD): Rect {
+  if (boxes.length === 0) return { x: 0, y: 0, w: 0, h: 0 }
+  let minX = Number.POSITIVE_INFINITY
+  let minY = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let maxY = Number.NEGATIVE_INFINITY
+  for (const b of boxes) {
+    minX = Math.min(minX, b.x)
+    minY = Math.min(minY, b.y)
+    maxX = Math.max(maxX, b.x + b.w)
+    maxY = Math.max(maxY, b.y + b.h)
+  }
+  return { x: minX - pad, y: minY - pad, w: maxX - minX + pad * 2, h: maxY - minY + pad * 2 }
+}
+
+/**
+ * viewBox 属性串。**保留两位小数**：布局里的三角函数（`radialPoint` 的 cos/sin）
+ * 带 1e-15 级浮点噪声，直接 `String()` 会写出 `280.00000000000006` 这种脏值——
+ * 该属性既是浏览器读的、也是测试断言的契约，噪声不是信息。
+ */
+export function viewBoxAttr(vb: Rect): string {
+  const round = (n: number): number => Math.round(n * 100) / 100
+  return `${round(vb.x)} ${round(vb.y)} ${round(vb.w)} ${round(vb.h)}`
+}
+
+/** 星形图的节点框：中心 + 前 `count` 个关系节点（自正上方顺时针，同 `radialPoint`）。 */
+export function radialBoxes(count: number): Rect[] {
+  const boxes = [boxAt(RADIAL_CENTER, RADIAL_CENTER)]
+  for (let i = 0; i < count; i++) boxes.push(boxAt(radialPoint(i, count), RADIAL_PEER))
+  return boxes
+}
+
+/** 纵向链的节点框：自上而下、横向居中于 `CHAIN_VIEW_W / 2`。 */
+export function chainBoxes(count: number): Rect[] {
+  const cx = CHAIN_VIEW_W / 2
+  return Array.from({ length: Math.max(0, count) }, (_, i) => boxAt({ x: cx, y: chainY(i) }, CHAIN_NODE))
 }
 
 /* ===== 连线的端点：退到节点框外 ===== */
@@ -148,6 +215,121 @@ export function segmentBetweenBoxes(from: Point, fromBox: Box, to: Point, toBox:
   }
 }
 
+/* ===== 缩放平移（v12 F1 / SPEC-1.2–1.5） ===== */
+
+/** 元素盒尺寸（px）。 */
+export interface Size {
+  w: number
+  h: number
+}
+
+/**
+ * 内容 → 屏幕的仿射映射（**元素像素坐标系**，原点 = 元素盒左上角）：`e = scale · v + (tx, ty)`。
+ *
+ * ⚠ 同一个类型出现在两个坐标系里，靠函数名分辨（两处的注释都写明单位）：
+ * - `fitTransform` / `zoomAt` / `panBy` 的入参与出参 = **元素像素**（状态与事件同单位，拖拽 1px = 位移 1px）；
+ * - `userTransform` 的出参 = **viewBox 用户坐标**（写进内层 `<g transform>` 的那份）。
+ */
+export interface ZoomTransform {
+  scale: number
+  tx: number
+  ty: number
+}
+
+/**
+ * 「适应窗口」（SPEC-1.4，也是**初始态**）：容器盒 × 内容 viewBox → 内容在盒内的映射。
+ *
+ * - `scale = min(盒宽/内容宽, 盒高/内容高)`：**双向比取 min** ⇒ 两个方向都不裁切
+ *   （宁 letterbox 不拉伸——与 `preserveAspectRatio: meet` 同一条算法）；
+ * - `tx / ty` = 剩余空间的居中偏移，并减掉 viewBox 自身的原点偏移（W-1 之后 `vb.x/vb.y`
+ *   常是负数，不减会把内容整体推偏；这条同时是浏览器自己那条 meet 映射的定义）。
+ *
+ * 退化输入（盒或内容任一维 ≤ 0，如未测量 / 空图）→ 单位映射：调用方据此走兜底，
+ * **绝不返回 NaN / Infinity** 让下游拿去做除法。
+ */
+export function fitTransform(box: Size, vb: Rect): ZoomTransform {
+  if (!(box.w > 0) || !(box.h > 0) || !(vb.w > 0) || !(vb.h > 0)) return { scale: 1, tx: 0, ty: 0 }
+  const scale = Math.min(box.w / vb.w, box.h / vb.h)
+  return {
+    scale,
+    tx: (box.w - vb.w * scale) / 2 - vb.x * scale,
+    ty: (box.h - vb.h * scale) / 2 - vb.y * scale,
+  }
+}
+
+/** 滚轮一格的倍率（SPEC-1.2：向上 ×1.1，向下 ÷1.1）。 */
+export const ZOOM_STEP = 1.1
+/** 相对「适应窗口」的倍率下限（SPEC-1.2：clamp 0.3–3）。 */
+export const ZOOM_MIN = 0.3
+/** 相对「适应窗口」的倍率上限。 */
+export const ZOOM_MAX = 3
+
+/**
+ * 倍率 clamp（SPEC-1.2）。非有限值（NaN / ±Infinity，来自未测量的盒）→ 1
+ * ——不让一次脏输入把视图钉死在边界上。
+ */
+export function clampZoom(ratio: number): number {
+  if (!Number.isFinite(ratio)) return 1
+  return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, ratio))
+}
+
+/** 当前倍率 = 状态相对「适应窗口」的比值（1 = 适应窗口 = 100%）。`fit` 退化时按 1。 */
+export function zoomRatio(view: ZoomTransform, fit: ZoomTransform): number {
+  return fit.scale > 0 ? view.scale / fit.scale : 1
+}
+
+/** 百分比读数（SPEC-1.5：只读显示当前 scale，四舍五入到整数）。 */
+export function zoomPercent(view: ZoomTransform, fit: ZoomTransform): number {
+  return Math.round(zoomRatio(view, fit) * 100)
+}
+
+/**
+ * 指针锚缩放（SPEC-1.2）：`at`（**元素盒坐标**，px）底下的那个内容点，缩放前后落在同一屏幕位置。
+ *
+ * 先按**旧**映射反解出锚点内容坐标，再把新偏移解回去；倍率 = 当前倍率 ×`factor` 后 clamp。
+ * 反解与解回都在元素像素里做（状态同单位），所以不依赖任何「当前倍率是多少」的假设。
+ */
+export function zoomAt(view: ZoomTransform, factor: number, at: Point, fit: ZoomTransform): ZoomTransform {
+  const from = view.scale > 0 ? view.scale : 1
+  const scale = clampZoom(zoomRatio(view, fit) * factor) * (fit.scale > 0 ? fit.scale : 1)
+  const ux = (at.x - view.tx) / from
+  const uy = (at.y - view.ty) / from
+  return { scale, tx: at.x - ux * scale, ty: at.y - uy * scale }
+}
+
+/**
+ * 平移（SPEC-1.3）：拖拽位移**直接**加到映射偏移上——1px 拖拽 = 图上 1px 位移，
+ * 与当前倍率无关（倍率已在映射里；再乘一次会让「放大后拖不动」）。
+ */
+export function panBy(view: ZoomTransform, dx: number, dy: number): ZoomTransform {
+  return { scale: view.scale, tx: view.tx + dx, ty: view.ty + dy }
+}
+
+/**
+ * 「元素像素映射」→ **viewBox 用户坐标**里的 `<g transform>`（SPEC-1.1：缩放平移只动内层 `<g>`）。
+ *
+ * 为什么要除以 `fit`：SVG 自己已按 `meet` 把 viewBox 铺进元素盒（那条映射的定义**就是** `fit`），
+ * 而内层 `<g>` 的 transform 是在**用户坐标**里叠加的。不归一化就等于把「适应窗口」叠加两次
+ * （等比再放 `fit.scale` 倍）——正是设计警告的「纵向链反向爆放」形态。
+ * 故 `fit` 态 ⇒ `{ scale: 1, tx: 0, ty: 0 }`：渲染结果与 W-1 完全一致（比例由 viewBox + meet 定）。
+ *
+ * ⚠ 「适应窗口」的**状态**仍是 `fitTransform` 算出的那组数（不是 1/0/0）——归一化只发生在
+ * 写进 `<g>` 的最后一步，窗口尺寸或内容变了都会重新算，这正是它与「空洞地把 scale 设成 1」的区别。
+ */
+export function userTransform(view: ZoomTransform, fit: ZoomTransform): ZoomTransform {
+  const base = fit.scale > 0 ? fit.scale : 1
+  return { scale: view.scale / base, tx: (view.tx - fit.tx) / base, ty: (view.ty - fit.ty) / base }
+}
+
+/**
+ * `<g transform>` 属性串。**保留 3 位小数**：倍率是 1.1 的幂（`1/1.1` 带长尾），
+ * 该属性既是浏览器读的、也是测试断言的契约，噪声不是信息（同 `viewBoxAttr` 的口径）。
+ */
+export function transformAttr(t: ZoomTransform): string {
+  const round = (n: number): number => Math.round(n * 1000) / 1000
+  return `translate(${round(t.tx)} ${round(t.ty)}) scale(${round(t.scale)})`
+}
+
 /* ===== 标签 ===== */
 
 /**
@@ -160,6 +342,32 @@ export function segmentBetweenBoxes(from: Point, fromBox: Box, to: Point, toBox:
 export function clipLabel(text: string, max = 22): string {
   const chars = [...text]
   return chars.length <= max ? text : `${chars.slice(0, max - 1).join('')}…`
+}
+
+/* ===== 第二行标注（v12 F1 / SPEC-1.8：R-1「看清 file:line」的闭合点） ===== */
+
+/** 第二行的显隐阈值：倍率 ≥ 1.5 才画（低倍率交给 `<title>` 悬停与查询面板清单）。 */
+export const ANNOTATION_SCALE = 1.5
+
+/** 倍率是否已到「画第二行」的档（SPEC-1.8）。 */
+export function annotationVisible(ratio: number): boolean {
+  return ratio >= ANNOTATION_SCALE
+}
+
+/**
+ * 节点第二行标注：`id · file:line`，**不截断**（不套 `clipLabel`）。
+ *
+ * **不猜**（本模块的头注同源）：数据里没有 file/line 就没有第二行——
+ * - `relations` 的**关系节点**有 id（`other`）+ 定位 → 有第二行；
+ * - `relations` 的**中心节点**只有 id，响应里没有它的 file/line → 无第二行；
+ * - `path.chain` 是 graphify 切出来的符号串（无 id / 无定位）→ 无第二行。
+ * 拿不到就返回 `null`，绝不拼个空壳或拿 label 顶 id。
+ */
+export function annotationLine(id: string, file: string, line: string): string | null {
+  const at = formatLocation(file, line)
+  if (at === '') return null
+  const name = id.trim()
+  return name === '' ? at : `${name} · ${at}`
 }
 
 /* ===== affected 分组 ===== */

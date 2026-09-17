@@ -47,9 +47,10 @@ describe('F1 选取器弹层：`.modal-md` 与 `.modal-lg` 同版式两上限', 
       expect(md, '.modal-md 少了共享声明').toContain(shared)
       expect(body('.modal.modal-lg'), '.modal-lg 少了共享声明').toContain(shared)
     }
-    // 两个上限：选取器与 560px 的表单抽屉同宽，读全文那条仍是 880px
+    // 两个上限：选取器与 560px 的表单抽屉同宽（**md 档不变宽**）；详情档宽度归 CSS 变量
+    // `--modal-w`（v12 F2）。md 档断言保持原样——复核 N-2/N-6
     expect(md).toContain('width: min(560px, calc(100vw - var(--s-6)))')
-    expect(body('.modal.modal-lg')).toContain('width: min(880px, calc(100vw - var(--s-6)))')
+    expect(body('.modal.modal-lg')).toContain('width: var(--modal-w)')
   })
 
   it('**两条规则各自成条**（不合并选择器）：合并会让 `.modal-lg` 的规则体断言静默失配', () => {

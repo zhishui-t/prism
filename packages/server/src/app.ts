@@ -205,6 +205,15 @@ export async function createApp(options: AppOptions = {}): Promise<{
   // 否则被 `:name` 吞掉（路由器首个匹配即命中；people.ts 有同款顺序注释）。
   router.add('GET', '/api/skills/categories', people.skillCategories)
   router.add('POST', '/api/skills/categorize', people.skillCategorize)
+  // v12 F4（design-v12 F4「API」/ SPEC-4.4–4.5）：分类 CRUD 三条。**同样必须在
+  // `/api/skills/:name` 之前**注册，且与上面的 GET 凑成 `categories` 家族四条
+  // （GET/POST/PATCH/DELETE）**聚在一处**，避免后人插空破坏顺序
+  // （people.ts 有同款顺序注释）。
+  // ⚠ `PATCH`/`DELETE` 是 4 段（`categories/:name`），与 3 段的 `GET /api/skills/:name`
+  // 按段数本已不冲突；仍按契约前置——顺序是文档化的约定，不靠「恰好段数不同」兜底。
+  router.add('POST', '/api/skills/categories', people.skillCategoryCreate)
+  router.add('PATCH', '/api/skills/categories/:name', people.skillCategoryRename)
+  router.add('DELETE', '/api/skills/categories/:name', people.skillCategoryDelete)
   // 单技能详情必须注册在 usage/effective/categories/categorize **之后**
   // （路由器首个匹配即命中，:name 会吞掉它们）
   router.add('GET', '/api/skills/:name', people.skill)

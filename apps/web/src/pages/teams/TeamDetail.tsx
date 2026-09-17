@@ -3,7 +3,8 @@
  *
  * **F8 §2 层级重排后的组合顺序**（三档：第一眼 → 常用 → 深挖，见 v8-hierarchy-sketch §0.1）：
  *
- * 1. 第一眼带：`.pane-head`（团队名 + team_id + 默认标记 + 动作位/`.spacer`）→ 启用结果条（就地）
+ * 1. 第一眼带：`.pane-head`（**默认标记 + 动作位/`.spacer`**——身份 team_id 由外层 `<Modal>` 的
+ *    标题承担，团队 `name` 自 v12 F3 起 **UI 零展示**）→ 启用结果条（就地）
  *    → 描述 `firstSentence(desc, 60)` 2 行（全文进 `title`）；
  * 2. 第一眼带：**工作流**（`WorkflowFlow`，灵魂，必须落在概览之上）——阶段计数并入它的 Pane 头；
  * 3. 常用带：成员表（`.form-grid` + `.list-row` 紧凑网格，`rosterHint` 降级为 Pane 头 `title`）
@@ -11,9 +12,13 @@
  *    同源，合并成一处，见 §2.5）；
  * 4. 深挖带：沉淀规则 / 仲裁链进 `<details>`（默认折叠，summary 口径同 `.role-body`）。
  *
- * 原「概览 `kv`」六行至此全部各有归属（§2.4 #1–#4）：名称→pane-head（已在那）、描述→第一眼条、
+ * 原「概览 `kv`」六行至此全部各有归属（§2.4 #1–#4）：名称→外层 `<Modal>` 标题（v12 F3 起为
+ * team_id，团队 `name` 零展示）、描述→第一眼条、
  * 成员串→名册（逐成员可点）、阶段数→工作流 Pane 头计数、沉淀/仲裁→深挖折叠 —— 故 kv 整块删除。
  * 硬删走统一确认模态（B5，不再是内联危险区）。角色/技能/书一律走 `<Ref>`（Shell 不认识实体）。
+ *
+ * **v12 F3（W-4）**：本组件由「页内右栏 pane」迁入居中 `<Modal size="lg">`（父级 `TeamsPage` 给
+ * 容器）；组件自身只交出「身份重复展示」这一处——`name` 与 team_id 行删除，其余结构与动作一字未动。
  */
 
 import { useEffect, useState } from 'react'
@@ -120,9 +125,9 @@ export function TeamDetail({
     <>
       <Pane
         head={
+          /* v12 F3：身份（team_id）已由外层 `<Modal>` 的标题承担——这里不再重复一遍。
+             团队 `name` 字段自本轮起**零展示**（展示面一律 team_id，SPEC-3.1）。 */
           <div className="pane-head">
-            <h3 className="mono">{detail?.name ?? id}</h3>
-            <span className="mono small muted">{id}</span>
             {detail?.default === true && <StatusTag kind="ok">{t('teams.default')}</StatusTag>}
             <span className="spacer">
               {detail !== undefined && (

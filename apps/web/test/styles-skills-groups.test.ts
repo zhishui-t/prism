@@ -91,16 +91,17 @@ describe('v10 F4 组头字号升一档 + 组内技能行缩进一档', () => {
     expect(decl('.count-line.section.bare', 'flex')).toBe('1')
   })
 
-  it('组内技能行缩进一档：`calc(var(--s-2) + var(--s-3))`（token 组合，不写死像素）', () => {
-    expect(decl('.skill-group .md-row', 'padding-left')).toBe('calc(var(--s-2) + var(--s-3))')
-    // 只加在组内行上：裸 `.md-row`（团队页等共用）的口径一字未动
+  it('组内缩进一档：`calc(var(--s-2) + var(--s-3))`（token 组合，不写死像素）', () => {
+    // W-5：挂载点从 `.md-row`（行列表）换成 `.skill-grid`（卡片网格），**值一字未改**
+    expect(decl('.skill-group .skill-grid', 'padding-left')).toBe('calc(var(--s-2) + var(--s-3))')
+    // 只加在组内：裸 `.md-row`（知识库等页共用）的口径一字未动
     expect(decl('.md-row', 'padding')).toBe('var(--s-2) var(--s-2)')
-    // 组头自身左内边距不动 ⇒ 组名与行名之间正好差一档（--s-3）
+    // 组头自身左内边距不动 ⇒ 组名与组内内容之间正好差一档（--s-3）
     expect(decl('.skill-group-head', 'padding')).toBe('var(--s-1) var(--s-2)')
   })
 
-  it('缩进不靠颜色表达（组内行的字色仍继承 `.md-row` 的 `--ink`）', () => {
-    const rule = body('.skill-group .md-row')
+  it('缩进不靠颜色表达（组内卡片仍复用 `.role-card` 的既有字色）', () => {
+    const rule = body('.skill-group .skill-grid')
     expect(rule).not.toMatch(/#[0-9a-f]{3,8}\b/i)
     expect(rule).not.toMatch(/\brgba?\(/)
     expect(rule).not.toMatch(/color/)
@@ -120,13 +121,14 @@ describe('F7 详情居中：居中的单位是详情整体', () => {
     expect(body('.md-read')).not.toMatch(/(^|;|\s)margin/)
   })
 
-  it('F3 契约不破：滚动的仍是 `.md-detail`（居中列是它的**内层**包裹）', () => {
-    const detail = body('.md-detail')
-    expect(detail).toContain('overflow-y: auto')
-    expect(detail).toContain('min-height: 0')
-    expect(detail).toContain('min-width: 0')
-    // 滚动容器自身不被加宽/收窄约束（约束落在那层包裹上）
-    expect(detail).not.toMatch(/max-width/)
+  it('W-5：滚动的换成弹窗的内容区（`.modal-content`），居中列仍是它的**内层**包裹', () => {
+    const content = body('.modal-content')
+    expect(content).toContain('overflow-y: auto')
+    expect(content).toContain('min-height: 0')
+    // 详情内的横向滚动容器只滚 X 轴，不与这里的 Y 轴嵌套成双滚动条
+    expect(body('.md-source')).toContain('overflow-x: auto')
+    // `.md-detail` 规则按「不删覆盖」保留（通用详情栏定义，当前无挂载点）
+    expect(body('.md-detail')).toContain('overflow-y: auto')
   })
 
   it('不影响左列表宽度（`.md` 网格与 `.md-list` 的滚动口径一字未动）', () => {
@@ -134,6 +136,40 @@ describe('F7 详情居中：居中的单位是详情整体', () => {
     expect(md).toContain('grid-template-columns: minmax(220px, 300px) minmax(0, 1fr)')
     expect(md).not.toMatch(/height:\s*calc\(/)
     expect(body('.md-list')).toContain('overflow-y: auto')
+  })
+})
+
+describe('v12 F4（W-5）组内卡片网格：与角色页**共用一条**网格定义', () => {
+  it('`.role-grid` 与 `.skill-grid` 是同一条规则（两个挂载点、取值不复制）', () => {
+    // 组选择器写法：只加选择器不复制取值 ⇒ 两页的网格永远不会漂
+    expect(BARE).toContain('\n.role-grid, .skill-grid {')
+    expect(decl('.role-grid, .skill-grid', 'display')).toBe('grid')
+    expect(decl('.role-grid, .skill-grid', 'grid-template-columns')).toBe(
+      'repeat(auto-fill, minmax(300px, 1fr))',
+    )
+    expect(decl('.role-grid, .skill-grid', 'gap')).toBe('var(--s-3)')
+    // 回归红线：`.skill-grid` **不得**自己再成一条规则（那就是第二套网格口径）
+    expect(BARE).not.toContain('\n.skill-grid {')
+  })
+
+  it('网格只用既有 token：间距取 `--s-3`，无颜色 / 无字号 / 无写死像素', () => {
+    const rule = body('.role-grid, .skill-grid')
+    expect(rule).not.toMatch(/#[0-9a-f]{3,8}\b/i)
+    expect(rule).not.toMatch(/\brgba?\(/)
+    expect(rule).not.toMatch(/color\s*:/)
+    expect(rule).not.toMatch(/font-size/)
+    // 唯一的字面量是 `300px` 的列宽下限（与角色页同一取值，非本批新增）
+    expect(rule.replace(/repeat\(auto-fill, minmax\(300px, 1fr\)\)/, '')).not.toMatch(/\d+px/)
+  })
+
+  it('卡片版式仍是既有 `.role-card` 一套（`<NavRow variant="card">`，不新造卡片类）', () => {
+    // 竖排卡片只有一处定义（交互契约 `.nav-row` + 版式 `.role-card`），本批零新增
+    expect(decl('.role-card', 'border-radius')).toBe('var(--r-2)')
+    expect(decl('.role-card', 'border')).toBe('1px solid var(--rule)')
+    expect(decl('.role-card', 'padding')).toBe('var(--s-4)')
+    // 卡片内容复用的是既有共用品（无 `.role-card` 前缀的两条在右上「卡面/详情同构」一段锁着）
+    expect(decl('.role-card .role-name', 'font-size')).toBe('var(--fs-500)')
+    expect(body('.role-card .role-dot')).toContain('border-radius: 50%')
   })
 })
 
@@ -148,5 +184,74 @@ describe('F7 折行长串不撑破居中列', () => {
     expect(cmd).toContain('overflow-x: auto')
     expect(cmd).toContain('white-space: nowrap')
     expect(cmd).toContain('min-width: 12.5rem')
+  })
+})
+
+describe('v12 F4（W-6）分类管理：组头动作区 + 就地表单', () => {
+  it('组头一行 = 切换（吃满剩余宽度）+ 动作（不压缩）；切换节点自身的既有口径一字未动', () => {
+    expect(decl('.skill-group-bar', 'display')).toBe('flex')
+    // 切换节点靠外层 flex 行吃满 ⇒ 引线仍能撑到动作区左缘；`min-width: 0` 让长组名先让位
+    expect(decl('.skill-group-bar .skill-group-head', 'flex')).toBe('1')
+    expect(decl('.skill-group-bar .skill-group-head', 'min-width')).toBe('0')
+    expect(decl('.skill-group-actions', 'flex-shrink')).toBe('0')
+    // 既有那几条（可点行的视觉信号）不动
+    expect(decl('.skill-group-head', 'padding')).toBe('var(--s-1) var(--s-2)')
+    expect(decl('.skill-group-head', 'cursor')).toBe('pointer')
+    expect(decl('.skill-group-head', 'border-left')).toBe('3px solid transparent')
+    // 回归红线：动作按钮复用 `.tool-btn`，不得自成一套按钮样式
+    expect(BARE).not.toContain('\n.skill-group-actions button {')
+  })
+
+  it('新建 / 改名**共用一条**就地表单排版（两处挂载点不各写一套）', () => {
+    expect(decl('.skill-cat-form', 'display')).toBe('flex')
+    expect(decl('.skill-cat-form .skill-cat-input', 'min-width')).toBe('12.5rem')
+    expect(decl('.skill-cat-form .skill-cat-input', 'flex')).toBe('0 1 320px')
+    // 改名表单不另立规则（它只是同一套表单的第二处挂载点）
+    expect(BARE).not.toContain('\n.skill-group-rename {')
+  })
+
+  it('空分类组的空态吃满网格整行；不新增颜色 / 字号', () => {
+    expect(decl('.skill-group-empty', 'grid-column')).toBe('1 / -1')
+    expect(decl('.skill-group-empty', 'margin')).toBe('0')
+    const rule = body('.skill-group-empty')
+    expect(rule).not.toMatch(/#[0-9a-f]{3,8}\b/i)
+    expect(rule).not.toMatch(/\brgba?\(/)
+    expect(rule).not.toMatch(/color/)
+    expect(rule).not.toMatch(/font-size/)
+  })
+})
+
+describe('v12 F4（W-7）拖拽归类：拖起态 + 落点高亮都用既有 token', () => {
+  it('拖起态只降透明度（`opacity`，不是颜色）', () => {
+    expect(decl('.role-card.dragging', 'opacity')).toBe('0.5')
+    const rule = body('.role-card.dragging')
+    expect(rule).not.toMatch(/#[0-9a-f]{3,8}\b/i)
+    expect(rule).not.toMatch(/\brgba?\(/)
+    expect(rule).not.toMatch(/color/)
+  })
+
+  it('落点高亮 = `--buckram` 的虚线外框（与选中引线同一语义色，不新造颜色）', () => {
+    expect(decl('.skill-group.drop-target', 'outline')).toBe('1px dashed var(--buckram)')
+    expect(decl('.skill-group.drop-target', 'outline-offset')).toBe('-1px')
+    const rule = body('.skill-group.drop-target')
+    expect(rule).not.toMatch(/#[0-9a-f]{3,8}\b/i)
+    expect(rule).not.toMatch(/\brgba?\(/)
+  })
+
+  it('键盘下拉只补宽度（控件外观走全站表单基类，不新造控件样式）', () => {
+    expect(decl('.skill-cat-select', 'min-width')).toBe('12.5rem')
+    // 与既有过滤框同一取值（同档宽度，不新增第三条宽度口径）
+    expect(decl('.role-filter', 'min-width')).toBe('12.5rem')
+  })
+
+  it('reduced-motion：文件末尾通配块**覆盖到**新加的拖拽类（`*` 通配 ⇒ 任何过渡/动画都归零）', () => {
+    // 本批未给拖拽类写过渡；断言通配块仍在且是 `*` 全选（不是逐类列举——列举会漏新类）
+    const at = BARE.indexOf('@media (prefers-reduced-motion: reduce)')
+    expect(at).toBeGreaterThan(-1)
+    const block = BARE.slice(at)
+    expect(block).toContain('*::before')
+    expect(block).toContain('*::after')
+    expect(block).toContain('transition-duration: 0.01ms !important')
+    expect(block).toContain('animation-duration: 0.01ms !important')
   })
 })

@@ -7,7 +7,8 @@
  * （同 `styles-markdown-typography.test.ts` 头注）。
  *
  * 本文件锁五件事（层级与密度都靠 CSS 表达，DOM 断言看不见）：
- *  1. **列表行摘要 1 行**（`.md-row .s`）——§3.4 #5：2 行 clamp → 1 行，配 `firstSentence(desc, 32)`；
+ *  1. **卡片摘要 1 行**（`.role-desc`，W-5 起与角色页**同一个类**）——§3.4 #5：2 行 clamp → 1 行，
+ *     配 `firstSentence(desc, 32)`；行列表的 `.md-row .s` 口径仍是 1 行；
  *  2. **第一眼描述正文**（`.skill-desc`）——`--fs-300` + `--lh-ui`、**不截断**（全文落这里）、不上色；
  *  3. **深挖带口径**——`.skill-deep > summary` 与角色页校验清单 `.role-issues > summary` **逐值相同**
  *     （`--s-4` 顶距、summary `--fs-200` + `--mute`），不是第二套口径
@@ -55,21 +56,24 @@ function groupDecl(group: string, prop: string): string {
   return m![1]!.trim()
 }
 
-describe('F8 §3.4 #5 左列表行摘要：1 行 clamp（2 行是旧口径）', () => {
-  it('`.md-row .s` 是 **1 行**截断的 `-webkit-box`（半套写法等于没截断）', () => {
-    const rule = body('.md-row .s')
+describe('F8 §3.4 #5 卡片摘要：1 行 clamp（2 行是旧口径）', () => {
+  it('`.role-desc`（W-5 起技能卡片的摘要格）是 **1 行**截断的 `-webkit-box`（半套写法等于没截断）', () => {
+    // W-5：技能列表行 `.md-row .s` → 卡片 `.role-desc`（与角色页**同一个**类，取值不复制）。
+    // `.md-row .s` 的规则本身仍在（知识库等页的行列表还在用），口径同样是 1 行。
+    const rule = body('.role-desc')
     expect(rule).toContain('display: -webkit-box')
     expect(rule).toContain('-webkit-line-clamp: 1')
     expect(rule).toContain('-webkit-box-orient: vertical')
     expect(rule).toContain('overflow: hidden')
     // 回归红线：2 行 clamp 是本批要砍掉的旧口径
     expect(rule).not.toContain('-webkit-line-clamp: 2')
+    expect(body('.md-row .s')).toContain('-webkit-line-clamp: 1')
   })
 
   it('字号/行高取既有档（摘要属第二眼：`--fs-200` + `--lh-ui` + `--mute`）', () => {
-    expect(decl('.md-row .s', 'font-size')).toBe('var(--fs-200)')
-    expect(decl('.md-row .s', 'line-height')).toBe('var(--lh-ui)')
-    expect(decl('.md-row .s', 'color')).toBe('var(--mute)')
+    expect(decl('.role-desc', 'font-size')).toBe('var(--fs-200)')
+    expect(decl('.role-desc', 'line-height')).toBe('var(--lh-ui)')
+    expect(decl('.role-desc', 'color')).toBe('var(--mute)')
   })
 })
 
@@ -143,10 +147,11 @@ describe('F8 §0.1 红线：不新增颜色 / 灰阶 / 字号档', () => {
     }
   })
 
-  it('F3 的两栏容器口径未动（技能页左右两栏仍各自滚、整页不滚）', () => {
+  it('F3 的高度链未动（`.md` 的两列定义与 `.md-list` 的滚动口径一字未改）', () => {
     expect(body('.md')).toContain('minmax(220px, 300px)')
     expect(body('.md')).not.toMatch(/height:\s*calc\(/)
     expect(body('.md-list')).toContain('overflow-y: auto')
+    // `.md-detail` 是通用详情栏定义（W-5 后无挂载点），按「不删覆盖」保留
     expect(body('.md-detail')).toContain('overflow-y: auto')
   })
 })

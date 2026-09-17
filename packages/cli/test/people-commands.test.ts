@@ -95,8 +95,10 @@ describe('prism init（F09 五步；全部写临时目录）', () => {
     cleanup.length = 0
   })
 
-  it('首次 init：① 探测 ② 骨架 ③ 装 skill ④ 写 MCP ⑤ 报告 + 重启提示', async () => {
-    expect(await runCommand(ctx, ['init', '--harness-root', harnessRoot])).toBe(0)
+  it('首次 init：① 探测 ② 骨架 ③ 装 skill ④ 写 MCP ⑤ CLI 注册 ⑥ 报告 + 重启提示', async () => {
+    // `--skip-cli`：本用例断言 init 的前四步与报告文案；F5 的 CLI 全局注册会真实写
+    // 本机 npm 全局 bin 目录（SPEC-5.6 红线），其隔离测试见 init-cli-guard.test.ts。
+    expect(await runCommand(ctx, ['init', '--harness-root', harnessRoot, '--skip-cli'])).toBe(0)
     const output = lines.join('\n')
     expect(output).toContain('① 宿主目录')
     expect(output).toContain('catalog')
@@ -115,16 +117,17 @@ describe('prism init（F09 五步；全部写临时目录）', () => {
     expect(existsSync(join(harnessRoot, 'teams'))).toBe(false)
     expect(existsSync(join(home, 'teams'))).toBe(false)
     expect(output).toContain('团队: 未创建')
-    expect(output).toContain('⑤ 完成。请重启宿主会话使 MCP 与 Skill 生效')
+    expect(output).toContain('⑤ CLI 全局注册: 已跳过（--skip-cli）')
+    expect(output).toContain('⑥ 完成。请重启宿主会话使 MCP 与 Skill 生效')
   })
 
   it('幂等：重跑不产生新备份、MCP 状态 unchanged', async () => {
-    expect(await runCommand(ctx, ['init', '--harness-root', harnessRoot, '--json'])).toBe(0)
+    expect(await runCommand(ctx, ['init', '--harness-root', harnessRoot, '--skip-cli', '--json'])).toBe(0)
     const first = JSON.parse(lines[lines.length - 1]) as { value: { mcp: { status: string; backup?: string } } }
     expect(first.value.mcp.status).toBe('written')
 
     lines = []
-    expect(await runCommand(ctx, ['init', '--harness-root', harnessRoot, '--json'])).toBe(0)
+    expect(await runCommand(ctx, ['init', '--harness-root', harnessRoot, '--skip-cli', '--json'])).toBe(0)
     const second = JSON.parse(lines[lines.length - 1]) as { value: { mcp: { status: string }; skills: { written: unknown[]; skipped: unknown[] } } }
     expect(second.value.mcp.status).toBe('unchanged')
     expect(second.value.mcp.backup).toBeUndefined()
@@ -141,7 +144,7 @@ describe('prism init（F09 五步；全部写临时目录）', () => {
       JSON.stringify({ mcp: { servers: { photoshop: { command: 'photoshop-mcp' } } }, plugins: { enabledPlugins: { a: true } } }),
       'utf-8',
     )
-    expect(await runCommand(ctx, ['init', '--harness-root', harnessRoot])).toBe(0)
+    expect(await runCommand(ctx, ['init', '--harness-root', harnessRoot, '--skip-cli'])).toBe(0)
     const config = JSON.parse(await readFile(configFile, 'utf-8')) as {
       mcp: { servers: Record<string, unknown> }
       plugins: { enabledPlugins: { a: boolean } }
@@ -162,7 +165,7 @@ describe('prism init（F09 五步；全部写临时目录）', () => {
       'utf-8',
     )
     lines = []
-    expect(await runCommand(ctx, ['init', '--harness-root', harnessRoot, '--json'])).toBe(0)
+    expect(await runCommand(ctx, ['init', '--harness-root', harnessRoot, '--skip-cli', '--json'])).toBe(0)
     const report = JSON.parse(lines[lines.length - 1]) as { value: { mcp: { status: string } } }
     expect(report.value.mcp.status).toBe('conflict')
     expect(JSON.parse(await readFile(configFile, 'utf-8')) as { mcp: { servers: { prism: { command: string } } } }).toMatchObject({
@@ -170,11 +173,11 @@ describe('prism init（F09 五步；全部写临时目录）', () => {
     })
     // 文本模式给出 --force 提示
     lines = []
-    expect(await runCommand(ctx, ['init', '--harness-root', harnessRoot])).toBe(0)
+    expect(await runCommand(ctx, ['init', '--harness-root', harnessRoot, '--skip-cli'])).toBe(0)
     expect(lines.join('\n')).toContain('--force')
 
     lines = []
-    expect(await runCommand(ctx, ['init', '--harness-root', harnessRoot, '--force', '--json'])).toBe(0)
+    expect(await runCommand(ctx, ['init', '--harness-root', harnessRoot, '--force', '--skip-cli', '--json'])).toBe(0)
     const forced = JSON.parse(lines[lines.length - 1]) as { value: { mcp: { status: string; backup?: string } } }
     expect(forced.value.mcp.status).toBe('forced')
     expect(forced.value.mcp.backup).toBeDefined()
@@ -185,14 +188,14 @@ describe('prism init（F09 五步；全部写临时目录）', () => {
     await mkdir(join(harnessRoot, 'skills', 'prism'), { recursive: true })
     await writeFile(skillFile, '---\nname: prism\ndescription: "人写的"\n---\n\n手写\n', 'utf-8')
     lines = []
-    expect(await runCommand(ctx, ['init', '--harness-root', harnessRoot, '--json'])).toBe(0)
+    expect(await runCommand(ctx, ['init', '--harness-root', harnessRoot, '--skip-cli', '--json'])).toBe(0)
     const report = JSON.parse(lines[lines.length - 1]) as { value: { skills: { skipped: Array<{ path: string }> } } }
     expect(report.value.skills.skipped).toHaveLength(1)
     expect(await readFile(skillFile, 'utf-8')).toContain('人写的')
     expect(existsSync(`${skillFile}.prism-new`)).toBe(true)
 
     lines = []
-    expect(await runCommand(ctx, ['init', '--harness-root', harnessRoot, '--force', '--json'])).toBe(0)
+    expect(await runCommand(ctx, ['init', '--harness-root', harnessRoot, '--force', '--skip-cli', '--json'])).toBe(0)
     expect(await readFile(skillFile, 'utf-8')).toContain('generated by prism')
   })
 })
@@ -274,7 +277,7 @@ describe('prism role/team/skill（F10 端到端；临时目录）', () => {
 
   it('team list/validate/activate（使用者自建团队 + 手写角色）', async () => {
     // init 只建骨架、**不代建团队**；受管位置由 <home>/prism.yaml 指定（roles_dir/teams_dir → <home>）
-    expect(await runCommand(ctx, ['init', '--harness-root', harnessRoot, '--json'])).toBe(0)
+    expect(await runCommand(ctx, ['init', '--harness-root', harnessRoot, '--skip-cli', '--json'])).toBe(0)
     lines = []
     expect(await runCommand(ctx, ['team', 'list', '--json'])).toBe(0)
     expect((JSON.parse(lines[lines.length - 1]) as { value: unknown[] }).value).toEqual([])

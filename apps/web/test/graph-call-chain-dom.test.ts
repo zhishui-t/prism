@@ -14,7 +14,10 @@
  *     `preview`、两类 `bad_request` 边类抛错 + `project_root_missing` 映人话、其余错误原文透出、
  *     拿不到 id 时禁用并说明；
  *  5. 图与**既有精确行清单并存**（清单的类名与行数不变——`graph-query-dom.test.ts` 的
- *     既有断言面不动）。
+ *     既有断言面不动）；
+ *  6. **v12 F1 缩放层**：relations / path 两档的图内容都在 `.chain-zoom-layer` 里（缩放平移的
+ *     唯一出口，fit 态 = 单位变换），工具条随之出现；`affected` 形态**没有**这一层（SPEC-1.7）。
+ *     交互细节（wheel / 拖拽 / 工具条 / 第二行标注）单开在 `graph-call-chain-zoom-dom.test.ts`。
  *
  * mock 口径与 `graph-query-dom.test.ts` 同源：stub 最外层 `globalThis.fetch`（让 `api.ts`
  * 与页面一起跑真代码，能验 URL / 方法 / 请求体），未铺桩的路径回可识别的错误信封。
@@ -34,8 +37,12 @@ import {
   RADIAL_CENTER,
   RADIAL_MAX,
   RADIAL_PEER,
+  chainBoxes,
   chainY,
+  contentViewBox,
+  radialBoxes,
   radialPoint,
+  viewBoxAttr,
 } from '../src/pages/graph-logic.ts'
 
 const PROJECT = { project: 'demo', root: '/tmp/demo' }
@@ -232,8 +239,15 @@ describe('F5 三档形状：relations → 中心-辐射', () => {
     expect(shape()).toBe('radial')
     const box = svg()
     expect(box).not.toBeNull()
-    expect(box!.getAttribute('viewBox')).toBe('0 0 560 340')
+    // v12 F1：viewBox = 节点几何包围盒 + padding（中心 + 3 个关系节点），不再是固定 560×340
+    expect(box!.getAttribute('viewBox')).toBe(viewBoxAttr(contentViewBox(radialBoxes(3))))
     expect(box!.getAttribute('role')).toBe('img')
+    // v12 F1：缩放平移只动内层 `<g>`；未测量容器（happy-dom）⇒ fit = 单位映射 ⇒ 单位变换
+    const layer = one('.chain-zoom-layer')
+    expect(layer).not.toBeNull()
+    expect(layer!.getAttribute('transform')).toBe('translate(0 0) scale(1)')
+    // 工具条随图出现（放大 / 缩小 / 适应窗口 / 百分比只读）
+    expect(one('.chain-zoom .chain-zoom-pct')?.textContent).toBe('100%')
     // 中心：命中节点 id（服务端 `node` 字段），全文在 `<title>` 里
     expect(one('.chain-node.center text')?.textContent).toBe('pkg/a.ts#alpha')
     expect(one('.chain-node.center title')?.textContent).toBe(
@@ -368,6 +382,9 @@ describe('F5 三档形状：path → 纵向链', () => {
     const box = svg()!
     expect(box.getAttribute('role')).toBe('img')
     expect(box.getAttribute('aria-label')).toBe(t('graph.viz.chainAria', { n: 3 }))
+    // v12 F1：纵向链同样有缩放层（内容全在它里面），链上节点只有一行（无 id / file:line）
+    expect(one('.chain-zoom-layer')?.getAttribute('transform')).toBe('translate(0 0) scale(1)')
+    expect(all('.chain-node text tspan')).toHaveLength(0)
     expect(nodeTexts('.chain-node text')).toEqual(['a', 'mid', 'b'])
     // 段数 = 节点数 − 1，且都朝下；端点退到节点框外（箭头不被框盖）
     const edges = all('.chain-edge')
@@ -409,6 +426,20 @@ describe('F5 三档形状：path → 纵向链', () => {
     expect(svg()).toBeNull()
     expect(container.textContent).toContain(t('graph.path.unparsed'))
   })
+
+  it('viewBox 随内容变化：12 节点链的 viewBox 高于 3 节点链（v12 F1 比例修复的渲染面）', async () => {
+    const heightOf = (vb: string): number => Number(vb.split(' ')[3])
+
+    await runPath(['a', 'mid', 'b'])
+    const few = svg()!.getAttribute('viewBox')!
+    expect(heightOf(few)).toBeGreaterThan(0)
+
+    await runPath(Array.from({ length: 12 }, (_, i) => `hop${i}`))
+    const many = svg()!.getAttribute('viewBox')!
+    expect(heightOf(many)).toBeGreaterThan(heightOf(few))
+    // 宽度只由节点框宽 + 两侧留白决定，与链长无关（横向居中）
+    expect(many).toBe(viewBoxAttr(contentViewBox(chainBoxes(12))))
+  })
 })
 
 describe('F5 三档形状：affected → 分组列表（不硬画成图）', () => {
@@ -434,6 +465,9 @@ describe('F5 三档形状：affected → 分组列表（不硬画成图）', () 
 
     expect(shape()).toBe('groups')
     expect(svg()).toBeNull() // 这一档的「图」就是列表本身
+    // v12 F1 / SPEC-1.7：分组列表是列表语义——不出缩放层，也不出工具条
+    expect(one('.chain-zoom')).toBeNull()
+    expect(one('.chain-zoom-layer')).toBeNull()
     const groups = all('.chain-group')
     expect(groups).toHaveLength(2)
     expect(groups[0]!.querySelector('.count-label')?.textContent).toBe('calls')

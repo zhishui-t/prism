@@ -467,8 +467,11 @@ export interface PrismSkill {
    * 的映射**合并进 `/api/skills` 的每条技能**——**映射里没有该技能则不加这个键**
    * （与 MCP `prism_skill_list` 同口径），故消费方一律按 `skill.category ?? ''` 读。
    *
-   * 它是技能页分组的**唯一数据源**：UI 不做「列表 + 独立映射表（`/api/skills/categories`）」
-   * 的二次拼接。分类判断归宿主，Prism 只存映射、只读展示（R2/R3）。
+   * 它是「这条技能属于哪个分类」的**唯一来源**（R-v8-5：不回头查第二张表）。
+   *
+   * ⚠ v12 F4（W-6）起技能页分组的**组集与组序**另有来源：`GET /api/skills/categories` 的
+   * `categories` 清单（能表达空分类）。两者分工是「谁属于谁」与「有哪些组、什么顺序」——
+   * 本字段仍是前者，故按值读、不按清单二次筛选（`groupSkills` 负责把游离值归未分类）。
    */
   category?: string
 }
@@ -544,7 +547,45 @@ export interface SkillExternalRemoveResult {
   trash_id: string
 }
 
-/** 单个技能详情（GET /api/skills/:name）：正文 + 安装路径 + 引用方。 */
+/** 技能 → 分类的映射（值 = 分类名；缺键 = 未分类）。 */
+export type SkillCategoryMap = Record<string, string>
+
+/**
+ * 技能分类台账（v12 F4 / B-1 迁移后的**冻结形状**）。
+ *
+ * `categories` 是**分类清单**（含当前 0 条技能的空分类），`mapping` 是技能→分类映射。
+ * 二者**不是冗余**：`mapping` 的值域理论上可能出现不在 `categories` 里的「游离分类」
+ * （SPEC-4.3：读时按未分类呈现），故消费方一律以 `categories` 为准。
+ *
+ * GET / POST / PATCH / DELETE 四条口**成功时都返回这个形状**（同形 ⇒ 前端可整表替换，
+ * 省一次 GET）。
+ */
+export interface SkillCategoryData {
+  categories: string[]
+  mapping: SkillCategoryMap
+}
+
+/**
+ * 归类写入结果（`POST /api/skills/categorize`，v12 F4 迁移后的冻结形状）。
+ *
+ * 逐字段照服务端 `SkillCategorizeResult`（`packages/server/src/roles/skill-categories.ts`）：
+ * `category` 为 `null` = 本次是**清除**；`updated` / `cleared` 是写入后**带 / 不带**该分类的
+ * 技能名；`categories` 是写入后的分类清单、`mapping` 是全量映射（回显用）。
+ *
+ * 控制台只消费「成功与否」（真结果一律靠随后的 `GET` 刷新，不做本地臆测级联）——类型写全
+ * 是为**契约冻结留痕**：形状不对时类型层先红。
+ */
+export interface SkillCategorizeResult {
+  category: string | null
+  updated: string[]
+  cleared: string[]
+  categories: string[]
+  mapping: SkillCategoryMap
+}
+
+/**
+ * 单个技能详情（GET /api/skills/:name）：正文 + 安装路径 + 引用方。
+ */
 export interface SkillDetail {
   name: string
   description: string
@@ -777,6 +818,59 @@ export const teamApi = {
   skills: () => request<SkillListResult>('/api/skills'),
   skill: (name: string) => request<SkillDetail>(`/api/skills/${encodeURIComponent(name)}`),
   skillUsage: () => request<SkillUsage[]>('/api/skills/usage'),
+
+  /**
+   * 技能分类台账（`GET /api/skills/categories`，v12 F4 / B-1 迁移后的新形状）。
+   *
+   * 它是技能页分组的**分类清单来源**（组集与组序），与逐条技能上的 `category` 字段分工不同：
+   * 前者能表达**空分类**（0 条技能的组），后者只能表达「这条技能属于谁」。
+   */
+  skillCategories: () => request<SkillCategoryData>('/api/skills/categories'),
+
+  /**
+   * 新建分类（`POST /api/skills/categories`，body `{name}`）。
+   *
+   * 失败面（冻结契约）：`bad_request`(400) = 名字 trim 后为空；`id_conflict`(409) = 重名。
+   * UI 逐条映射人话见 `skills-logic.ts#categoryErrorKey`。
+   */
+  skillCategoryAdd: (input: { name: string }) =>
+    request<SkillCategoryData>('/api/skills/categories', { method: 'POST', body: JSON.stringify(input) }),
+
+  /**
+   * 分类改名（`PATCH /api/skills/categories/:name`）。
+   *
+   * ⚠ 路径段是**旧名**、body 的 `name` 是**新名**（冻结契约的逐字段口径，别写反）。
+   * 服务端**级联**更新 `mapping`（组内技能的展示分类随之变）；同名是幂等 no-op。
+   * 失败面：`bad_request`(400) 空新名 / `id_conflict`(409) 目标名重名 / `not_found`(404) 源不存在。
+   */
+  skillCategoryRename: (input: { from: string; to: string }) =>
+    request<SkillCategoryData>(`/api/skills/categories/${encodeURIComponent(input.from)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name: input.to }),
+    }),
+
+  /**
+   * 删除分类（`DELETE /api/skills/categories/:name`）。
+   *
+   * 服务端把组内技能的 `mapping` 一并清除（回未分类），**技能本身不动**——确认弹窗的文案
+   * 要把这件事说清楚（`skills.category.removeBody`）。失败面：`not_found`(404) 源不存在。
+   */
+  skillCategoryRemove: (name: string) =>
+    request<SkillCategoryData>(`/api/skills/categories/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+
+  /**
+   * 归类：技能 → 分类（`POST /api/skills/categorize`，v12 F4 / W-7 的 DnD 与键盘下拉共用）。
+   *
+   * 入参 `{ names: string[]; category?: string }`；**`category` 省略 = 清除分类**——
+   * 服务端 `parseCategorizeInput` 把「省略 / `null` / 空串（含纯空白）」归同一档（`people.ts` 的
+   * `skillCategorize` 注释同此）。故「拖到未分类组」应传**不带 `category` 键**的载荷，
+   * 而不是 `category: ''`（两档等价，但省略是契约里写明的表达，见 `skills-logic#categorizePayload`）。
+   *
+   * 失败面：`bad_request`(400) = `names` 空 / `category` 非字符串。
+   * 响应 = `SkillCategorizeResult`（写入后的清单与映射，整表可替换）。
+   */
+  skillCategorize: (input: { names: string[]; category?: string }) =>
+    request<SkillCategorizeResult>('/api/skills/categorize', { method: 'POST', body: JSON.stringify(input) }),
 
   /** 新建团队（F-C2 → POST /api/teams，F-C3 落地）。 */
   create: (input: NewTeamInput) =>

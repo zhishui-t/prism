@@ -77,8 +77,10 @@ describe('B6 写守卫：默认宿主目录写入需确认', () => {
   })
 
   it('prism init：默认链 + 无确认 → 阻止（建议 --yes）；--yes → 放行', async () => {
+    // `--skip-cli`：本组用例只测写守卫。init 默认要做 F5 的 CLI 全局注册——
+    // 默认链一旦被 --yes 放行就会真实写本机 npm 全局 bin 目录（SPEC-5.6 红线）。
     lines = []
-    expect(await runCommand(bareCtx, ['init'])).toBe(1)
+    expect(await runCommand(bareCtx, ['init', '--skip-cli'])).toBe(1)
     const blocked = lines.join('\n')
     expect(blocked).toContain('已阻止写入')
     // v10 F7：init 的守卫改为指向 `--yes`（init 的正常落点就是默认宿主目录）；
@@ -90,7 +92,7 @@ describe('B6 写守卫：默认宿主目录写入需确认', () => {
     expect(blocked).toContain('测试/CI 专用')
 
     lines = []
-    expect(await runCommand(bareCtx, ['init', '--yes', '--json'])).toBe(0)
+    expect(await runCommand(bareCtx, ['init', '--yes', '--skip-cli', '--json'])).toBe(0)
     expect(existsSync(join(fakeDefaultZcode, 'skills'))).toBe(true)
   })
 
@@ -98,7 +100,7 @@ describe('B6 写守卫：默认宿主目录写入需确认', () => {
     // 用一个**不存在**的根：`harnessDetected` 为 false，才会打出推荐 --harness-root 的那句
     const missingRoot = join(directZcode, 'not-there')
     lines = []
-    expect(await runCommand(bareCtx, ['init', '--harness-root', missingRoot])).toBe(0)
+    expect(await runCommand(bareCtx, ['init', '--harness-root', missingRoot, '--skip-cli'])).toBe(0)
     const output = lines.join('\n')
     expect(output).toContain('--harness-root')
     expect(output).toContain('测试/CI 专用')

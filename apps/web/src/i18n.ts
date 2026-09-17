@@ -209,6 +209,12 @@ const ZH = {
   'graph.viz.radialAria': '{dir}：{n} 个关系节点（可逐个聚焦选择）',
   'graph.viz.chainAria': '调用链图：{n} 个节点',
   'graph.viz.more': '图中只画前 {shown} 个（共 {total} 个）',
+  /* v12 F1：缩放工具条（SPEC-1.4/1.5）。百分比只读，`{pct}` 由组件算好传入。 */
+  'graph.zoom.label': '缩放',
+  'graph.zoom.in': '放大',
+  'graph.zoom.out': '缩小',
+  'graph.zoom.fit': '适应窗口',
+  'graph.zoom.current': '当前缩放 {pct}%',
   'graph.affected.other': '其他关系',
   'graph.seq.action': '导出时序图',
   'graph.seq.busy': '导出中…',
@@ -399,7 +405,7 @@ const ZH = {
   'teams.desc': '团队 = 成员引用角色库 ∪ 固定工作流 ∪ 沉淀规则 ∪ 优先级。Prism 只定义与校验，不执行调度。',
   'teams.new': '新建团队',
   'teams.empty': '还没有团队。点右上角「新建团队」，或用 prism team new <id> 创建。',
-  'teams.filterPlaceholder': '按团队名 / 描述筛选…',
+  'teams.filterPlaceholder': '按团队 ID / 描述筛选…',
   'teams.stages': '{n} 阶段',
   'teams.membersCount': '{n} 名成员',
   /* v7 8b（§4.4 T1/T2/T3/T4/T6/T8 + §4.3 S8） */
@@ -415,7 +421,7 @@ const ZH = {
   'teams.declaredSkills': '声明技能',
   'teams.deleted': '已删除团队「{id}」，移除 {n} 项。',
   'teams.delete.title': '删除团队「{id}」？',
-  'teams.delete.confirmLabel': '输入团队名 {id} 以确认硬删',
+  'teams.delete.confirmLabel': '输入团队 ID {id} 以确认硬删',
   'teams.form.warnTitle': '保存成功，但有 {n} 条提示',
   'teams.form.warnHint': '服务端已就地收窄工作流；受影响阶段见上（文本来自服务端，未在客户端重算）。',
   'teams.effective.title': '有效技能（全员合并）',
@@ -423,7 +429,8 @@ const ZH = {
   'teams.effective.truncated': '还有 {n} 个成员角色未计入（上限 {max}）。',
   'teams.effective.from': '来自 {roles}',
   'teams.effective.noMembers': '该团队没有成员，暂无法计算有效集。',
-  'teams.selectHint': '从左侧选一个团队看详情',
+  /* W-4（v12 F3）：`teams.selectHint`「从左侧选一个团队看详情」随详情 pane 一并删除——
+     详情迁入弹窗后「无选中 = 纯列表」，那句提示没有落点（死键守卫会盯住）。 */
   'teams.workflow': '工作流',
   'teams.deepDive': '沉淀规则 / 仲裁链',
   'teams.roster': '成员名册',
@@ -605,7 +612,8 @@ const ZH = {
   'skills.counts.refs': '被角色引用 {roles} › 被团队引用 {teams}',
   'skills.row.refWarn': '被 {n} 角色引用但未装',
   'skills.scope': '生效层',
-  'skills.selectHint': '从左侧选一个技能看详情',
+  /* W-5（v12 F4）：`skills.selectHint`「从左侧选一个技能看详情」随详情 pane 一并删除——
+     详情迁入弹窗后「无选中 = 纯列表」，那句提示没有落点（死键守卫会盯住）。 */
   'skills.notFound.desc': '技能「{name}」不存在（可能已改名或移除）。',
   'skills.notFound.back': '返回技能列表',
   'skills.notFound.teams': '去团队页看有效技能',
@@ -642,6 +650,30 @@ const ZH = {
   'skills.delete.notFound': '技能目录不存在，或里面没有 SKILL.md（非技能目录不可删）。',
   'skills.view.render': '渲染',
   'skills.view.source': '源码',
+  /* v12 F4（W-6）分类管理：分类名是**用户数据**（不翻译），这几条只是管理面的骨架文案。
+     排序按钮的 label 用箭头（`↑`/`↓`），`aria-label` / `title` 取这两个键。 */
+  'skills.category.add': '新建分类',
+  'skills.category.create': '创建',
+  'skills.category.namePlaceholder': '分类名',
+  'skills.category.rename': '改名',
+  'skills.category.remove': '删除',
+  'skills.category.moveUp': '上移',
+  'skills.category.moveDown': '下移',
+  'skills.category.empty': '这个分类下还没有技能。',
+  'skills.category.addDone': '已新建分类「{name}」。',
+  'skills.category.renameDone': '分类「{from}」已改名为「{to}」。',
+  'skills.category.removeDone': '已删除分类「{name}」，组内技能回到未分类。',
+  'skills.category.removeTitle': '删除分类「{name}」？',
+  'skills.category.removeBody': '组内技能回到「未分类」；技能本身不受影响。',
+  /* 失败码 → 人话（分派判据在 `skills-logic.ts#categoryErrorKey`，三个码在三个动作下语义不同）。 */
+  'skills.category.err.exists': '已有同名分类。',
+  'skills.category.err.targetExists': '目标分类名已存在。',
+  'skills.category.err.missing': '分类不存在（可能已被删除）。',
+  'skills.category.err.empty': '分类名不能为空。',
+  /* v12 F4（W-7）：键盘替代（详情内的分类下拉）+ 拖拽归类的结果提示。 */
+  'skills.category.label': '分类',
+  'skills.drag.moved': '已把「{name}」归入「{category}」。',
+  'skills.drag.cleared': '已把「{name}」移出分类（回到未分类）。',
 
   /* 技能来源（三档：谁指定了它）+ 有效集（正向视图）。
      来源标签在 Skills 页与 Teams 页共用（同一套词汇，禁止各写一套）。 */
@@ -855,6 +887,12 @@ const EN: Record<keyof typeof ZH, string> = {
   'graph.viz.radialAria': '{dir}: {n} related nodes (each can be focused and picked)',
   'graph.viz.chainAria': 'Call chain diagram: {n} nodes',
   'graph.viz.more': 'Only the first {shown} of {total} are drawn',
+  /* v12 F1: the zoom toolbar (SPEC-1.4/1.5); the percentage readout is read-only. */
+  'graph.zoom.label': 'Zoom',
+  'graph.zoom.in': 'Zoom in',
+  'graph.zoom.out': 'Zoom out',
+  'graph.zoom.fit': 'Fit to window',
+  'graph.zoom.current': 'Zoom {pct}%',
   'graph.affected.other': 'Other relations',
   'graph.seq.action': 'Export sequence',
   'graph.seq.busy': 'Exporting…',
@@ -1028,7 +1066,7 @@ const EN: Record<keyof typeof ZH, string> = {
   'teams.desc': 'A team = members referencing the role library ∪ a fixed workflow ∪ accumulation rules ∪ priority. Prism defines and validates; it never schedules.',
   'teams.new': 'New team',
   'teams.empty': 'No teams yet. Click "New team" or run prism team new <id>.',
-  'teams.filterPlaceholder': 'Filter by name or description…',
+  'teams.filterPlaceholder': 'Filter by team ID or description…',
   'teams.stages': '{n} stages',
   'teams.membersCount': '{n} members',
   /* v7 8b (§4.4 T1/T2/T3/T4/T6/T8 + §4.3 S8) */
@@ -1052,7 +1090,7 @@ const EN: Record<keyof typeof ZH, string> = {
   'teams.effective.truncated': '{n} more member roles not counted (cap {max}).',
   'teams.effective.from': 'from {roles}',
   'teams.effective.noMembers': 'This team has no members, so the effective set cannot be computed.',
-  'teams.selectHint': 'Pick a team on the left to see its details',
+  /* W-4 (v12 F3): `teams.selectHint` removed with the detail pane — no selection now means a pure list. */
   'teams.workflow': 'Workflow',
   'teams.deepDive': 'Accumulation rules / arbitration chain',
   'teams.roster': 'Roster',
@@ -1234,7 +1272,7 @@ const EN: Record<keyof typeof ZH, string> = {
   'skills.counts.refs': 'referenced by {roles} role(s) › {teams} team(s)',
   'skills.row.refWarn': 'referenced by {n} role(s) but not installed',
   'skills.scope': 'Scope layers',
-  'skills.selectHint': 'Pick a skill on the left to see its details',
+  /* W-5 (v12 F4): `skills.selectHint` removed with the detail pane — no selection now means a pure list. */
   'skills.notFound.desc': 'Skill "{name}" does not exist (it may have been renamed or removed).',
   'skills.notFound.back': 'Back to skill list',
   'skills.notFound.teams': 'See effective skills on the teams page',
@@ -1265,6 +1303,28 @@ const EN: Record<keyof typeof ZH, string> = {
   'skills.delete.notFound': 'The skill directory does not exist, or it has no SKILL.md (a non-skill directory cannot be deleted).',
   'skills.view.render': 'Rendered',
   'skills.view.source': 'Source',
+  /* v12 F4 (W-6) category management: category names are user data (never translated). */
+  'skills.category.add': 'New category',
+  'skills.category.create': 'Create',
+  'skills.category.namePlaceholder': 'Category name',
+  'skills.category.rename': 'Rename',
+  'skills.category.remove': 'Delete',
+  'skills.category.moveUp': 'Move up',
+  'skills.category.moveDown': 'Move down',
+  'skills.category.empty': 'No skills in this category yet.',
+  'skills.category.addDone': 'Category "{name}" created.',
+  'skills.category.renameDone': 'Category "{from}" renamed to "{to}".',
+  'skills.category.removeDone': 'Category "{name}" removed; its skills are back to uncategorized.',
+  'skills.category.removeTitle': 'Delete category "{name}"?',
+  'skills.category.removeBody': 'Its skills fall back to Uncategorized; the skills themselves are unaffected.',
+  'skills.category.err.exists': 'A category with this name already exists.',
+  'skills.category.err.targetExists': 'The target category name already exists.',
+  'skills.category.err.missing': 'Category not found (it may have been deleted).',
+  'skills.category.err.empty': 'Category name cannot be empty.',
+  /* v12 F4 (W-7): keyboard alternative (category select in the detail modal) + drop feedback. */
+  'skills.category.label': 'Category',
+  'skills.drag.moved': 'Moved "{name}" to "{category}".',
+  'skills.drag.cleared': 'Removed "{name}" from its category (back to uncategorized).',
 
   'skills.scope.global': 'Global (installed)',
   'skills.scope.team': 'Team-declared',

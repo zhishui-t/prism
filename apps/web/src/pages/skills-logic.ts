@@ -20,39 +20,276 @@ export interface SkillGroup<T> {
   skills: T[]
 }
 
+/** `groupSkills` 的可选口径。 */
+export interface SkillGroupOptions {
+  /**
+   * `true` = **不渲染空分类组**（组内 0 条连组头一起收起）。只在**过滤视图**下用：
+   * 过滤是「把命中行挑出来」，把没命中的空分类组头留在屏上会与「过滤后某组空了，该组连组头
+   * 一起消失」的既有口径打架（`skills-groups-dom.test.ts` 锁着）。
+   *
+   * 缺省 `false` = 空分类**照常成组**（SPEC-4.4「空分类在界面成组」）——这是无过滤时的默认，
+   * 也是本函数相对旧版的**行为变更点**。
+   */
+  hideEmpty?: boolean
+}
+
 /**
- * 按 `category` 把技能行分组（v8 F7 / 层级稿 §3.5）。
+ * 把技能行分组（v8 F7 / 层级稿 §3.5；v12 F4 / W-6 扩为「行 + 分类清单」）。
  *
- * 口径（三条都有回归测试）：
- * - **数据源 = 入参行自带的 `category`**（`GET /api/skills` 合并进来的字段，R-v8-5）：
- *   本函数**不做**「列表 + 独立映射表（`/api/skills/categories`）」的二次拼接——
- *   映射里没有的技能就是未分类，不回头查第二张表；
+ * 口径：
+ * - **分类清单（第二参，可选）是权威的组集与组序**：
+ *   - 给清单（`categories` 为数组）——**空分类也成组**（组内 0 条、计数 0，SPEC-4.4），
+ *     组序**就是清单顺序**（清单由 `GET /api/skills/categories` 的 `categories` 给，
+ *     调用方通常已按用户 `localStorage` 组序归一化过，见 `normalizeGroupOrder`）；
+ *   - 不给（`undefined`）——旧口径：分类清单由**行自己**推、组间按分类名排序。角色表单的
+ *     技能选取器走这一支（它没有分类管理面，也不需要空分类组）。
+ * - **游离值归未分类**：给清单时，行的 `category` **不在清单内**（含删除后残留的旧值、
+ *   空串 / 缺键）一律进未分类组——与 SPEC-4.3「映射指向不在 categories 里的游离分类 ⇒
+ *   读时按未分类呈现」同口径，不凭空补出一个清单里没有的组。
  * - **未分类组置末尾**：它不挡已分类的主内容（组名与 `lamp` 由调用方渲染）；
- * - **排序**：组间按分类名、组内按技能名，都用 `localeCompare`（与技能台账既有的
- *   `rows.sort((a, b) => a.name.localeCompare(b.name))` 同口径）⇒ 结果**与入参顺序无关**，
- *   过滤只改入参、不改排序契约。
+ * - **组内排序**：按技能名 `localeCompare`（与技能台账既有排序同口径）⇒ 组内结果与入参顺序无关。
  *
- * 边界：**全未分类 ⇒ 单个「未分类」组**（不是空数组、也不是不分组）；无行 ⇒ 空数组
- * （调用方据此走行内空态，不渲染空组头）。
+ * 边界：给清单但清单为空 ⇒ 所有行都是游离值 ⇒ 单个未分类组；不给清单且全未分类 ⇒
+ * 单个未分类组；无行且无清单 ⇒ 空数组（调用方据此走行内空态）。
  */
 export function groupSkills<T extends { name: string; category?: string }>(
   rows: readonly T[],
+  categories?: readonly string[],
+  options: SkillGroupOptions = {},
 ): SkillGroup<T>[] {
   const buckets = new Map<string, T[]>()
-  for (const row of rows) {
-    const category = row.category ?? UNCATEGORIZED
+  const push = (category: string, row: T): void => {
     const bucket = buckets.get(category)
     if (bucket === undefined) buckets.set(category, [row])
     else bucket.push(row)
   }
-  const named = [...buckets.keys()]
-    .filter((category) => category !== UNCATEGORIZED)
-    .sort((a, b) => a.localeCompare(b))
-  const order = buckets.has(UNCATEGORIZED) ? [...named, UNCATEGORIZED] : named
-  return order.map((category) => ({
-    category,
-    skills: (buckets.get(category) ?? []).slice().sort((a, b) => a.name.localeCompare(b.name)),
-  }))
+  /** 清单去重 + 去空（服务端 `POST` 已 trim 非空，这里只做防御，不改写值）。 */
+  const listed =
+    categories === undefined
+      ? undefined
+      : [...new Set(categories.filter((name) => name !== UNCATEGORIZED && name.trim() !== ''))]
+  // 空分类也成组：先把清单里的分类建桶（0 条也占位）。
+  if (listed !== undefined) for (const name of listed) buckets.set(name, [])
+  const known = new Set(listed ?? [])
+  for (const row of rows) {
+    const category = row.category ?? UNCATEGORIZED
+    // 无清单：行自带分类即一群；有清单：不在清单内的游离值归未分类。
+    if (listed === undefined || (category !== UNCATEGORIZED && known.has(category))) push(category, row)
+    else push(UNCATEGORIZED, row)
+  }
+  const named =
+    listed ?? [...buckets.keys()].filter((category) => category !== UNCATEGORIZED).sort((a, b) => a.localeCompare(b))
+  const order = buckets.has(UNCATEGORIZED) ? [...named, UNCATEGORIZED] : [...named]
+  const hideEmpty = options.hideEmpty === true
+  return order
+    .filter((category) => !(hideEmpty && category !== UNCATEGORIZED && (buckets.get(category)?.length ?? 0) === 0))
+    .map((category) => ({
+      category,
+      skills: (buckets.get(category) ?? []).slice().sort((a, b) => a.name.localeCompare(b.name)),
+    }))
+}
+
+/* ==================== 分类组序（v12 F4 / W-6，SPEC-4.10） ==================== */
+
+/**
+ * 组序的 `localStorage` 键。**为什么落 localStorage 而不是存储文件**：冻结契约的
+ * `SkillCategoryStore` 没有顺序端点（`addCategory` 只 append、`renameCategory` 原位、
+ * `removeCategory` 只移除），SPEC-4.10 授权「localStorage 或存储文件，W-6 落定」——
+ * 组序是**视图偏好**，不是分类数据本身，故不新开后端契约。
+ *
+ * ⚠ 与 `COLLAPSED_STORAGE_KEY`（折叠态）是**同一族视图偏好**的两把键：组序管「组怎么排」、
+ * 折叠管「哪些组收起」。两者都只活在 localStorage（都不进服务端契约），也都以**分类名**
+ * 为键——故分类改名时要一起迁移（`renameCollapsed` + `Skills.tsx#submitRename`）。
+ */
+export const GROUP_ORDER_STORAGE_KEY = 'skills-group-order'
+
+/**
+ * 把「清单顺序」与「用户存的组序」归并成**生效组序**（纯函数）。
+ *
+ * 三条口径（对应任务书的两个开放问）：
+ * - **新分类缺省排哪**：`saved` 里有、清单里也在的按 `saved` 顺序在前；清单里**新增**的
+ *   分类（`saved` 没见过）按**清单原顺序**补在**已命名组的末尾**（即紧挨未分类组之前）——
+ *   也就是服务端 `addCategory` append 的位置，不凭空空插。
+ * - **删除后残留键自愈**：`saved` 里**已不存在**于清单的名字直接丢弃。调用方据此把归一化结果
+ *   写回存储（`Skills.tsx` 的挂载 effect），下一次渲染即无残留。
+ * - 未分类哨兵不参与排序（调用方恒把它置末），传进来也会被过滤掉。
+ */
+export function normalizeGroupOrder(names: readonly string[], saved: readonly string[]): string[] {
+  const known = names.filter((name) => name !== UNCATEGORIZED)
+  const set = new Set(known)
+  const kept: string[] = []
+  for (const name of saved) if (set.has(name) && !kept.includes(name)) kept.push(name)
+  const seen = new Set(kept)
+  return [...kept, ...known.filter((name) => !seen.has(name))]
+}
+
+/**
+ * 组序里把 `name` 上/下移一格（纯函数，SPEC-4.10 的「组头 ↑↓」）。
+ *
+ * **越界返回原数组引用**（调用方据此判断「这一下没发生移动」，不白写一次存储）。
+ * 只吃**已命名组**的序（未分类不参与）；`names` 里的名字来自 `normalizeGroupOrder`。
+ */
+export function moveGroup(names: string[], name: string, delta: -1 | 1): string[] {
+  const from = names.indexOf(name)
+  const to = from + delta
+  if (from === -1 || to < 0 || to >= names.length) return names
+  const next = [...names]
+  next[from] = names[to]!
+  next[to] = names[from]!
+  return next
+}
+
+/* ============ 折叠记忆（v12 F4 / W-7，SPEC-4.8） ============ */
+
+/**
+ * 折叠态的 `localStorage` 键（SPEC-4.8 钉死）。存的是**收起集合**的 JSON 数组
+ * （缺省 = 空集 = 全展开，与既有「折叠是用户主动的收窄手段，不是默认态」同口径）。
+ *
+ * 与 `GROUP_ORDER_STORAGE_KEY` 并存：**组序**与**收起集合**是两把独立的视图偏好键，
+ * 都以分类名（未分类组 = 哨兵 `''`）为键——分类改名后两把键都需要跟着搬
+ * （组序由 `normalizeGroupOrder` 的残留丢弃兜底为「回默认位」，折叠由 `renameCollapsed` 迁移）。
+ */
+export const COLLAPSED_STORAGE_KEY = 'skills-collapsed'
+
+/**
+ * 收起集合的**归一化**（纯函数）：非数组 / 非字符串项一律丢弃 ⇒ 损坏值自愈成空集。
+ *
+ * 判据与 `Skills.tsx#readGroupOrder` 同款（`Array.isArray` + 逐项 `typeof === 'string'`），
+ * 抽出来的理由：折叠记忆的「损坏 JSON / 缺键自愈」是 SPEC-4.8 的验收点，值得 node 直测，
+ * 不搭整个组件的渲染测试。空串是**合法**键（未分类组哨兵），故不做去空。
+ */
+export function normalizeCollapsed(raw: unknown): string[] {
+  return Array.isArray(raw) ? raw.filter((name): name is string => typeof name === 'string') : []
+}
+
+/**
+ * 分类改名时**同步迁移折叠键**（SPEC-4.8 配套，W-7 顺手项）。
+ *
+ * 旧名不在集合里 ⇒ **原样返回同一引用**（调用方据此不白写一次存储）；在 ⇒ 换成新名
+ * （集合是 Set，「先删后加」保住单值语义）。改名后旧名对应的收起态若不迁移，就成了
+ * 一条永远命不中的残留键（新名的组会突然展开，且残留键直到下次分类被删才被清）。
+ */
+export function renameCollapsed(
+  collapsed: ReadonlySet<string>,
+  from: string,
+  to: string,
+): ReadonlySet<string> {
+  if (!collapsed.has(from)) return collapsed
+  const next = new Set(collapsed)
+  next.delete(from)
+  next.add(to)
+  return next
+}
+
+/* ============ 拖拽归类（v12 F4 / W-7，SPEC-4.6） ============ */
+
+/**
+ * 拖拽载荷：被拖技能名 + 它**当前所在的组键**（生效分类名；未分类组 = 哨兵 `''`）。
+ *
+ * 用「组」而不是行上的原始 `category`：行里的游离值（不在清单内，SPEC-4.3）在界面上就
+ * 呈现为未分类，判「同组放回」必须按**看到的组**判——否则从游离值拖到未分类会白发一次写。
+ */
+export interface SkillDragPayload {
+  name: string
+  category: string
+}
+
+/**
+ * drop 目标解析 → `POST /api/skills/categorize` 的调用参数（**纯函数**，SPEC-4.6 的
+ * 「drop 目标解析→categorize 调用」可测点）。
+ *
+ * **清除语义以服务端实现为准**（`SkillCategoryStore.categorize` + `parseCategorizeInput`，
+ * `packages/server/src/http/routes/people.ts` 的 `skillCategorize` 同此）：`category`
+ * **省略 / `null` / 空串（含纯空白）** 一律 = 清除。故目标为「未分类」时返回**不带
+ * `category` 键**的载荷（而不是传 `category: ''`——服务端两档等价，但省略是契约里
+ * 写明的表达，也让 mock 断言能一眼看出「这是清除」）。
+ */
+export function categorizePayload(
+  name: string,
+  targetCategory: string,
+): { names: string[]; category?: string } {
+  return targetCategory === UNCATEGORIZED
+    ? { names: [name] }
+    : { names: [name], category: targetCategory }
+}
+
+/**
+ * drop 专用：在 `categorizePayload` 之上加「**同组放回不发请求**」的判据（返回 `null`）。
+ *
+ * 拖拽排序记债不做（design-v12 F4「拖拽排序记债不做」），故把卡片拖回自己的组是空操作——
+ * 不该为一次「什么都没变」的落点写一次存储、再拉一次全量刷新。
+ */
+export function dropCategorizeCall(
+  drag: SkillDragPayload,
+  targetCategory: string,
+): { names: string[]; category?: string } | null {
+  if (drag.category === targetCategory) return null
+  return categorizePayload(drag.name, targetCategory)
+}
+
+/**
+ * 分类管理失败码 → 字典键（v12 F4 / W-6）。
+ *
+ * `api-team.ts#request` 的契约是错误以 `` `${code}: ${message}` `` 抛成 `Error.message`
+ * （debts D-1），故按**前缀**分派（同 `externalDeleteErrorKey`）。三个码在**动作**下语义不同，
+ * 故带 `action` 参数而不是让调用方自己拼：
+ * - `id_conflict`（409）：**新建**重名 → `exists`；**改名**目标重名 → `targetExists`
+ *   （「已存在」与「目标名已被占用」对用户是两条不同的出路）；
+ * - `not_found`（404）：改名 / 删除的**源**不存在 → `missing`（新建时该码不该出现，返回 null）；
+ * - `bad_request`（400）：契约里只有「名字 trim 后为空」这一种 → `empty`。
+ *
+ * 其余（网络层 TypeError / 5xx / 未列出的码）返回 `null`，调用方原文透出（`common.loadFailed`）——
+ * **不猜**服务端文案。返回字典**键**而非成品文案：本函数保持纯（不引 i18n / React），可 node 直测。
+ */
+export type SkillCategoryAction = 'add' | 'rename' | 'remove'
+
+export type SkillCategoryErrorKey =
+  | 'skills.category.err.exists'
+  | 'skills.category.err.targetExists'
+  | 'skills.category.err.missing'
+  | 'skills.category.err.empty'
+
+export function categoryErrorKey(message: string, action: SkillCategoryAction): SkillCategoryErrorKey | null {
+  if (message.startsWith('id_conflict')) {
+    return action === 'rename' ? 'skills.category.err.targetExists' : 'skills.category.err.exists'
+  }
+  if (message.startsWith('bad_request')) return 'skills.category.err.empty'
+  if (message.startsWith('not_found')) return action === 'add' ? null : 'skills.category.err.missing'
+  return null
+}
+
+/**
+ * 分类色点的**确定性**映射（v12 F4 / W-5：卡片网格的「分类色点」）。
+ *
+ * 三条口径：
+ * 1. **只用既有颜色 token**——取值是 `var(--role-*)` 八个色相（`roles/COLOR_MAP` 的同一批
+ *    语义色，两主题各自定义在 `styles.css` 的 `:root` / 浅色块里）。**不新增 hex、不新增变量**；
+ *    刻意**不含 `--role-gray`**：灰是「无色」档，留给未分类，而设计明确「无分类不显示色点」；
+ * 2. **稳定性**：同一分类名在任何一次渲染 / 任何一次会话里都得到同一个色相——
+ *    判据是**名字本身**（`h = h * 31 + 码点` 的滚动散列），不含时间 / 随机 / 行序，
+ *    故列表重排、过滤、刷新都不换色。**不按数组下标取色**（那会让色点随行序漂移）；
+ * 3. **未分类 ⇒ `undefined`**（调用方据此完全不渲染色点），而不是回落到灰色。
+ *
+ * 返回 CSS **值**（`var(--role-x)`）而非类名：色相是数据，写法在调用方一致（`style={{background}}`），
+ * 与 `Roles.tsx#colorOf` 的既有用法同形。函数保持纯（不引 i18n / React），可 node 直测。
+ */
+const CATEGORY_COLOR_VARS = [
+  'var(--role-red)',
+  'var(--role-blue)',
+  'var(--role-green)',
+  'var(--role-yellow)',
+  'var(--role-purple)',
+  'var(--role-orange)',
+  'var(--role-pink)',
+  'var(--role-cyan)',
+] as const
+
+export function categoryColor(category?: string): string | undefined {
+  const name = (category ?? '').trim()
+  if (name === '') return undefined
+  let h = 0
+  for (const ch of name) h = (h * 31 + (ch.codePointAt(0) ?? 0)) % 2147483647
+  return CATEGORY_COLOR_VARS[h % CATEGORY_COLOR_VARS.length]
 }
 
 /**

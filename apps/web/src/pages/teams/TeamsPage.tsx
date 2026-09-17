@@ -1,13 +1,19 @@
 /**
- * 团队页（T5 拆分）：左列表 + 过滤 + 提示条 + 右侧详情挂载 + 表单抽屉。
+ * 团队页（T5 拆分）：左列表 + 过滤 + 提示条 + 表单抽屉（详情走居中弹窗）。
  *
- * 选中**只有一个真相**：hash `#/teams/<id>`（`sel`），列表高亮由它派生。
+ * 选中**只有一个真相**：hash `#/teams/<id>`（`sel`），列表高亮与**详情弹窗**都由它派生。
  * 注意：**抽屉的 create/edit 意图是另一件事**（`formIntent`），与 `sel` 无关——
  * 选中某团队时点「+ 新建团队」仍是新建（R-8-4）。
  * 列表行是 `<NavRow>`（`<a href>`，B6）——键盘 / 中键 / 复制深链都通，不再靠改 hash 的按钮；
- * `onSelect` 因此只剩两件**程序化**的事：深链失效时清空（`''`）、创建成功后落选中（`pendingSelect`）。
+ * `onSelect` 因此只剩三件**程序化**的事：深链失效时清空（`''`）、创建成功后落选中（`pendingSelect`）、
+ * **关闭详情弹窗**（`''`）。
  * 抽屉的**关闭**只有 `closeForm()` 一个出口（Esc / 遮罩 / 头部关闭钮 / 表单取消钮都走到它），
  * 冲刷 `pendingSelect` 就在那里——见其上的注记（M3）。
+ *
+ * **v12 F3（W-4）**：详情从页内右栏（`.md-detail`）迁入居中 `<Modal size="lg">`（宽度 = `--modal-w`），
+ * 故右栏连同「选择提示」Pane 一并消失——无选中就是纯列表（`.md.solo` 单列铺满，见 styles.css）。
+ * 展示面一律 **team_id**：团队 `name` 字段 UI 零展示（列表行 / 弹窗标题 / 搜索 / 确认文案），
+ * 表单里的 name 输入保留（`nameRequired` 校验依赖它，SPEC-3.2 数据面零改动）。
  */
 
 import { useEffect, useState } from 'react'
@@ -16,7 +22,7 @@ import { teamApi } from '../../api-team.ts'
 import { NavRow } from '../../components/NavRow.tsx'
 import { State } from '../../components/State.tsx'
 import { useAsync } from '../../components/useAsync.ts'
-import { Drawer, PageHead, Pane, StatusTag, firstSentence } from '../../components/ui.tsx'
+import { Drawer, Modal, PageHead, StatusTag, firstSentence } from '../../components/ui.tsx'
 import { useT } from '../../i18n.ts'
 import { hrefOf } from '../../route.ts'
 import { TeamDetail } from './TeamDetail.tsx'
@@ -114,13 +120,16 @@ export function TeamsPage({
     }
   }, [teams.data, teams.loading, teams.error, selected, list, onSelect])
 
+  /**
+   * v12 F3：搜索**只按用户看得见的东西**——team_id 与描述。
+   * 团队 `name` 已零展示，再按它命中等于「搜得到却看不见那条为什么命中」（SPEC-3.1）。
+   */
   const keyword = filter.trim().toLowerCase()
   const shown =
     keyword === ''
       ? list
       : list.filter(
           (x) =>
-            x.name.toLowerCase().includes(keyword) ||
             x.team_id.toLowerCase().includes(keyword) ||
             x.description.toLowerCase().includes(keyword),
         )
@@ -171,7 +180,9 @@ export function TeamsPage({
           empty={!teams.loading && !teams.error && list.length === 0}
           emptyText={t('teams.empty')}
         >
-          <div className="md">
+          {/* W-4：详情已迁入弹窗 ⇒ 主从网格只剩列表，走单列铺满（`.md.solo`）。
+              高度链不变：`.md` 仍是 `.page-fill` 的剩余高度子项，`.md-list` 自己滚。 */}
+          <div className="md solo">
             <div className="md-list">
               <div style={{ padding: 'var(--s-1) var(--s-1) var(--s-2)' }}>
                 <input
@@ -195,12 +206,8 @@ export function TeamsPage({
                   /* 导航靠 href（键盘 / 中键 / 复制深链都通）；onClick 只清上一次的写操作提示条 */
                   onClick={() => setBanner(null)}
                 >
-                  <span className="t">
-                    {team.name}
-                    <span className="muted" style={{ fontWeight: 400 }}>
-                      {team.team_id}
-                    </span>
-                  </span>
+                  {/* v12 F3：行主标题**只有 team_id**——团队 `name` UI 零展示（SPEC-3.1）。 */}
+                  <span className="t">{team.team_id}</span>
                   {team.description !== '' && <span className="s">{firstSentence(team.description, 76)}</span>}
                   <span className="tags">
                     {team.default && <StatusTag kind="ok">{t('teams.default')}</StatusTag>}
@@ -210,30 +217,34 @@ export function TeamsPage({
                 </NavRow>
               ))}
             </div>
-
-            {/* v7.1 P2：换团队时右栏**轻过渡**（纯 opacity，`key` 让动画随换选中重放）。 */}
-            <div className="md-detail">
-              <div className="swap-in" key={selected}>
-                {selected === '' ? (
-                  <Pane>
-                    <div className="small muted">{t('teams.selectHint')}</div>
-                  </Pane>
-                ) : (
-                  <TeamDetail
-                    key={selected}
-                    id={selected}
-                    detail={detail.data}
-                    loading={detail.loading}
-                    error={detail.error}
-                    teamsDir={teamsDir}
-                    onOpenUsage={onOpenUsageSkills}
-                    onEdit={() => setFormIntent('edit')}
-                    onDeleted={(text) => afterWrite('ok', text, { close: true })}
-                  />
-                )}
-              </div>
-            </div>
           </div>
+
+          {/* W-4：详情 = **居中弹窗**（`.modal-lg` / `--modal-w`，与角色/技能同档）。
+              开关与 hash 双向同步：`sel` 有值即开，关闭（Esc / 遮罩 / 头部关闭钮）走 `onSelect('')`。
+              弹窗挂在 `<State>` 内层，与迁入前「列表加载中 / 空态不出详情」的行为保持一致。
+              `swap-in` 的 `key` 让换选中时轻过渡重放（沿用 v7.1 P2 口径）。 */}
+          {selected !== '' && (
+            <Modal
+              size="lg"
+              title={<span className="mono">{selected}</span>}
+              ariaLabel={selected}
+              onClose={() => onSelect?.('')}
+            >
+              <div className="swap-in" key={selected}>
+                <TeamDetail
+                  key={selected}
+                  id={selected}
+                  detail={detail.data}
+                  loading={detail.loading}
+                  error={detail.error}
+                  teamsDir={teamsDir}
+                  onOpenUsage={onOpenUsageSkills}
+                  onEdit={() => setFormIntent('edit')}
+                  onDeleted={(text) => afterWrite('ok', text, { close: true })}
+                />
+              </div>
+            </Modal>
+          )}
         </State>
       </div>
 

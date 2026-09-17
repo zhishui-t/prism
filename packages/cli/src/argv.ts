@@ -21,6 +21,7 @@ import { runRole } from './commands/role.js'
 import { runTeam } from './commands/team.js'
 import { runSkill } from './commands/skill.js'
 import { runTrash } from './commands/trash.js'
+import { cliVersion } from './version.js'
 
 /** CLI 命令上下文（可注入，便于测试）。 */
 export interface CommandContext {
@@ -50,8 +51,10 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
 
 用法：
   prism --version
-  prism init [--home <PRISM_HOME>] [--yes] [--force]   接入初始化（五步；正常接入用 --yes 写入默认宿主配置）
+  prism init [--home <PRISM_HOME>] [--yes] [--force] [--skip-cli]
+                                            接入初始化（六步；正常接入用 --yes 写入默认宿主配置）
                                                        --harness-root 覆盖落点，**测试/CI 专用**
+                                                       --skip-cli 跳过「CLI 全局注册」（测试隔离用）
   prism serve [--port 7777] [--host <h>]   启动 HTTP 服务（控制台 + API；前台阻塞，Ctrl+C 停）
   prism serve --ensure [--port 7777]       幂等确保**后台**运行：已在跑则复用，否则拉起（宿主按需启动用它）
   prism serve --check | --stop             查看后台服务状态 / 停止它
@@ -86,6 +89,12 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
   prism skill categorize <name...> [--category <分类>] [--json]
                                            给技能打分类（省略 --category / 空串 = 清除；映射落
                                            <PRISM_HOME>/skill-categories.json，不校验技能是否存在）
+  prism skill category add <名称> [--json]
+  prism skill category rename <旧名> <新名> [--json]
+  prism skill category rm <名称> [--json]
+                                           分类清单增 / 改名 / 删（v12 F4）：add 只登记分类名
+                                           （空分类存得住），rename 级联改映射，rm 组内技能回未分类；
+                                           重名报 id_conflict、不存在报 not_found
   prism trash list [--kind role|team|skill] | restore <id> [--overwrite] | purge [--all]
                                            回收站（role/team/skill 删除的落点）：list 列单元，
                                            restore 还原到原路径（--overwrite 才覆盖），
@@ -171,6 +180,8 @@ const CLI_OPTIONS = {
   /** harness 根目录（通用名；`--zcode-dir` 为兼容旧名，见 harnessRootOverride） */
   'harness-root': { type: 'string' },
   'zcode-dir': { type: 'string' },
+  /** `init --skip-cli`：跳过 CLI 全局注册（默认执行；测试/CI 隔离用，见 design-v12 §F5） */
+  'skip-cli': { type: 'boolean' },
   yes: { type: 'boolean' },
   from: { type: 'string' },
   to: { type: 'string' },
@@ -287,6 +298,8 @@ export type ArgValues = {
   timeout?: string
   'harness-root'?: string
   'zcode-dir'?: string
+  /** `init --skip-cli`：跳过 CLI 全局注册（见 CLI_OPTIONS 同名项） */
+  'skip-cli'?: boolean
   yes?: boolean
   from?: string
   to?: string
@@ -540,20 +553,11 @@ export async function runCommand(ctx: CommandContext, argv: string[]): Promise<n
   }
 }
 
-let cachedVersion: string | null = null
-
-/** CLI 版本（读自身 package.json）。 */
-export async function cliVersion(): Promise<string> {
-  if (cachedVersion !== null) {
-    return cachedVersion
-  }
-  try {
-    const { readFile } = await import('node:fs/promises')
-    const pkgPath = new URL('../package.json', import.meta.url)
-    const pkg = JSON.parse(await readFile(pkgPath, 'utf-8')) as { version?: string }
-    cachedVersion = pkg.version ?? '0.0.0'
-  } catch {
-    cachedVersion = '0.0.0'
-  }
-  return cachedVersion
-}
+/**
+ * CLI 版本（读自身 package.json）。
+ *
+ * 实现已移到 `./version.ts`（**唯一来源**）：`commands/init-cli.ts` 也要用它比对
+ * 全局 prism 的验证版本，若留在本文件会形成 `argv → init → init-cli → argv` 的循环依赖。
+ * 此处保留同名导出，既有调用方（含 `packages/cli/test/argv.test.ts`）不受影响。
+ */
+export { cliVersion }

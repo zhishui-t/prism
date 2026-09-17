@@ -37,6 +37,8 @@ vi.mock('../src/api-team.ts', () => ({
       }),
     skillUsage: () =>
       Promise.resolve([{ name: 'alpha', builtin: true, installed: false, roles: ['dev'], teams: [] }]),
+    // W-6：该技能无分类 ⇒ 清单为空（本文件只走安装链路）
+    skillCategories: () => Promise.resolve({ categories: [], mapping: {} }),
     skill: (name: string) =>
       Promise.resolve({
         name,

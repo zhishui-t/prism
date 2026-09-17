@@ -6,15 +6,20 @@
  *  1. **组头**：`CountLine size="section"`（组名 + 计数）+ `.toc-chev`，且是展开切换
  *     （`role="button"` + `tabIndex` + `aria-expanded`，与知识库目录树 `.toc-mod` 同口径）；
  *  2. **数据源**：组名/计数来自 `GET /api/skills` 合并的 `category`——同一分类合成一组，
- *     组名是分类名原文（R-v8-5：不做「列表 + 独立映射表」二次拼接）；
- *  3. **默认全展开**：三组都 `aria-expanded="true"` + `.collapse.open`，行都在 DOM 里；
- *  4. **点组头折叠 / 展开**：只切 `aria-expanded` 与 `.open` 类，**收起不卸载**（同一节点）；
+ *     组名是分类名原文（R-v8-5：不回头查第二张表）。⚠ **组集与组序**自 v12 W-6 起另由
+ *     `GET /api/skills/categories` 的 `categories` 清单给（故空分类也成组）——本文件的 mock
+ *     给了 `['docs','ui']` 的清单，组序与旧口径一致；空分类组与分类管理面见
+ *     `skills-categories-dom.test.ts`；
+ *  3. **默认全展开**：三组都 `aria-expanded="true"` + `.collapse.open`，卡片都在 DOM 里；
+ *  4. **点组头折叠 / 展开**：切 `aria-expanded` 与 `.open` 类，**收起不卸载**（同一节点）；
+ *     v12 W-7 起收起态另存 `localStorage['skills-collapsed']`（持久化与自愈的验收在
+ *     `skills-dnd-collapse.test.ts`，本文件只保证折叠/展开的**结构**契约不变）；
  *  5. **未分类组在末尾** + 组头带 `lamp`（`--warn` 既有状态色），其余组无 lamp。
  *
- * 另锁两条：过滤只让命中组出现（不留空组头）；详情侧是**整体**居中列
- * （`.md-detail > .skill-detail`，命令块 / scope / 折叠三层都在同一列内）。
+ * 另锁两条：过滤只让命中组出现（不留空组头）；W-5 起详情**整体进弹窗**，居中的单位仍是
+ * 详情整体（`.modal-lg .modal-content > .skill-detail`，命令块 / scope / 折叠三层都在同一列内）。
  *
- * ⚠ happy-dom **不解析外部样式表**，故「66ch 居中 / chev 旋转 / 不新增颜色」这类**纯 CSS 事实**
+ * ⚠ happy-dom **不解析外部样式表**，故「居中列宽 / chev 旋转 / 不新增颜色」这类**纯 CSS 事实**
  * 在同批的 `styles-skills-groups.test.ts`（node 环境、读文件断言）。本文件只管 DOM 结构。
  *
  * 渲染路径与 `skills-hierarchy.test.ts` 一致：happy-dom + 裸 `react-dom/client` + `react.act`，
@@ -50,6 +55,8 @@ vi.mock('../src/api-team.ts', () => ({
       Promise.resolve(
         SKILLS.map((s) => ({ name: s.name, builtin: true, installed: true, roles: [], teams: [] })),
       ),
+    // W-6：分类清单是组集与组序的权威来源（这里给的就是本文件两组的清单顺序，故组序断言不变）
+    skillCategories: () => Promise.resolve({ categories: ['docs', 'ui'], mapping: {} }),
     skill: (name: string) =>
       Promise.resolve({
         name,
@@ -112,9 +119,9 @@ function groupOf(head: Element): Element {
   return group
 }
 
-/** 组内行名（文档序）。 */
+/** 组内卡片名（文档序；`role-name` 里的色点 span 无文本，故 `textContent` 就是技能名）。 */
 function rowNames(group: Element): string[] {
-  return [...group.querySelectorAll('.md-row .t')].map((n) => n.textContent ?? '')
+  return [...group.querySelectorAll('.role-card .role-name')].map((n) => n.textContent ?? '')
 }
 
 async function click(target: Element): Promise<void> {
@@ -135,6 +142,9 @@ async function fill(target: HTMLInputElement, value: string): Promise<void> {
 
 beforeEach(() => {
   setLang('zh')
+  /* v12 F4（W-7）：折叠态已落 `localStorage['skills-collapsed']`（SPEC-4.8），跨用例需清干净
+     ——「默认全展开」的断言否则会受同文件其它用例的收起态影响。 */
+  window.localStorage.clear()
   window.location.hash = ''
   container = document.createElement('div')
   document.body.appendChild(container)
@@ -205,7 +215,7 @@ describe('F7 默认全展开 / 点组头折叠展开', () => {
       true,
       true,
     ])
-    expect(all('.md-list .md-row').length).toBe(5)
+    expect(all('.md-list .role-card').length).toBe(5)
   })
 
   it('点组头 → 收起：`aria-expanded=false` + `.open` 从 chev 与容器同时摘掉，**行不卸载**', async () => {
@@ -213,7 +223,7 @@ describe('F7 默认全展开 / 点组头折叠展开', () => {
     const head = heads().find((h) => h.querySelector('.count-label')?.textContent === 'ui')!
     const group = groupOf(head)
     const chev = head.querySelector('.toc-chev')!
-    const row = group.querySelector('.md-row')
+    const row = group.querySelector('.role-card')
     expect(row).not.toBeNull()
 
     await click(head)
@@ -221,7 +231,7 @@ describe('F7 默认全展开 / 点组头折叠展开', () => {
     expect(chev.classList.contains('open')).toBe(false)
     expect(groupOf(head).querySelector('.collapse')?.classList.contains('open')).toBe(false)
     // 收起不卸载（`.collapse` 的高度过渡要求内容常驻 DOM）
-    expect(groupOf(head).querySelector('.md-row')).toBe(row)
+    expect(groupOf(head).querySelector('.role-card')).toBe(row)
 
     await click(head)
     expect(head.getAttribute('aria-expanded')).toBe('true')
@@ -247,23 +257,23 @@ describe('F7 默认全展开 / 点组头折叠展开', () => {
     await fill(one<HTMLInputElement>('.role-filter')!, 'frontend')
     expect(labels()).toEqual(['ui'])
     expect(counts()).toEqual(['2'])
-    expect(all('.md-list .md-row').length).toBe(2)
+    expect(all('.md-list .role-card').length).toBe(2)
   })
 })
 
-describe('F7 详情居中：居中的单位是详情整体（不是正文段）', () => {
-  it('`.md-detail` 的内层包裹带 `skill-detail`，且三层都在这一列内', async () => {
+describe('W-5 详情居中：详情整体迁入弹窗，居中的单位仍是详情整体', () => {
+  it('`.modal-content` 的内层包裹带 `skill-detail`，且三层都在这一列内', async () => {
     await render('frontend-dev')
-    const col = one('.md-detail > .swap-in.skill-detail')
+    const col = one('.modal.modal-lg .modal-content > .swap-in.skill-detail')
     expect(col).not.toBeNull()
     // 第一眼（描述）/ 常用（scope 计数与三行）/ 深挖（折叠）三层同列
     expect(col!.querySelector('.skill-desc')).not.toBeNull()
     expect(col!.querySelector('.scope-rows')).not.toBeNull()
     expect(col!.querySelector('.skill-deep')).not.toBeNull()
-    // 滚动容器仍是 `.md-detail` 本身（居中是内层包裹，不动滚动容器）
-    expect(one('.md-detail .skill-detail .md-detail')).toBeNull()
+    // 滚动容器是弹窗内容区（居中是内层包裹，不动滚动容器）
+    expect(one('.modal-content .skill-detail .modal-content')).toBeNull()
     // 分组只在列表侧：详情侧没有分组概念
-    expect(one('.md-detail .skill-group')).toBeNull()
+    expect(one('.modal.modal-lg .skill-group')).toBeNull()
   })
 
   it('折行长串的行内兜底仍在（安装路径 `break-all`，长串不撑破居中列）', async () => {

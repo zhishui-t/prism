@@ -72,10 +72,10 @@ describe('技能分类 HTTP/MCP 面（design-v8 §3 F7）', () => {
     await rm(tmp, { recursive: true, force: true }).catch(() => {})
   })
 
-  it('空表起步：GET /api/skills/categories → {}，GET /api/skills 无 category 键', async () => {
+  it('空表起步：GET /api/skills/categories → {categories:[], mapping:{}}，GET /api/skills 无 category 键', async () => {
     const { status, body } = await readJson('/api/skills/categories')
     expect(status).toBe(200)
-    expect(body).toEqual({ ok: true, value: { categories: {} } })
+    expect(body).toEqual({ ok: true, value: { categories: [], mapping: {} } })
 
     const skills = await listSkills()
     expect(skills.map((s) => s.name)).toContain('prism')
@@ -83,7 +83,7 @@ describe('技能分类 HTTP/MCP 面（design-v8 §3 F7）', () => {
     expect(skills.every((s) => !('category' in s))).toBe(true)
   })
 
-  it('POST /api/skills/categorize 写入 → GET /api/skills/categories 全量表 + GET /api/skills 合并 category', async () => {
+  it('POST /api/skills/categorize 写入 → GET /api/skills/categories 双节形态 + GET /api/skills 合并 category', async () => {
     const written = await post('/api/skills/categorize', { names: ['prism', 'ghost-skill'], category: '质量' })
     expect(written.status).toBe(200)
     expect(written.body).toEqual({
@@ -92,22 +92,30 @@ describe('技能分类 HTTP/MCP 面（design-v8 §3 F7）', () => {
         category: '质量',
         updated: ['prism', 'ghost-skill'],
         cleared: [],
-        categories: { prism: '质量', 'ghost-skill': '质量' },
+        // v12 F4：`categories` 变分类名数组（新分类自动登记），映射在 `mapping`
+        categories: ['质量'],
+        mapping: { prism: '质量', 'ghost-skill': '质量' },
       },
     })
 
     const all = await readJson('/api/skills/categories')
-    expect(all.body).toEqual({ ok: true, value: { categories: { prism: '质量', 'ghost-skill': '质量' } } })
+    expect(all.body).toEqual({
+      ok: true,
+      value: { categories: ['质量'], mapping: { prism: '质量', 'ghost-skill': '质量' } },
+    })
 
     const skills = await listSkills()
     expect(skills.find((s) => s.name === 'prism')?.category).toBe('质量')
     // ⚠ 不校验技能存在性（R3 不做审核）：映射里的 ghost-skill 不因「不是技能」被清掉
-    const cats = (all.body.value as { categories: Record<string, string> }).categories
+    const cats = (all.body.value as { mapping: Record<string, string> }).mapping
     expect(cats['ghost-skill']).toBe('质量')
 
-    // 落盘形：{ "<技能名>": "<分类>" }（Prism 侧独立文件，<PRISM_HOME> 根下）
+    // 落盘形：双节新形态 `{ categories: string[], mapping: { <技能名>: <分类> } }`
     const onDisk = JSON.parse(await readFile(join(home, 'skill-categories.json'), 'utf-8')) as unknown
-    expect(onDisk).toEqual({ prism: '质量', 'ghost-skill': '质量' })
+    expect(onDisk).toEqual({
+      categories: ['质量'],
+      mapping: { prism: '质量', 'ghost-skill': '质量' },
+    })
   })
 
   it('交叉对账：HTTP 写 → MCP 读（prism_skill_list 合并 category，同口径「没有则不加键」）', async () => {
@@ -116,12 +124,18 @@ describe('技能分类 HTTP/MCP 面（design-v8 §3 F7）', () => {
     expect(listed.skills.every((s) => ('category' in s) === (s.name === 'prism'))).toBe(true)
   })
 
-  it('POST 省略 category = 清除；清除后 GET /api/skills 不再带 category 键', async () => {
+  it('POST 省略 category = 清除；清除后 GET /api/skills 不再带 category 键（分类本身保留）', async () => {
     const cleared = await post('/api/skills/categorize', { names: ['prism'] })
     expect(cleared.status).toBe(200)
     expect(cleared.body).toEqual({
       ok: true,
-      value: { category: null, updated: [], cleared: ['prism'], categories: { 'ghost-skill': '质量' } },
+      value: {
+        category: null,
+        updated: [],
+        cleared: ['prism'],
+        categories: ['质量'],
+        mapping: { 'ghost-skill': '质量' },
+      },
     })
 
     const skills = await listSkills()
@@ -133,7 +147,7 @@ describe('技能分类 HTTP/MCP 面（design-v8 §3 F7）', () => {
     // 空串 category 与省略同义
     await post('/api/skills/categorize', { names: ['ghost-skill'], category: '质量' })
     const empty = await post('/api/skills/categorize', { names: ['ghost-skill'], category: '' })
-    expect((empty.body.value as { categories: Record<string, string> }).categories).toEqual({})
+    expect((empty.body.value as { mapping: Record<string, string> }).mapping).toEqual({})
   })
 
   it('names 空 / 非数组 → 400 bad_request（不静默成功）', async () => {
@@ -142,14 +156,18 @@ describe('技能分类 HTTP/MCP 面（design-v8 §3 F7）', () => {
       expect(res.status).toBe(400)
       expect((res.body.error as { code: string }).code).toBe('bad_request')
     }
-    expect((await readJson('/api/skills/categories')).body).toEqual({ ok: true, value: { categories: {} } })
+    // bad_request 不落盘：上一用例留下的空分类「质量」仍在，但无任何 mapping 条目
+    expect((await readJson('/api/skills/categories')).body).toEqual({
+      ok: true,
+      value: { categories: ['质量'], mapping: {} },
+    })
   })
 
   it('注册顺序回归：/api/skills/categories 不被 /api/skills/:name 吞掉；单技能详情仍可达', async () => {
     // 被 :name 吞掉的表现 = 走到 skill 详情 → not_found「未知 Skill: categories」
     const categories = await readJson('/api/skills/categories')
     expect(categories.status).toBe(200)
-    expect(Object.keys(categories.body.value as object)).toEqual(['categories'])
+    expect(Object.keys(categories.body.value as object)).toEqual(['categories', 'mapping'])
 
     const detail = await readJson('/api/skills/prism')
     expect(detail.status).toBe(200)
@@ -160,6 +178,22 @@ describe('技能分类 HTTP/MCP 面（design-v8 §3 F7）', () => {
     const ghost = await readJson('/api/skills/no-such-skill')
     expect(ghost.status).toBe(404)
     expect((ghost.body.error as { code: string }).code).toBe('not_found')
+
+    // v12 F4：新增的分类写路由（`PATCH`/`DELETE /api/skills/categories/:name`）同样不被吞。
+    // 被吞的表征是 405（命中 GET 的 `:name`、方法不符，路由器归 405）或 404 且
+    // message 是「未知 Skill」；这里用**分类不存在**的 404 反证 handler 真跑到了
+    // （只读、零副作用：不存在的分类不会被写入）。
+    for (const method of ['PATCH', 'DELETE'] as const) {
+      const res = await fetch(`${base}/api/skills/categories/查无此分类`, {
+        method,
+        headers: { 'content-type': 'application/json' },
+        ...(method === 'PATCH' ? { body: JSON.stringify({ name: 'x' }) } : {}),
+      })
+      expect(res.status, `${method} 应落到分类 handler`).toBe(404)
+      const body = (await res.json()) as { error: { code: string; message: string } }
+      expect(body.error.code).toBe('not_found')
+      expect(body.error.message, `${method} 的错误来自分类 handler`).toContain('分类不存在')
+    }
   })
 
   /**

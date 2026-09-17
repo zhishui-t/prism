@@ -8,6 +8,7 @@ import { loadEffectiveSkills, SkillCategoryStore, trashStoreFor } from '@prism/s
 
 import type { ArgValues, CommandContext } from '../argv.js'
 import { dirProvenanceLabel, guardWriteTarget, resolveTargetDirs } from '../argv.js'
+import { skillCategory } from './skill-category.js'
 
 /**
  * `prism skill list/install`（design-v3 §3.5 F10；本期裁剪 update/uninstall/uninit）。
@@ -25,6 +26,9 @@ export async function runSkill(ctx: CommandContext, args: string[], values: ArgV
 
     case 'categorize':
       return await skillCategorize(ctx, values, rest)
+
+    case 'category':
+      return await skillCategory(ctx, rest)
 
     case 'list': {
       const skills = listBuiltinSkills()
@@ -153,7 +157,7 @@ export async function runSkill(ctx: CommandContext, args: string[], values: ArgV
 
     default:
       ctx.stderr(
-        `未知子命令: skill ${sub ?? ''}\n用法: prism skill list | install | update | uninstall | validate [name...] | effective --role <r> [--team <t>] | categorize <name...> [--category <分类>] [--harness-root <dir>] [--force]`,
+        `未知子命令: skill ${sub ?? ''}\n用法: prism skill list | install | update | uninstall | validate [name...] | effective --role <r> [--team <t>] | categorize <name...> [--category <分类>] | category add|rename|rm [--harness-root <dir>] [--force]`,
       )
       return 1
   }

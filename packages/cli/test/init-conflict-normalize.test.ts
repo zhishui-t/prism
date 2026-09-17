@@ -76,10 +76,16 @@ describe('prism init：MCP 冲突判定 = 归一化投影比较', () => {
     await writeFile(configPath(h), `${JSON.stringify({ mcp: { servers: { prism: entry } } }, null, 2)}\n`, 'utf-8')
   }
 
-  /** 跑一次 init（`--harness-root` 指临时目录：既隔离真实宿主，也免掉 --yes）。 */
+  /**
+   * 跑一次 init（`--harness-root` 指临时目录：既隔离真实宿主，也免掉 --yes）。
+   *
+   * `--skip-cli`：跳过 F5 的 CLI 全局注册——本文件只关心 MCP 注册冲突判定，
+   * CLI 全局注册会真实触碰本机 npm prefix / 全局 bin 目录（SPEC-5.6 红线）。
+   * 全部 12 个调用点都经这个 wrapper，故隔离点只有这一处。
+   */
   async function runInit(h: Harness, extra: string[] = []): Promise<number> {
     h.lines.length = 0
-    return runCommand(h.ctx, ['init', '--home', h.home, '--harness-root', h.root, ...extra])
+    return runCommand(h.ctx, ['init', '--home', h.home, '--harness-root', h.root, '--skip-cli', ...extra])
   }
 
   /** 首次 init 写出真实条目，作为「派生变体」的基线。 */

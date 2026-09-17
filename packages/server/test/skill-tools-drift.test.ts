@@ -12,10 +12,15 @@
  * 其后：任务中心（任务台账 `prism_task_*` 三工具）整体移除 → **44**。
  * v8 F7（2026-09-16）：技能分类（`prism_skill_categorize` 写入 + `prism_skill_list` 合并
  * `category`）→ **45**。
+ * v12 F4（2026-09-17）：技能分类**清单**增删改（`prism_skill_category_add|rename|rm`，
+ * 与 HTTP 三路由 / CLI `prism skill category add|rename|rm` 同名同位）→ **48**。
  *
  * 口径：从 Skill 正文（SKILL.md + references/*）提取全部 `prism_*` 工具名，
  * 与实际 `createMcpTools` 产出的工具集合比对（双向）。
  */
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
 import { listBuiltinSkills } from '@prism/skills'
 
 import { describe, expect, it } from 'vitest'
@@ -42,9 +47,9 @@ function toolsMentionedIn(text: string): Set<string> {
 }
 
 describe('Skill 工具清单 vs 实际 MCP 工具（防漂移）', () => {
-  it('实际工具数 = 45', () => {
+  it('实际工具数 = 48', () => {
     const tools = createMcpTools({ home: 'X:/unused' })
-    expect(tools).toHaveLength(45)
+    expect(tools).toHaveLength(48)
   })
 
   it('Skill 提到的每个工具都真实存在（无幽灵工具）', () => {
@@ -69,12 +74,48 @@ describe('Skill 工具清单 vs 实际 MCP 工具（防漂移）', () => {
 
   it('声明的总数与表格分组一致', () => {
     const text = skillText()
-    expect(text).toContain('45 个 MCP 工具')
-    // 分组小计之和 = 45
+    expect(text).toContain('48 个 MCP 工具')
+    // 分组小计之和 = 48
     const groups = [...text.matchAll(/(知识库|代码图谱|架构图谱|角色团队)（(\d+)）/g)].map((m) =>
       Number(m[2]),
     )
     expect(groups.length).toBe(4)
-    expect(groups.reduce((a, b) => a + b, 0)).toBe(45)
+    expect(groups.reduce((a, b) => a + b, 0)).toBe(48)
+  })
+
+  /**
+   * v12 F4（SPEC-4.9）：技能分类清单三动作在 **MCP 与 HTTP 两面对齐**。
+   *
+   * 单锁一侧（只数 MCP 工具名、或只看路由）都发现不了「加了路由忘了加工具」这类半拉子。
+   * 这里用**成对硬编码**（`_add` ↔ `POST`、`_rename` ↔ `PATCH`、`_rm` ↔ `DELETE`）双向断言：
+   * 该对两侧都存在才算过——既防某侧缺失，也防两侧动词名漂移。
+   */
+  it('技能分类三动作：MCP 工具 ↔ HTTP 路由 一一对应', () => {
+    const readRepoFile = (rel: string): string =>
+      readFileSync(fileURLToPath(new URL(`../../../${rel}`, import.meta.url)), 'utf8')
+
+    // HTTP 侧：从装配处读实测注册（不靠注释/文档），构成 `METHOD /path` 集合
+    const app = readRepoFile('packages/server/src/app.ts')
+    const routes = new Set(
+      [...app.matchAll(/router\.add\('(GET|POST|PATCH|DELETE)', '(\/api\/skills\/categories[^']*)'/g)].map(
+        (m) => `${m[1]} ${m[2]}`,
+      ),
+    )
+
+    const mcpTools = new Set(createMcpTools({ home: 'X:/unused' }).map((t) => t.name))
+
+    const pairs: Array<[string, string]> = [
+      ['prism_skill_category_add', 'POST /api/skills/categories'],
+      ['prism_skill_category_rename', 'PATCH /api/skills/categories/:name'],
+      ['prism_skill_category_rm', 'DELETE /api/skills/categories/:name'],
+    ]
+    for (const [tool, route] of pairs) {
+      expect(mcpTools.has(tool), `MCP 缺工具 ${tool}`).toBe(true)
+      expect(routes.has(route), `HTTP 缺路由 ${route}`).toBe(true)
+    }
+
+    // 反向：分类家族的三条**写**路由不得多出第四条（读路由 GET 不算）
+    const mutating = [...routes].filter((r) => !r.startsWith('GET '))
+    expect(mutating.sort()).toEqual(pairs.map(([, route]) => route).sort())
   })
 })

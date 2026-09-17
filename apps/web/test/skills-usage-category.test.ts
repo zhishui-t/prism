@@ -49,6 +49,8 @@ vi.mock('../src/api-team.ts', () => ({
   teamApi: {
     skills: () => Promise.resolve({ skills: BUILTIN, skills_dir: '/tmp/prism-skills' }),
     skillUsage: () => Promise.resolve(USAGE),
+    // W-6：清单里只有 `ui`（本文件不涉及空分类组；分组仍按行上的 category 归位）
+    skillCategories: () => Promise.resolve({ categories: ['ui'], mapping: {} }),
     // 以下为模块被整体替身时的占位（本文件只渲染列表，不触发详情/有效集）
     skill: (name: string) =>
       Promise.resolve({
@@ -103,9 +105,9 @@ function group(label: string): Element {
   return groupOf(head)
 }
 
-/** 组内行名（文档序）。 */
+/** 组内卡片名（文档序；W-5 起组内是卡片网格，不再是 `.md-row` 行列表）。 */
 function rowNames(el: Element): string[] {
-  return [...el.querySelectorAll('.md-row .t')].map((n) => n.textContent ?? '')
+  return [...el.querySelectorAll('.role-card .role-name')].map((n) => n.textContent ?? '')
 }
 
 beforeEach(() => {

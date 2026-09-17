@@ -95,19 +95,21 @@ describe('CLI 命令（注入真实知识服务 / 假 graphify）', () => {
   }
 
   it('init：建骨架 + 幂等 + --force（--harness-root 指临时目录，绝不写真实 ~/.zcode）', async () => {
+    // `--skip-cli`：跳过 F5 的 CLI 全局注册（否则会真实写本机 npm 全局 bin 目录）。
+    // 本文件聚焦骨架/MCP/Skill，CLI 注册的隔离测试见 init-cli-guard.test.ts。
     const harnessRoot = await tempDir('prism-cli-zcode-')
     cleanup.push(harnessRoot)
-    expect(await runCommand(ctx, ['init', '--harness-root', harnessRoot])).toBe(0)
+    expect(await runCommand(ctx, ['init', '--harness-root', harnessRoot, '--skip-cli'])).toBe(0)
     expect(existsSync(join(home, 'state'))).toBe(true)
     expect(existsSync(join(home, 'knowledge'))).toBe(true)
     expect(existsSync(join(home, 'config.json'))).toBe(true)
 
     lines = []
-    expect(await runCommand(ctx, ['init', '--harness-root', harnessRoot])).toBe(0)
+    expect(await runCommand(ctx, ['init', '--harness-root', harnessRoot, '--skip-cli'])).toBe(0)
     expect(lines.join('\n')).toContain('幂等跳过')
 
     lines = []
-    expect(await runCommand(ctx, ['init', '--harness-root', harnessRoot, '--force'])).toBe(0)
+    expect(await runCommand(ctx, ['init', '--harness-root', harnessRoot, '--force', '--skip-cli'])).toBe(0)
     expect(lines.join('\n')).toContain('已写配置')
   })
 
@@ -115,7 +117,7 @@ describe('CLI 命令（注入真实知识服务 / 假 graphify）', () => {
   // 曾撞 `testTimeout: 20_000`（20037ms，超限 37ms）→ 全量门禁假红。该用例是**负载敏感型**，
   // 单独放宽到 60s（不改产品代码、不改断言；裸 20s 并不代表被测行为有问题）。
   it('doctor：graphifyEnv 注入假 bin → 全部通过', { timeout: 60_000 }, async () => {
-    await runCommand(ctx, ['init'])
+    await runCommand(ctx, ['init', '--skip-cli'])
     const fakeBin = await writeFakeGraphify(await tempDir('prism-cli-bin2-'))
     cleanup.push(join(fakeBin, '..'))
     const withEnv: CommandContext = { ...ctx, graphifyEnv: { GRAPHIFY_BIN: fakeBin } }

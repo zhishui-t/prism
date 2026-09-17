@@ -62,7 +62,7 @@ describe('MCP 角色/团队工具（design-v3 §3.4 P6；stdio JSON-RPC 手写�
     await rm(tmp, { recursive: true, force: true }).catch(() => {})
   })
 
-  it('tools/list 含新增工具（累计 45 个；v6 角色/团队补齐增删改，team_create → team_new；v10 增 arch_generate；v8 F7 增 skill_categorize）', async () => {
+  it('tools/list 含新增工具（累计 48 个；v6 角色/团队补齐增删改，team_create → team_new；v10 增 arch_generate；v8 F7 增 skill_categorize；v12 F4 增 skill_category_add/rename/rm）', async () => {
     const response = await handleRpcRequest(rpc(1, 'tools/list'), tools)
     const names = ((response?.result as { tools: Array<{ name: string }> })?.tools ?? []).map((t) => t.name)
     expect(names).toEqual([
@@ -103,6 +103,9 @@ describe('MCP 角色/团队工具（design-v3 §3.4 P6；stdio JSON-RPC 手写�
       'prism_skill_install',
       'prism_skill_uninstall',
       'prism_skill_categorize',
+      'prism_skill_category_add',
+      'prism_skill_category_rename',
+      'prism_skill_category_rm',
       'prism_role_render',
       'prism_team_list',
       'prism_team_get',

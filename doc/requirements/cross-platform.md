@@ -53,6 +53,7 @@
 | `packages/server/src/kb/embedding.ts` → `cpuBackendHint()` | 走 CPU 时给用户的建议文案（Intel Mac 不能说「装 GPU 包」） | 平台 + `arch` |
 | `packages/server/src/graph/archify.ts` | 前缀包含判断的分隔符方向 | `isWindows` |
 | `packages/server/src/http/routes/studio.ts` → `isInside()` | 路径前缀比对（含大小写归一） | `process.platform` |
+| `packages/cli/src/commands/init-cli.ts` → `resolveGlobalBin()` | **npm/prism 可执行体命名**与 npm 全局 bin 布局（init 的 CLI 全局注册用；Windows 的 `.cmd` 还决定是否走 `shell: true`） | `process.platform`：Windows → bin 目录 = `<prefix>`、可执行体 `prism.cmd`/`npm.cmd`、`shell: true`；POSIX → `<prefix>/bin`、`prism`/`npm`、`shell: false` |
 | `scripts/python.mjs` → `resolvePython()` | npm scripts 的解释器解析 | **与 graphify.ts 刻意镜像**（scripts/ 不进发行包，TS 侧无法导入；改一处必须同步另一处） |
 | `scripts/archive.mjs` → `extractArchive()` | 归档解压 + 摊平 + POSIX 可执行位 | 扩展名分流 + `IS_WINDOWS` |
 | `scripts/setup-embedding.mjs` → `PREBUILT` | 预编译包资产名 | 平台 + `arch` |

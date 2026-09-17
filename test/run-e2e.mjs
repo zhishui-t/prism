@@ -157,7 +157,9 @@ async function main() {
     await mkdir(home, { recursive: true })
 
     // ===== 1. init：注册 MCP + 装 Skill + 建骨架（显式 --harness-root） =====
-    const init = await cli(['init', '--home', home, '--harness-root', harnessRoot, '--json'], env)
+    // `--skip-cli`：跳过 F5 的 CLI 全局注册——那是**真实写本机 npm 全局 bin 目录**的动作，
+    // e2e 绝不触碰（见 packages/cli/test/init-cli-guard.test.ts 的静态红线断言）。
+    const init = await cli(['init', '--home', home, '--harness-root', harnessRoot, '--json', '--skip-cli'], env)
     check('1.1 init 成功', init.code === 0, init.stderr.trim().slice(0, 160))
     const initReport = JSON.parse(init.stdout)
     check('1.2 init 装 Skill 到 harnessRoot', initReport.value.skills.written.length >= 1)
@@ -173,12 +175,18 @@ async function main() {
       initReport.value.seededTeam === undefined && !harnessTeamsExists && !homeTeamsExists,
       `seededTeam=${JSON.stringify(initReport.value.seededTeam)} harnessTeams=${harnessTeamsExists} homeTeams=${homeTeamsExists}`,
     )
+    // v12 F5：cli 节必须存在——`--skip-cli` 下为 skipped（也是本 e2e 不碰真实 npm prefix 的证据）
+    check(
+      '1.5 init --skip-cli → 报告 cli 节 status=skipped（不写本机全局 bin）',
+      initReport.value.cli?.status === 'skipped',
+      JSON.stringify(initReport.value.cli),
+    )
 
-    // 1.5 doctor 自检全绿（含 anydoc 文档转换可用性）
+    // 1.6 doctor 自检全绿（含 anydoc 文档转换可用性）
     const doctor = await cli(['doctor', '--home', home, '--port', '7799', '--json'], env)
     const doctorChecks = JSON.parse(doctor.stdout).value
     check(
-      '1.5 doctor 全绿（含 anydoc）',
+      '1.6 doctor 全绿（含 anydoc）',
       doctor.code === 0 && doctorChecks.every((c) => c.ok),
       doctorChecks.filter((c) => !c.ok).map((c) => c.name).join(',') || `${doctorChecks.length} 项通过`,
     )

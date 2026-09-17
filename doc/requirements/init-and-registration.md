@@ -58,7 +58,25 @@ prism init
   ④ 安装 Prism Skill 到 ~/.zcode/skills/
   ⑤ 创建 <PRISM_HOME> 目录骨架
   ⑥ 输出报告（改了什么、如何回滚）
+  ⑦ 注册 CLI 全局命令 prism（v12 F5 新增；默认执行，--skip-cli 跳过）
 ```
+
+> ①–⑥ 是设计初稿的动作清单（顺序与实现略有出入，实现顺序见
+> `packages/cli/src/commands/init.ts` 的步骤注释）；⑦ 为本轮新增。
+
+**⑦ CLI 全局注册（v12 F5 / SPEC-5.1–5.6）**：让 `prism` 在任何 cwd 下可用，按包形态二选一——
+
+- **发行态**（发行根含 `PRISM-MANIFEST.json`）→ `npm install -g <发行根>`（发行根 package.json
+  自带 `bin: {prism: ./bin/prism.js}` 且依赖自包含，npm 只做「装目录 + 链接 bin」，无需联网）；
+- **仓库态**（无 `PRISM-MANIFEST.json`）→ 写全局 bin **shim**（`prism` / `prism.cmd` / `prism.ps1` →
+  `node <仓库根>/packages/cli/dist/index.js`）。**不能** `npm install -g <仓库根>`：根包 private 且无 bin，
+  子包依赖是 pnpm `workspace:*` 协议，npm 解析不了。
+
+全局 bin 落点 = `npm config get prefix` 经 `resolveGlobalBin()` 推导（Windows `<prefix>` / POSIX
+`<prefix>/bin`，见 `cross-platform.md` §3）。验证是**解析绝对路径**后跑 `<该路径> --version` 比对当前版本
+（不裸跑 PATH 上的 `prism`）；幂等判据 = 绝对路径 + 版本都命中 → `unchanged`，版本不符 → 重装/重写 → `updated`。
+失败（npm 缺失 / EEXIST / 不可写 / 超时 / 版本不符）只记报告 `cli` 节 `failed` + 平台对应手动指引，
+**不中断 init 其余步骤**（exit 0）。
 
 ### 3.1 写入内容
 

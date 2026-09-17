@@ -10,13 +10,17 @@
  * ⚠ 连那行 pragma 的**文字**都不能出现在注释里——vitest 扫的是首个块注释的原文，
  * 出现即被静默切到 happy-dom（`styles-motion-tokens.test.ts` 头注记了同一个坑）。
  *
- * 锁四件事：
- *  1. **自适应容器**：`.chain-graph` 宽 100% / 高 auto（几何在 `graph-logic.ts` 算，不写死 px 宽）；
+ * 锁五件事：
+ *  1. **自适应容器**：`.chain-graph` 宽 100% / 高 auto / max-height（几何在 `graph-logic.ts` 算，
+ *     不写死 px 宽；v12 F1 起 viewBox 随内容收窄，长链靠 max-height + 默认 meet 封顶），
+ *     并带 `touch-action: none`（触控拖拽平移不被浏览器抢去滚页面，SPEC-1.3）；
  *  2. **配色只用既有 token**：方向两色（出边 `--buckram` / 入边 `--lamp`）各自到位且**不相等**，
  *     中心节点用「主色面 + `--on-buckram` 字」这对配套色，全组零 hex、零字面色；
  *  3. **动效**：本组只动 `transform`、时长/缓动走 motion token、**不新增关键帧**（淡入复用
  *     `.swap-in`），幅度复用 `--press`——reduced-motion 由文件末尾的通配块统一归零（既有守卫）；
- *  4. **`--lamp` 的非状态消费只有这一处**：状态语义仍只走 `--warn` 别名（防「顺手再借一个色」）。
+ *     而**缩放平移层本身不声明任何过渡**（v12 F1 / SPEC-1.6：平移瞬移、缩放不因归零而失效）；
+ *  4. **`--lamp` 的非状态消费只有这一处**：状态语义仍只走 `--warn` 别名（防「顺手再借一个色」）；
+ *  5. **v12 F1 缩放工具条**：按钮复用既有 `.tool-btn`，百分比只读且右对齐（等宽数字）。
  */
 
 import { readFileSync } from 'node:fs'
@@ -82,10 +86,18 @@ function ownRules(): Rule[] {
 }
 
 describe('F5 图容器：尺寸自适应，几何不进样式表', () => {
-  it('`.chain-graph` 宽 100% / 高 auto，块级显示（viewBox 比例决定实际高度）', () => {
+  it('`.chain-graph` 宽 100% / 高 auto / 有 max-height（v12 F1：letterbox，不拉伸不爆高）', () => {
     expect(decl('.chain-graph', 'display')).toBe('block')
     expect(decl('.chain-graph', 'width')).toBe('100%')
     expect(decl('.chain-graph', 'height')).toBe('auto')
+    // v12 F1：viewBox 收窄后长链会很高，给一个上限；比例仍由 viewBox 定
+    expect(decl('.chain-graph', 'max-height')).toBe('70vh')
+  })
+
+  it('v12 F1 触控与指针：`touch-action: none`（拖拽平移不被浏览器截胡）+ grab / grabbing 光标', () => {
+    expect(decl('.chain-graph', 'touch-action')).toBe('none')
+    expect(decl('.chain-graph', 'cursor')).toBe('grab')
+    expect(decl('.chain-graph.dragging', 'cursor')).toBe('grabbing')
   })
 
   it('SVG 文字的字号 / 字族走既有阶梯（`--fs-200` + `--font-code`），并显式居中', () => {
@@ -201,6 +213,35 @@ describe('F5 导出条与分组：布局类到位', () => {
   })
 })
 
+describe('v12 F1 缩放层与工具条：瞬移无过渡，工具条不另起一套控件', () => {
+  const ZOOM_LAYER = '.chain-zoom-layer'
+
+  it('缩放层只声明变换原点，**不声明过渡 / 动画**（SPEC-1.6：平移瞬移、缩放不受 reduced-motion 限制）', () => {
+    expect(decl(ZOOM_LAYER, 'transform-origin')).toBe('0 0')
+    for (const rule of rulesFor(ZOOM_LAYER)) {
+      expect(rule.decls, rule.selector).not.toMatch(/(?:^|;)\s*transition\s*:/)
+      expect(rule.decls, rule.selector).not.toMatch(/(?:^|;)\s*animation\s*:/)
+    }
+    // 容器同理：`transform` 写在属性上、没有过渡，跟手才不慢半拍
+    for (const rule of rulesFor('.chain-graph')) {
+      expect(rule.decls, rule.selector).not.toMatch(/(?:^|;)\s*transition\s*:/)
+    }
+  })
+
+  it('工具条一行排列、百分比只读右对齐（等宽数字，数字跳动不抖宽）', () => {
+    expect(decl('.chain-zoom', 'display')).toBe('flex')
+    expect(decl('.chain-zoom', 'gap')).toBe('var(--s-1)')
+    expect(decl('.chain-zoom-pct', 'margin-left')).toBe('auto')
+    expect(decl('.chain-zoom-pct', 'font-variant-numeric')).toBe('tabular-nums')
+  })
+
+  it('工具条按钮复用既有 `.tool-btn`（不为它另起一套按钮样式）', () => {
+    for (const selector of ['.chain-zoom button', '.chain-zoom .btn', '.chain-zoom-btn']) {
+      expect(RULES.some((r) => parts(r.selector).includes(selector)), `${selector} 不该有新规则`).toBe(false)
+    }
+  })
+})
+
 describe('F5 SVG 组件源码：不写 inline 样式、不写 hex', () => {
   const SRC = read('../src/pages/CallChainGraph.tsx').replace(/\/\*[\s\S]*?\*\//g, '')
 
@@ -216,5 +257,19 @@ describe('F5 SVG 组件源码：不写 inline 样式、不写 hex', () => {
     // `rx="3"` 是控件圆角的既有档位（`--r-1`），属于「几何属性」而非「颜色」——
     // 这里只锁「不出现小数级魔法尺寸」（`rx="3.5"` 这种就地微调）
     expect(SRC).not.toMatch(/rx="[^"]*\./)
+  })
+
+  it('不覆盖 `preserveAspectRatio`（保持默认 `xMidYMid meet` ⇒ 宽容器里 letterbox，不拉伸）', () => {
+    // v12 F1：容器加了 max-height，若有人把它改成 `none` 就会拉伸变形——故锁「不设置」
+    expect(SRC).not.toContain('preserveAspectRatio')
+  })
+
+  it('v12 F1：滚轮走**原生** `addEventListener(..., { passive: false })`（React 合成 onWheel 是 passive，preventDefault 无效）', () => {
+    expect(SRC).toContain("addEventListener('wheel'")
+    expect(SRC).toContain('{ passive: false }')
+    expect(SRC).not.toContain('onWheel=')
+    // 缩放平移只施加在内层 `<g>` 上（viewBox 属性仍写的是内容包围盒）
+    expect(SRC).toContain('className="chain-zoom-layer"')
+    expect(SRC).toContain('transform={zoom.transform}')
   })
 })
