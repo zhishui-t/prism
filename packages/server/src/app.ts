@@ -150,6 +150,7 @@ export async function createApp(options: AppOptions = {}): Promise<{
   router.add('GET', '/api/graph/god-nodes', graph.godNodes)
   router.add('GET', '/api/graph/summary', graph.summary)
   router.add('POST', '/api/graph/export', graph.exportGraph)
+  router.add('GET', '/api/graph/rollup', graph.rollup)
   router.add('GET', '/api/graph/status', graph.status)
 
   router.add('GET', '/studio/:project/*', studioRoute(registry))
@@ -209,6 +210,10 @@ export async function createApp(options: AppOptions = {}): Promise<{
   router.add('GET', '/api/skills/:name', people.skill)
   router.add('POST', '/api/skills/install', people.skillInstall)
   router.add('POST', '/api/skills/uninstall', people.skillUninstall)
+  // v10 F3：外部技能（人写、无 Prism marker）删除——整目录进回收站。
+  // 段数 4 且是 DELETE，与上面 `GET /api/skills/:name`（段数 3）无顺序耦合；
+  // 仍排在 `GET /*` 兜底之前（兜底只接 GET，这里显式留位以免后人误挪）。
+  router.add('DELETE', '/api/skills/external/:name', people.skillExternalDelete)
 
   // 回收站（v9 F3 §3）：只读列表；响应 snake_case 冻结（people.ts 显式映射）。
   // 不带 `:param`，与上面的 `/api/skills*` 无顺序耦合；仍须排在 `GET /*` 兜底之前。

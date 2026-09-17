@@ -16,11 +16,15 @@ printf 'harness: workbuddy\n' >> <PRISM_HOME>/prism.yaml      # 持久
 PRISM_HARNESS=workbuddy prism harness list                    # 临时
 
 prism harness list        # 应看到 workbuddy [插件]
-prism init --harness-root ~/.workbuddy --yes
+prism init --yes          # 落点是适配器自述的 defaultRoot（~/.workbuddy），故不需 --harness-root
 ```
 
 `prism init` 会：把内置 Skill 装到 `~/.workbuddy/skills/`，并把 MCP 注册合并写入
 `~/.workbuddy/mcp.json`（平铺形态，写前备份 `mcp.json.bak-prism-init-<ts>`）。
+
+> `--harness-root` 在 init 语境是**测试/CI 专用**（把落点重定向到临时目录）。正常接入新宿主
+> 走 `--yes`：落点由**激活适配器**的 `defaultRoot` 决定，给插件宿主硬传路径反而容易写错地方。
+> init 误在项目目录生成的 `cli/config.json` / `mcp.json` **可直接删除**（宿主不读该位置）。
 
 ## 核实与未核实的约定
 

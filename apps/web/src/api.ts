@@ -268,6 +268,117 @@ export interface GraphAffected {
   nodes: Array<{ label: string; relation: string; location: string | null }>
 }
 
+/**
+ * 分层聚合端点（v10 F9）。
+ *
+ * ✅ **已与后端批逐字对账**（`packages/server/src/http/routes/graph.ts` 的 `rollup`
+ * + `packages/server/src/graph/rollup.ts` 的 `buildRollup`；后端回归
+ * `packages/server/test/graph-rollup.test.ts`）。路径只此一处，后端定稿/改名时单点改。
+ */
+export const GRAPH_ROLLUP_ENDPOINT = '/api/graph/rollup'
+
+/** 四层（`symbol` 是 file 的只读出口，不是网格层——见 `pages/explore-logic.ts` 的 `GRID_LEVELS`）。 */
+export type RollupLevel = 'community' | 'dir' | 'file' | 'symbol'
+
+/**
+ * 一层里的一个聚合节点。
+ *
+ * 合成 id 编码（后端 `rollup.ts` 头注钉死）：`community:<n>` / `dir:<路径>` / `file:<路径>`。
+ * ⚠ 只有 `symbol` 层的 `id` 是**真实图谱节点 id**（可拿去四模式查询）；前三个是合成 id，
+ * 拿去做查询必然 404——这正是「dir/community 不给『查此节点』」的原因。
+ */
+export interface RollupNode {
+  id: string
+  label: string
+  kind: RollupLevel
+  symbol_count: number
+  /** 仅 `dir` 层填父社区编号（`community:_` 未分组桶无此键） */
+  community?: number | string
+}
+
+/** 跨组边**条数**（与边自带的 `weight` 字段无关；后端只统计 calls 族）。 */
+export interface RollupEdge {
+  from: string
+  to: string
+  weight: number
+}
+
+/**
+ * `GET /api/graph/rollup` 的 value。
+ *
+ * ⚠ **响应不含 `project`**（后端形状按 F9 契约钉死为恰好这六个键，逐字见
+ * `graph-rollup.test.ts` 的「响应形状钉死」用例）——不要在本类型上加 `project`。
+ */
+export interface RollupResult {
+  level: RollupLevel
+  /** 合成 parent id（`community` 层为 `null`） */
+  parent: string | null
+  /** 截断**前**的全量节点数 */
+  total: number
+  /** 是否被服务端按 `symbol_count` 降序截断（上限 500，**无分页参数**） */
+  truncated: boolean
+  nodes: RollupNode[]
+  edges: RollupEdge[]
+}
+
+/**
+ * 架构图渲染端点（`POST /api/arch/render`）。
+ *
+ * v10 F5 起该面有**两个互斥分支**（`packages/server/src/http/routes/arch.ts` 的 `render`）：
+ * - 缺省：调用方自备 `body.ir`（既有面，Web 未消费）；
+ * - `mode: 'from-graph'`：调用方只给「项目 + 起点节点 id」，服务端读图谱自组 IR（F5 的导出）。
+ *   路径与 mode 常量都收在这里，后端定稿/改名时**单点改**。
+ */
+export const ARCH_RENDER_ENDPOINT = '/api/arch/render'
+
+/** `mode=from-graph` 分支的选择器值（与后端 `arch.ts` 里的字面量同源）。 */
+export const ARCH_RENDER_MODE_FROM_GRAPH = 'from-graph'
+
+/** `POST /api/arch/render` 的 `mode=from-graph` 分支（F5）。
+ *
+ * ✅ **已与后端批逐字对账**（`packages/server/src/http/routes/arch.ts` 的 `renderFromGraph`；
+ * 后端回归 `packages/server/test/arch-render-from-graph.test.ts`）。⚠ 与 design-v10 的
+ * **设想路径不同**：设计稿写「新分支（参照 from-team 模式）」，后端落成的是既有
+ * `/api/arch/render` 路由的 `mode: 'from-graph'` 子分支——请求体因此多带 `mode` 与 `type`。
+ *
+ * 口径（对账后的实况）：
+ * - 请求体 `{ mode: 'from-graph', type: 'sequence', project, node }`：**`node` 是节点 id**
+ *   （`图谱中没有节点 id: X` 的 bad_request 会提示「用 other，不要用符号名」）；
+ * - `rootFile` = 命中节点的 `source_file`（反斜杠已归一），由服务端取，前端不传；
+ * - 产物落**项目源** `<projectRoot>/.prism/arch/sequence/`，名 `sequence-<消毒 id>-<时间戳>-<短哈希>`；
+ * - 失败码（后端冻结，逐条见 `v10-backend-report.md` 的 F5 节）：
+ *   `bad_request`（节点 id 不存在 / 该节点无 `source_file` / 缺参 / `type` 不是 sequence /
+ *   图谱无跨文件 calls 边 / **指定根文件**无跨文件调用边）、`not_found`（项目未注册）、
+ *   `project_root_missing`（项目已注册但根目录被删或被移，由 `resolveArchPlacement` 抛
+ *   ——**它是独立码、不是 `bad_request`**，映射见 `pages/graph-logic.ts` 的
+ *   `sequenceExportErrorKey`）。
+ */
+export interface ArchFromGraphResult {
+  /** 恒为 `'sequence'`（该分支只支持时序图） */
+  type: string
+  /** 项目名 */
+  project: string
+  /** 起点节点 id（回显） */
+  node: string
+  /** 项目根（绝对路径） */
+  root: string
+  /** 实际用作根文件的仓库相对路径（正斜杠） */
+  root_file: string
+  /** 产物文件名，如 `sequence-<消毒 id>-<yyyyMMdd-HHmmss>-<短哈希>.html` */
+  name: string
+  /** 产物相对**项目根**的路径（正斜杠），便于界面直接展示 */
+  relative_path: string
+  bytes: number
+  /** 服务端构造的预览 URL（iframe src / 新标签打开都用它） */
+  preview: string
+  /** 产物 IR 源（绝对路径） */
+  ir: string
+  /** 作用域 sidecar（与 `ArchDiagram` 同族，字段随调用方传入的 layer/owner/book/module 变） */
+  meta: unknown
+  /** 恒为 `'project'`（落项目源，不落全局 archify 目录） */
+  source: 'project'
+}
+
 export interface HealthInfo {
   version: string
   home: string
@@ -442,6 +553,39 @@ export const api = {
     if (params.depth !== undefined) qs.set('depth', String(params.depth))
     return request<GraphAffected>(`/api/graph/affected?${qs.toString()}`)
   },
+
+  /**
+   * 分层聚合·逐级探索（v10 F9 → `GET /api/graph/rollup`）。
+   *
+   * - `level='community'` **不接受** `parent`（传了服务端 400）；其余三层必带。
+   * - `parent` 形态：`dir` 层 = `community:<n>`；`file` 层 = `dir:<路径>`；`symbol` 层 = `file:<路径>`。
+   * - 形态错 → 400 `bad_request`；形态对但图中无此实体 → 404 `not_found`；
+   *   项目未登记 → 404 `not_found`；已登记但产物缺失 → 404 `graph_not_found`。
+   */
+  graphRollup: (params: { project: string; level: RollupLevel; parent?: string }) => {
+    const qs = new URLSearchParams({ project: params.project, level: params.level })
+    if (params.parent !== undefined && params.parent !== '') qs.set('parent', params.parent)
+    return request<RollupResult>(`${GRAPH_ROLLUP_ENDPOINT}?${qs.toString()}`)
+  },
+
+  /**
+   * F5：由**图谱节点 id** 导出时序图（`POST /api/arch/render` 的 `mode: 'from-graph'` 分支）。
+   *
+   * `node` 必须是**节点 id**：四模式结果里带 id 的只有 `relations`（`value.node` 是命中
+   * 节点 id、`items[].other` 是对端 id）。UI 侧的取用与「拿不到就禁用」的判据见
+   * `pages/graph-logic.ts` 的 `sequenceAddress`；错误码→文案的映射见同文件的
+   * `sequenceExportErrorKey`。
+   */
+  archRenderFromGraph: (params: { project: string; node: string }) =>
+    request<ArchFromGraphResult>(ARCH_RENDER_ENDPOINT, {
+      method: 'POST',
+      body: JSON.stringify({
+        mode: ARCH_RENDER_MODE_FROM_GRAPH,
+        type: 'sequence',
+        project: params.project,
+        node: params.node,
+      }),
+    }),
 
   /** 图谱导出（obsidian/wiki/svg/graphml…） */
   graphExport: (project: string, format: string) =>

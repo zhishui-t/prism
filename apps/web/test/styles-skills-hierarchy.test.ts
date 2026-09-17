@@ -9,8 +9,9 @@
  * 本文件锁五件事（层级与密度都靠 CSS 表达，DOM 断言看不见）：
  *  1. **列表行摘要 1 行**（`.md-row .s`）——§3.4 #5：2 行 clamp → 1 行，配 `firstSentence(desc, 32)`；
  *  2. **第一眼描述正文**（`.skill-desc`）——`--fs-300` + `--lh-ui`、**不截断**（全文落这里）、不上色；
- *  3. **深挖带口径**——`.skill-deep > summary` 与角色页 `.role-body > summary` **逐值相同**
- *     （`--s-4` 顶距、summary `--fs-200` + `--mute`），不是第二套口径；
+ *  3. **深挖带口径**——`.skill-deep > summary` 与角色页校验清单 `.role-issues > summary` **逐值相同**
+ *     （`--s-4` 顶距、summary `--fs-200` + `--mute`），不是第二套口径
+ *     （v10 F2 起角色页的正文区 `.role-body` 不再折叠，故比对对象改为 `.role-issues`）；
  *  4. **未装命令块**（`.scope-callout`）仍是 `--sheet-2` 底 + 左 3px `--warn` 边（F8 §3.1 常用带）；
  *  5. **红线**：本批新增类不引入颜色 / 灰阶 / 新字号档（只用既有 token），且 F3 的两栏容器口径未动。
  *
@@ -89,9 +90,9 @@ describe('F8 §3.4 #6 详情第一眼：描述直接作为正文', () => {
   })
 })
 
-describe('F8 §3.1 深挖带：`.skill-deep` 与 `.role-body` 同口径（不是第二套）', () => {
+describe('F8 §3.1 深挖带：`.skill-deep` 与角色页校验清单同口径（不是第二套）', () => {
   it('summary 三值（光标 / 字号 / 字色）与角色页深挖带逐字相同', () => {
-    const roleSummary = '.role-issues > summary, .role-body > summary'
+    const roleSummary = '.role-issues > summary'
     expect(decl('.skill-deep > summary', 'cursor')).toBe('pointer')
     expect(decl('.skill-deep > summary', 'font-size')).toBe(groupDecl(roleSummary, 'font-size'))
     expect(decl('.skill-deep > summary', 'color')).toBe(groupDecl(roleSummary, 'color'))
@@ -99,9 +100,9 @@ describe('F8 §3.1 深挖带：`.skill-deep` 与 `.role-body` 同口径（不是
     expect(decl('.skill-deep > summary', 'color')).toBe('var(--mute)')
   })
 
-  it('顶距与常用带拉开一档（`--s-4`，与 `.role-issues` / `.role-body` 同值）', () => {
+  it('顶距与常用带拉开一档（`--s-4`，与 `.role-issues` 同值）', () => {
     expect(decl('.skill-deep', 'margin-top')).toBe('var(--s-4)')
-    expect(decl('.skill-deep', 'margin-top')).toBe(groupDecl('.role-issues, .role-body', 'margin-top'))
+    expect(decl('.skill-deep', 'margin-top')).toBe(decl('.role-issues', 'margin-top'))
   })
 
   it('与团队页那条同源新规则逐值相同（三页同一条深挖口径）', () => {
@@ -110,9 +111,13 @@ describe('F8 §3.1 深挖带：`.skill-deep` 与 `.role-body` 同口径（不是
     expect(decl('.skill-deep > summary', 'color')).toBe(decl('.team-deep > summary', 'color'))
   })
 
-  it('角色页那两条既有规则**未被改写**（本轮只加同值的新选择器，不动别人的断言面）', () => {
-    expect(BARE).toContain('\n.role-issues, .role-body {')
-    expect(BARE).toContain('\n.role-issues > summary, .role-body > summary {')
+  it('角色页那条既有规则**未被改写**（v10 F2 只把 `.role-body` 从组里移出，取值一字未动）', () => {
+    expect(BARE).toContain('\n.role-issues {')
+    expect(BARE).toContain('\n.role-issues > summary {')
+    expect(decl('.role-issues > summary', 'font-size')).toBe('var(--fs-200)')
+    expect(decl('.role-issues > summary', 'color')).toBe('var(--mute)')
+    // v10 F2：正文区改常驻（实色 hairline），不再是这条折叠口径的兄弟
+    expect(BARE).not.toContain('\n.role-issues > summary, .role-body > summary {')
   })
 })
 

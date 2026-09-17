@@ -10,6 +10,9 @@
  * **MINOR-10**（brief R3 括号里承诺的焦点圈闭）：打开时焦点入容器，`Tab`/`Shift+Tab`
  * 在容器内首尾回绕，关闭时还原到打开前的 `document.activeElement`（嵌套时自然逐层回退：
  * 模态关 → 回抽屉，抽屉关 → 回触发它的按钮）。用循环而非 `inert`：后者要动全站节点。
+ *
+ * **v10 F2**：滚动锁也收进本文件（`useScrollLock`）——居中 `Modal` 是第三种浮层版式，
+ * 之前 `Drawer` / `ConfirmModal` 各写一份的滚动锁若再复制一遍就是第三处镜像。
  */
 
 import { useEffect, useRef, type RefObject } from 'react'
@@ -145,4 +148,48 @@ export function useOverlayLayer({
       if (target !== null && target.isConnected) target.focus({ preventScroll: true })
     }
   }, [container, initialFocus])
+}
+
+/**
+ * 浮层挂载期的滚动锁（v10 F2 起三处共用：`Drawer` / `ConfirmModal` / `Modal`）。
+ *
+ * v7 §2.7 锚点 9 之后**滚动容器是页面区 `.page`（body 不再滚）**，故两处都要锁，
+ * 否则浮层打开时底下的列表仍能滚（锚点改动带来的必然跟随项）。
+ *
+ * ⚠ 必须是**挂载级** effect（依赖为空）：Esc/焦点那套在 `useOverlayLayer` 里已按挂载级注册，
+ * 这里若跟着 `onClose` 的箭头函数引用重跑，锁会在重渲染时先解后加——中间的窗口期能滚。
+ *
+ * **多层叠开靠模块级计数（v10 派修 P1-1）**：早期实现是「每层各自快照、卸载时无条件回写」，
+ * 而 React 删除期 effect 清理是**先挂的先清**，于是两类坏态真实发生：
+ *  1. 同 commit 全卸（`Modal` + `ConfirmModal` 一起消失，F1/F2 常规路径）——外层先回写 `''`、
+ *     内层再把自己挂载时看到的 `'hidden'` 回写 ⇒ `body`/`.page` **停在 `hidden`**，整站不可滚；
+ *  2. 先卸外层（内层还在）——外层无条件回写 `''` ⇒ 锁静默丢失，浮层底下的列表又能滚。
+ * 现在**只有第一层锁时快照**（快照是「第一层打开前」的值，不是中间态的 `hidden`），
+ * **最后一层解锁时才回写**：中途卸载只减计数、不动 DOM；清理顺序与谁先谁后无关。
+ * 回归见 `apps/web/test/overlay-scroll-lock.test.ts`（含两条坏态）。
+ */
+let lockCount = 0
+/** 第一个持锁者看到的 `body` / `.page` 的 inline `overflow`（最后一个解锁者回写）。 */
+let lockedBodyOverflow = ''
+let lockedPage: HTMLElement | null = null
+let lockedPageOverflow = ''
+
+export function useScrollLock(): void {
+  useEffect(() => {
+    if (lockCount === 0) {
+      lockedBodyOverflow = document.body.style.overflow
+      lockedPage = document.querySelector<HTMLElement>('.page')
+      lockedPageOverflow = lockedPage?.style.overflow ?? ''
+      document.body.style.overflow = 'hidden'
+      if (lockedPage !== null) lockedPage.style.overflow = 'hidden'
+    }
+    lockCount += 1
+    return () => {
+      lockCount -= 1
+      if (lockCount > 0) return
+      document.body.style.overflow = lockedBodyOverflow
+      if (lockedPage !== null) lockedPage.style.overflow = lockedPageOverflow
+      lockedPage = null
+    }
+  }, [])
 }

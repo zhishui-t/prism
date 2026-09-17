@@ -12,12 +12,14 @@
  * - 未分类组**恒在末尾**（分类名无论字典序大小都不越位）；
  * - 纯函数**不就地重排入参**（调用方那张已过滤的数组仍归调用方）。
  *
+ * v10 F3ui 追加：`externalDeleteErrorKey`（外部删除失败码 → 字典键）的纯判据，见文件末尾。
+ *
  * 环境：默认 node（不写环境 pragma，同 `knowledge-logic.test.ts` 的既有做法）。
  */
 
 import { describe, expect, it } from 'vitest'
 
-import { UNCATEGORIZED, cleanSkillDescription, groupSkills } from '../src/pages/skills-logic.ts'
+import { UNCATEGORIZED, cleanSkillDescription, externalDeleteErrorKey, groupSkills } from '../src/pages/skills-logic.ts'
 
 /** 判据只要求 `name` + 可选 `category`（不依赖技能台账的其它字段）。 */
 type Row = { name: string; category?: string }
@@ -124,5 +126,42 @@ describe('F9-3 详情头描述：剥 frontmatter 块标量标记', () => {
   it('空串进 ⇒ 空串出（消费方据此走既有空态文案，与「服务端没给描述」同一档）', () => {
     expect(cleanSkillDescription('')).toBe('')
     expect(cleanSkillDescription('   ')).toBe('')
+  })
+})
+
+/**
+ * v10 F3ui：外部技能删除的**失败码 → 字典键**映射。
+ *
+ * `api-team.ts#request` 的契约是错误以 `` `${code}: ${message}` `` 抛成 `Error.message`
+ * （debts D-1），故按**前缀**分派。这里锁三条：
+ *  - 两个已知码各归各档（`id_conflict` / `not_found`）；
+ *  - **前缀**匹配而非全等（真正的 message 里 `${code}` 后面跟着 `: 说明`）；
+ *  - 其余码一律 `null`（调用方原文透出），不被硬塞进上面两档。
+ */
+describe('v10 F3ui 外部删除失败码 → 字典键', () => {
+  it('`id_conflict` 前缀 → 走 `skills.delete.conflict`（409：落点带 Prism 标记，该改用卸载）', () => {
+    expect(externalDeleteErrorKey('id_conflict: skill already exists with prism marker')).toBe(
+      'skills.delete.conflict',
+    )
+    expect(externalDeleteErrorKey('id_conflict')).toBe('skills.delete.conflict')
+  })
+
+  it('`not_found` 前缀 → 走 `skills.delete.notFound`（404：目录不存在 / 没有 SKILL.md）', () => {
+    expect(externalDeleteErrorKey('not_found: no SKILL.md at target')).toBe('skills.delete.notFound')
+  })
+
+  it('未知码 / 网络层错误 → `null`（原文透出，不猜服务端文案）', () => {
+    for (const msg of [
+      'bad_request: invalid name',
+      'internal: boom',
+      'Failed to fetch',
+      '',
+    ]) {
+      expect(externalDeleteErrorKey(msg), msg).toBeNull()
+    }
+  })
+
+  it('**前缀**匹配：码作为子串出现在别处不算命中（码必须打头）', () => {
+    expect(externalDeleteErrorKey('error: id_conflict happened')).toBeNull()
   })
 })

@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { accessSync, constants as fsConstants } from 'node:fs'
-import { access, readFile } from 'node:fs/promises'
+import { access, readFile, stat } from 'node:fs/promises'
 import { delimiter, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -591,6 +591,45 @@ export async function readCodeGraph(root: string): Promise<CodeGraph> {
       cause: error instanceof Error ? error.message : String(error),
     })
   }
+}
+
+/**
+ * 图谱产物**进程内缓存**（v10 F9 性能轨）。
+ *
+ * 缓存的边界刻意压到最小：**只包住 read+parse**，不缓存任何派生结果（rollup 分组每次都算）。
+ * 失效键 = `path + mtimeMs + size`——**不用时间 TTL**：时间窗内的陈旧读就是「双真相源」
+ * （R7 文件为真相）；mtime/size 是文件系统的既成事实，重新建图/换产物天然换 key。
+ *
+ * 命中时返回**同一个已解析对象**（调用方不得 mutate；本仓消费方都只读）。
+ * `readCodeGraph` 本身保持「每请求 readFile+JSON.parse」不变（F5 等既有调用方零影响）。
+ *
+ * 为什么值得加：下钻一层就是一次请求（前端按 parent 逐层拉），单层 3.66MB 的 read+parse
+ * 实测 ≈24ms，连续下钻会反复付出解析成本；有它之后只有首次付。
+ */
+const graphDocumentCache = new Map<string, { key: string; graph: CodeGraph }>()
+
+/**
+ * 同 `readCodeGraph`，但带上述失效键缓存。错误映射完全复用 `readCodeGraph`
+ * （`not_found` 图谱不存在 / `bad_request` 产物不可解析），避免第二套文案。
+ */
+export async function readCodeGraphCached(root: string): Promise<CodeGraph> {
+  const path = defaultGraphPath(root)
+  let key: string
+  try {
+    const info = await stat(path)
+    key = `${info.mtimeMs}:${info.size}`
+  } catch {
+    // 产物缺失/不可 stat：清掉可能存在的陈旧条目，让 readCodeGraph 抛标准错误
+    graphDocumentCache.delete(path)
+    return await readCodeGraph(root)
+  }
+  const hit = graphDocumentCache.get(path)
+  if (hit !== undefined && hit.key === key) {
+    return hit.graph
+  }
+  const graph = await readCodeGraph(root)
+  graphDocumentCache.set(path, { key, graph })
+  return graph
 }
 
 // ===== 调用链关系查询（v8 F4：直读 graph.json 内存过滤，零子进程） =====

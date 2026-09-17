@@ -82,3 +82,26 @@ const BLOCK_SCALAR_HEAD = /^[>|][+\-\d]*(?=\s|$)/
 export function cleanSkillDescription(text: string): string {
   return text.trim().replace(BLOCK_SCALAR_HEAD, '').trim()
 }
+
+/**
+ * 外部技能删除的**失败码 → 字典键**映射（v10 F3ui）。
+ *
+ * `api-team.ts#request` 的契约是错误以 `` `${code}: ${message}` `` 抛成 `Error.message`
+ * （debts D-1），故按**前缀**分派（与 `EffectiveSkills.tsx` 的 `startsWith('not_found')` 同口径）。
+ *
+ * 这两个码在界面上不是「同一个错误的两种措辞」，而是**出路不同**：
+ * - `id_conflict`（409）——落点 SKILL.md 带 Prism 标记 ⇒ 该走「卸载」，文案要指路；
+ * - `not_found`（404）——目录不存在 / 没有 SKILL.md ⇒ 这个对象本来就不可删。
+ *
+ * 其余（`bad_request` 消毒失败 / 网络层 TypeError / 5xx）返回 `null`，由调用方原文透出
+ * （`common.loadFailed` 兜底）——**不猜**服务端文案，也不把未知码硬塞进上面两档。
+ *
+ * 返回字典**键**而非成品文案：本函数保持纯（不引 i18n / React），可 node 直测。
+ */
+export function externalDeleteErrorKey(
+  message: string,
+): 'skills.delete.conflict' | 'skills.delete.notFound' | null {
+  if (message.startsWith('id_conflict')) return 'skills.delete.conflict'
+  if (message.startsWith('not_found')) return 'skills.delete.notFound'
+  return null
+}

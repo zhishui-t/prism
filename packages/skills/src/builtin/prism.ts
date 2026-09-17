@@ -54,7 +54,7 @@ Prism 是本机的**研发效能控制面**：知识库、知识图谱、代码�
 ## 1.5 第一次接入：从零到能用
 
 \`\`\`bash
-prism init --harness-root <宿主根>   # ①探测 ②建骨架 ③装本 Skill ④写 MCP 注册 ⑤提示重启
+prism init --yes                     # ①探测 ②建骨架 ③装本 Skill ④写 MCP 注册 ⑤提示重启
 prism doctor                       # 自检：Node 版本 / 目录 / DB / graphify / 端口
 prism serve --ensure               # 后台幂等起控制台（已在跑则复用）；--check 看状态 / --stop 停它
 \`\`\`
@@ -150,7 +150,7 @@ prism serve --ensure               # 后台幂等起控制台（已在跑则复�
 ## 6. CLI 速查
 
 \`\`\`
-prism init [--harness-root <宿主根>] [--yes]     # 接入：注册 MCP + 装 Skill + 建骨架
+prism init [--yes] [--force]                   # 接入：注册 MCP + 装 Skill + 建骨架（--harness-root 覆盖落点=测试/CI 专用）
 prism serve [--port 7777]|--ensure|--check|--stop  # 控制台：前台 / 后台幂等 / 查状态 / 停
 prism doctor                                   # 环境自检
 prism harness list | show                      # 运行时宿主适配器
@@ -164,7 +164,7 @@ prism team   list/show/new/edit/rm/validate/render/activate [--source <dir>] [--
 prism skill  list/install/update/uninstall/validate/effective
 \`\`\`
 
-**写守卫**：目标是默认宿主目录且未显式指定时会拒绝（\`guard_required\`），需 \`--yes\` 或显式 \`--harness-root\`。
+**写守卫**：目标是默认宿主目录且未显式指定时会拒绝（\`guard_required\`），加 \`--yes\` 确认写入默认宿主配置（\`--harness-root\` 为测试/CI 专用）。
 `
 
 /** 附带文件：按需读取的细节（渐进披露）。 */
@@ -579,12 +579,12 @@ prism_arch_generate { type: 'lifecycle' }
 ## 接入初始化
 
 \`\`\`bash
-prism init --harness-root <宿主根>    # ①探测 ②建骨架 ③装 Skill ④写 MCP 注册 ⑤提示重启
+prism init --yes                     # ①探测 ②建骨架 ③装 Skill ④写 MCP 注册 ⑤提示重启
 prism doctor                        # 环境自检（Node/目录/DB/graphify/embedding/端口）
 prism serve --ensure                # 后台幂等起控制台（只读控制面）
 \`\`\`
 
-**写守卫**：目标为默认宿主目录且未显式指定 → 拒绝（\`guard_required\`）；加 \`--yes\` 或显式 \`--harness-root\`。
+**写守卫**：目标为默认宿主目录且未显式指定 → 拒绝（\`guard_required\`）；加 \`--yes\` 确认写入默认宿主配置（\`--harness-root\` 为测试/CI 专用）。
 
 ## 本地向量化（prism embedding）
 

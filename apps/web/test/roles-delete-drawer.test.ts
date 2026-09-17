@@ -2,10 +2,13 @@
 /**
  * RolesPage 删除链路回归（**D-2**）—— 删除确认后，与该角色相关的浮层必须全关。
  *
- * 缺陷：详情抽屉里点「编辑」叠起表单抽屉 → 再点「删除」并在模态里确认 → 删除成功、
+ * 缺陷：详情里点「编辑」叠起表单抽屉 → 再点「删除」并在确认框里确认 → 删除成功、
  * 列表与 toast 都正确刷新，但**表单抽屉留在 DOM 里**，继续显示已删角色的名称/描述
- * （`doDelete` 只做了 `navigate({page:'roles'})`，那只关详情抽屉——`form` 这份 state
+ * （`doDelete` 只做了 `navigate({page:'roles'})`，那只关详情浮层——`form` 这份 state
  * 没人清）。实体已不存在，浮层必须一并关闭。
+ *
+ * v10 F2：详情从右侧抽屉改为**居中模态**（`.modal.modal-lg`），确认框是窄版 `.modal`
+ * ——两者靠 `modal-lg` 分流；本文件的两条断言随之从「两扇抽屉」改为「详情模态 + 表单抽屉」。
  *
  * ⚠ 与本页 R-6 Q1「**保存**成功不关抽屉」不冲突：Q1 管保存（实体仍在，反馈就地留在
  * 抽屉内），本文件管删除（实体已删）。两个方向各有一条用例，改动其一必惊动另一条。
@@ -111,18 +114,29 @@ async function fill(target: HTMLInputElement | HTMLTextAreaElement, value: strin
   })
 }
 
-/** 走通「打开编辑表单抽屉」：详情抽屉在 → 点「编辑」→ 两个抽屉叠着。 */
+/** 详情模态（带 `modal-lg` 的那一个：确认框走窄版 `.modal`，两者靠这个类分流）。 */
+function detailModal(): Element | null {
+  return el('.modal.modal-lg')
+}
+
+/** 确认模态（窄版 `.modal`）。 */
+function confirmModal(): Element | null {
+  return all('.modal').find((m) => !m.classList.contains('modal-lg')) ?? null
+}
+
+/** 走通「打开编辑表单抽屉」：详情模态在 → 点「编辑」→ 表单抽屉叠在详情模态之上。 */
 async function openEditForm(): Promise<void> {
   await click(button(t('common.edit')))
-  // 前置：编辑表单抽屉确实开在详情抽屉之上，否则下面的断言都是空谈
-  expect(all('.drawer').length).toBe(2)
+  // 前置：详情模态仍在、编辑表单抽屉叠在它之上，否则下面的断言都是空谈
+  expect(detailModal()).not.toBeNull()
+  expect(all('.drawer').length).toBe(1)
   expect(el<HTMLInputElement>('.drawer input')?.value).toBe('dev-1')
 }
 
-/** 走通删除确认：点详情抽屉的「删除」→ 模态点「删除」确认。 */
+/** 走通删除确认：点详情模态的「删除」→ 确认框点「删除」确认。 */
 async function confirmDelete(): Promise<void> {
   await click(button(t('common.delete')))
-  expect(el('.modal')).not.toBeNull()
+  expect(confirmModal()).not.toBeNull()
   await click(button(t('common.confirmDelete')))
 }
 
@@ -144,9 +158,9 @@ afterEach(async () => {
 })
 
 describe('RolesPage 删除：浮层收口（D-2）', () => {
-  it('删除成功后详情抽屉与编辑表单抽屉都关闭（旧代码：表单抽屉残留显示已删角色）', async () => {
+  it('删除成功后详情模态与编辑表单抽屉都关闭（旧代码：表单抽屉残留显示已删角色）', async () => {
     await render('dev-1')
-    expect(el('.drawer')).not.toBeNull()
+    expect(detailModal()).not.toBeNull()
     await openEditForm()
 
     await confirmDelete()
@@ -155,8 +169,8 @@ describe('RolesPage 删除：浮层收口（D-2）', () => {
     expect(data.deleted).toEqual(['dev-1'])
     // 现有行为不回归：hash 回落到列表页（`doDelete` 里那条 `navigate`，清掉已删实体的选中）
     expect(window.location.hash).toBe('#/roles')
-    // 收口自证②：确认模态已关（模态自己那条路径不回归）
-    expect(el('.modal')).toBeNull()
+    // 收口自证②：确认框已关（确认模态自己那条路径不回归）
+    expect(confirmModal()).toBeNull()
 
     // 父级（Shell）按新 hash 重渲染 → `sel` 变 undefined（hash 是唯一选中真相）。
     // 少了这一步，页面停在「未命中 pane」上，格的断言都落在不可达状态里。
@@ -168,6 +182,7 @@ describe('RolesPage 删除：浮层收口（D-2）', () => {
 
     // 主断言：实体已不存在 → 相关浮层一个都不留。旧代码这里是 1（编辑表单抽屉残留，
     // 里面还挂着已删角色的名称/描述）
+    expect(all('.modal').length).toBe(0)
     expect(all('.drawer').length).toBe(0)
   })
 
@@ -181,9 +196,10 @@ describe('RolesPage 删除：浮层收口（D-2）', () => {
     expect(save.disabled).toBe(false)
     await click(save)
 
-    // Q1：保存成功就地反馈，抽屉照样开着（详情 + 表单，两扇）
+    // Q1：保存成功就地反馈，抽屉照样开着（详情模态 + 表单抽屉都在）
     expect(el('.drawer .banner[role="status"]')?.textContent).toContain('dev-1')
-    expect(all('.drawer').length).toBe(2)
+    expect(all('.drawer').length).toBe(1)
+    expect(detailModal()).not.toBeNull()
     expect(data.deleted).toEqual([])
   })
 })

@@ -161,9 +161,14 @@ export { CORE_DEV_TEAM_MD } from './templates.js'
 export {
   installBuiltinSkillDefinitions,
   uninstallSkillDefinitions,
+  deleteExternalSkillDefinition,
+  isExternalSkillRemovable,
+  resolveExternalSkillTarget,
   type SkillWriteBody,
   type SkillInstallOutcome,
   type SkillUninstallOutcome,
+  type SkillExternalDeleteOutcome,
+  type ExternalSkillState,
 } from './skill-create.js'
 
 // 技能分类映射（design-v8 §3 F7：HTTP `/api/skills/categorize` / MCP `prism_skill_categorize`

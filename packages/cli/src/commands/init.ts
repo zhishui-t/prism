@@ -58,11 +58,14 @@ export async function runInit(ctx: CommandContext, _args: string[], values: ArgV
   // 否则插件适配器会拿到 zcode 的默认根，MCP 注册与 Skill 全写错宿主（见 defaultHarnessRoot 注释）
   const harnessRoot = expandHome(rootExplicit ? rootFlag : defaultHarnessRoot(home))
   // B6 写守卫：init 会写 <harnessRoot>/skills 与 <harnessRoot>/cli/config.json——
-  // 默认链（未显式 --harness-root）落真实宿主目录，需 --yes 确认
+  // 默认链（未显式 --harness-root）落真实宿主目录，需 --yes 确认。
+  // 文案只指向 `--yes`：init 的**正常落点就是默认宿主目录**（这就是这个命令要做的事），
+  // 旧文案让用户「加 --harness-root 指定其他位置」等于劝他别用 init 的本职；
+  // `--harness-root` 在 init 语境是测试/CI 专用（见 USAGE 与成功输出）。
   if (!rootExplicit && values.yes !== true) {
     ctx.stderr(
-      `已阻止写入 [guard_required]: 检测到目标为默认宿主目录 ${harnessRoot}（未经 --harness-root 显式指定），` +
-        `prism init 将写入 Skill 与 MCP 注册配置；加 --harness-root 指定其他位置，或加 --yes 确认。`,
+      `已阻止写入 [guard_required]: 检测到目标为默认宿主目录 ${harnessRoot}（未经 --harness-root 显式指定，该参数测试/CI 专用），` +
+        `prism init 将写入 Skill 与 MCP 注册配置；加 --yes 确认写入默认宿主配置。`,
     )
     return 1
   }
@@ -125,7 +128,7 @@ export async function runInit(ctx: CommandContext, _args: string[], values: ArgV
   } else {
     const display = (dir: string): string => (dir === home ? '.' : dir)
     ctx.stdout(`PRISM_HOME: ${home}`)
-    ctx.stdout(`① 宿主目录: ${harnessRoot}${harnessDetected ? '' : '（未探测到——将继续，可用 --harness-root 指定）'}`)
+    ctx.stdout(`① 宿主目录: ${harnessRoot}${harnessDetected ? '' : '（未探测到——将继续；覆盖落点用 --harness-root，该参数测试/CI 专用）'}`)
     ctx.stdout(`② 已建目录: ${dirs.map(display).join(' ')}`)
     if (!homeConfigExisted || force) {
       ctx.stdout(`  已写配置: ${configPath}${homeConfigExisted ? '（--force 重建）' : ''}`)
@@ -169,6 +172,10 @@ export async function runInit(ctx: CommandContext, _args: string[], values: ArgV
  *
  * 早期实现把 ZCode 形态写死在此——接入 WorkBuddy 时会**静默写错层级**（宿主读不到、
  * 且往人家配置里塞了无意义的 `mcp.servers` 键），故改为按形态分派。
+ *
+ * 「是否与既有条目等价」走 {@link sameMcpEntry} 的**归一化投影比较**（不再用 `JSON.stringify`
+ * 全等——它对键序、`node`/`node.exe`、`\`/`/`、缺省 timeoutMs 这类等价写法全部误报 conflict，
+ * 且对宿主自己加的键敏感）。覆盖写回走 {@link mergeMcpEntry}（保留未知键）。
  */
 async function registerMcp(opts: {
   configFile: string | null
@@ -206,7 +213,7 @@ async function registerMcp(opts: {
   const existing = servers[serverName]
 
   if (existing !== undefined) {
-    if (JSON.stringify(existing) === JSON.stringify(entry)) {
+    if (sameMcpEntry(existing, entry, format)) {
       return { status: 'unchanged', configFile, entry }
     }
     if (!force) {
@@ -219,7 +226,7 @@ async function registerMcp(opts: {
     await writeFile(backup, await readFile(configFile, 'utf-8'), 'utf-8')
   }
 
-  servers[serverName] = entry
+  servers[serverName] = mergeMcpEntry(existing, entry)
   writeMcpServers(cfg, format, servers)
   await mkdir(join(configFile, '..'), { recursive: true })
   await writeFile(configFile, `${JSON.stringify(cfg, null, 2)}\n`, 'utf-8')
@@ -229,6 +236,90 @@ async function registerMcp(opts: {
     entry,
     ...(backup !== undefined ? { backup } : {}),
   }
+}
+
+/**
+ * 归一化投影的**字段口径**（按形态）：
+ * - 两种形态都比 `command` / `args` / `env`；
+ * - 仅 ZCode 形态比 `type`（缺省即 `stdio`）与 `timeoutMs`（缺省补齐 60_000）——
+ *   平铺形态本就不写这两个键，拿它们去比会凭空造出 conflict。
+ * 其余键（宿主加的 `disabled`、用户加的 env 变量…）**不参与比较**：不是 Prism 写的，就不该算冲突。
+ */
+function normalizedEntry(entry: unknown, format: McpConvention['format']): Record<string, unknown> {
+  if (!isRecord(entry)) return {}
+  const out: Record<string, unknown> = {
+    command: normalizeCommand(entry['command']),
+    args: Array.isArray(entry['args']) ? entry['args'].map(normalizePathValue) : entry['args'],
+    env: normalizeEnv(entry['env']),
+  }
+  if (format === 'mcp-servers-json') {
+    out['type'] = entry['type'] ?? 'stdio'
+    out['timeoutMs'] = normalizeTimeout(entry['timeoutMs'])
+  }
+  return out
+}
+
+/** 既有条目与新条目**内容等价**？（等价 → unchanged：不报 conflict、不覆盖、不备份） */
+function sameMcpEntry(existing: unknown, entry: Record<string, unknown>, format: McpConvention['format']): boolean {
+  if (!isRecord(existing)) return false
+  const prev = normalizedEntry(existing, format)
+  const next = normalizedEntry(entry, format)
+  const scalarKeys = format === 'mcp-servers-json' ? ['type', 'command', 'timeoutMs'] : ['command']
+  for (const key of scalarKeys) {
+    if (JSON.stringify(prev[key]) !== JSON.stringify(next[key])) return false
+  }
+  if (JSON.stringify(prev['args']) !== JSON.stringify(next['args'])) return false
+  return envSatisfies(prev['env'] as Record<string, unknown>, next['env'] as Record<string, unknown>)
+}
+
+/**
+ * env 等价判据：只要求**我们管的键**（PRISM_HOME）逐键一致——键序无关；
+ * 宿主/用户往该条目里加的其它环境变量（`NODE_OPTIONS` 之类）不算冲突，且 `--force` 时保留。
+ */
+function envSatisfies(prev: Record<string, unknown>, next: Record<string, unknown>): boolean {
+  return Object.keys(next).every((key) => JSON.stringify(prev[key]) === JSON.stringify(next[key]))
+}
+
+/**
+ * 覆盖写回的合并：Prism 管的字段取新值，既有其它键**原样保留**（不静默丢弃宿主/用户写的键）；
+ * `env` 单独逐键合并，免掉整块替换时抹掉用户往该条目里加的环境变量。
+ */
+function mergeMcpEntry(existing: unknown, entry: Record<string, unknown>): Record<string, unknown> {
+  if (!isRecord(existing)) return entry
+  const merged: Record<string, unknown> = { ...existing, ...entry }
+  if (isRecord(existing['env']) && isRecord(entry['env'])) {
+    merged['env'] = { ...existing['env'], ...entry['env'] }
+  }
+  return merged
+}
+
+/** 可执行体形态归一：`node` 与 `node.exe`（大小写不限）视为同一可执行体；路径分隔符一并归一。 */
+function normalizeCommand(value: unknown): unknown {
+  if (typeof value !== 'string') return value
+  return value.replace(/\\/g, '/').replace(/\.exe$/i, '')
+}
+
+/** 路径分隔符归一（`\` ↔ `/`）：args 逐项、env 逐值比较时用。 */
+function normalizePathValue(value: unknown): unknown {
+  return typeof value === 'string' ? value.replace(/\\/g, '/') : value
+}
+
+/** env 值归一：字符串按路径分隔符归一；键排序后返回（消除键序差异）。 */
+function normalizeEnv(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) return {}
+  const out: Record<string, unknown> = {}
+  for (const key of Object.keys(value).sort()) {
+    out[key] = normalizePathValue(value[key])
+  }
+  return out
+}
+
+/** `timeoutMs` 归一：`"60000"` → `60000`；缺省（undefined/null）→ 60_000（ZCode 形态默认值）。 */
+function normalizeTimeout(value: unknown): unknown {
+  if (value === undefined || value === null) return 60_000
+  if (typeof value === 'number') return value
+  if (typeof value === 'string' && value.trim() !== '' && !Number.isNaN(Number(value))) return Number(value)
+  return value
 }
 
 /** 按形态从既有配置里**浅拷**出服务表（避免污染原对象；缺则空表）。 */

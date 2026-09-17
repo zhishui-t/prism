@@ -15,6 +15,7 @@ import {
   graphGodNodes as queryGraphGodNodes,
   graphSummary as queryGraphSummary,
   graphRelations as queryGraphRelations,
+  readCodeGraphCached,
   DEFAULT_GRAPH_RELATION_LIMIT,
   graphExport as runGraphExport,
   GRAPHIFY_EXPORT_FORMATS,
@@ -22,6 +23,13 @@ import {
 import { BuildJobManager, type BuildRunner } from '../../graph/jobs.js'
 import { mergeProjectGraphs, type MergeProjectInput } from '../../graph/merge.js'
 import { inspectGraphStatus, ProjectRegistry, type ProjectInfo } from '../../graph/registry.js'
+import {
+  ROLLUP_LEVELS,
+  buildRollup,
+  decodeRollupParent,
+  isRollupLevel,
+  normalizeRollupGraph,
+} from '../../graph/rollup.js'
 import type { RouteContext } from '../router.js'
 
 export interface GraphDeps {
@@ -55,7 +63,7 @@ export function defaultGraphifyRunner(deps: { env?: NodeJS.ProcessEnv; timeoutMs
   }
 }
 
-/** graph 路由工厂（design.md §4：projects/build/job/query/path/explain/affected/god-nodes/summary/status；v5 增 merge）。 */
+/** graph 路由工厂（design.md §4：projects/build/job/query/path/explain/affected/god-nodes/summary/status；v5 增 merge；v10 F9 增 rollup）。 */
 export function graphRoutes(deps: GraphDeps): {
   projects: (ctx: RouteContext) => Promise<Envelope>
   build: (ctx: RouteContext) => Promise<Envelope>
@@ -69,6 +77,7 @@ export function graphRoutes(deps: GraphDeps): {
   godNodes: (ctx: RouteContext) => Promise<Envelope>
   summary: (ctx: RouteContext) => Promise<Envelope>
   exportGraph: (ctx: RouteContext) => Promise<Envelope>
+  rollup: (ctx: RouteContext) => Promise<Envelope>
   status: (ctx: RouteContext) => Promise<Envelope>
 } {
   const projects = async (_ctx: RouteContext): Promise<Envelope> => {
@@ -283,6 +292,40 @@ export function graphRoutes(deps: GraphDeps): {
     return ok({ project: project.project, ...result })
   }
 
+  /**
+   * 分层聚合·逐级探索（v10 F9）：
+   * `GET /api/graph/rollup?project=&level=community|dir|file|symbol&parent=<合成 id?>`。
+   *
+   * 直读 `<root>/graphify-out/graph.json`（**带 mtime+size 失效键的进程内缓存**，只缓存
+   * read+parse，不缓存聚合结果），内存分组，**不起 graphify 子进程**（同 relations/summary
+   * 先例）。parent 编码与实体校验：形态错 → bad_request，实体不存在 → not_found。
+   *
+   * 响应**不加 `project` 字段**——形状按 F9 契约钉死为
+   * `{ level, parent, total, truncated, nodes, edges }`（前端按此写死解析）。
+   *
+   * 性能（红线 <200ms）：本仓实测 read+parse+分组 ≈24ms（3.66MB / 2340 节点 / 7103 边）；
+   * 加缓存后只有首次付 read+parse。**测试不做硬时限断言**（CI 负载下抖，见「bare sleep
+   * 测异步」同类教训），以实测为准。
+   */
+  const rollup = async (ctx: RouteContext): Promise<Envelope> => {
+    const levelRaw = ctx.query.get('level')?.trim() ?? ''
+    if (!isRollupLevel(levelRaw)) {
+      throw new PrismError(
+        'bad_request',
+        `level 必须为 ${ROLLUP_LEVELS.join('/')}: ${levelRaw === '' ? '(缺省)' : levelRaw}`,
+      )
+    }
+    // 形态校验放读图之前（读一张几 MB 的图再报 400 是纯浪费）
+    const parentRaw = ctx.query.get('parent')?.trim() ?? ''
+    const parent = decodeRollupParent(levelRaw, parentRaw === '' ? null : parentRaw)
+    const project = await requireProject(ctx)
+    await ensureGraph(project)
+    // 边读取取**非空侧**（派修 P2-4）：rollup 不自造 `links ?? edges` 口径，用与
+    // `/api/graph/relations`（`readGraphEdges`）同口径的归一，避免「rollup 见 0 边」。
+    const graph = normalizeRollupGraph(await readCodeGraphCached(project.root))
+    return ok(buildRollup(graph, levelRaw, parent))
+  }
+
   const status = async (ctx: RouteContext): Promise<Envelope> => {
     const project = await requireProject(ctx)
     return ok(await inspectGraphStatus(project.project, project.root, project.built_at))
@@ -296,7 +339,7 @@ export function graphRoutes(deps: GraphDeps): {
     return await deps.registry.get(name)
   }
 
-  return { projects, build, jobStatus, merge, query, path, explain, affected, relations, godNodes, summary, exportGraph, status }
+  return { projects, build, jobStatus, merge, query, path, explain, affected, relations, godNodes, summary, exportGraph, rollup, status }
 }
 
 /**

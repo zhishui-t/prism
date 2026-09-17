@@ -15,7 +15,9 @@
  *     **详情整体**（`.md-read` 正文段自己**没有** margin），且它是 `.md-detail` 的**内层**包裹
  *     （滚动容器与左列表宽度都不动 = F3 契约不破）；
  *  4. **长串不撑破列宽**——列内 `min-width: 0` + `overflow-wrap: anywhere` 兜底；
- *     命令块 `.cmd` 保持自己的横滚（`white-space: nowrap` + `overflow-x: auto`）不折行。
+ *     命令块 `.cmd` 保持自己的横滚（`white-space: nowrap` + `overflow-x: auto`）不折行；
+ *  5. **v10 F4 层级**（本批）——组头字号升一档（`--fs-300`）、组内技能行缩进一档
+ *     （`calc(var(--s-2) + var(--s-3))`）：两条都只动字号 / 内边距，取值全在既有 token 阶梯内。
  *
  * 环境：默认 node（不写环境 pragma，同 `styles-*.test.ts` 的既有做法）。
  */
@@ -71,6 +73,37 @@ describe('F7 组头：可点行（同知识库目录树的行口径）', () => {
       'transform var(--t-mid) var(--ease)',
     )
     expect(body('.book-toc .toc-chev.open, .skill-group .toc-chev.open')).toContain('transform: rotate(90deg)')
+  })
+})
+
+describe('v10 F4 组头字号升一档 + 组内技能行缩进一档', () => {
+  it('组头字号 `--fs-200` → `--fs-300`（仍在 `--fs` 阶梯内，不新增字号档）', () => {
+    expect(decl('.skill-group-head .count-line.section', 'font-size')).toBe('var(--fs-300)')
+    // 一档之差是相对**组内行名**说的：行名仍是 `--fs-200`（`.md-row .t`），两边不是并排同号
+    expect(decl('.md-row .t', 'font-size')).toBe('var(--fs-200)')
+  })
+
+  it('组头其余声明不复制：`bare` 变体的弹性引线仍由 `.count-line.section.bare` 承担', () => {
+    // 组头那条只覆盖字号——否则「组名 + 引线 + 计数」会在两处各写一份
+    const rule = body('.skill-group-head .count-line.section')
+    expect(rule).not.toContain('flex')
+    expect(rule).not.toContain('margin')
+    expect(decl('.count-line.section.bare', 'flex')).toBe('1')
+  })
+
+  it('组内技能行缩进一档：`calc(var(--s-2) + var(--s-3))`（token 组合，不写死像素）', () => {
+    expect(decl('.skill-group .md-row', 'padding-left')).toBe('calc(var(--s-2) + var(--s-3))')
+    // 只加在组内行上：裸 `.md-row`（团队页等共用）的口径一字未动
+    expect(decl('.md-row', 'padding')).toBe('var(--s-2) var(--s-2)')
+    // 组头自身左内边距不动 ⇒ 组名与行名之间正好差一档（--s-3）
+    expect(decl('.skill-group-head', 'padding')).toBe('var(--s-1) var(--s-2)')
+  })
+
+  it('缩进不靠颜色表达（组内行的字色仍继承 `.md-row` 的 `--ink`）', () => {
+    const rule = body('.skill-group .md-row')
+    expect(rule).not.toMatch(/#[0-9a-f]{3,8}\b/i)
+    expect(rule).not.toMatch(/\brgba?\(/)
+    expect(rule).not.toMatch(/color/)
   })
 })
 

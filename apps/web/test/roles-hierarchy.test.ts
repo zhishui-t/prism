@@ -5,13 +5,15 @@
  * 锁四条**层级契约**（不是像素）：
  * 1. **卡片底行三计数同行**（§1.4 高度代价里那 −40px 的来源）——DOM 上是同一个
  *    `.role-metrics` 里的三个 `.count-line.compact`，CSS 上是 `flex-direction: row`；
- * 2. **抽屉与卡片同构**（§1.3）——第一眼后三件（一句话职责 → 原则强调块 → 徽章行）在
- *    两个容器里**同一顺序**，故「点开卡片」是放大而不是换重心；
+ * 2. **详情模态与卡片同构**（§1.3）——第一眼后三件（一句话职责 → 原则强调块 → 徽章行）在
+ *    两个容器里**同一顺序**，故「点开卡片」是放大而不是换重心（v10 F2：详情从抽屉改为
+ *    居中模态 `.modal.modal-lg`，同构关系与断言面不变、只是容器换了）；
  * 3. **F5 落点**——「有效 Skill」差集清单整段消失（`.rsec-eff` 为 0、`roles.effectiveSkills`
  *    文案无命中），而技能段的分段头计数行仍在，口径说明降级进它的 `title`；
- * 4. **R-v8-1**——详情抽屉 `min(680px, 72vw)`、编辑表单抽屉维持 `min(560px, 96vw)`；
- *    内容列 66ch 居中的落点 `.role-detail` 只挂在**详情**抽屉里（MIN-4）；
- * 5. **F8-1 原则块**——渲染前剥掉强强调标记：卡面与抽屉（共用 `RoleGlance`）都不出现字面 `**`
+ * 4. **R-v8-1 / v10 F2**——详情改居中模态（宽度归 `.modal-lg` 的 CSS，见
+ *    `styles-role-modal.test.ts`），编辑表单抽屉维持 `min(560px, 96vw)`；
+ *    内容列 66ch 居中的落点 `.role-detail` 只挂在**详情模态**里（MIN-4）；
+ * 5. **F8-1 原则块**——渲染前剥掉强强调标记：卡面与详情模态（共用 `RoleGlance`）都不出现字面 `**`
  *    （只看标记的原则按「没写原则」走 `.missing`）；纯文本判据见 `ui-text.test.ts`。
  *
  * 渲染路径与 `roles-delete-drawer.test.ts` 一致：happy-dom + 裸 `react-dom/client` +
@@ -111,6 +113,13 @@ function button(label: string): HTMLButtonElement {
   if (hit === undefined) throw new Error(`未找到按钮：${label}`)
   return hit as HTMLButtonElement
 }
+
+/**
+ * 详情模态的内层（v10 F2：详情从抽屉改为居中模态 `.modal.modal-lg`）。
+ * 同构 / 顺序 / 内容断言都落在这个作用域里——它是 `.role-detail` 那一层，
+ * 与 `roles-detail-modal.test.ts` 的取法一致；编辑表单仍是 `.drawer`（不进这里）。
+ */
+const DETAIL = '.modal-lg .swap-in'
 
 /** 元素自身的 class（只取第一个 token，`.role-principle` 可能带 ` missing`）。 */
 function cls(e: Element): string {
@@ -225,9 +234,9 @@ describe('F8 §1.1/§1.4 卡片正面', () => {
     data.roles = [
       { ...role('paired'), principle: '**方向未定不动手，抛光不改方向。** 每个视觉决定以设计系统为唯一真相。' },
     ]
-    // 打开抽屉：卡面与抽屉共用同一个 `RoleGlance`，两处都得干净（缺陷报告里两处都出现）
+    // 打开详情模态：卡面与详情共用同一个 `RoleGlance`，两处都得干净（缺陷报告里两处都出现）
     await render('paired')
-    for (const scope of ['.role-card', '.drawer-body .swap-in']) {
+    for (const scope of ['.role-card', DETAIL]) {
       const text = one(`${scope} .role-principle .rp-text`)!
       expect(text, scope).not.toBeNull()
       expect(text.textContent, scope).toBe('方向未定不动手，抛光不改方向。')
@@ -249,28 +258,28 @@ describe('F8 §1.1/§1.4 卡片正面', () => {
   })
 })
 
-describe('F8 §1.3 抽屉与卡片同构（点开 = 放大，不换重心）', () => {
+describe('F8 §1.3 详情模态与卡片同构（点开 = 放大，不换重心）', () => {
   it('第一眼后三件在两个容器里同一顺序：职责 → 原则块 → 徽章', async () => {
     await render('dev-1')
     const card = one('.role-card')!
-    const drawer = one('.drawer-body .swap-in')!
+    const detail = one(DETAIL)!
     expect(glanceOrder(card)).toEqual(['role-desc', 'role-principle', 'role-tags'])
-    expect(glanceOrder(drawer)).toEqual(glanceOrder(card))
+    expect(glanceOrder(detail)).toEqual(glanceOrder(card))
   })
 
-  it('抽屉第一件是角色名（在 `.drawer-head` 里，与卡片 `.role-name` 同一槽位）', async () => {
+  it('详情第一件是角色名（在 `.modal-head` 里，与卡片 `.role-name` 同一槽位）', async () => {
     await render('dev-1')
-    expect(one('.drawer-head h3')?.textContent).toContain('dev-1')
-    expect(one('.drawer-head .role-dot')).not.toBeNull()
-    // 卡面 .role-name 与抽屉 .drawer-head h3 各自存在（同字号档由 styles 契约锁）
+    expect(one('.modal-head h3')?.textContent).toContain('dev-1')
+    expect(one('.modal-head .role-dot')).not.toBeNull()
+    // 卡面 .role-name 与详情 .modal-head h3 各自存在（同字号档由 styles 契约锁）
     expect(one('.role-card .role-name .role-dot')).not.toBeNull()
   })
 
-  it('抽屉整体结构：第一眼带 → 常用带（3 段）→ 深挖带（2 个折叠）', async () => {
+  it('详情整体结构：第一眼带 → 常用带（3 段）→ 深挖带（校验折叠）→ 正文区（常驻）', async () => {
     await render('dev-1')
-    const drawer = one('.drawer-body .swap-in')!
+    const detail = one(DETAIL)!
     // 把每个直接子节点折成「标签」：div 取 class，其余取 tagName —— 一条断言看完整页顺序
-    const order = [...drawer.children].map((c) => {
+    const order = [...detail.children].map((c) => {
       const tag = c.tagName.toLowerCase()
       return tag === 'div' ? cls(c) : tag
     })
@@ -281,14 +290,14 @@ describe('F8 §1.3 抽屉与卡片同构（点开 = 放大，不换重心）', (
       'section', // 常用 ①：所属团队
       'section', // 常用 ②：白名单技能
       'section', // 常用 ③：知识范围
-      'details', // 深挖 ①：校验问题清单（默认折叠）
-      'details', // 深挖 ②：完整定义正文（默认折叠）
+      'details', // 深挖：校验问题清单（默认折叠）
+      'section', // v10 F2 正文区（`.role-body`）：常驻，不再是折叠的 `<details>`
     ])
   })
 
-  it('抽屉不重复卡片已表达的 color 标签（§1.5 #1）', async () => {
+  it('详情不重复卡片已表达的 color 标签（§1.5 #1）', async () => {
     await render('dev-1')
-    const tags = all('.drawer-body .swap-in > .role-tags .tag')
+    const tags = all(`${DETAIL} > .role-tags .tag`)
     expect(tags.length).toBe(3)
     expect(tags.map((n) => n.textContent).join('')).not.toContain(t('roles.form.color'))
   })
@@ -297,27 +306,27 @@ describe('F8 §1.3 抽屉与卡片同构（点开 = 放大，不换重心）', (
 describe('F5 落点：只列白名单，差集清单消失而计数行仍在', () => {
   it('「有效 Skill」差集清单整段不再渲染（`.rsec-eff` 为 0、文案无命中）', async () => {
     await render('dev-1')
-    const drawer = one('.drawer-body .swap-in')!
+    const detail = one(DETAIL)!
     // 前置自证：服务端确实回了白名单之外的技能（否则本用例可能是「差集本来就空」的假绿）
-    expect(drawer.textContent).not.toContain('global-a')
-    expect(drawer.textContent).not.toContain('team-b')
+    expect(detail.textContent).not.toContain('global-a')
+    expect(detail.textContent).not.toContain('team-b')
     expect(all('.rsec-eff').length).toBe(0)
     expect(all('.rsec-mark').length).toBe(0)
   })
 
   it('白名单技能仍在列（只渲染 `role.skills`）', async () => {
     await render('dev-1')
-    const drawer = one('.drawer-body .swap-in')!
-    const text = drawer.textContent ?? ''
+    const detail = one(DETAIL)!
+    const text = detail.textContent ?? ''
     expect(text).toContain('role-a')
     expect(text).toContain('role-b')
   })
 
   it('技能段计数行仍在，且两行口径说明降级进了它的 `title`（§1.5 #4）', async () => {
     await render('dev-1')
-    // ⚠ 必须限定在抽屉里：卡面第一格同名（`roles.card.skills` 与 `roles.capabilities` 同为「技能」），
+    // ⚠ 必须限定在详情里：卡面第一格同名（`roles.card.skills` 与 `roles.capabilities` 同为「技能」），
     // 不限定会先命中卡面那格（它本来就不该有 title）
-    const line = all('.drawer-body .count-line').find(
+    const line = all(`${DETAIL} .count-line`).find(
       (n) => n.querySelector('.count-label')?.textContent === t('roles.capabilities'),
     )
     expect(line, '技能段的分段头计数行不见了').toBeDefined()
@@ -333,30 +342,30 @@ describe('F5 落点：只列白名单，差集清单消失而计数行仍在', (
 
   it('知识范围过滤串降级为 `Ref kind="book"` 的 `title`（§1.5 #5）', async () => {
     await render('dev-1')
-    const bookRef = all('.drawer-body .ref').find((a) => a.textContent === 'prism')!
+    const bookRef = all(`${DETAIL} .ref`).find((a) => a.textContent === 'prism')!
     expect(bookRef).toBeDefined()
     expect(bookRef.getAttribute('title')).toBe(`${t('roles.knowledge.filter')}: role/dev-1`)
   })
 
-  it('抽屉不再有全量描述（§1.5 #6）：`.role-drawer-desc` 已删，描述只剩一句话', async () => {
+  it('详情不再有全量描述（§1.5 #6）：`.role-drawer-desc` 已删，描述只剩一句话', async () => {
     await render('dev-1')
     expect(all('.role-drawer-desc').length).toBe(0)
-    const desc = one('.drawer-body .role-desc')!
+    const desc = one(`${DETAIL} .role-desc`)!
     expect(desc.textContent).toBe('架构边界与跨模块契约。')
     expect(desc.getAttribute('title')).toBe(LONG_DESC)
   })
 
-  it('描述全文只有一个去处：深挖折叠内（§1.5 #6 的「全文进深挖折叠」）', async () => {
+  it('描述全文只有一个去处：正文区（§1.5 #6 的「全文进深挖折叠」，v10 F2 起正文区常驻）', async () => {
     await render('dev-1')
-    // 第一眼（卡面 + 抽屉）只出现那句话，全文不在这两处
-    expect(one('.drawer-body .swap-in > .role-desc')?.textContent).not.toBe(LONG_DESC)
-    // 全文在 `role-body` 折叠里（`role.body` 是 frontmatter 之后的正文，不含 description）
+    // 第一眼（卡面 + 详情）只出现那句话，全文不在这两处
+    expect(one(`${DETAIL} > .role-desc`)?.textContent).not.toBe(LONG_DESC)
+    // 全文在正文区里（`role.body` 是 frontmatter 之后的正文，不含 description）
     const full = one('.role-body .role-body-desc')
     expect(full?.textContent).toBe(LONG_DESC)
   })
 })
 
-describe('R-v8-4 深挖带：校验问题清单默认折叠 + 完整定义正文', () => {
+describe('R-v8-4 / v10 F2 深挖带：校验问题清单默认折叠 + 完整定义正文常驻', () => {
   it('校验问题清单是 `<details>` 且**默认不展开**（状态位由卡片 lamp 承担）', async () => {
     await render('dev-1')
     const fold = one<HTMLDetailsElement>('.role-issues')
@@ -368,12 +377,17 @@ describe('R-v8-4 深挖带：校验问题清单默认折叠 + 完整定义正文
     // error 级文本的 `--madder` 由 styles 契约锁
   })
 
-  it('完整定义正文同样是默认折叠的深挖带，与校验清单共用 summary 口径', async () => {
+  it('完整定义正文改为**常驻正文区**（v10 F2：不再是折叠的 `<details>`，正文走 Markdown）', async () => {
     await render('dev-1')
-    const fold = one<HTMLDetailsElement>('.role-body')!
-    expect(fold.open).toBe(false)
-    expect(fold.querySelector('summary')?.textContent).toBe(t('common.showDetails'))
-    expect(fold.querySelector('pre')?.textContent).toContain('dev-1')
+    const body = one<HTMLElement>('.role-body')!
+    expect(body.tagName.toLowerCase()).toBe('section')
+    // 不再折叠：它自己不是 `<details>`，里面也没有 summary / 裸 `<pre>`
+    expect(one('details.role-body')).toBeNull()
+    expect(body.querySelector('summary')).toBeNull()
+    expect(body.querySelector('pre')).toBeNull()
+    // 段头 + Markdown 渲染（`role.body = '# dev-1'` → `<h1 class="md-h1">dev-1</h1>`）
+    expect(body.querySelector('.role-body-head')?.textContent).toBe(t('roles.definitionBody'))
+    expect(body.querySelector('.md-body .md-h1')?.textContent).toBe('dev-1')
   })
 
   it('无校验问题的角色不渲染该折叠带（空的深挖项没有存在意义）', async () => {
@@ -384,35 +398,35 @@ describe('R-v8-4 深挖带：校验问题清单默认折叠 + 完整定义正文
   })
 })
 
-describe('R-v8-1 抽屉宽度：详情加宽、表单维持', () => {
-  it('详情抽屉渲染 `680px` + 视口上限 `72vw`（= `min(680px, 72vw)`）', async () => {
+describe('R-v8-1 / v10 F2 宽度：详情走 `.modal-lg`（CSS），编辑表单抽屉维持', () => {
+  it('详情是居中模态 `.modal.modal-lg`，**不写** inline 宽度（宽度口径归 CSS，值锁在 styles-role-modal）', async () => {
     await render('dev-1')
-    const drawer = one<HTMLElement>('.drawer')!
-    expect(drawer.style.width).toBe('680px')
-    expect(drawer.style.maxWidth).toBe('72vw')
+    const modal = one<HTMLElement>('.modal.modal-lg')
+    expect(modal).not.toBeNull()
+    expect(modal!.style.width).toBe('')
+    expect(modal!.style.maxWidth).toBe('')
+    // 详情不再是抽屉
+    expect(all('.drawer').length).toBe(0)
   })
 
-  it('编辑表单抽屉维持 `560px` + 默认上限 `96vw`（上限默认值不变）', async () => {
+  it('编辑表单抽屉维持 `560px` + 默认上限 `96vw`（详情模态与它并存，互不打扰）', async () => {
     await render('dev-1')
     await click(button(t('common.edit')))
     const drawers = all('.drawer') as HTMLElement[]
-    // 前置：两扇抽屉叠着（详情在下、表单在上）
-    expect(drawers.length).toBe(2)
-    expect(drawers[0]!.style.width).toBe('680px')
-    expect(drawers[0]!.style.maxWidth).toBe('72vw')
-    expect(drawers[1]!.style.width).toBe('560px')
-    expect(drawers[1]!.style.maxWidth).toBe('96vw')
+    // 前置：表单抽屉开着、详情模态仍在（详情不再是一扇抽屉，故只剩一扇）
+    expect(drawers.length).toBe(1)
+    expect(one('.modal.modal-lg')).not.toBeNull()
+    expect(drawers[0]!.style.width).toBe('560px')
+    expect(drawers[0]!.style.maxWidth).toBe('96vw')
   })
 
-  it('详情抽屉内容列挂 `.role-detail`（66ch 居中落点）；编辑表单抽屉不挂', async () => {
+  it('详情内容列挂 `.role-detail`（66ch 居中落点）；编辑表单抽屉不挂', async () => {
     await render('dev-1')
-    // 详情：滚动容器 `.drawer-body` 的内层就是居中列（`max-width/margin` 由 styles 契约锁）
-    expect(one('.drawer-body > .role-detail')).not.toBeNull()
+    // 详情：滚动容器 `.modal-content` 的内层就是居中列（`max-width/margin` 由 styles 契约锁）
+    expect(one('.modal-content > .role-detail')).not.toBeNull()
     await click(button(t('common.edit')))
-    const bodies = all('.drawer-body')
-    expect(bodies).toHaveLength(2)
-    expect(bodies[0]!.querySelector('.role-detail'), '详情抽屉（下）该有居中列').not.toBeNull()
-    expect(bodies[1]!.querySelector('.role-detail'), '表单抽屉（上，560）不该套 66ch 列').toBeNull()
+    const formBody = one('.drawer-body')!
+    expect(formBody.querySelector('.role-detail'), '表单抽屉（560）不该套 66ch 列').toBeNull()
   })
 
   it('未给 `width` 时**不渲染** inline 宽度（落回 `.drawer` 的 CSS 默认，其他页不受影响）', async () => {

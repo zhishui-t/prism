@@ -34,6 +34,12 @@
 >
 > **v8 F7 技能分类三入口（2026-09-16，design-v8 §3）**：新增 `skill categorize <name...> [--category <分类>]`（CLI）、`prism_skill_categorize`（MCP）、`GET /api/skills/categories` + `POST /api/skills/categorize`（HTTP）；`GET /api/skills` 与 `prism_skill_list` 响应**合并 `category` 字段**（R-v8-5，技能页语义分组的唯一数据源；映射里没有的技能**不加该键**）。映射落 `<PRISM_HOME>/skill-categories.json`（tmp + rename 原子写、每次访问重读磁盘、坏文件降级空表），**不校验技能是否存在**（R3 不做审核——分类判断归宿主；也不碰宿主技能文件）。`category` 省略 / 空串 = 清除；`names` 必填非空。⚠ `GET /api/skills/categories` 必须注册在 `/api/skills/:name` **之前**（路由器首个匹配即命中）。
 >
+> **v10 F3/F5/F9 服务端面（2026-09-17，design-v10）**：
+>
+> - **F3 外部技能删除（数据安全轨）**：新增 `DELETE /api/skills/external/:name` —— 删**外部技能**（人写在 `skills_dir` 下、非 Prism 产物的技能目录）：整目录搬进回收站，**200 + `{ skills_dir, removed: [目录], trash_id }`**（`trash_id` 供 UI 提示 3 天内可 `prism trash restore <id>` 还原）。错误：SKILL.md 含 Prism marker → **409 `id_conflict`**（提示走卸载）；目录不存在 / 存在但无 SKILL.md → **404**（非技能目录不可删）；`:name` 为空串 / `.` / `..` / 含路径分隔符 → **400**。`skills_dir` 取**配置解析后**的同源值（`resolveDirsFromHome(home,{rootExplicit:true}).skillsDir`，与 `GET /api/skills`、`installedSkillNames` 同源，**不用 `harnessPaths`**——prism.yaml 覆盖 `skills_dir` 时它会读错目录）；外部判定**按落点文件**（有 SKILL.md 且无 marker），**不查内置清单**——否则会误伤「复制内置后改写的人写同名技能」。`GET /api/skills/usage` 每行增只读 **`external_removable`**（= 有 SKILL.md 且无 marker；无 SKILL.md/未落盘/Prism 产物恒 `false`），供 UI 区分「删除」与「卸载」。
+> - **F5 导出时序图（调用链轨）**：`POST /api/arch/render` 增 **`mode: 'from-graph'`** 分支——入参 `{ mode, type: 'sequence', project, node }`（`node` = **图谱节点 id**，即四模式查询结果的 `other`，**不是符号名**：label 跨文件重名会静默选错）。服务端读 graph.json 一次 → 该节点 `source_file` 作 rootFile → `buildSequenceIr` → `renderDiagram`，响应沿用既有结构（`preview` URL 新标签打开）。三类 **`bad_request`**：节点 id 不存在 / 图谱无跨文件 calls 边 / **指定根文件无跨文件 calls 边**（高频路径，文案指引换起点）。产物名 `sequence-<消毒 id>-<yyyyMMdd-HHmmss>-<sha256(原始 id) 前 8 位>.html`（CJK 符号消毒后会同名互覆，靠短哈希防撞），落**项目源** `<projectRoot>/.prism/arch/sequence/`，**不落**全局 archify 目录（避免 arch 页双源列表堆积无归属噪音）。
+> - **F9 分层聚合·逐级探索（性能轨）**：新增 `GET /api/graph/rollup?project=&level=community|dir|file|symbol&parent=<合成 id?>` → `{ level, parent, total, truncated, nodes: [{ id, label, kind, symbol_count, community? }], edges: [{ from, to, weight }] }`（**不含 `project`**，形状钉死给前端）。合成 id 编码 `community:<n>` / `dir:<path>` / `file:<path>`（正斜杠）；community 层无 parent，dir/file/symbol 层 parent 必填。三层是**独立投影、非包含树**（同一文件的符号可属多个社区：dir 层计数只数该父社区成员，file/symbol 层是全图口径——下钻计数变化是设计语义，不是 bug）。`weight` = **跨组 calls 族边条数**（`calls`/`invokes`；**不计 `imports`/`re_exports` 等结构边**，与边自带的 `weight` 字段无关）。单层 >500 节点按 `symbol_count` 降序（label 字典序次级）截断，`total` = 截断前全量、`truncated` 标记，**edges 只保留两端都在返回节点集内的**（无悬挂边）。level 非法 / 该层缺 parent → **400**；parent 反解后在图中无对应实体 → **404**。`level=symbol&parent=file:<path>` 是 file 节点的**只读出口**：`nodes[].id` 是**真实图谱节点 id**（合成节点在四模式查询里必 404），`kind='symbol'`，`edges` 恒 `[]`。读图带**进程内缓存**（只包 read+parse、不缓存聚合结果，失效键 `path+mtime+size`）。
+>
 > **已废弃**：工作队列（`prism_work_*` 工具、`work` 命令、`/api/work/*`）——见 `work-queue.md` 顶部；下方 §1 的 `work` 分组与 §2.7 已失效。同理 `uninit` / `harness detect` / `skill sync` 均未实现。
 
 ---
@@ -49,7 +55,8 @@
 
 ```
 prism
-├── init                    接入初始化（注册 MCP + 复制 Skill + 建目录骨架）
+├── init                    接入初始化（注册 MCP + 复制 Skill + 建目录骨架；加 --yes 写默认宿主配置，
+│                           --harness-root 覆盖落点为测试/CI 专用）
 ├── uninit                  撤销接入  ❌ 未实现
 ├── serve                   控制台（HTTP API + web UI）：前台起；--ensure 后台幂等 / --check 查状态 / --stop 停
 ├── doctor                  环境自检（ZCode 探测、目录、权限、版本）
@@ -259,6 +266,7 @@ prism
 > | `render`（预览宿主形态） | ✅ role/team | ✅ | ❌ | 本地开发/排障工具，控制台不需要 |
 > | `validate` | ✅ role（全量）/ team（单条） | ❌ | ❌ | 校验结果随 `list`/`detail` 的 `issues` 返回，无需独立入口 |
 > | Skill 写（install/uninstall/update） | ✅ | ✅ | ✅ | **v6.2 已补齐**（原为唯一真缺口）：`skill list|install|uninstall` ↔ `prism_skill_list|install|uninstall` ↔ `POST /api/skills/install|uninstall` |
+> | 外部 Skill 删（`DELETE /api/skills/external/:name`） | ❌ | ❌ | ✅ | **有意不对称**（v10 F3）：外部技能是**落点事实**（人写目录），CLI/MCP 侧用文件系统即可达；控制台是唯一需要走 API 的消费方（要 `trash_id` 与 409/404 的分级提示） |
 > | `--from`（从既有定义复制） | ✅ role/team | ❌ | ❌ | 便于人手写；机器侧「读→改」即可 |
 > | 指定写目录 | ✅ `--source`（role=roles_dir / team=teams_dir） | ✅ 必填 | ✅ 必填 | team 侧另可用 `--roles-dir` 指定成员校验库 |
 >

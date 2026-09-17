@@ -61,16 +61,19 @@ pnpm run 3rd:init      # = git submodule update --init --recursive
 ### 2.3 接入宿主
 
 ```bash
-# 注册 MCP + 安装 Skill + 建目录骨架
-prism init --harness-root ~/.zcode
+# 注册 MCP + 安装 Skill + 建目录骨架（写入你真实的宿主目录，故要 --yes 确认）
+prism init --yes
 
 # 启动控制台（http://127.0.0.1:7777）
 prism serve
 ```
 
 `prism init` 会：① 探测宿主目录 ② 建 `<PRISM_HOME>` 骨架 ③ 安装 Prism Skill ④ 写 MCP 注册到宿主配置 ⑤ 提示重启会话。
+正常接入只走**默认落点**；`--harness-root <路径>` 覆盖落点是**测试/CI 专用**（把配置写到临时目录，宿主不读那里）。
 
-> **写守卫**：目标是默认宿主目录且未显式指定时，所有写命令会拒绝执行（`guard_required`），需加 `--yes` 或显式 `--harness-root`。防止误写你的真实宿主配置。
+> **写守卫**：目标是默认宿主目录且未显式指定时，所有写命令会拒绝执行（`guard_required`）。`prism init` 加 `--yes` 确认写入默认宿主配置（role/team/skill 等写命令另可用 `--harness-root` 或 `--yes`）。防止误写你的真实宿主配置。
+>
+> 清理：把 init 误指到项目目录后生成的 `cli/config.json` / `mcp.json` **可直接删除**（宿主不读该位置，删除不影响宿主里的注册）。
 
 ### 2.4 启用本地向量化（可选，但推荐）
 

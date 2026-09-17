@@ -1,0 +1,12 @@
+code-review-v10 门禁通过（2026-09-17）
+
+判定：有条件通过 → P1×2 + P2×4 整改核销全过，正式放行。
+- 复检核销：WorkBuddy deepseek-v4.1-flash / effort max（job-b5b17b58255b，裁决「可签核」）+
+  主审逐项自验六项全过（P1-1 计数实现+6 条叠层回归；P1-2 旧句零命中/三方一致；
+  P2 em-dash 可见值 0、F5 文案可执行、幽灵名零命中、rollup 取非空侧+fixture）。
+- 门禁：pnpm typecheck / lint / build 全绿；定向 vitest 112 文件 / 1289 条
+  （= 审次 1282 + overlay-scroll-lock 6 + edgeside fixture 1），web 单侧 641/641；
+  server 全量在负载下的 1-2 条抖动经单跑复验为既有已知 flake，非修复引入。
+- 非阻断记档：MINOR-1 web 错误分派 stub 未同步真实双判别词文案（行为正确，顺序约束待测试锁定）；
+  MINOR-2 修复记录「设计稿未改」一句落后于树（实况已改）；NIT graph.explore.note 措辞。
+- 详情：.agent-team/code-review-v10.md（含 §1 派修 / §2 记债 11 项 / 修复记录）。

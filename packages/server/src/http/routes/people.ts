@@ -13,10 +13,12 @@ import {
   activateTeam,
   createRoleDefinition,
   createTeamDefinition,
+  deleteExternalSkillDefinition,
   deleteRoleDefinition,
   deleteTeamDefinition,
   installedSkillNames,
   installBuiltinSkillDefinitions,
+  isExternalSkillRemovable,
   loadEffectiveSkills,
   loadRole,
   loadRoles,
@@ -68,6 +70,8 @@ export interface PeopleDeps {
  * - v6.1：读返回的目录字段统一为 snake_case（`roles_dir` / `teams_dir`），与写参数同名。
  * - v9 F3：`DELETE` 三条（角色/团队/Skill 卸载）改为**搬进回收站**（返回体附 `trash_id`），
  *   并新增只读 `GET /api/trash`（响应 snake_case 逐字段冻结）。
+ * - v10 F3：新增 `DELETE /api/skills/external/:name`（外部技能整目录进回收站）与
+ *   `/api/skills/usage` 的只读 `external_removable`。
  */
 export function peopleRoutes(deps: PeopleDeps): {
   roles: (ctx: RouteContext) => Promise<Envelope>
@@ -86,6 +90,7 @@ export function peopleRoutes(deps: PeopleDeps): {
   skillsEffective: (ctx: RouteContext) => Promise<Envelope>
   skillInstall: (ctx: RouteContext) => Promise<Envelope>
   skillUninstall: (ctx: RouteContext) => Promise<Envelope>
+  skillExternalDelete: (ctx: RouteContext) => Promise<Envelope>
   trash: (ctx: RouteContext) => Promise<Envelope>
   createTeam: (ctx: RouteContext) => Promise<Envelope>
   updateTeam: (ctx: RouteContext) => Promise<Envelope>
@@ -265,6 +270,10 @@ export function peopleRoutes(deps: PeopleDeps): {
    * 于是外部技能分类成功而 UI 仍落「未分类」。此处按**同一口径**逐条合并：
    * 映射里没有该技能 → **不加 `category` 键**（与 `/api/skills`、MCP `prism_skill_list` 一致）；
    * store 复用闭包里的 `categories` 单例（与 categorize / skillCategories 同一实现，不另建实例）。
+   *
+   * v10 F3：每行增**只读** `external_removable`（= 落点有 `SKILL.md` 且无 Prism marker），
+   * 供控制台区分「删除（外部技能）」与「卸载（Prism 产物）」——判定与
+   * `DELETE /api/skills/external/:name` 共用 `isExternalSkillRemovable`（同一单点，不各自判）。
    */
   const skillUsage = async (): Promise<Envelope> => {
     const [roleList, teamList, installed, categoryOf] = await Promise.all([
@@ -298,14 +307,14 @@ export function peopleRoutes(deps: PeopleDeps): {
         ensure(name).teams.push(team.team_id)
       }
     }
-    return ok(
-      [...usage.values()]
-        .map((entry) => ({
-          ...entry,
-          ...(categoryOf[entry.name] !== undefined ? { category: categoryOf[entry.name] } : {}),
-        }))
-        .sort((a, b) => a.name.localeCompare(b.name)),
+    const rows = await Promise.all(
+      [...usage.values()].map(async (entry) => ({
+        ...entry,
+        external_removable: await isExternalSkillRemovable(dirs.skillsDir, entry.name),
+        ...(categoryOf[entry.name] !== undefined ? { category: categoryOf[entry.name] } : {}),
+      })),
     )
+    return ok(rows.sort((a, b) => a.name.localeCompare(b.name)))
   }
 
   /** F-D2：有效 Skill 集（HTTP 面；三入口共用 `loadEffectiveSkills`）。 */
@@ -367,6 +376,20 @@ export function peopleRoutes(deps: PeopleDeps): {
     ok(await uninstallSkillDefinitions((await ctx.body()) as SkillWriteBody, trashStore, 'HTTP'))
 
   /**
+   * `DELETE /api/skills/external/:name`（v10 F3 服务端）：**外部技能**（人写、无 Prism marker）
+   * 整目录搬进回收站。200 + `{ skills_dir, removed, trash_id }`——不是 204（信封层无 204 通道，
+   * 且 `trash_id` 要回给 UI 提示「可恢复」）。
+   *
+   * 落点取**配置解析后**的 `dirs.skillsDir`（= `resolveDirsFromHome(home, {rootExplicit:true})`），
+   * 与 `installedSkillNames` / `GET /api/skills` 的 `skills_dir` **同源**：`prism.yaml` 覆盖
+   * `skills_dir` 时必须删在配置后的目录。**刻意不用 `harnessPaths().skillsDir`**——那只认适配器
+   * 默认，配置覆盖时会指向一个没有产物的目录（`wiring.ts:140-146` 的既有收口）。
+   * （`GET /api/skills/:name` 详情路由仍用 harnessPaths，属遗留债务：本轮不扩围不修。）
+   */
+  const skillExternalDelete = async (ctx: RouteContext): Promise<Envelope> =>
+    ok(await deleteExternalSkillDefinition(ctx.params.name ?? '', dirs.skillsDir, trashStore, 'HTTP'))
+
+  /**
    * `GET /api/trash`（v9 F3 §3）：**只读**回收站列表。
    *
    * 响应**逐字段冻结**（snake_case）：`[{id, kind, name, deleted_at, original_paths, broken}]`。
@@ -409,6 +432,7 @@ export function peopleRoutes(deps: PeopleDeps): {
     skillsEffective,
     skillInstall,
     skillUninstall,
+    skillExternalDelete,
     trash,
     createTeam,
     updateTeam: (ctx) => teamUpdateRoute(ctx),

@@ -11,10 +11,11 @@
  *  2. **卡面与抽屉共用规则**（§1.3 同构的结构保证）——`.role-desc` / `.role-tags` 不再带
  *     `.role-card` 前缀，否则两边各写一份必然漂移；
  *  3. **截断档**：职责 1 行、原则 2 行（§1.5 #2 / §1.1）；
- *  4. **深挖带口径**：校验清单与完整定义正文共用 summary，且两处都默认折叠（`<details>` 语义）；
+ *  4. **深挖带口径**：校验清单默认折叠（`<details>` 语义）；**v10 F2 起正文区不再折叠**
+ *     （`.role-body` 改常驻，与信息区之间走实色 hairline + 间距档，见文件末尾那组用例）；
  *  5. **砍掉的东西不再回来**：`.role-drawer-desc` / `.rsec-hint` / `.rsec-sub` / `.rsec-eff`
  *     / `.rsec-mark` 五条规则整条删除（`.rsec-label` 保留——`SkillScopeList.tsx` 仍在用）；
- *  6. **R-v8-1 的内容列口径**（评审 MIN-4）：角色详情抽屉内容列 `.role-detail` = 66ch 居中，
+ *  6. **R-v8-1 的内容列口径**（评审 MIN-4）：角色详情内容列 `.role-detail` = 居中列，
  *     与 `.skill-detail` 同源；且**不写进共用** `.drawer-body`（表单 / 团队页抽屉共用它）。
  *
  * 环境：默认 node（不写环境 pragma，同 `styles-*.test.ts` 的既有做法）。
@@ -86,21 +87,59 @@ describe('F8 §1.1/§1.4 卡片正面', () => {
 })
 
 describe('F8 §0.1 深挖带（默认折叠，summary 一行常驻）', () => {
-  it('校验清单与完整定义正文共用同一 summary 口径', () => {
-    const group = '\n.role-issues > summary, .role-body > summary {'
-    expect(BARE).toContain(group)
-    const rule = BARE.slice(BARE.indexOf(group), BARE.indexOf('}', BARE.indexOf(group)))
+  it('校验问题清单仍是默认折叠的深挖带（summary 三值：光标 / 字号 / 字色）', () => {
+    const rule = body('.role-issues > summary')
     expect(rule).toContain('cursor: pointer')
     expect(rule).toContain('font-size: var(--fs-200)')
     expect(rule).toContain('color: var(--mute)')
   })
 
-  it('两条深挖带都带 `margin-top: var(--s-4)`（与常用带拉开一档留白）', () => {
-    expect(body('.role-issues, .role-body')).toContain('margin-top: var(--s-4)')
+  it('校验清单带 `margin-top: var(--s-4)`（与常用带拉开一档留白）', () => {
+    expect(body('.role-issues')).toContain('margin-top: var(--s-4)')
   })
 
   it('error 级校验文本走 `--madder`（层级外的唯一着色，与层级无关）', () => {
     expect(body('.rsec-issue-text.err')).toContain('color: var(--madder)')
+  })
+})
+
+/**
+ * v10 F2：正文区（`.role-body`）从「细节折叠」改为「常驻正文块」——
+ * 与信息区之间是**实色 hairline + 间距档**，正文改由 Markdown 组件渲染。
+ * 这两条断言是本次改口的守卫：hairline 不许被换回虚线（`--rule` 实线是「明显分割」的口径），
+ * 也不许偷偷加回 `> summary` / `pre`（那就是把正文重新藏起来 / 打回原文）。
+ */
+describe('v10 F2 信息区 / 正文区之间的分割（实色 hairline + 间距档）', () => {
+  it('`.role-body` 是实色 `--rule` 上边线 + `--s-5` 顶距 + `--s-4` 内顶距（全在既有阶梯内）', () => {
+    const rule = body('.role-body')
+    expect(rule).toContain('border-top: 1px solid var(--rule)')
+    expect(rule).toContain('margin-top: var(--s-5)')
+    expect(rule).toContain('padding-top: var(--s-4)')
+    // 虚线是「引线」的口径（`.count-leader` / `.toc-leader`），分割条不许借它
+    expect(rule).toContain('solid')
+    expect(rule).not.toContain('dashed')
+    expect(rule).not.toContain('dotted')
+  })
+
+  it('正文区分段头与深挖带同档（`--fs-200` + `--mute`，不新增字号档）', () => {
+    const rule = body('.role-body-head')
+    expect(rule).toContain('font-size: var(--fs-200)')
+    expect(rule).toContain('color: var(--mute)')
+    expect(rule).toContain('font-weight: 600')
+  })
+
+  it('正文区**不再折叠**：没有 `.role-body > summary`，也没有 `.role-body pre`（正文走 Markdown）', () => {
+    expect(BARE).not.toMatch(/\n\.role-body > summary/)
+    expect(BARE).not.toMatch(/\n\.role-body pre \{/)
+    // 描述全文那一行仍在（§1.5 #6 的信息没减）
+    expect(body('.role-body-desc')).toContain('font-size: var(--fs-200)')
+  })
+
+  it('深挖带的组选择器只剩 `.role-issues`（`.role-body` 已从折叠口径里移出）', () => {
+    expect(BARE).toContain('\n.role-issues {')
+    expect(BARE).toContain('\n.role-issues > summary {')
+    expect(BARE).not.toContain('\n.role-issues, .role-body {')
+    expect(BARE).not.toContain('\n.role-issues > summary, .role-body > summary {')
   })
 })
 
@@ -139,7 +178,8 @@ describe('R-v8-1 内容列居中（MIN-4，2026-09-17 用户反馈后放宽）',
 
 describe('F8 §0.1 红线：不新增颜色 / 灰阶 / 字号档', () => {
   it('本批新增的类里只用既有 token（`--sheet-2`/`--rule`/`--buckram`/`--mute`/`--warn`/`--madder`）', () => {
-    for (const sel of ['.role-desc', '.role-tags', '.role-metrics', '.role-issues, .role-body']) {
+    // v10 F2：组选择器 `.role-issues, .role-body` 已拆开（正文区不再折叠），这里只锁仍在的那条
+    for (const sel of ['.role-desc', '.role-tags', '.role-metrics', '.role-issues']) {
       const rule = body(sel)
       // 任何十六进制色 / rgb() 字面量都是「新增色」的信号（本项目颜色只经 token）
       expect(rule, sel).not.toMatch(/#[0-9a-f]{3,8}\b/i)

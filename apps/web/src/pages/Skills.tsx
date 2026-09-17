@@ -17,9 +17,9 @@ import { State } from '../components/State.tsx'
 import { CopyCommand, PageHead, Pane, StatusTag, firstSentence } from '../components/ui.tsx'
 import { useAsync } from '../components/useAsync.ts'
 import { parseMarkdown } from '../markdown.ts'
-import { hrefOf } from '../route.ts'
+import { hrefOf, navigate } from '../route.ts'
 import { useT } from '../i18n.ts'
-import { groupSkills, UNCATEGORIZED, cleanSkillDescription } from './skills-logic.ts'
+import { groupSkills, UNCATEGORIZED, cleanSkillDescription, externalDeleteErrorKey } from './skills-logic.ts'
 
 /**
  * 技能页（v7 §4.3 S1-S10）：**三正交轴的技能台账**，不是「带徽标的列表」。
@@ -47,6 +47,11 @@ import { groupSkills, UNCATEGORIZED, cleanSkillDescription } from './skills-logi
  *   `/api/skills/categories` 全量表在本页**零消费方**）。
  * - **详情侧**：分组只存在于列表——详情侧无分组概念；居中的单位是**详情整体**
  *   （`.skill-detail` 包一层 66ch 居中列，命令块 / scope / 折叠三层都在同一列内）。
+ *
+ * **v10 F3ui 外部技能删除（本批）**：详情工具条的破坏性动作是**二选一**——
+ * usage 行 `external_removable === true`（宿主目录里人写、无 Prism 标记的目录）显「删除」
+ * （`DELETE /api/skills/external/:name`，整目录进回收站），否则显既有的「卸载」
+ * （只清 Prism 产物）。字段缺失 / `false` 一律按现状走卸载（内置与 Prism 产物零变更）。
  */
 
 interface SkillRow {
@@ -63,6 +68,12 @@ interface SkillRow {
    * `skills-logic.ts`（消费按 `?? ''`）。
    */
   category?: string
+  /**
+   * 外部可删态（v10 F3ui）：`true` 才把详情工具条的「卸载」换成「删除」（整目录进回收站）。
+   * 来源是 `GET /api/skills/usage` 的 `external_removable`（详情接口不下发该字段，故详情侧
+   * 按名字回查本行）；服务端不加键 / 给 `false` ⇒ 保持现状走卸载。
+   */
+  externalRemovable?: boolean
 }
 
 export function SkillsPage({ sel }: { sel?: string }) {
@@ -81,6 +92,15 @@ export function SkillsPage({ sel }: { sel?: string }) {
   const [view, setView] = useState<'detail' | 'effective'>('detail')
   const [busy, setBusy] = useState(false)
   const [pendingUninstall, setPendingUninstall] = useState<SkillDetail | null>(null)
+  /**
+   * 待确认的**外部技能删除**（F3ui）：存技能名——删除口只吃 `:name`（整目录由服务端按
+   * 落点搬运），不需要 `SkillDetail` 的其余字段，故不复用 `pendingUninstall` 的载荷。
+   */
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null)
+  /** 删除失败的就地反馈（模态未关时不能落到背后的列表上，同 `ConfirmModal#error` 的既有口径）。 */
+  const [deleteError, setDeleteError] = useState('')
+  /** 删除成功的**页级提示条**（列表刷新后人在列表上，反馈贴结果而不是留在已关的模态里）。 */
+  const [notice, setNotice] = useState('')
   const [feedback, setFeedback] = useState<{ kind: 'ok' | 'warn' | 'err'; lines: string[] } | null>(null)
 
   const key = sel?.trim() ?? ''
@@ -120,6 +140,9 @@ export function SkillsPage({ sel }: { sel?: string }) {
       // 已写过的 `category` 不被这条覆盖；`item` 无该键时是 `undefined`，`??=` 不落键
       // ⇒ 未分类就是 undefined，与「服务端不加键」同形态（分组哨兵仍由 `groupSkills` 归一）。
       row.category ??= item.category
+      // F3ui（v10）：外部可删态与 `category` **同源同路**（都只出现在 usage 路）——用 `=== true`
+      // 而非真值判断：服务端不下发该键时是 `undefined`，与 `false` 同档（保持现状走卸载）。
+      row.externalRemovable = item.external_removable === true
     }
     return [...map.values()].sort((a, b) => a.name.localeCompare(b.name))
   }, [skills.data, usage.data])
@@ -226,6 +249,39 @@ export function SkillsPage({ sel }: { sel?: string }) {
   }
 
   /**
+   * 删除**外部**技能（F3ui）：与 `uninstall` 是两条不同语义的动作（见本文件头注），
+   * 故独立一条链路而不是给 `uninstall` 加分支——两者的入参、返回值、失败面都不同。
+   *
+   * 三点刻意：
+   * 1. **不要求 `skills_dir`**：本口无 body，服务端用它自己解析的同源目录（`wiring.ts` 口径）；
+   *    `skills_dir` 读不回来时「卸载」要禁用，但删除不受这条影响（少一个假禁用）；
+   * 2. 失败码映射走 `skills-logic.ts#externalDeleteErrorKey`（纯函数、node 直测）；
+   *    未知码原文透出（`common.loadFailed`），不猜服务端文案；
+   * 3. 成功后若删的正是当前选中项 → 回列表页：实体已不存在，停在详情上只会看到
+   *    一次 404「未命中」（与角色页 D-2「删除后不留幽灵浮层」同一条裁决）。
+   */
+  const removeExternal = async () => {
+    if (pendingDelete === null) return
+    const name = pendingDelete
+    setBusy(true)
+    setDeleteError('')
+    setNotice('')
+    try {
+      const out = await teamApi.skillDeleteExternal(name)
+      setPendingDelete(null)
+      setNotice(t('skills.delete.done', { name, id: out.trash_id }))
+      if (key === name) navigate({ page: 'skills' })
+      refreshAll()
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      const mapped = externalDeleteErrorKey(msg)
+      setDeleteError(mapped !== null ? t(mapped) : t('common.loadFailed', { msg }))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /**
    * MINOR-13：`useAsync` 换 key 不清 `data`（`useAsync.ts:21`），首帧会把**上一个技能**的
    * 正文画到新 hash 下。只消费「名字与当前 key 一致」的那条（与 `Roles.tsx:111` 的
    * `linked.data.name === key` 同一守卫）；对不上且未报错时按未就绪走 loading，
@@ -233,6 +289,12 @@ export function SkillsPage({ sel }: { sel?: string }) {
    */
   const d = detail.data !== undefined && detail.data.name === key ? detail.data : undefined
   const staleDetail = detail.data !== undefined && detail.data.name !== key
+  /**
+   * 选中技能的「外部可删」态（F3ui）：详情接口（`GET /api/skills/:name`）不下发
+   * `external_removable`，故按名字回查 usage 路合出来的行——**行是它唯一的来源**，
+   * 不回查内置清单、也不按名字猜（判定归服务端，见 `SkillUsage.external_removable`）。
+   */
+  const externalRemovable = d !== undefined && rows.find((r) => r.name === d.name)?.externalRemovable === true
   const detailPane =
     key === '' ? (
       <Pane>
@@ -290,8 +352,10 @@ export function SkillsPage({ sel }: { sel?: string }) {
             dirMissing={dirMissing}
             busy={busy}
             feedback={feedback}
+            externalRemovable={externalRemovable}
             onInstall={() => void install(d.name)}
             onAskUninstall={() => setPendingUninstall(d)}
+            onAskDelete={() => setPendingDelete(d.name)}
           />
         )}
       </Pane>
@@ -337,7 +401,10 @@ export function SkillsPage({ sel }: { sel?: string }) {
 
         {dirMissing && <div className="banner small">{t('skills.dirMissing')}</div>}
         {/* R-6 Q2（按触发源就地）：安装/卸载的**唯一触发面是详情**（`onInstall`/`onAskUninstall` 只由
-            SkillBody 发起），故反馈条只渲染在详情内（见 SkillBody），页头不再镜像一份同样的结果。 */}
+            SkillBody 发起），故反馈条只渲染在详情内（见 SkillBody），页头不再镜像一份同样的结果。
+            F3ui 的**外部技能删除**是这条口径的例外：删除成功后被删技能已不存在，详情要收口回列表
+            （否则停在一次 404 上），反馈没有可依附的触发点 ⇒ 落到**页级**提示条（人在列表上）。 */}
+        {notice !== '' && <div className="banner small" role="status">{notice}</div>}
 
         <State loading={loading} error={error} empty={!loading && !error && rows.length === 0} emptyText={t('skills.empty')}>
           <div className="md">
@@ -452,6 +519,23 @@ export function SkillsPage({ sel }: { sel?: string }) {
           onCancel={() => setPendingUninstall(null)}
         />
       )}
+
+      {/* F3ui：外部技能删除 = 同一个确认零件（危险色 + 进回收站文案）。
+          ⚠ 与上面的卸载模态**不共用** `confirmDisabled` 判据：删除口无 body、目录由服务端解析，
+          本页读不到 `skills_dir` 时不该假装这条路走不通（少一个假禁用）。 */}
+      {pendingDelete !== null && (
+        <ConfirmModal
+          title={t('skills.delete.title', { name: pendingDelete })}
+          body={<p className="muted">{t('skills.delete.body')}</p>}
+          busy={busy}
+          error={deleteError}
+          onConfirm={() => void removeExternal()}
+          onCancel={() => {
+            setPendingDelete(null)
+            setDeleteError('')
+          }}
+        />
+      )}
     </>
   )
 }
@@ -469,6 +553,9 @@ export function SkillsPage({ sel }: { sel?: string }) {
  *   档位切换器（`.seg`）随之进折叠，但**行为不变**：`mode` 仍是本组件里那一个 `useState`，
  *   切换仍是原来的 `setMode`，跨技能重置仍由外层 `.swap-in` 的 `key` 决定（P2 旧语义），
  *   本轮只挪位置。（`skills-install-pending.test.ts` 只走安装按钮，未断言档位位置。）
+ * - **F3ui 破坏性动作**：`externalRemovable` 时出「删除」（整目录进回收站），否则出既有的
+ *   「卸载」——**二选一**，不是并排两个按钮：同一条目录上两者的语义互斥（卸载只清 Prism 产物，
+ *   对外部技能恒 `kept`），并排只会让用户选错。
  */
 function SkillBody({
   detail,
@@ -476,16 +563,21 @@ function SkillBody({
   dirMissing,
   busy,
   feedback,
+  externalRemovable,
   onInstall,
   onAskUninstall,
+  onAskDelete,
 }: {
   detail: SkillDetail
   skillsDir: string
   dirMissing: boolean
   busy: boolean
   feedback: { kind: string; lines: string[] } | null
+  /** 外部可删态（来自 usage 行）：`true` 才把「卸载」换成「删除」。 */
+  externalRemovable: boolean
   onInstall: () => void
   onAskUninstall: () => void
+  onAskDelete: () => void
 }) {
   const t = useT()
   const [mode, setMode] = useState<'render' | 'source'>('render')
@@ -530,12 +622,19 @@ function SkillBody({
       />
       <ScopeLayerRows installed={detail.installed} teams={detail.teams} roles={detail.roles} />
 
-      {/* 卸载是安装的对位动作，留在常用带可见处（不进深挖折叠）。 */}
+      {/* 卸载是安装的对位动作，留在常用带可见处（不进深挖折叠）。
+          F3ui：外部可删技能把这一格换成「删除」（同一位置、同一零件，语义换一条口）。 */}
       {detail.installed && (
         <div className="row" style={{ marginTop: 'var(--s-2)' }}>
-          <button type="button" className="tool-btn" disabled={busy || skillsDir === ''} onClick={onAskUninstall}>
-            {t('skills.uninstall.action')}
-          </button>
+          {externalRemovable ? (
+            <button type="button" className="tool-btn" disabled={busy} onClick={onAskDelete}>
+              {t('skills.delete.action')}
+            </button>
+          ) : (
+            <button type="button" className="tool-btn" disabled={busy || skillsDir === ''} onClick={onAskUninstall}>
+              {t('skills.uninstall.action')}
+            </button>
+          )}
         </div>
       )}
 

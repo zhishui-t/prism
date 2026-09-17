@@ -10,7 +10,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 
 import { useT } from '../i18n.ts'
-import { useOverlayLayer } from './overlay-stack.ts'
+import { useOverlayLayer, useScrollLock } from './overlay-stack.ts'
 
 /** 把一段长描述压成「一句话」：取首个句末标点之前，超长再截。 */
 export function firstSentence(text: string, max = 90): string {
@@ -186,21 +186,7 @@ export function Drawer({
   const t = useT()
   const box = useRef<HTMLElement>(null)
   useOverlayLayer({ container: box, onClose })
-
-  useEffect(() => {
-    // 滚动锁：v7 §2.7 锚点 9 之后**滚动容器是页面区 `.page`（body 不再滚）**，
-    // 故两处都要锁，否则抽屉打开时底下的列表仍能滚（锚点改动带来的必然跟随项）。
-    // 挂载级：Esc/焦点那套已挪进 `useOverlayLayer`，此处只做锁，不随 `onClose` 重跑。
-    const prev = document.body.style.overflow
-    const page = document.querySelector<HTMLElement>('.page')
-    const prevPage = page?.style.overflow ?? ''
-    document.body.style.overflow = 'hidden'
-    if (page !== null && page !== undefined) page.style.overflow = 'hidden'
-    return () => {
-      document.body.style.overflow = prev
-      if (page !== null && page !== undefined) page.style.overflow = prevPage
-    }
-  }, [])
+  useScrollLock()
 
   return (
     <div
@@ -226,6 +212,68 @@ export function Drawer({
         <div className="drawer-body">{children}</div>
         {footer !== undefined && <div className="drawer-foot">{footer}</div>}
       </aside>
+    </div>
+  )
+}
+
+/**
+ * 居中模态（v10 F2）：把一条定义的**全文**摊在屏幕中央看，而不是从右侧挤出来。
+ *
+ * 浮层契约与 `Drawer` **同源**（`useOverlayLayer` + `useScrollLock`）：Esc 只在栈顶时关、
+ * 点遮罩关、Tab 圈闭、关闭还原焦点、挂载期锁滚动。差别只有版式两处：
+ * 1. 面板走 `.modal`（K12 确认模态同一套 scrim / 面板 / 进场动画）+ `.modal-lg` 大版；
+ * 2. 结构是「头（标题 + 关闭）/ 内容（自滚）/ 脚（动作）」——**内容区吃剩余高度并自滚**，
+ *    长正文不会把面板撑出视口（`Drawer` 是整栏高度，这里必须有上限）。
+ *
+ * ⚠ 与 `ConfirmModal` 的分工：那个是**唯一确认零件**（danger 色确认钮、busy、二选一出口）；
+ * 本组件是**阅读容器**，不替调用方决定动作语义（footer 由调用方给）。
+ */
+export function Modal({
+  title,
+  ariaLabel,
+  onClose,
+  children,
+  footer,
+}: {
+  /** 面板标题：字符串直接作无障碍名；节点形态（如「色点 + 名字」）由调用方给 `ariaLabel`。 */
+  title: ReactNode
+  /** 无障碍名（`aria-label`）。省略时回落字符串型 `title`，再回落 `common.details`。 */
+  ariaLabel?: string
+  onClose: () => void
+  children: ReactNode
+  footer?: ReactNode
+}) {
+  const t = useT()
+  const box = useRef<HTMLDivElement>(null)
+  useOverlayLayer({ container: box, onClose })
+  useScrollLock()
+
+  return (
+    <div
+      className="modal-mask"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <div
+        ref={box}
+        tabIndex={-1}
+        className="modal modal-lg"
+        role="dialog"
+        aria-modal="true"
+        aria-label={ariaLabel ?? (typeof title === 'string' ? title : t('common.details'))}
+      >
+        <div className="modal-head">
+          <h3>{title}</h3>
+          <span className="spacer">
+            <button type="button" onClick={onClose}>
+              {t('common.close')}
+            </button>
+          </span>
+        </div>
+        <div className="modal-content">{children}</div>
+        {footer !== undefined && <div className="modal-foot">{footer}</div>}
+      </div>
     </div>
   )
 }

@@ -50,7 +50,8 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
 
 用法：
   prism --version
-  prism init [--home <PRISM_HOME>] [--harness-root <路径>] [--force]   接入初始化（五步）
+  prism init [--home <PRISM_HOME>] [--yes] [--force]   接入初始化（五步；正常接入用 --yes 写入默认宿主配置）
+                                                       --harness-root 覆盖落点，**测试/CI 专用**
   prism serve [--port 7777] [--host <h>]   启动 HTTP 服务（控制台 + API；前台阻塞，Ctrl+C 停）
   prism serve --ensure [--port 7777]       幂等确保**后台**运行：已在跑则复用，否则拉起（宿主按需启动用它）
   prism serve --check | --stop             查看后台服务状态 / 停止它

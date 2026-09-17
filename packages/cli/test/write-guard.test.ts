@@ -76,13 +76,40 @@ describe('B6 写守卫：默认宿主目录写入需确认', () => {
     expect(existsSync(join(directZcode, 'skills', 'prism', 'SKILL.md'))).toBe(true)
   })
 
-  it('prism init：默认链 + 无确认 → 阻止；--yes → 放行', async () => {
+  it('prism init：默认链 + 无确认 → 阻止（建议 --yes）；--yes → 放行', async () => {
     lines = []
     expect(await runCommand(bareCtx, ['init'])).toBe(1)
-    expect(lines.join('\n')).toContain('已阻止写入')
+    const blocked = lines.join('\n')
+    expect(blocked).toContain('已阻止写入')
+    // v10 F7：init 的守卫改为指向 `--yes`（init 的正常落点就是默认宿主目录）；
+    // `--harness-root` 在 init 语境只作测试/CI 用，不再作为「换个位置」的用户向建议。
+    expect(blocked).toContain('--yes')
+    expect(blocked).toContain('加 --yes 确认写入默认宿主配置')
+    expect(blocked).not.toContain('指定其他位置')
+    expect(blocked).not.toContain('或加 --yes')
+    expect(blocked).toContain('测试/CI 专用')
 
     lines = []
     expect(await runCommand(bareCtx, ['init', '--yes', '--json'])).toBe(0)
     expect(existsSync(join(fakeDefaultZcode, 'skills'))).toBe(true)
+  })
+
+  it('init 成功输出：--harness-root 标注「测试/CI 专用」（未探测到宿主时那句）', async () => {
+    // 用一个**不存在**的根：`harnessDetected` 为 false，才会打出推荐 --harness-root 的那句
+    const missingRoot = join(directZcode, 'not-there')
+    lines = []
+    expect(await runCommand(bareCtx, ['init', '--harness-root', missingRoot])).toBe(0)
+    const output = lines.join('\n')
+    expect(output).toContain('--harness-root')
+    expect(output).toContain('测试/CI 专用')
+  })
+
+  it('role 守卫文案不受 init 改动影响（--harness-root 仍是用户向出路，无「测试/CI 专用」标注）', async () => {
+    lines = []
+    expect(await runCommand(bareCtx, ['role', 'new', 'guard-role-text'])).toBe(1)
+    const blocked = lines.join('\n')
+    expect(blocked).toContain('--harness-root')
+    expect(blocked).toContain('加 --harness-root 指定其他位置')
+    expect(blocked).not.toContain('测试/CI 专用')
   })
 })

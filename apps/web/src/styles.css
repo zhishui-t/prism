@@ -417,15 +417,94 @@ tr:last-child td { border-bottom: 0; }
 .graph-page { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .graph-page > .page-head { flex: 0 0 auto; }
 .graph-query-card { flex: 0 0 auto; }
-.graph-studio-card { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; margin-bottom: 0; }
 
-/* Ontology Studio：iframe 吃掉全部剩余高度；查询结果作为右侧独立滚动栏，不挤压 iframe 高度 */
-.studio-split { flex: 1 1 auto; display: flex; gap: var(--s-3); min-height: 0; }
-.studio-split .iframe-wrap { flex: 1 1 auto; min-width: 0; min-height: 0; }
-.studio-note { flex: 0 0 auto; margin-top: var(--s-2); }
+/* v10 F8：主区（两态 = 查询结果 / 层级探索；无结果时是初始引导）。
+   `padding: 0` + `overflow: hidden`：内层（`.query-panel` / `.graph-guide` / `.explore-wrap`）
+   各自管自己的内边距与滚动——外层再留一道 padding 会让留白叠加，且滚动区被 padding 卡住。 */
+.graph-main { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; margin-bottom: 0; padding: 0; overflow: hidden; }
+.graph-view-bar { flex: 0 0 auto; padding: var(--s-2) var(--s-3); border-bottom: 1px solid var(--rule); }
+/* 结果面板在主区里独占一块（不再是 Studio 分栏的侧栏）——去掉分栏时代的固定宽度，
+   并收掉自身边框：`.pane.graph-main` 就是那道框，再套一层会画成双线。 */
+.graph-main > .query-panel { border: 0; border-radius: 0; }
+
+/* 初始引导（F8）：没发过查询时的主区内容，进页面即所见。
+   `.graph-loading` 与它共用同一块「主区主体」的版位（吃满 + 自滚 + 同一档内边距）——
+   查询在途时摆骨架、不在途时摆引导，两者切换不该有位移。 */
+.graph-guide,
+.graph-loading { flex: 1 1 auto; min-height: 0; overflow: auto; padding: var(--s-4); }
+.graph-guide > h3 { margin: 0 0 var(--s-2); font-size: var(--fs-500); font-weight: 600; }
+.graph-guide-list {
+  margin: var(--s-3) 0 0;
+  padding-left: var(--s-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  font-size: var(--fs-200);
+  line-height: var(--lh-ui);
+  color: var(--mute);
+}
+
+/* ===== v10 F9ui 层级探索（社区 → 目录 → 文件 → 文件内符号） =====
+   零新增颜色：卡片面走 `--sheet-2`（与 `.query-panel` 同一档「第三档面」），
+   强调只用 `--buckram`（全局主色 = 主动 / 选中 / 链接），次要文字走 `--mute`。
+   动效只动 `transform`（沿用 `--t-fast` / `--ease` / `--press`，reduced-motion 由文件末尾
+   的通配块统一归零）——不新增关键帧。 */
+.explore-wrap { flex: 1 1 auto; min-height: 0; overflow: auto; padding: var(--s-3) var(--s-4); }
+/* 面包屑：只表达**探索路径**（三层是独立投影不是包含树），故不做层级缩进、不给树形符号 */
+.crumb { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-1); }
+.crumb-cell { display: inline-flex; align-items: center; gap: var(--s-1); }
+.crumb-sep { color: var(--mute); }
+.crumb-back {
+  font: inherit;
+  font-size: var(--fs-200);
+  color: var(--mute);
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.crumb-back:hover { color: var(--ink); }
+.crumb-here { font-size: var(--fs-200); font-weight: 600; color: var(--ink); }
+.explore-note { margin-top: var(--s-1); line-height: var(--lh-ui); }
+
+.explore-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr));
+  gap: var(--s-2);
+  margin-top: var(--s-3);
+}
+.explore-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  text-align: left;
+  padding: var(--s-2);
+  background: var(--sheet-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-2);
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+  transition: transform var(--t-fast) var(--ease);
+}
+.explore-card:hover,
+.explore-card:focus-visible { transform: translateY(calc(-1 * var(--press))); border-color: var(--buckram); }
+.explore-kind { font-size: var(--fs-100); color: var(--mute); }
+.explore-label { word-break: break-all; }
+/* 「查此节点」只出现在 file 卡片上（dir/community 的合成 id 拿去查询必然 404） */
+.explore-open { font-size: var(--fs-100); color: var(--buckram); }
+.explore-weight { font-variant-numeric: tabular-nums; }
+.explore-more { margin-top: var(--s-3); }
+.explore-truncated { margin-top: var(--s-2); line-height: var(--lh-ui); }
+
+.explore-symbols { margin-top: var(--s-3); }
+.explore-symbol { width: 100%; }
+.explore-symbol-id { margin-left: auto; word-break: break-all; }
 
 .query-panel {
-  flex: 0 0 380px;
+  flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
   display: flex;
@@ -455,11 +534,66 @@ tr:last-child td { border-bottom: 0; }
 .graph-cand { display: flex; flex-direction: column; gap: var(--s-1); }
 .graph-cand-list { max-height: 40vh; overflow-y: auto; }
 
-/* 窄屏：结果面板改到图谱下方并自带滚动，避免左右分栏过窄 */
-@media (max-width: 1000px) {
-  .studio-split { flex-direction: column; }
-  .query-panel { flex: 0 0 auto; max-height: 40vh; }
+/* ===== v10 F5 调用链图（零依赖 SVG）+ 时序图导出条 =====
+   形状随响应走三档：纵向链（path）/ 中心-辐射（relations）/ 分组列表（affected）。
+   本组只补**布局、两处方向色与 SVG 的文字口径**，色值全部取既有 token
+   （不新增变量、不写 hex）：
+   - 出边（当前节点 → 对端）= `--buckram`：与全局「主色 = 主动 / 选中 / 链接」同源；
+   - 入边（对端 → 当前节点）= `--lamp`：借它的暖色相与主色拉开，让两个方向一眼可分。
+     ⚠ 这是 `--lamp` 在本文件里唯一一处**非状态语义**的消费（状态语义仍只走 `--warn` 别名），
+       别处不要跟着学；要第三个方向色时先回色板讨论，不要就地再借一个。
+   - 几何（viewBox 坐标 / 节点尺寸）由 `pages/graph-logic.ts` 按数据算出，**不进本文件**
+     ——样式只管颜色 / 字族 / 字号 / 过渡，改布局不必同时改两处。 */
+.chain-graph-wrap { margin-bottom: var(--s-2); }
+.chain-graph { display: block; width: 100%; height: auto; }
+/* SVG 的 `<text>` 拿不到 `.mono` 那套（那个类还带 padding/背景一族的语义），
+   故这里显式给字族 / 字号 / 填充；居中靠 `text-anchor` + `dominant-baseline`。 */
+.chain-graph text {
+  font-family: var(--font-code);
+  font-size: var(--fs-200);
+  fill: var(--ink);
+  text-anchor: middle;
+  dominant-baseline: middle;
 }
+.chain-node rect { fill: var(--sheet-2); stroke: var(--rule); }
+.chain-node.center rect { fill: var(--buckram); stroke: var(--buckram); }
+.chain-node.center text { fill: var(--on-buckram); font-weight: 600; }
+/* 可点节点：悬停 / 键盘聚焦抬起一档（幅度复用 `--press`，方向取反——按压是往下，
+   抬起是往上；时长与缓动都走 motion token，reduced-motion 由文件末尾的通配块归零）。 */
+.chain-node.pick { cursor: pointer; transition: transform var(--t-fast) var(--ease); }
+.chain-node.pick:hover,
+.chain-node.pick:focus-visible { transform: translateY(calc(-1 * var(--press))); }
+.chain-node.pick:hover rect,
+.chain-node.pick:focus-visible rect { stroke: var(--buckram); }
+.chain-edge { fill: none; stroke-width: 1.5; }
+.chain-edge.out,
+.chain-edge.down { stroke: var(--buckram); }
+.chain-edge.in { stroke: var(--lamp); }
+.chain-arrow.out,
+.chain-arrow.down { fill: var(--buckram); }
+.chain-arrow.in { fill: var(--lamp); }
+/* 图例：色块用 `currentColor`（同 `.book-toc .toc-lamp` 的写法），故一列只为定色相 */
+.chain-legend {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  margin-top: var(--s-1);
+  font-size: var(--fs-100);
+  color: var(--mute);
+}
+.chain-key { display: inline-flex; align-items: center; gap: var(--s-1); }
+.chain-key.center,
+.chain-key.out { color: var(--buckram); }
+.chain-key.in { color: var(--lamp); }
+.chain-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; flex: none; }
+/* affected 的分组：组头沿用既有 `.count-line.section`（计数口径只有一处），组内行沿用
+   `.list-row`；这里只抹掉首组头顶的留白，免得面板顶部凭空空一档。 */
+.chain-group:first-child .count-line { margin-top: 0; }
+
+/* 导出条（F5）：夹在面板头与结果之间。按钮走既有 `.tool-btn`，口径说明占满余宽。 */
+.graph-seq-bar { padding: var(--s-1) var(--s-2); border-bottom: 1px solid var(--rule); }
+.graph-seq-bar .small { flex: 1; min-width: 0; }
+.graph-seq-bar .act-bar { margin: var(--s-2) 0 0; }
 
 /* ===== 知识库（书架式布局） ===== */
 
@@ -499,12 +633,24 @@ tr:last-child td { border-bottom: 0; }
 .book-toc .toc-book { cursor: pointer; padding: var(--s-1) var(--s-3); }
 .book-toc .toc-book:hover { background: var(--sheet-2); }
 .book-toc .toc-book-main { display: flex; align-items: baseline; gap: var(--s-2); }
-.book-toc .toc-bookname { flex-shrink: 0; font-size: var(--fs-300); color: var(--ink); font-weight: 600; }
+/* v10 F6：书名（骨架第一档）`--fs-300` → `--fs-400`——与**条目行**（`.toc-item` 的 `--fs-300`，
+   本批不动）拉开一档，扫目录时先看到书。取值仍在 `--fs` 阶梯内（不新增字号档）；
+   副行（`.toc-book-sub`）与字色/字重口径不动。
+   v10 黑盒回归：模块行升到 `--fs-400`（下面 `.toc-mod`）后，原 `--fs-400` 的书名与之同档，
+   骨架里「书 > 模块」的两级只剩字重差，扫读时仍分不清。故书名再升一档到 `--fs-500`
+   （阶梯里的「列表行主标题 / 区块标题」档），回到 书 500 > 模块 400 > 条目 300 的三级阶梯。 */
+.book-toc .toc-bookname { flex-shrink: 0; font-size: var(--fs-500); color: var(--ink); font-weight: 600; }
 .book-toc .toc-book-sub { display: flex; align-items: center; gap: var(--s-1); padding-left: calc(var(--s-3) + var(--s-2)); font-size: var(--fs-200); color: var(--mute); }
 /* 分隔符用 `--mute`：`--rule` 是发丝线色（1.3:1），当文字用等于不可见。 */
 .book-toc .toc-sep { color: var(--mute); }
-/* 目录节点行（F2）：原「模块行」——同一条规则承载多级目录，缩进口径与 `.toc-item` 一致。 */
-.book-toc .toc-mod { display: flex; align-items: baseline; gap: var(--s-2); padding: 3px var(--s-3) 3px calc(var(--s-5) + var(--toc-depth, 0) * var(--s-3)); font-size: var(--fs-200); color: var(--mute); font-weight: 600; cursor: pointer; }
+/* 目录节点行（F2）：原「模块行」——同一条规则承载多级目录，缩进口径与 `.toc-item` 一致。
+   v10 F6：书行 `--fs-300` → `--fs-400`（上面 `.toc-bookname`）、本行 `--fs-200` → `--fs-300`
+   ——骨架（书 / 目录）各升一档，与**条目行**（`.toc-item` 的 `--fs-300`，本批不动）拉开；
+   层级仍由缩进 + chev 表达，字重/字色口径一字未动。
+   v10 黑盒回归：上面的「各升一档」让本行落在 `--fs-300`——**正是条目行那一档**，两者只靠
+   加粗分不开（用户原话「分不清」）。故本行再升一档到 `--fs-400`（界面正文档），
+   与条目行错开一档；配合上面书名升到 `--fs-500`，骨架两级各自大于它统领的下一级。 */
+.book-toc .toc-mod { display: flex; align-items: baseline; gap: var(--s-2); padding: 3px var(--s-3) 3px calc(var(--s-5) + var(--toc-depth, 0) * var(--s-3)); font-size: var(--fs-400); color: var(--mute); font-weight: 600; cursor: pointer; }
 .book-toc .toc-mod:hover { color: var(--ink); }
 .book-toc .toc-modname { flex-shrink: 0; }
 .book-toc .toc-note { padding: 3px var(--s-3) 3px var(--s-5); }
@@ -664,6 +810,21 @@ tr:last-child td { border-bottom: 0; }
 .modal-body { font-size: var(--fs-300); line-height: var(--lh-read); white-space: pre-line; }
 .modal-foot { display: flex; justify-content: flex-end; align-items: center; gap: var(--s-2); margin-top: var(--s-3); }
 
+/* v10 F2：居中模态的**大版**（角色详情）——`<Modal>` 用，与上面的确认框共用
+   `.modal-mask`（遮罩 + 居中）与 `.modal`（面板 / 进场动画），只加尺寸与滚动结构。
+   口径：`min(880px, 100vw − --s-6)` 撑住「一条定义的全文」，窄屏由 `100vw − --s-6` 回落；
+   `max-height: 85vh` 是**面板**上限（`.drawer` 那时是整屏高，居中版式必须有上限，
+   否则长正文会把面板顶出视口）——内容区在面板内自滚，头 / 脚常驻。
+   ⚠ `.modal-lg` 只作用于本组件；K12 的确认框保持 420px 不动（它是「一句话确认」的版式）。 */
+.modal.modal-lg { display: flex; flex-direction: column; width: min(880px, calc(100vw - var(--s-6))); max-height: 85vh; padding: 0; }
+.modal-head { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-4) var(--s-4); border-bottom: 1px solid var(--rule); }
+/* 头字与 `.drawer-head h3` 同档（`--fs-500`/600）：两种浮层版式的标题是同一层级。 */
+.modal-head h3 { margin: 0; font-size: var(--fs-500); font-weight: 600; }
+.modal-head .spacer { margin-left: auto; }
+.modal-content { flex: 1; min-height: 0; overflow-y: auto; padding: var(--s-4) var(--s-4) var(--s-5); }
+/* 大版面板自己收边距（padding: 0），故脚的内边距与顶距由这条给（确认框那条 `--s-3` 顶距留给 K12）。 */
+.modal.modal-lg .modal-foot { margin-top: 0; padding: var(--s-3) var(--s-4); border-top: 1px solid var(--rule); }
+
 /* 侧栏底部：知识总量（kbStats） */
 .book-footer {
   position: sticky;
@@ -765,9 +926,17 @@ tr:last-child td { border-bottom: 0; }
 .rsec-issue-text { flex: 1; min-width: 12ch; }
 /* 唯一的层级外着色之一：error 级校验文本（与层级无关，§0.1） */
 .rsec-issue-text.err { color: var(--madder); }
-/* 深挖带（§0.1：**默认折叠**，summary 一行常驻）——校验问题清单与完整定义正文共用同一 summary 口径。 */
-.role-issues, .role-body { margin-top: var(--s-4); }
-.role-issues > summary, .role-body > summary { cursor: pointer; font-size: var(--fs-200); color: var(--mute); }
+/* 深挖带（§0.1：**默认折叠**，summary 一行常驻）——校验问题清单仍走这条。 */
+.role-issues { margin-top: var(--s-4); }
+.role-issues > summary { cursor: pointer; font-size: var(--fs-200); color: var(--mute); }
+/* v10 F2：正文区与上面的信息区**明显分割**——实色 hairline（`--rule`）+ 间距档
+   （`--s-5` 顶距 + `--s-4` 内顶距，均在既有阶梯内）。
+   ⚠ 这里**不再**是 `.role-issues` 的折叠兄弟：正文全文改由 `<Modal>` 承载（居中大版），
+   折叠反而把「md 要渲染」这句要求藏起来 ⇒ 撤 summary、规则单列（`.role-body` 从上面那条
+   组选择器里移出，`.role-body pre` 规则随 `<pre>` 一并删）。 */
+.role-body { margin-top: var(--s-5); padding-top: var(--s-4); border-top: 1px solid var(--rule); }
+/* 正文区分段头：与深挖带 summary 同档（`--fs-200` + `--mute`），不新增字号档。 */
+.role-body-head { margin: 0 0 var(--s-2); font-size: var(--fs-200); font-weight: 600; color: var(--mute); }
 /* F8 §2.1 团队页深挖带（沉淀规则 / 仲裁链）：**与上面两条同口径**（`--fs-200` + `--mute` 的 summary、
    `--s-4` 顶距）——单独成条而非并入上面的组选择器，是为了让「角色页深挖带」那两条规则的范围
    与 `styles-role-hierarchy.test.ts` 的断言一字不动（同值不同选择器，不是第二套口径）。 */
@@ -778,24 +947,25 @@ tr:last-child td { border-bottom: 0; }
    第一眼正文不上色，§0.1）。 */
 .skill-desc { margin: 0 0 var(--s-2); font-size: var(--fs-300); line-height: var(--lh-ui); }
 /* F8 §3.1 技能页深挖带（§3.4 #1/#4）：安装路径 + SKILL.md 全文（含 render｜源码档位）默认折叠；
-   summary 口径与角色页 `.role-body` 逐值相同——同样单独成条而非并入上面的组选择器，
-   免得动到 `styles-role-hierarchy.test.ts` 的断言面（同值不同选择器，不是第二套口径）。 */
+   summary 口径与角色页 `.role-issues`（校验问题清单）逐值相同——同样单独成条而非并进上面的
+   组选择器，免得动到 `styles-role-hierarchy.test.ts` 的断言面（同值不同选择器，不是第二套口径）。
+   ⚠ v10 F2 起角色页的**正文区**（`.role-body`）已不折叠，故这里比对的对象从它换成 `.role-issues`。 */
 .skill-deep { margin-top: var(--s-4); }
 .skill-deep > summary { cursor: pointer; font-size: var(--fs-200); color: var(--mute); }
 /* F8 §2.1 团队第一眼②：干什么（description）——2 行截断，全文进 `title`。
    与卡片的 `.role-desc`（1 行）同族但不同档：团队页这里是首屏唯一正文行，给 2 行 `--fs-300`。 */
 .pane-desc { margin: 0; font-size: var(--fs-300); line-height: var(--lh-ui); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .role-issues .rsec-issue:first-of-type { margin-top: var(--s-1); }
-/* §1.5 #6：描述全文（第一眼只留一句话职责）落在深挖折叠里，与深挖档同口径。 */
+/* §1.5 #6：描述全文（第一眼只留一句话职责）落在正文区，与深挖档同口径。
+   （`.role-body pre` 已随 v10 F2 删除：正文不再是 `<pre>` 原文，改由 Markdown 组件渲染。） */
 .role-body-desc { margin: var(--s-2) 0 0; font-size: var(--fs-200); color: var(--mute); line-height: var(--lh-ui); }
-.role-body pre { margin-top: var(--s-2); padding: var(--s-3); background: var(--sheet-2); border-radius: var(--r-2); white-space: pre-wrap; font-size: var(--fs-200); line-height: var(--lh-ui); }
-/* v8 R-v8-1 闭合点（评审 MIN-4）：角色**详情**抽屉的内容列 66ch 居中。宽度改 680/72vw 只兑现了
-   「常用带一行多放几个 Ref」，设计明文的「内容列 66ch 居中」此前没落（正文仍满宽贴边）。
-   口径与 `.skill-detail`（技能详情）同源：`max-width: 66ch` + `margin: 0 auto`（块级触顶后
-   auto 外边距均分剩余宽度），**不新增列宽档**。
-   ⚠ 刻意**不写进共用的 `.drawer-body`**：那是详情 / 编辑表单（560）/ 团队页三处抽屉共用的
-   滚动容器，改默认等于越权改另两处版式；且上限落在滚动容器上会让滚动条贴到 66ch 列边
-   （`.skill-detail` 同样是滚动容器 `.md-detail` 的**内层**包裹，此处照抄该结构）。 */
+/* v8 R-v8-1 闭合点（评审 MIN-4）：角色**详情**的内容列居中。宽度改 680/72vw 只兑现了
+   「常用带一行多放几个 Ref」，设计明文的「内容列居中」此前没落（正文仍满宽贴边）。
+   口径与 `.skill-detail`（技能详情）同源：`max-width: min(75rem, 100%)` + `margin: 0 auto`
+   （块级触顶后 auto 外边距均分剩余宽度），**不新增列宽档**。
+   v10 F2：详情从抽屉搬进 `.modal-lg` 后这条**一字未动**——`.modal-content` 是新的滚动容器
+   （`.drawer-body` 不再承载详情），内层包一层居中的结构、以及「约束不落在滚动容器上」的理由
+   都与 `.skill-detail` 嵌在 `.md-detail` 里时相同。 */
 .role-detail { max-width: min(75rem, 100%); margin: 0 auto; }
 .field > span { font-size: var(--fs-200); color: var(--mute); }
 .field .hint { font-size: var(--fs-100); color: var(--mute); }
@@ -1100,6 +1270,16 @@ tr:last-child td { border-bottom: 0; }
   cursor: pointer;
 }
 .skill-group-head:hover { background: var(--sheet-2); }
+/* v10 F4：组头字号**升一档**（`.count-line.section` 的 `--fs-200` → `--fs-300`）——
+   组头是这一屏唯一的骨架，与组内行名（`.md-row .t` 的 `--fs-200`）由此拉开一档。
+   取值仍在 `--fs` 阶梯内（不新增字号档）；`bare` 变体的其余声明（引线 `flex: 1`）不动，
+   故只覆盖字号，规则单独成条而不是改写全局 `.count-line.section`（角色/团队页共用它）。 */
+.skill-group-head .count-line.section { font-size: var(--fs-300); }
+/* v10 F4：组内技能行**缩进一档**（`--s-3`，拼在 `.md-row` 既有的 `--s-2` 左内边距上）——
+   组名与行名之间出现一个档位的纵向节奏，「这行属于哪个分类」不靠猜。
+   写法遵守既有先例（`.toc-item` 的 `calc(var(--s-5) + var(--toc-depth,0) * var(--s-3))`）：
+   只做 token 组合，不写死像素。 */
+.skill-group .md-row { padding-left: calc(var(--s-2) + var(--s-3)); }
 
 /* ── F7 技能详情居中（层级稿 §3.5 实施要点 1–3）──────────────────────────────
    居中的单位是**详情整体**：命令块 / scope / 深挖折叠三层都在同一个居中列内

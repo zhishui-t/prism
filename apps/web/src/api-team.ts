@@ -154,6 +154,30 @@ export interface SkillUsage {
    * 只出现在 usage 路，分组时要靠这里补上（见 `Skills.tsx` 的 `row.category ??=`）。
    */
   category?: string
+  /**
+   * 外部可删态（v10 F3，design-v10 F3「UI 数据支撑」）：`true` = 该技能落点是宿主技能目录里
+   * 一个**有 SKILL.md、且不带 Prism 标记**的目录 ⇒ 可以整目录搬进回收站（「删除」）。
+   *
+   * 判定在服务端（按**落点文件**判，不按名字查内置清单——否则「复制内置后改写的人写同名技能」
+   * 在 UI 恒显「卸载」而卸载恒 `kept`）。服务端**不加该键**时按 `undefined` 读 ⇒ 与 `false`
+   * 同档：保持现状（内置 / Prism 产物显「卸载」）。
+   */
+  external_removable?: boolean
+}
+
+/**
+ * 外部技能删除结果（`DELETE /api/skills/external/:name`，design-v10 F3 契约冻结）。
+ *
+ * 与 v9 删除族同形：**200 + 返回体**（不是 204——信封层没有无 body 通道，且 `trash_id`
+ * 是 UI「可恢复」提示的唯一来源）。
+ */
+export interface SkillExternalRemoveResult {
+  /** 宿主技能目录（服务端配置解析后的同源值） */
+  skills_dir: string
+  /** 被搬走的目录（整目录，含 references/ 等子项） */
+  removed: string[]
+  /** 回收站单元 id，可 `prism trash restore <id>` 还原 */
+  trash_id: string
 }
 
 /** 单个技能详情（GET /api/skills/:name）：正文 + 安装路径 + 引用方。 */
@@ -412,5 +436,21 @@ export const teamApi = {
     request<SkillUninstallOutcome>('/api/skills/uninstall', {
       method: 'POST',
       body: JSON.stringify(input),
+    }),
+
+  /**
+   * 删除**外部**技能（`DELETE /api/skills/external/:name`，v10 F3）。
+   *
+   * 与 `skillUninstall` 的分工：卸载只清 Prism 产物（外部技能恒 `kept`），本口才真把整个
+   * 技能目录搬进回收站。服务端的失败面（UI 逐条映射人话，见 `skills-logic.ts`）：
+   * - `id_conflict`（409）：落点 SKILL.md 带 Prism 标记 → 该走卸载；
+   * - `not_found`（404）：目录不存在 / 没有 SKILL.md（非技能目录）；
+   * - `bad_request`：`:name` 消毒没过（空串 / `.` / `..` / 含分隔符 / 根自身）。
+   *
+   * `:name` 走 `encodeURIComponent`（服务端在解码**之后**做消毒，两侧不重复表达同一条规则）。
+   */
+  skillDeleteExternal: (name: string) =>
+    request<SkillExternalRemoveResult>(`/api/skills/external/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
     }),
 }

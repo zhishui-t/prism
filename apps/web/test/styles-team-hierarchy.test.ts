@@ -8,8 +8,9 @@
  *
  * 本文件锁四件事（层级与密度都靠 CSS 表达，DOM 断言看不见）：
  *  1. **第一眼描述行**（`.pane-desc`）——`--fs-300` + `--lh-ui` + **2 行截断**（§2.1，全文进 `title`）；
- *  2. **深挖带口径**——`.team-deep` 与角色页的 `.role-body` **逐值相同**（`--s-4` 顶距、
- *     summary `--fs-200` + `--mute`），不是第二套口径；
+ *  2. **深挖带口径**——`.team-deep` 与角色页的折叠带 `.role-issues` **逐值相同**（`--s-4` 顶距、
+ *     summary `--fs-200` + `--mute`），不是第二套口径（v10 F2 起角色页正文区 `.role-body`
+ *     改常驻、不再折叠，故比对对象是仍在的 `.role-issues`）；
  *  3. **组折叠的可发现入口**——`.scope-group > summary` 是组头（R-v8-7），有指针光标；
  *  4. **红线**：本批新增类不引入颜色/灰阶/新字号档（只用既有 token），且 F3 的两栏容器口径未动。
  *
@@ -40,19 +41,6 @@ function decl(selector: string, prop: string): string {
   return m![1]!.trim()
 }
 
-/**
- * 组选择器（`.a, .b > summary` 这种）的规则体：`body()` 只认从行首起、**单个**选择器的写法，
- * 角色页两条深挖带是组选择器，故另开一个入口按整串匹配。
- */
-function groupDecl(group: string, prop: string): string {
-  const at = BARE.indexOf(`\n${group} {`)
-  expect(at, `styles.css 里找不到组规则 ${group}`).toBeGreaterThan(-1)
-  const rule = BARE.slice(BARE.indexOf('{', at) + 1, BARE.indexOf('}', at))
-  const m = new RegExp(`(?:^|;)\\s*${prop}:\\s*([^;]+);`).exec(rule)
-  expect(m, `${group} 里没有 ${prop}`).not.toBeNull()
-  return m![1]!.trim()
-}
-
 describe('F8 §2.1 第一眼②：描述收 2 行（全文进 `title`）', () => {
   it('`.pane-desc` 是 2 行截断的 `-webkit-box`（半套写法等于没截断）', () => {
     const rule = body('.pane-desc')
@@ -72,24 +60,28 @@ describe('F8 §2.1 第一眼②：描述收 2 行（全文进 `title`）', () =>
   })
 })
 
-describe('F8 §2.1 深挖带：`.team-deep` 与 `.role-body` 同口径（不是第二套）', () => {
-  it('summary 三值（光标 / 字号 / 字色）与角色页深挖带逐字相同', () => {
-    const roleSummary = '.role-issues > summary, .role-body > summary'
+describe('F8 §2.1 / v10 F2 深挖带：`.team-deep` 与角色页折叠带 `.role-issues` 同口径（不是第二套）', () => {
+  it('summary 三值（光标 / 字号 / 字色）与角色页折叠带逐字相同', () => {
     expect(decl('.team-deep > summary', 'cursor')).toBe('pointer')
-    expect(decl('.team-deep > summary', 'font-size')).toBe(groupDecl(roleSummary, 'font-size'))
-    expect(decl('.team-deep > summary', 'color')).toBe(groupDecl(roleSummary, 'color'))
+    expect(decl('.team-deep > summary', 'font-size')).toBe(decl('.role-issues > summary', 'font-size'))
+    expect(decl('.team-deep > summary', 'color')).toBe(decl('.role-issues > summary', 'color'))
     expect(decl('.team-deep > summary', 'font-size')).toBe('var(--fs-200)')
     expect(decl('.team-deep > summary', 'color')).toBe('var(--mute)')
   })
 
-  it('顶距与常用带拉开一档（`--s-4`，与 `.role-issues` / `.role-body` 同值）', () => {
+  it('顶距与常用带拉开一档（`--s-4`，与 `.role-issues` 同值）', () => {
     expect(decl('.team-deep', 'margin-top')).toBe('var(--s-4)')
-    expect(decl('.team-deep', 'margin-top')).toBe(groupDecl('.role-issues, .role-body', 'margin-top'))
+    expect(decl('.team-deep', 'margin-top')).toBe(decl('.role-issues', 'margin-top'))
   })
 
-  it('角色页那两条既有规则**未被改写**（本轮只加同值的新选择器，不动别人的断言面）', () => {
-    expect(BARE).toContain('\n.role-issues, .role-body {')
-    expect(BARE).toContain('\n.role-issues > summary, .role-body > summary {')
+  it('角色页那条折叠带规则**未被改写**（v10 F2 只把 `.role-body` 从组里移出，取值一字未动）', () => {
+    expect(BARE).toContain('\n.role-issues {')
+    expect(BARE).toContain('\n.role-issues > summary {')
+    expect(decl('.role-issues > summary', 'font-size')).toBe('var(--fs-200)')
+    expect(decl('.role-issues > summary', 'color')).toBe('var(--mute)')
+    // v10 F2：正文区 `role-body` 改常驻（实色 hairline），不再是这条折叠口径的兄弟
+    expect(BARE).not.toContain('\n.role-issues, .role-body {')
+    expect(BARE).not.toContain('\n.role-issues > summary, .role-body > summary {')
   })
 })
 

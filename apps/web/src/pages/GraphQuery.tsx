@@ -3,7 +3,8 @@
  *
  * 为什么单开一个文件：查询区从「一个自由文本框 + graphify 原样输出」变成
  * 「模式（谁调用它 / 它调用谁 / A→B 调用链 / 改动影响谁）+ 关系类型 + 结果列表」，
- * 而结果面板挂在 CodeGraph 页的 Studio 分栏里（与查询卡不同 DOM 父节点），
+ * 而结果面板由图谱页主区另外摆放（`CodeGraph.tsx`，与查询卡不同 DOM 父节点 ——
+ * F8 前那个「Studio 分栏」已随 iframe 一起退役），
  * 故这里把「状态 + 两个渲染件」收在一处，`CodeGraph.tsx` 只做摆放。
  *
  * 契约：`design-v8.md §2 F4`（含审核修订 #3/#10）与
@@ -18,6 +19,19 @@
  *
  * 视觉：只用既有类（`.seg` / `.list-row` / `.tag` / `.rel-link` / `.act-bar` / `.mono`）
  * 与 `styles.css` 里本文件新增的 `graph-rel-*` 布局类，**不新增颜色与字号档**。
+ *
+ * 2026-09-17（v10 F5）：结果区加**调用链图**（零依赖 SVG，`./CallChainGraph.tsx`）与
+ * **时序图导出**（`POST /api/arch/render` 的 `mode=from-graph` 分支，契约见 `api.ts` 的
+ * `ARCH_RENDER_ENDPOINT` / `ARCH_RENDER_MODE_FROM_GRAPH`）。
+ * 落点取舍：`relations` / `path` 两档图与**精确行清单并存**（图答「形状」，清单答「到底有哪些」，
+ * 清单不截断且有 kind + file:line）；`affected` 一档**只有图**——它的「图」本身就是分组列表，
+ * 再加一份同义清单就是同一份数据的两次呈现。纯函数（形状判据 / 布局 / 分组 / 导出寻址 /
+ * 错误码映射）全在 `./graph-logic.ts`，`formatLocation` 亦随之迁走。
+ *
+ * 2026-09-17（v10 F9ui）：加 `pickSymbol` —— 层级探索里点「文件内符号」也走这一处查询状态。
+ * 它**不复用** `drill`：`drill` 按当前模式分派，而探索态下用户可能正停在 path/affected 档，
+ * 那时 `drill` 直接 return（点了没反应）；也不能先 `setMode` 再 `drill`（同 tick 闭包里的
+ * `mode` 还是旧值）。故它直接落到 relations 执行体并把 chip 拨回「谁调用它」。
  */
 
 import { useEffect, useRef, useState, type ReactNode } from 'react'
@@ -31,6 +45,8 @@ import {
   type GraphRelations,
 } from '../api.ts'
 import { useT, type DictKey } from '../i18n.ts'
+import { CallChainGraph, SequenceExport } from './CallChainGraph.tsx'
+import { formatLocation, sequenceAddress } from './graph-logic.ts'
 
 /* 方向字形（纯装饰，集中定义避免散落在模板串里被当成内容读）：
    `←` = 入边（对端 → 当前节点，即「谁调用它」）；`→` = 出边（当前节点 → 对端）。 */
@@ -114,6 +130,8 @@ export interface GraphQueryController {
   drill: (other: string, label: string) => void
   /** 多义候选：以该 id 重查 */
   pickCandidate: (candidate: GraphRelationCandidate) => void
+  /** 层级探索来的「查此节点」：**强制切到「谁调用它」**再以该 id 查（见实现处注释） */
+  pickSymbol: (id: string, label: string) => void
   clear: () => void
 }
 
@@ -243,6 +261,21 @@ export function useGraphQuery(project: string): GraphQueryController {
     drill(candidate.id, candidate.label)
   }
 
+  /**
+   * v10 F9ui：层级探索里点「文件内符号」= 对这个**真实节点 id** 发四模式查询。
+   *
+   * 不复用 `drill`——它按**当前模式**分派，而用户可能是在 path/affected 档切去探索的，
+   * 那时 `drill` 直接 return（点了没反应）。也不能写成「先 `setMode('in')` 再 `drill`」：
+   * `setMode` 改的是 state，同一个事件闭包里读到的 `mode` 还是旧值。
+   * 故这里直接落到 relations 的执行体，并同步把模式 chip 拨到「谁调用它」——
+   * 查询框回填 label、请求传 id 的口径与 `drill` 完全一致。
+   */
+  const pickSymbol = (id: string, label: string): void => {
+    setModeState('in')
+    setNode(label !== '' ? label : id)
+    void runRelations(id, 'in')
+  }
+
   const setMode = (next: GraphQueryMode): void => {
     if (next === mode) return
     setModeState(next)
@@ -274,16 +307,9 @@ export function useGraphQuery(project: string): GraphQueryController {
     run,
     drill,
     pickCandidate,
+    pickSymbol,
     clear,
   }
-}
-
-/** 调用点定位文本（`file:line`；两段都可缺，缺哪段不显示哪段——不做拼接假象）。 */
-export function formatLocation(file: string, line: string): string {
-  if (file === '' && line === '') return ''
-  if (file === '') return line
-  if (line === '') return file
-  return `${file}:${line}`
 }
 
 /** 查询卡：模式 chips + 关系类型 + 输入行（+ path 的终点输入）。 */
@@ -375,9 +401,12 @@ export function GraphQueryCard({ q }: { q: GraphQueryController }) {
 }
 
 /**
- * 结果面板（挂在 Studio 分栏右列）。
+ * 结果面板（由 `CodeGraph.tsx` 摆在图谱页主区）。
  *
- * 无结果时不渲染任何东西（返回 null），保持 Studio 全宽——与改造前「有结果才出面板」一致。
+ * 无结果时不渲染任何东西（返回 null），保持主区全宽——与改造前「有结果才出面板」一致。
+ *
+ * v10 F5：`body` 里先出**调用链图**，再出该模式专属的精确清单（口径见文件头注）。
+ * 导出条（`SequenceExport`）夹在面板头与结果之间：它作用于**当前结果**，不属于结果本身。
  */
 export function GraphResultPanel({ q }: { q: GraphQueryController }) {
   const t = useT()
@@ -396,14 +425,24 @@ export function GraphResultPanel({ q }: { q: GraphQueryController }) {
           : t('graph.rel.total', { n: value.total })}
       </span>
     )
-    body = <RelationsBody value={value} dir={dir} onDrill={q.drill} onPick={q.pickCandidate} />
+    body = (
+      <>
+        <CallChainGraph result={result} onNodePick={q.drill} />
+        <RelationsBody value={value} dir={dir} onDrill={q.drill} onPick={q.pickCandidate} />
+      </>
+    )
   } else if (result.kind === 'path') {
     head = result.value.found ? (
       <span className="small muted">
         {result.value.hops !== null ? t('graph.path.hops', { n: result.value.hops }) : ''}
       </span>
     ) : null
-    body = <PathBody value={result.value} />
+    body = (
+      <>
+        <CallChainGraph result={result} onNodePick={q.drill} />
+        <PathBody value={result.value} />
+      </>
+    )
   } else {
     head = (
       <span className="small muted">
@@ -411,7 +450,8 @@ export function GraphResultPanel({ q }: { q: GraphQueryController }) {
         {result.value.depth !== null ? ` · ${t('graph.affected.depth', { n: result.value.depth })}` : ''}
       </span>
     )
-    body = <AffectedBody value={result.value} />
+    // affected 只出图：它的图就是「按关系分组的受影响节点列表」，再加一份同义清单没有新信息
+    body = <CallChainGraph result={result} onNodePick={q.drill} />
   }
 
   return (
@@ -423,6 +463,8 @@ export function GraphResultPanel({ q }: { q: GraphQueryController }) {
           {t('common.close')}
         </button>
       </div>
+      {/* 导出寻址 id 从当前结果里取（唯一取处）；拿不到就禁用并说明原因，不拿 label 顶替 */}
+      <SequenceExport project={q.project} address={sequenceAddress(result)} />
       <div className="query-result graph-rel-list">{body}</div>
     </div>
   )
@@ -521,27 +563,10 @@ function PathBody({ value }: { value: GraphPath }) {
 }
 
 /**
- * 受影响节点列表。
+ * 受影响节点列表 → **v10 F5 已并入 `./CallChainGraph.tsx` 的 `AffectedGroups`**
+ * （该模式在 F5 里的呈现就是「按关系分组的列表图」）。
  *
- * ⚠ **不可点击**：`/api/graph/affected` 只回 label（没有 id），而 label 不唯一——
- * 拿它当寻址主键会查错节点。要追问请用「谁调用它/它调用谁」两档（那里回的是 id）。
+ * 从那里继承的既有裁决：**不可点击**——`/api/graph/affected` 只回 label（没有 id），
+ * 而 label 不唯一，拿它当寻址主键会查错节点。要追问请用「谁调用它/它调用谁」两档
+ * （那里回的是 id）。
  */
-function AffectedBody({ value }: { value: GraphAffected }) {
-  const t = useT()
-  if (value.nodes.length === 0) {
-    return <div className="small muted">{t('graph.affected.none')}</div>
-  }
-  return (
-    <>
-      {value.nodes.map((node, index) => (
-        <div className="list-row graph-rel-row" key={`${node.label}|${node.relation}|${index}`}>
-          <span className="mono graph-rel-peer">{node.label}</span>
-          {node.relation !== '' && <span className="tag">{node.relation}</span>}
-          {node.location !== null && node.location !== '' && (
-            <span className="mono small muted graph-rel-loc">{node.location}</span>
-          )}
-        </div>
-      ))}
-    </>
-  )
-}

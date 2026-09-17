@@ -14,10 +14,10 @@
  * Esc 只在**本模态是浮层栈顶**时才取消（M1）：模态叠在抽屉上时按 Esc 只关模态，
  * 再按才关抽屉。浮层栈与 Tab 圈闭见 `./overlay-stack.ts`。
  */
-import { useEffect, useRef, type ReactNode } from 'react'
+import { useRef, type ReactNode } from 'react'
 
 import { useT } from '../i18n.ts'
-import { useOverlayLayer } from './overlay-stack.ts'
+import { useOverlayLayer, useScrollLock } from './overlay-stack.ts'
 
 export function ConfirmModal({
   title,
@@ -51,19 +51,8 @@ export function ConfirmModal({
   const confirmRef = useRef<HTMLButtonElement>(null)
 
   useOverlayLayer({ container: box, onClose: onCancel, initialFocus: confirmRef })
-
-  useEffect(() => {
-    // 滚动锁：挂载级，不随 `onCancel` 重跑（Esc/焦点那套已挪进 `useOverlayLayer`）。
-    const prev = document.body.style.overflow
-    const page = document.querySelector<HTMLElement>('.page')
-    const prevPage = page?.style.overflow ?? ''
-    document.body.style.overflow = 'hidden'
-    if (page !== null && page !== undefined) page.style.overflow = 'hidden'
-    return () => {
-      document.body.style.overflow = prev
-      if (page !== null && page !== undefined) page.style.overflow = prevPage
-    }
-  }, [])
+  // 滚动锁（v10 F2 起与 `Drawer` / `Modal` 同一实现）：挂载级，不随 `onCancel` 重跑。
+  useScrollLock()
 
   return (
     <div

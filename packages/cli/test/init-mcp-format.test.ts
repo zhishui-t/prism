@@ -230,6 +230,61 @@ describe('prism init：MCP 注册形态分派', () => {
     expect(output).not.toContain('mcp.servers.prism')
   })
 
+  it('平铺形态：既有条目带 `type` + 未知键且内容等价 → unchanged（type 不参与比较）', async () => {
+    const { home, root, ctx: baseCtx } = await makeHarness()
+    await installPlugin(home)
+    process.env['PRISM_HARNESS'] = 'workbuddy'
+    const lines: string[] = []
+    const ctx: CommandContext = { ...baseCtx, stdout: (l) => lines.push(l) }
+    // 先把真实条目写出来，再按「等价但写法不同」派生：`type`（平铺形态 Prism 不写）、
+    // args 换一种分隔符写法、宿主自加的 `disabled`
+    expect(await runCommand(ctx, ['init', '--home', home, '--harness-root', root])).toBe(0)
+    const configPath = join(root, 'mcp.json')
+    const written = await readJson(configPath)
+    const entry = (written['mcpServers'] as Record<string, unknown>)['prism'] as Record<string, unknown>
+    const args = (entry['args'] as string[]).map((a) => (a.includes('\\') ? a.replace(/\\/g, '/') : a.replace(/\//g, '\\')))
+
+    await writeFile(
+      configPath,
+      `${JSON.stringify({ mcpServers: { prism: { disabled: true, env: entry['env'], args, command: 'node.exe', type: 'stdio' } } }, null, 2)}\n`,
+      'utf-8',
+    )
+    const before = await readFile(configPath, 'utf-8')
+
+    lines.length = 0
+    expect(await runCommand(ctx, ['init', '--home', home, '--harness-root', root])).toBe(0)
+    expect(lines.join('\n')).toContain('MCP 注册未变化')
+    expect(await readFile(configPath, 'utf-8')).toBe(before)
+  })
+
+  it('平铺形态：--force 覆盖时未知键与宿主写的 type 保留，Prism 管的字段被覆盖', async () => {
+    const { home, root, ctx: baseCtx } = await makeHarness()
+    await installPlugin(home)
+    process.env['PRISM_HARNESS'] = 'workbuddy'
+    const lines: string[] = []
+    const ctx: CommandContext = { ...baseCtx, stdout: (l) => lines.push(l) }
+    expect(await runCommand(ctx, ['init', '--home', home, '--harness-root', root])).toBe(0)
+    const configPath = join(root, 'mcp.json')
+    const written = await readJson(configPath)
+    const entry = (written['mcpServers'] as Record<string, unknown>)['prism'] as Record<string, unknown>
+
+    await writeFile(
+      configPath,
+      `${JSON.stringify({ mcpServers: { prism: { disabled: true, type: 'stdio', ...entry, args: ['/stale/server.js'] } } }, null, 2)}\n`,
+      'utf-8',
+    )
+
+    lines.length = 0
+    expect(await runCommand(ctx, ['init', '--home', home, '--harness-root', root, '--force'])).toBe(0)
+    expect(lines.join('\n')).toContain('MCP 注册已按 --force 覆盖')
+
+    const after = (await readJson(configPath))['mcpServers'] as Record<string, unknown>
+    const prism = after['prism'] as Record<string, unknown>
+    expect(prism['args']).toEqual(entry['args'])
+    expect(prism['disabled']).toBe(true)
+    expect(prism['type']).toBe('stdio')
+  })
+
   it('prism harness list 能看到插件适配器（external）', async () => {
     const { home, ctx } = await makeHarness()
     await installPlugin(home)

@@ -10,11 +10,13 @@ import {
 } from '../api-team.ts'
 import { ConfirmModal } from '../components/ConfirmModal.tsx'
 import { CountLine } from '../components/CountLine.tsx'
+import { MarkdownBlocks } from '../components/Markdown.tsx'
 import { NavRow } from '../components/NavRow.tsx'
 import { Ref } from '../components/ref.tsx'
 import { State } from '../components/State.tsx'
-import { CopyCommand, Drawer, EmptyBlock, PageHead, firstSentence, stripStrongMarkers } from '../components/ui.tsx'
+import { CopyCommand, Drawer, EmptyBlock, Modal, PageHead, firstSentence, stripStrongMarkers } from '../components/ui.tsx'
 import { useAsync } from '../components/useAsync.ts'
+import { parseMarkdown } from '../markdown.ts'
 import { hrefOf, navigate } from '../route.ts'
 import { useT, type DictKey } from '../i18n.ts'
 import { buildRoleInput } from './roles-form-logic.ts'
@@ -33,6 +35,10 @@ import { buildRoleInput } from './roles-form-logic.ts'
  *    `margin-top: auto` 把它钉在卡片底部。
  * 4. **`roles_dir` 必填且来自读回值**（design-v7 §2.4）：表单预填 `GET /api/roles`
  *    的 `rolesDir`、可改、显式提交；读回为空则禁用提交，绝不猜宿主目录。
+ *
+ * **v10 F2**：详情从右侧抽屉改为**居中模态**（`<Modal>`，浮层契约与 `Drawer` 同源）——
+ * 一条定义的全文要在屏幕中央读，不是从侧边挤出来；正文区改用 `Markdown` 组件渲染，
+ * 与上面的信息区之间以**实色 hairline + 间距档**分割。编辑表单仍走 `Drawer`（不在本批范围）。
  */
 
 const COLOR_MAP: Record<string, string> = {
@@ -119,6 +125,13 @@ export function RolesPage({ sel }: { sel?: string }) {
   const role = key === '' ? null : linkedRole ?? roleList.find((r) => r.name === key) ?? null
   /** 深链未命中（已删 / 名字错）：列表与单角色请求都落定才判定，避免首帧误报。 */
   const notFound = key !== '' && !roles.loading && !linked.loading && role === null
+
+  /**
+   * 详情正文的 Markdown 块（v10 F2）：`role.body` 是 frontmatter 之后的正文，
+   * 渲染走与技能详情**同一条路径**（`parseMarkdown` → `MarkdownBlocks`，样式挂 `.md-body`）。
+   * `role` 为 null 时给空数组——hooks 不可条件调用，故依赖项是 `role` 本身（换选中即重解析）。
+   */
+  const bodyBlocks = useMemo(() => (role === null ? [] : parseMarkdown(role.body).blocks), [role])
 
   const effective = useAsync(
     () => (key === '' ? Promise.resolve(null) : teamApi.effectiveSkills(key).catch(() => null)),
@@ -246,24 +259,25 @@ export function RolesPage({ sel }: { sel?: string }) {
       )}
 
       {role !== null && (
-        <Drawer
-          /* R-v8-1：详情抽屉加宽到 `min(680px, 72vw)`（编辑表单抽屉维持 560）。
-             ⚠ 宽度**不作为层级手段**（F8 §1.6）——层级仍由三段带子表达，加宽只影响常用带
-             一行的 `Ref` 个数。`.drawer-body` 内部滚动，窄屏由 `72vw` 兜住。 */
-          width={680}
-          maxVw={72}
+        <Modal
+          /* v10 F2：详情 = **居中模态**（宽度口径随之从 `min(680px, 72vw)` 抽屉改为
+             `.modal-lg` 的 `min(880px, 100vw − --s-6)`——居中版式不再受「侧栏百分比」约束）。
+             `aria-label` 显式给名字：标题是「色点 + 名字」的节点形态，读屏取不到纯文本。 */
           title={
             <span className="row">
               <span className="role-dot" style={{ background: colorOf(role.color) }} />
               {role.name}
             </span>
           }
+          ariaLabel={role.name}
           onClose={() => navigate({ page: 'roles' })}
           footer={
             <>
               <button type="button" className="tool-btn" onClick={() => setForm({ mode: 'edit', initial: role })}>
                 {t('common.edit')}
               </button>
+              {/* F1：删除入口**只此一处**（不另起一处「删除」按钮）——确认文案与 v9 回收站口径
+                  对齐（见 i18n `roles.delete.body`），确认后走既有 `DELETE /api/roles/:name`。 */}
               <button
                 type="button"
                 className="tool-btn"
@@ -276,9 +290,9 @@ export function RolesPage({ sel }: { sel?: string }) {
             </>
           }
         >
-          {/* v7.1 P2：换角色时抽屉正文**轻过渡**（纯 opacity，`key` 让动画随换选中重放）。
-              `role-detail` = R-v8-1 的「内容列 66ch 居中」落点（MIN-4）：它必须挂在滚动容器
-              `.drawer-body` 的**内层**——那容器是详情 / 编辑表单 / 团队页三处共用的，改它越权。 */}
+          {/* v7.1 P2：换角色时正文**轻过渡**（纯 opacity，`key` 让动画随换选中重放）。
+              `role-detail` = R-v8-1 的「内容列居中」落点（MIN-4）：它挂在 `.modal-content`
+              （滚动容器）的**内层**——那容器是详情模态自己的，与抽屉版式互不影响。 */}
           <div className="swap-in role-detail" key={role.name}>
             {/* 第一眼带（F8 §1.3 同构）：与卡片正面**同一个组件**、同一顺序、同一视觉手段
                 —— 点开是放大，不是换重心。 */}
@@ -374,16 +388,26 @@ export function RolesPage({ sel }: { sel?: string }) {
               </details>
             )}
 
-            {/* 深挖带·二：完整定义正文（§1.1：折叠是唯一去处）。
-                §1.5 #6：第一眼与卡面只留一句话职责，**描述全文**落到这里
-                （`role.body` 是 frontmatter 之后的正文，不含 `description`，故单独补一行）。 */}
-            <details className="role-body">
-              <summary>{t('common.showDetails')}</summary>
+            {/* 正文区（v10 F2）：与上面的信息区以**实色 hairline + 间距档**分割
+                （`.role-body` 的 `border-top: 1px solid var(--rule)` + `--s-5`/`--s-4`），
+                正文走 Markdown 渲染器 —— 与技能详情**同一条渲染路径**（不再是 `<pre>` 原文）。
+                §1.5 #6：第一眼与卡面只留一句话职责，**描述全文**在这里补一行
+                （`role.body` 是 frontmatter 之后的正文，不含 `description`）。 */}
+            <section className="role-body">
+              <h4 className="role-body-head">{t('roles.definitionBody')}</h4>
               <p className="role-body-desc">{role.description}</p>
-              <pre>{role.body}</pre>
-            </details>
+              {role.body.trim() === '' ? (
+                <div className="small muted">{t('roles.bodyEmpty')}</div>
+              ) : (
+                /* `md-read` = 正文档度量（`--fs-read`/`--lh-read`/`--font-read`），
+                   与技能详情的 `md-body md-read` 同口径；`.md-body` 才是渲染器自己的容器类。 */
+                <div className="md-body md-read">
+                  <MarkdownBlocks blocks={bodyBlocks} />
+                </div>
+              )}
+            </section>
           </div>
-        </Drawer>
+        </Modal>
       )}
 
       {form !== null && (

@@ -1,8 +1,9 @@
 import { readFile, stat, writeFile, mkdir } from 'node:fs/promises'
 import { createReadStream } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { createHash } from 'node:crypto'
+import { join, relative, resolve, sep } from 'node:path'
 
-import { buildTeamWorkflowIr } from '@prism/agents'
+import { buildSequenceIr, buildTeamWorkflowIr, normalizeGraph } from '@prism/agents'
 import { PrismError } from '@prism/core'
 
 import { loadTeam, teamNotFoundMessage } from '../../roles/index.js'
@@ -27,6 +28,7 @@ import {
   sanitizeArtifactName,
 } from '../../graph/arch-placement.js'
 import { ProjectRegistry } from '../../graph/registry.js'
+import { readCodeGraph } from '../../graph/graphify.js'
 import type { RouteContext } from '../router.js'
 
 export interface ArchDeps {
@@ -103,12 +105,36 @@ function assertArtifactFile(file: string): void {
   }
 }
 
+/** 本地时间戳 `yyyyMMdd-HHmmss`（与 `init` / 回收站目录名同口径）。 */
+function localStamp(date: Date = new Date()): string {
+  const pad = (value: number): string => String(value).padStart(2, '0')
+  return (
+    `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}` +
+    `-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`
+  )
+}
+
+/**
+ * `from-graph` 分支的产物名：`sequence-<消毒 id>-<yyyyMMdd-HHmmss>-<短哈希>`。
+ *
+ * **短哈希不是装饰**：节点 id 可以全是 CJK（`sanitizeArtifactName` 会把它们逐字换成 `_`），
+ * 两个不同节点在同一秒内导出就会撞成同一个文件名而**静默互相覆盖**；哈希取的是**原始 id**，
+ * 故消毒后同名的不同 id 仍然可区分。
+ */
+function sequenceArtifactName(nodeId: string): string {
+  const safeId = sanitizeArtifactName(nodeId, 'node')
+  const hash = createHash('sha256').update(nodeId).digest('hex').slice(0, 8)
+  return `sequence-${safeId}-${localStamp()}-${hash}`
+}
+
 /**
  * 架构图谱路由（knowledge-base.md §4.4 / D10）：
  * - GET  /api/arch/types              五类图清单
  * - GET  /api/arch/diagrams           已渲染产物列表（**双源**：项目 `.prism/arch/` + `<home>/archify/`）
  * - POST /api/arch/validate           校验 IR（body: { type, ir }）
- * - POST /api/arch/render             渲染并落盘（body: { type, ir, name?, project?, book?, module? }）
+ * - POST /api/arch/render             渲染并落盘（body: { type, ir, name?, project?, book?, module? }）；
+ *                                     `mode: 'from-graph'` 时**不收 ir**，由服务端读图谱自组 IR
+ *                                     （F5：body: { mode, type:'sequence', project, node }）
  * - POST /api/arch/from-team          由**团队工作流**生成并渲染（body: { team_id, name? }，F-C4）
  * - GET  /api/arch/preview/:type/:file  取渲染产物 HTML（iframe 预览；防穿越；可选 `?project=`）
  * - GET  /api/arch/ir/:type/:file       取产物 IR 源与 sidecar（同上）
@@ -292,10 +318,152 @@ export function archRoutes(deps: ArchDeps): {
     return result.ok ? ok(result) : ok(result) // 校验失败也是「正常响应」，由 value.ok 表达
   }
 
+  /**
+   * F5（v10）**由图谱查询结果导出时序图**——服务端自组 IR 的分支，与「调用方自备 `ir`」互斥。
+   *
+   * 为什么必须服务端组 IR：`buildSequenceIr` 的输入是**全图 CodeGraph + rootFile**
+   * （`graph-ir.ts:677`），而前端持有的 relations 是**单跳 items**，组不出链。故调用方只给
+   * 「项目 + 起点节点 id」，其余由服务端做。
+   *
+   * 契约（钉死）：
+   * - **按节点 id 精确寻址**（复用 `resolveGraphNode` 的①档语义，**不落** label 前缀档）——
+   *   本仓 159/2063 个 label 跨多文件，按符号名取 `source_file` 会**静默选错根文件**；
+   * - `rootFile` = 命中节点的 `source_file`（反斜杠按生成器 `fileOf` 同口径归一，否则匹配不上
+   *   calls 边的文件键）；
+   * - 三类失败都映射 `bad_request`：节点 id 解析不到 /「图谱没有跨文件 calls 边」/
+   *   「指定的根文件没有跨文件调用边」（后者是**高频路径**——本仓 27.6% 节点所在文件在调用图里
+   *   没有跨文件 calls 边，文案必须让用户看懂**换起点**）。⚠ 生成器原文里「改用
+   *   architecture/dataflow」是图集/CLI 侧的出路，本入口（`mode=from-graph` 只支持
+   *   `type=sequence`）照做只会再吃 400，故在下面 catch 里改写为可行动指引
+   *   （重建图 / 换起点符号；判别词「图谱没有跨文件 calls 边」保留，web 按它分派文案）；
+   * - 产物落**项目源** `<projectRoot>/.prism/arch/sequence/`，**不落全局** `<home>/archify/`
+   *   （否则 arch 页双源列表长期堆积无归属产物）。
+   *
+   * 口径声明：产物语义是「**该符号所在文件**的跨文件调用邻域」（参与者 = 文件、消息 =
+   * 跨文件 calls 边），**可能不含该符号本身**；IR `meta.subtitle` 由生成器恒写「根 = 调用图
+   * 度数最高的文件」，本分支显式指定了 rootFile，故渲染前**覆写**为实际根文件。
+   */
+  const renderFromGraph = async (
+    body: Record<string, unknown>,
+    type: ArchifyDiagramType,
+  ): Promise<Envelope> => {
+    if (type !== 'sequence') {
+      throw new PrismError('bad_request', `mode=from-graph 只支持 type=sequence（收到 ${type}）`)
+    }
+    const project = typeof body['project'] === 'string' ? body['project'].trim() : ''
+    if (project === '') {
+      throw new PrismError('bad_request', '缺少 project（已注册的项目名）')
+    }
+    const nodeId = typeof body['node'] === 'string' ? body['node'].trim() : ''
+    if (nodeId === '') {
+      throw new PrismError('bad_request', '缺少 node（图谱节点 id；四模式查询结果的 other）')
+    }
+
+    const name = sequenceArtifactName(nodeId)
+    // 落点解析**先于**读图谱：未注册 → not_found；已注册但 root 被删/被挪 → project_root_missing
+    // （绝不 mkdir 复活，v9.1 B-1）。
+    const placement = await resolveArchPlacement({ type, home: deps.home, name, project })
+    const projectName = placement.project ?? project
+    if (placement.root === undefined) {
+      throw new PrismError('bad_request', `项目 ${projectName} 没有可用的项目根，无法由图谱导出`)
+    }
+    // 每请求读一次 graph.json（与 MCP/CLI `from-graph` 同一读取器，无缓存层）
+    const graph = await readCodeGraph(placement.root)
+    const { nodes } = normalizeGraph(graph)
+    const hit = nodes.find((node) => node.id === nodeId)
+    if (hit === undefined) {
+      throw new PrismError(
+        'bad_request',
+        `图谱中没有节点 id: ${nodeId}（请用图谱查询结果里的 other 字段，不要用符号名）`,
+        { project: projectName, node: nodeId },
+      )
+    }
+    const rawFile = typeof hit.source_file === 'string' ? hit.source_file.trim() : ''
+    if (rawFile === '') {
+      throw new PrismError('bad_request', `节点 ${nodeId} 没有 source_file，无法定位根文件`, {
+        project: projectName,
+        node: nodeId,
+      })
+    }
+    const rootFile = rawFile.replace(/\\/g, '/')
+    const label = typeof hit.label === 'string' && hit.label.trim() !== '' ? hit.label.trim() : nodeId
+
+    let ir: ReturnType<typeof buildSequenceIr>
+    try {
+      ir = buildSequenceIr(graph, { title: `${projectName} · ${label} 调用链`, rootFile })
+    } catch (error) {
+      const raw = error instanceof Error ? error.message : String(error)
+      // 两条生成器抛错都要落到**本入口真能执行**的出路（code-review-v10 §1 P2-2）：
+      // `graph-ir.ts:702` 的原文建议「改用 architecture/dataflow」——那是图集/CLI 侧的出路；
+      // 本入口是 `mode=from-graph`（只支持 `type=sequence`），用户照做只会再吃一个 400。
+      // 故第一条改为重写（保留判别词「图谱没有跨文件 calls 边」，web 的
+      // `sequenceExportErrorKey` 按它分派），第二条沿用既有的追加式提示。
+      const message = raw.includes('指定的根文件没有跨文件调用边')
+        ? `${raw}；该文件在调用图里没有跨文件 calls 边，请换一个起点符号`
+        : raw.includes('图谱没有跨文件 calls 边')
+          ? '图谱没有跨文件 calls 边，无法派生时序图：本入口只从图谱的跨文件 calls 边派生调用链，' +
+            '请先 prism graph build 重建图，或换一个在调用图里有跨文件 calls 边的起点符号'
+          : raw
+      throw new PrismError('bad_request', message, {
+        project: projectName,
+        node: nodeId,
+        root_file: rootFile,
+      })
+    }
+    // 覆写 subtitle：生成器恒写「根 = 调用图度数最高的文件」，本分支的根是显式指定的
+    const rendered = {
+      ...ir,
+      meta: {
+        ...ir.meta,
+        subtitle:
+          `代码图谱派生（Graphify ${nodes.length} 节点）｜ 根 = ${rootFile}` +
+          `（由指定符号所在文件指定，非默认口径）；参与者 = 文件，消息 = 跨文件 calls 边（BFS 顺序）`,
+      },
+    }
+
+    await mkdir(placement.dir, { recursive: true })
+    const htmlPath = placement.htmlPath
+    // 渲染前 archify 会先校验，不过直接抛（不产出坏图）
+    await renderDiagram(type, rendered, htmlPath)
+    const irCopy = htmlPath.replace(/\.html$/i, '.ir.json')
+    await writeFile(irCopy, `${JSON.stringify(rendered, null, 2)}\n`, 'utf-8')
+    const scope = {
+      ...(typeof body['layer'] === 'string' ? { layer: body['layer'] } : {}),
+      ...(typeof body['owner'] === 'string' ? { owner: body['owner'] } : {}),
+      ...(typeof body['book'] === 'string' ? { book: body['book'] } : {}),
+      ...(typeof body['module'] === 'string' ? { module: body['module'] } : {}),
+    }
+    const meta = await writeArtifactMeta(htmlPath, rendered, scope)
+    const info = await stat(htmlPath)
+    return ok({
+      type,
+      project: projectName,
+      node: nodeId,
+      root: placement.root,
+      root_file: rootFile,
+      name: `${name}.html`,
+      /** 产物相对**项目根**的路径（正斜杠，便于界面直接拼 / 展示） */
+      relative_path: relative(placement.root, htmlPath).split(sep).join('/'),
+      bytes: info.size,
+      preview: `/api/arch/preview/${type}/${name}.html?project=${encodeURIComponent(projectName)}`,
+      ir: irCopy,
+      meta,
+      source: 'project',
+    })
+  }
+
   const render = async (ctx: RouteContext): Promise<Envelope> => {
     const body = (await ctx.body()) as Record<string, unknown>
     const type = String(body['type'] ?? '')
     assertType(type)
+    // F5：服务端自组 IR 的分支（调用方只给 项目 + 节点 id），与「自备 ir」互斥
+    const mode = typeof body['mode'] === 'string' ? body['mode'].trim() : ''
+    if (mode === 'from-graph') {
+      return await renderFromGraph(body, type)
+    }
+    if (mode !== '') {
+      throw new PrismError('bad_request', `未知 mode: ${mode}（可用: from-graph）`)
+    }
     if (body['ir'] === undefined) {
       throw new PrismError('bad_request', '缺少 ir（JSON-IR 对象）')
     }
