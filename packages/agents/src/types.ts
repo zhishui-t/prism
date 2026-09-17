@@ -61,6 +61,95 @@ export interface WorkflowStage {
   reflow: string
 }
 
+/**
+ * 工作流核心字段名（v11 F2 弹性表格模型）。
+ * 列名 → 字段的同义词映射表落在 `team/parse.ts`（行为，不放进类型文件）。
+ */
+export type WorkflowCoreField = 'order' | 'name' | 'roles' | 'mode' | 'input' | 'output' | 'done' | 'reflow'
+
+/**
+ * 工作流表的**原始底账**（v11 F2，design-v11 §1）。
+ *
+ * 存在理由：`WorkflowStage` 只是核心字段的语义投影，未映射列（自定义列）与行的**身份**
+ * 不在其中；编辑后回写要保列集、保未映射列值，必须靠这份底账。
+ */
+export interface RawWorkflowTable {
+  /** 表头原样（含未映射列），已按转义契约解码。 */
+  columns: string[]
+  /** 数据行单元格原样（已解码，长度已对齐表头——列数不符者已截断/补空）。 */
+  rows: string[][]
+  /** 行身份 `r1..rn`（原始行序）——编辑合并未映射列的锚（R-v11-3）。 */
+  rowIds: string[]
+  /**
+   * 表格首行（表头行）在**解析输入**中的 0 基行号（v11 派修 B-1）。
+   *
+   * 写回定位用：`serializeWorkflowSection` 只 splice `[headerLine, lastLine]` 行区间为
+   * 新表格，区间外的段落/引用块/第二张表逐行原样保留（不再整节替换 → 静默删正文）。
+   * 行号基于 `parseWorkflowSection` 的**同一入参字符串**（`patchTeamRaw` 里 parse 与
+   * serialize 吃同一份 `nextBody`，天然对齐）；无表格（prose / sectionMissing）时缺省。
+   */
+  headerLine?: number
+  /** 表格**末行**（末数据行；空表 = 分隔行）在解析输入中的 0 基行号。 */
+  lastLine?: number
+}
+
+/** 工作流行级降级诊断（R-v11-5：不抛异常的替代通道，GET 层并入响应 issues）。 */
+export interface ParseIssue {
+  code: string
+  message: string
+  /** 1 起始的**整份文件**行号（可判定时给）。 */
+  line?: number
+}
+
+/** `## 工作流` 小节的弹性解析结果（design-v11 §1）。 */
+export interface WorkflowParseResult {
+  /** 语义映射后的核心字段（缺列按缺省值：order←行号、mode←serial、其余空）。 */
+  stages: WorkflowStage[]
+  /** 原始表格（有表格时必带）——序列化的保真底账。 */
+  raw?: RawWorkflowTable
+  /** 未映射列名（含同义双列冲突中被表序靠前者挤掉的那列）。 */
+  unmappedColumns: string[]
+  /** 小节存在但无表格（仅自由文本）。 */
+  prose?: boolean
+  /**
+   * prose 小节的**原文**（v11 收口）：`## 工作流` 标题行之后到下一个 `## ` 标题之前的内容，
+   * 去首尾空行、保留内部行。仅 `prose === true` 时给出；表格态 / sectionMissing → `undefined`
+   * （server GET 层会归一为 `''`，保证字段恒存在）。
+   */
+  proseText?: string
+  /** 全文无 `## 工作流` 小节——与 prose 区分（R-v11-7）。 */
+  sectionMissing?: boolean
+  issues: ParseIssue[]
+}
+
+/** 序列化输入的一行（编辑后的阶段 + 未映射列值）。 */
+export interface WorkflowSerializeRow {
+  /**
+   * 原 raw 行身份（`RawWorkflowTable.rowIds` 之一）。
+   * 有 → 对齐原 raw 行合并未映射列；无 → 新行（按序插入，未映射列空）。
+   */
+  rowId?: string
+  order: number
+  stage: string
+  roles: string[]
+  mode: 'serial' | 'parallel'
+  input: string
+  output: string
+  done: string
+  reflow: string
+  /** 未映射列值（列名 → 值）；缺省时回落到 raw 中该 rowId 的原值。 */
+  extra?: Record<string, string>
+}
+
+/** 工作流表格序列化输入（design-v11 §2）。 */
+export interface WorkflowSerializeInput {
+  /** 列集（含未映射列，保持列序）。缺省：取 `raw.columns`；再无 → 核心八列 + `原文`。 */
+  columns?: string[]
+  rows: WorkflowSerializeRow[]
+  /** 原 raw 底账（列序 + 未映射列合并来源 + rowId 索引）。 */
+  raw?: RawWorkflowTable
+}
+
 /** 沉淀规则：按内容特征覆盖默认落点（P4）。 */
 export interface DepositRule {
   /**

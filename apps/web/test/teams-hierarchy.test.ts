@@ -32,7 +32,9 @@ import type { RoleDefinition, TeamDefinition } from '../src/api-team.ts'
 /** 受控假数据：`vi.mock` 工厂被提升，故经 `vi.hoisted` 共享可变引用。 */
 const data = vi.hoisted(() => ({ teams: [] as unknown[], roles: [] as unknown[] }))
 
-vi.mock('../src/api-team.ts', () => ({
+vi.mock('../src/api-team.ts', async (importOriginal) => ({
+  // 部分 mock（同 `teams-page-drawer.test.ts`）：只换 `teamApi`，常量走真身。
+  ...(await importOriginal<typeof import('../src/api-team.ts')>()),
   teamApi: {
     teams: () => Promise.resolve({ teams: data.teams, teamsDir: '/tmp/prism-teams' }),
     team: (id: string) => Promise.resolve(data.teams.find((t) => (t as TeamDefinition).team_id === id)),
@@ -103,6 +105,13 @@ function all(selector: string): Element[] {
 
 function one<T extends Element>(selector: string): T | null {
   return container.querySelector<T>(selector)
+}
+
+/** 点一下（`WorkflowFlow` 的阶段卡是 `<button>`，点开才渲染明细）。 */
+async function click(target: Element): Promise<void> {
+  await act(async () => {
+    target.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  })
 }
 
 /** `CountLine` 的行（按可见标签找，避免序号耦合）。 */
@@ -367,5 +376,81 @@ describe('F8 §0.1 红线：启用结果条保持现状（默认一行摘要 + `
     await render('t-a')
     expect(one('.act-bar')).toBeNull()
     expect(one('details.act-bar')).toBeNull()
+  })
+})
+
+describe('v11 F2：工作流 Pane 的三态与缺列降级（渲染码一字未改，改的是喂给它的数据）', () => {
+  /** 最薄形态：只有序号 + 名称（缺 roles / mode / 三个文本列 / reflow）。 */
+  const thin = (): TeamDefinition => ({
+    ...team('t-a'),
+    workflow: [
+      { order: 1, stage: '需求', roles: [], mode: '', input: '', output: '', done: '', reflow: '' },
+      { order: 2, stage: '设计', roles: [], mode: '', input: '', output: '', done: '', reflow: '' },
+    ],
+  })
+
+  it('只有「序号 + 名称」也成链（箭头只出现在第二个之后）', async () => {
+    data.teams = [thin()]
+    await render('t-a')
+    expect(all('.flow-step')).toHaveLength(2)
+    expect(all('.flow-arrow')).toHaveLength(1)
+    expect(all('.stage-num').map((n) => n.textContent)).toEqual(['1', '2'])
+    expect(all('.stage-name').map((n) => n.textContent)).toEqual(['需求', '设计'])
+  })
+
+  it('缺 roles ⇒ 明细里画不出角色徽章（行还在，不是整块塌掉）；缺 reflow ⇒ 不画回流那一行', async () => {
+    data.teams = [thin()]
+    await render('t-a')
+    await click(all('.flow-stage')[0]!)
+
+    const labels = all('.flow-detail .scope-label').map((n) => n.textContent)
+    expect(labels, '明细整块没展开，后面的断言会假绿').toContain(t('teams.col.owner'))
+    expect(all('.flow-detail-val .ref')).toHaveLength(0)
+    expect(labels).not.toContain(t('teams.col.reflow'))
+  })
+
+  it('prose（小节存在但只有自由文本）⇒ 渲染 Markdown，不画流程链', async () => {
+    data.teams = [
+      {
+        ...team('t-a'),
+        workflow: [],
+        workflow_raw: {
+          columns: [],
+          rows: [],
+          rowIds: [],
+          unmapped: [],
+          prose: true,
+          proseText: '## 流程\n\n先做 A，再做 B。',
+        },
+      },
+    ]
+    await render('t-a')
+    expect(one('.wf-prose-body .md-h2')?.textContent).toBe('流程')
+    expect(one('.flow-scroll')).toBeNull()
+    expect(one('.swap-in')!.textContent).toContain(t('teams.wf.prose.title'))
+  })
+
+  it('sectionMissing ⇒ 显式说明「没有这个小节」，不留空白（Pane 仍在，位次不变）', async () => {
+    data.teams = [
+      {
+        ...team('t-a'),
+        workflow: [],
+        workflow_raw: { columns: [], rows: [], rowIds: [], unmapped: [], sectionMissing: true },
+      },
+    ]
+    await render('t-a')
+    const panes = all('.md-detail .swap-in > .pane')
+    expect(panes).toHaveLength(3)
+    expect(panes[1]!.textContent).toContain(t('teams.wf.missing.title'))
+    expect(one('.flow-scroll')).toBeNull()
+  })
+
+  it('没有 `workflow_raw` 的旧响应 ⇒ 走合成底账仍是「表格态」（不误判成 prose / missing）', async () => {
+    // 前置自证：夹具**确实**没有 workflow_raw，否则本用例测的是另一条路
+    expect((data.teams[0] as TeamDefinition).workflow_raw).toBeUndefined()
+    await render('t-a')
+    expect(one('.flow-scroll .workflow-flow')).not.toBeNull()
+    expect(one('.wf-prose-body')).toBeNull()
+    expect(one('.swap-in')!.textContent).not.toContain(t('teams.wf.missing.title'))
   })
 })

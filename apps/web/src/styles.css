@@ -817,6 +817,12 @@ tr:last-child td { border-bottom: 0; }
    否则长正文会把面板顶出视口）——内容区在面板内自滚，头 / 脚常驻。
    ⚠ `.modal-lg` 只作用于本组件；K12 的确认框保持 420px 不动（它是「一句话确认」的版式）。 */
 .modal.modal-lg { display: flex; flex-direction: column; width: min(880px, calc(100vw - var(--s-6))); max-height: 85vh; padding: 0; }
+/* F1（v11）：`<Modal>` 的**中版**（560px，库内选取器）——与 560px 的表单抽屉同宽
+   （选取器是从抽屉里弹出来的，比抽屉还宽会显得重心跑掉）。
+   ⚠ 不把两条并成组选择器：`styles-role-modal.test.ts` 的规则体断言按**字面选择器**
+   `\n.modal.modal-lg {` 定位，合并后那条断言会静默变成「找不到规则」。这也是
+   三五条声明在此**刻意重复**的原因（同 `scripts/python.mjs` 的镜像先例）。 */
+.modal.modal-md { display: flex; flex-direction: column; width: min(560px, calc(100vw - var(--s-6))); max-height: 85vh; padding: 0; }
 .modal-head { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-4) var(--s-4); border-bottom: 1px solid var(--rule); }
 /* 头字与 `.drawer-head h3` 同档（`--fs-500`/600）：两种浮层版式的标题是同一层级。 */
 .modal-head h3 { margin: 0; font-size: var(--fs-500); font-weight: 600; }
@@ -824,6 +830,8 @@ tr:last-child td { border-bottom: 0; }
 .modal-content { flex: 1; min-height: 0; overflow-y: auto; padding: var(--s-4) var(--s-4) var(--s-5); }
 /* 大版面板自己收边距（padding: 0），故脚的内边距与顶距由这条给（确认框那条 `--s-3` 顶距留给 K12）。 */
 .modal.modal-lg .modal-foot { margin-top: 0; padding: var(--s-3) var(--s-4); border-top: 1px solid var(--rule); }
+/* 中版同款脚（同上：不合并选择器，见 `.modal.modal-md` 处的口径注）。 */
+.modal.modal-md .modal-foot { margin-top: 0; padding: var(--s-3) var(--s-4); border-top: 1px solid var(--rule); }
 
 /* 侧栏底部：知识总量（kbStats） */
 .book-footer {
@@ -983,7 +991,9 @@ tr:last-child td { border-bottom: 0; }
    `border: 1px solid`（见上），`border-bottom: 2px` 只比原来多 1px；而 `box-shadow: inset`
    不占布局，换掉它本身不产生位移——所以 padding-bottom 减 1px 后选中/未选中的总高完全相同。 */
 .flow-stage.open { border-color: var(--buckram); border-bottom: 2px solid var(--buckram); padding-bottom: calc(var(--s-2) - 1px); }
-.flow-stage .stage-num { width: 22px; height: 22px; border-radius: var(--r-1); background: var(--buckram); color: var(--paper); display: flex; align-items: center; justify-content: center; font-size: var(--fs-100); font-weight: 600; }
+/* 序号徽标：**编排器的阶段卡与流程预览共用同一定义**（同一颗东西在两处出现，不复制声明）。
+   原先只作用在 `.flow-stage` 下；v11 F2 的卡片头也用同名类，故选择器放宽到类本身。 */
+.stage-num { width: 22px; height: 22px; border-radius: var(--r-1); background: var(--buckram); color: var(--paper); display: flex; align-items: center; justify-content: center; font-size: var(--fs-100); font-weight: 600; }
 .flow-stage .stage-name { font-size: var(--fs-300); font-weight: 600; }
 .flow-stage .stage-mode { font-size: var(--fs-100); color: var(--mute); }
 .flow-arrow { position: relative; width: 18px; height: 1px; background: var(--rule); flex-shrink: 0; }
@@ -1150,6 +1160,61 @@ tr:last-child td { border-bottom: 0; }
 .pane h4:first-child { margin-top: 0; }
 
 .chips { display: flex; gap: var(--s-2); flex-wrap: wrap; }
+
+/* ── F1（v11）：库内选取器（角色表单的 skills / books 两用）─────────────────────
+   版式 = `<Modal size="md">`（头 / 内容 / 脚复用 `.modal-*`），内容区三件：
+   搜索 → 库内勾选（分组列表）→ 手动添加（callout）。**不新增颜色**：选中引线走 `--buckram`、
+   未装走 `--warn`（lamp 与「未装」文字同色）、面/线/字全部复用既有 token。
+   钩子：`.picker-body`（内容区）/ `.pick-list`（自滚的库列表）/ `.pick-group`（分组容器，
+   **无自身样式**——它只是「组头 + 组内行」这一层，组名空串时组头不画）/
+   `.pick-row`（库内一行，整行可点）/ `.picker-manual`（手动添加区）/ `.chip`（已选项）。 */
+.picker-body { display: flex; flex-direction: column; gap: var(--s-3); }
+/* 列表自滚并给个上限：它是内容区里唯一会长的东西，其余三件（搜索 / 手动 / 已选）常驻。 */
+.pick-list { display: flex; flex-direction: column; gap: var(--s-2); max-height: 38vh; overflow-y: auto; }
+/* 一行 = 复选框 + 名字 + 库内元信息（内置 / 已装）。整行可点（`<label>` 原生的 for/包裹行为），
+   选中态的左边线与 `.md-row` / `.list-row` 同宽（3px），故「有没有被选」不用看复选框也能扫出来。 */
+.pick-row { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-1) var(--s-2); border-left: 3px solid transparent; border-radius: var(--r-2); font-size: var(--fs-200); cursor: pointer; }
+.pick-row:hover { background: var(--sheet-2); }
+.pick-row.on { border-left-color: var(--buckram); }
+.pick-row .pick-name { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+/* 元信息字号与 `.md-row .src/.host` 同档（`--fs-100`/`--mute`）——同一套词汇、同一套度量。 */
+.pick-row .src, .pick-row .host { flex: none; font-size: var(--fs-100); color: var(--mute); }
+.pick-row .src { font-family: var(--font-code); }
+/* 手动添加区：与 `.scope-callout` 同构（`--sheet-2` 底 + 左 3px `--warn` 引线），
+   因为它是同一件事——「这里有个需要留意的前提」。 */
+.picker-manual { display: flex; flex-direction: column; gap: var(--s-2); padding: var(--s-2) var(--s-3); background: var(--sheet-2); border-left: 3px solid var(--warn); border-radius: var(--r-2); }
+.picker-manual .row { flex-wrap: nowrap; }
+.picker-manual input { flex: 1 1 auto; min-width: 0; }
+/* 已选项 chip：可**单个**移除（右端 `×`）。未装项的点灯与文字同走 `--warn`（既有状态色）。 */
+.chip { display: inline-flex; align-items: center; gap: var(--s-1); padding: 1px var(--s-1) 1px var(--s-2); border: 1px solid var(--rule); border-radius: var(--r-1); background: var(--sheet-2); font-size: var(--fs-100); }
+.chip.missing { border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
+.chip-note { font-size: var(--fs-100); color: var(--warn); }
+.chip button { font: inherit; color: var(--mute); background: transparent; border: 0; padding: 0 var(--s-1); cursor: pointer; }
+.chip button:hover { color: var(--ink); }
+
+/* ── F2（v11）：工作流阶段编排器（团队表单的「工作流」区）──────────────────────
+   版式 = 列映射条 → 阶段卡列表 → 自定义列条 → 流程预览（预览复用 `.flow-scroll` / `.flow-*`，
+   不另画一套）。钩子：
+   `.wf-cols`（列映射条：已映射列名 + 缺列的「+ 添加此列」）/ `.wf-col-on`（已映射列名）/
+   `.wf-callout`（三态说明与「恢复为自由文本」，**`--buckram` 引线 = 说明**，与 `.scope-callout`
+   的 `--warn` 引线刻意区分：那一支是「要留意」）/ `.wf-prose-body`（自由文本的 Markdown 容器，
+   自滚并有上限——它与弹层里的库列表同属「内容区里唯一会长的东西」）/ `.stage-cards` + `.stage-card`
+   （阶段卡）/ `.wf-field`（卡内一个字段）/ `.wf-custom`（自定义列条）/ `.wf-preview`（预览）。
+   **不新增颜色**：面 / 线 / 字全部走既有 token（`--sheet` / `--sheet-2` / `--rule` / `--mute` /
+   `--buckram`）。 */
+.wf-cols { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-1); margin: var(--s-2) 0; }
+.wf-col-on { padding: 0 var(--s-1); font-size: var(--fs-100); color: var(--mute); }
+.wf-callout { display: flex; flex-direction: column; gap: var(--s-2); margin: var(--s-2) 0; padding: var(--s-2) var(--s-3); background: var(--sheet-2); border-left: 3px solid var(--buckram); border-radius: var(--r-2); }
+.wf-prose-body { max-height: 42vh; overflow-y: auto; padding: var(--s-2) var(--s-3); background: var(--paper); border: 1px solid var(--rule); border-radius: var(--r-2); font-size: var(--fs-200); }
+.stage-cards { display: flex; flex-direction: column; gap: var(--s-3); margin-top: var(--s-2); }
+.stage-card { padding: var(--s-3); background: var(--sheet); border: 1px solid var(--rule); border-radius: var(--r-2); }
+.stage-card-head { display: flex; align-items: center; gap: var(--s-2); margin-bottom: var(--s-2); }
+.stage-card-head .spacer { display: flex; gap: var(--s-1); margin-left: auto; }
+.stage-card-title { font-size: var(--fs-300); font-weight: 600; }
+.wf-field { display: flex; flex-direction: column; gap: var(--s-1); }
+.wf-field .label { font-size: var(--fs-100); color: var(--mute); }
+.wf-custom { display: flex; flex-direction: column; gap: var(--s-2); margin-top: var(--s-3); padding: var(--s-2) var(--s-3); background: var(--sheet-2); border-left: 3px solid var(--rule); border-radius: var(--r-2); }
+.wf-preview { margin-top: var(--s-3); }
 
 .kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--s-1) var(--s-3); font-size: var(--fs-200); }
 .kv dt { color: var(--mute); }

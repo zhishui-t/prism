@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 
+import { api, type BookNode } from '../api.ts'
 import {
   ROLE_COLOR_OPTIONS,
   THOUGHT_LEVELS,
@@ -10,6 +11,7 @@ import {
 } from '../api-team.ts'
 import { ConfirmModal } from '../components/ConfirmModal.tsx'
 import { CountLine } from '../components/CountLine.tsx'
+import { PickerDialog, SelectedChips, type PickerGroup } from '../components/LibraryPicker.tsx'
 import { MarkdownBlocks } from '../components/Markdown.tsx'
 import { NavRow } from '../components/NavRow.tsx'
 import { Ref } from '../components/ref.tsx'
@@ -18,8 +20,15 @@ import { CopyCommand, Drawer, EmptyBlock, Modal, PageHead, firstSentence, stripS
 import { useAsync } from '../components/useAsync.ts'
 import { parseMarkdown } from '../markdown.ts'
 import { hrefOf, navigate } from '../route.ts'
-import { useT, type DictKey } from '../i18n.ts'
-import { buildRoleInput } from './roles-form-logic.ts'
+import { currentLang, useT, type DictKey } from '../i18n.ts'
+import {
+  appendToList,
+  buildRoleInput,
+  removeFromList,
+  seedRoleFormValues,
+  toggleInList,
+} from './roles-form-logic.ts'
+import { groupSkills, mergeSkillCatalog, UNCATEGORIZED } from './skills-logic.ts'
 
 /**
  * 角色页（v7 §4.2 R1-R8；F8 §一 层级重排）。
@@ -39,6 +48,11 @@ import { buildRoleInput } from './roles-form-logic.ts'
  * **v10 F2**：详情从右侧抽屉改为**居中模态**（`<Modal>`，浮层契约与 `Drawer` 同源）——
  * 一条定义的全文要在屏幕中央读，不是从侧边挤出来；正文区改用 `Markdown` 组件渲染，
  * 与上面的信息区之间以**实色 hairline + 间距档**分割。编辑表单仍走 `Drawer`（不在本批范围）。
+ *
+ * **v11 F1**：编辑表单的 `skills` / `knowledge.books` 两个字段改用 `components/LibraryPicker`
+ * （库内勾选 ∪ 手动添加 + chips 单个移除），逗号文本框退役；选取器弹层是 `.modal-md`
+ * （与详情模态 `.modal-lg` 同档不同尺寸）。**校验路径一字未动**——`skill_unknown` 等 issue
+ * 仍由服务端给（`FORM_FIXABLE` / `ISSUE_KEYS` 照旧）。
  */
 
 const COLOR_MAP: Record<string, string> = {
@@ -505,19 +519,78 @@ function RoleForm({
   onSaved: () => void
 }) {
   const t = useT()
-  const [name, setName] = useState(initial?.name ?? '')
-  const [description, setDescription] = useState(initial?.description ?? '')
-  const [color, setColor] = useState(initial?.color ?? '')
-  const [model, setModel] = useState(initial?.model ?? '')
-  const [thought, setThought] = useState(initial?.thoughtLevel ?? '')
-  const [skills, setSkills] = useState((initial?.skills ?? []).join(', '))
-  const [layers, setLayers] = useState((initial?.knowledge?.layers ?? ['global']).join(', '))
-  const [body, setBody] = useState(initial?.body ?? '')
-  const [dir, setDir] = useState(rolesDir)
+  /** 表单初值**只在这里播种一次**（`seedRoleFormValues`：定义 → 表单值，含 skills / books）。 */
+  const [seed] = useState(() => seedRoleFormValues(rolesDir, initial))
+  const [name, setName] = useState(seed.name)
+  const [description, setDescription] = useState(seed.description)
+  const [color, setColor] = useState(seed.color)
+  const [model, setModel] = useState(seed.model)
+  const [thought, setThought] = useState(seed.thought)
+  /** F1：技能白名单 = **数组**（选取器结果；逗号文本框已退役）。 */
+  const [skills, setSkills] = useState(seed.skills)
+  const [layers, setLayers] = useState(seed.layers)
+  /** F1：书目（books）同构升级，从「表单外原样回传」变成可编辑的选取器结果。 */
+  const [books, setBooks] = useState(seed.books)
+  const [body, setBody] = useState(seed.body)
+  const [dir, setDir] = useState(seed.dir)
+  /** 打开的选取器（`null` = 关；两个字段共用同一个弹层零件）。 */
+  const [picker, setPicker] = useState<'skill' | 'book' | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   /** R-6 Q1：保存反馈**就地**留在抽屉内（保存后不关抽屉），不再上抛给列表提示条。 */
   const [saved, setSaved] = useState('')
+
+  /**
+   * 技能台账（两路合并，与技能页**同一份** `mergeSkillCatalog`）：表单里的 chips 需要
+   * 「未装」判据（`available: false` 的既有语义），而它只有库知道 ⇒ 表单打开即拉一次
+   * （两个本地端点，与技能页同源）。**不改校验链路**：这里只决定 chip 的呈现，
+   * `skill_unknown` 等 issue 仍由服务端给（F1 #4）。
+   */
+  const catalog = useAsync(
+    () =>
+      Promise.all([teamApi.skills(), teamApi.skillUsage()]).then(([list, usage]) =>
+        mergeSkillCatalog(list.skills ?? [], usage),
+      ),
+    [],
+  )
+  /**
+   * 书目**懒加载**（只在书目弹层打开时拉）：chips 不需要它——书目没有「装没装」这一档，
+   * 故没打开过选取器的人不必付这次请求。`picker` 一变即重取（未打开时立即返回空表）。
+   */
+  const tree = useAsync(() => (picker === 'book' ? api.kbTree() : Promise.resolve([] as BookNode[])), [picker])
+
+  const rows = catalog.data ?? []
+  const installed = useMemo(() => new Set(rows.filter((r) => r.installed).map((r) => r.name)), [rows])
+  /**
+   * 「未装」判据：库未就绪（加载中 / 拉取失败）时返回 `undefined` ⇒ chips **一律不点灯**
+   * ——不把「不知道」渲染成「未装」（假状态比缺状态更坏）。
+   */
+  const skillMissing = useMemo(
+    () => (catalog.data === undefined ? undefined : (n: string) => !installed.has(n)),
+    [catalog.data, installed],
+  )
+  /**
+   * 技能分组复用技能页的 `groupSkills`（分类分组、未分类组置末尾、组名走同一个字典键）。
+   * `currentLang()` 进依赖：`t` 是模块级稳定引用，只写 `[t]` 会让组名停在切换前的语言。
+   */
+  const lang = currentLang()
+  const skillGroups = useMemo<PickerGroup[]>(
+    () =>
+      groupSkills(rows).map((g) => ({
+        label: g.category === UNCATEGORIZED ? t('skills.uncategorized') : g.category,
+        items: g.skills.map((s) => ({ name: s.name, builtin: s.builtin, installed: s.installed })),
+      })),
+    // 依赖就是这两个：`rows` 换 = 库换；`lang` 换 = 组名要重取（见上）
+    [rows, lang],
+  )
+  /**
+   * 书目 = **平铺**（单组 + 空组名 ⇒ `PickerDialog` 不画组头）：`GET /api/kb/tree` 的
+   * `book` 跨层可能同名，按名字去重后排序——不硬造分类（书目本来就没有分类）。
+   */
+  const bookGroups = useMemo<PickerGroup[]>(() => {
+    const names = [...new Set((tree.data ?? []).map((b) => b.book))].sort((a, b) => a.localeCompare(b))
+    return names.length === 0 ? [] : [{ label: '', items: names.map((name) => ({ name })) }]
+  }, [tree.data])
 
   const dirOk = dir.trim() !== ''
   const canSubmit = !busy && dirOk && (mode === 'edit' || name.trim() !== '')
@@ -527,10 +600,10 @@ function RoleForm({
     setBusy(true)
     setError('')
     setSaved('')
-    // B1：payload 构造抽到 `roles-form-logic.ts`（纯函数、有回归锁）——`knowledge`
-    // 在 PATCH 下是全量写入，表单没暴露的 `books` 由该函数从 `initial` 原样回传。
-    const input: RoleWriteInput = buildRoleInput(mode, initial, {
-      name, description, color, model, thought, skills, layers, body, dir,
+    // B1：payload 构造抽到 `roles-form-logic.ts`（纯函数、有回归锁）。F1 起 skills / books
+    // 都以**表单值**为准（`knowledge` 在 PATCH 下是全量写入，空 books 即清空绑定）。
+    const input: RoleWriteInput = buildRoleInput(mode, {
+      name, description, color, model, thought, skills, layers, books, body, dir,
     })
     try {
       if (mode === 'new') await teamApi.createRole(input)
@@ -603,17 +676,37 @@ function RoleForm({
         </label>
       </div>
 
-      <label className="field">
+      {/* F1：技能白名单 = **多选选取器**（库内勾选 ∪ 手动添加），逗号文本框退役。
+          `div.field` 而不是 `label`：里面是按钮与 chips，`label` 的隐式绑定会把点击语义搅在一起。 */}
+      <div className="field">
         <span>{t('roles.form.skills')}</span>
-        <input value={skills} onChange={(e) => setSkills(e.target.value)} />
-      </label>
+        <SelectedChips
+          names={skills}
+          isMissing={skillMissing}
+          onRemove={(n) => setSkills((prev) => removeFromList(prev, n))}
+        />
+        <div className="row">
+          <button type="button" className="tool-btn" onClick={() => setPicker('skill')}>
+            {t('picker.open.skill')}
+          </button>
+        </div>
+      </div>
 
       <label className="field">
         <span>{t('roles.form.layers')}</span>
         <input value={layers} onChange={(e) => setLayers(e.target.value)} />
-        {/* B1：`books` 没有编辑位，但保存时原样回传——必须让用户知道，否则会以为能在这里改/清 */}
-        <span className="hint">{t('roles.form.booksHint')}</span>
       </label>
+
+      {/* F1：books 与 skills **同构**（同一个选取器零件、同一套 chips），只是库换成知识书目。 */}
+      <div className="field">
+        <span>{t('roles.form.books')}</span>
+        <SelectedChips names={books} onRemove={(n) => setBooks((prev) => removeFromList(prev, n))} />
+        <div className="row">
+          <button type="button" className="tool-btn" onClick={() => setPicker('book')}>
+            {t('picker.open.book')}
+          </button>
+        </div>
+      </div>
 
       <label className="field">
         <span>{t('roles.form.dir')}</span>
@@ -626,6 +719,39 @@ function RoleForm({
         <textarea rows={10} value={body} onChange={(e) => setBody(e.target.value)} />
         <span className="hint">{t('roles.form.bodyHint')}</span>
       </label>
+
+      {/* F1：两个选取器都是**受控弹层**（外壳走 `Modal size="md"` ⇒ Esc/遮罩/Tab 圈闭/滚动锁
+          全走既有浮层栈；表单抽屉在下层，Esc 只关栈顶这一层）。
+          chips 在两处常驻（表单字段位 + 弹层里）——弹层盖着表单，不这样做就看不到自己勾了什么。 */}
+      {picker === 'skill' && (
+        <PickerDialog
+          kind="skill"
+          groups={skillGroups}
+          selected={skills}
+          loading={catalog.loading}
+          error={catalog.error}
+          isMissing={skillMissing}
+          onRetry={catalog.reload}
+          onToggle={(n) => setSkills((prev) => toggleInList(prev, n))}
+          onRemove={(n) => setSkills((prev) => removeFromList(prev, n))}
+          onManualAdd={(n) => setSkills((prev) => appendToList(prev, n))}
+          onClose={() => setPicker(null)}
+        />
+      )}
+      {picker === 'book' && (
+        <PickerDialog
+          kind="book"
+          groups={bookGroups}
+          selected={books}
+          loading={tree.loading}
+          error={tree.error}
+          onRetry={tree.reload}
+          onToggle={(n) => setBooks((prev) => toggleInList(prev, n))}
+          onRemove={(n) => setBooks((prev) => removeFromList(prev, n))}
+          onManualAdd={(n) => setBooks((prev) => appendToList(prev, n))}
+          onClose={() => setPicker(null)}
+        />
+      )}
     </Drawer>
   )
 }

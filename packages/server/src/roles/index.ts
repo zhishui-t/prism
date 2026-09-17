@@ -14,6 +14,12 @@ export type {
   RoleDefinition,
   TeamMember,
   WorkflowStage,
+  WorkflowCoreField,
+  RawWorkflowTable,
+  ParseIssue,
+  WorkflowParseResult,
+  WorkflowSerializeRow,
+  WorkflowSerializeInput,
   DepositRule,
   DepositPolicy,
   TeamDefinition,
@@ -34,6 +40,17 @@ export {
   parseTeamMarkdown,
   parseWorkflowTable,
   parseRoleCell,
+  // 工作流弹性解析 + 序列化（v11 F2：GET workflow_raw / PATCH workflow 的读写单点）
+  parseWorkflowSection,
+  locateWorkflowSection,
+  mapWorkflowColumns,
+  serializeWorkflowTable,
+  serializeWorkflowSection,
+  WorkflowSectionMissingError,
+  resolveTeamFile,
+  WORKFLOW_HEADING,
+  WORKFLOW_CORE_FIELDS,
+  CORE_COLUMN_NAMES,
   extractPrinciple,
   // 校验
   validateRole,
@@ -149,10 +166,16 @@ export {
   deleteTeamDefinition,
   asNonEmptyString,
   parseMembers,
+  parseWorkflowPatch,
+  parseIfMatch,
   type NewTeamBody,
   type UpdateTeamBody,
   type CreateTeamResult,
 } from './team-create.js'
+
+// 团队读侧单点（v11 派修 M-3：`GET /api/teams/:id` 与 MCP `prism_team_get` 共用，
+// 保证 workflow_raw / source_mtime 两面同源）
+export { readTeamDetail, type TeamReadDetail, type TeamWorkflowRaw } from './team-read.js'
 
 // 出厂团队模板（server 侧资产）
 export { CORE_DEV_TEAM_MD } from './templates.js'

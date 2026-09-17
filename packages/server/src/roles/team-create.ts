@@ -9,15 +9,30 @@
  *   没有 env 回落，也绝不复用 `resolveDirsFromHome` 的默认宿主目录（R5/R6 延伸）。
  */
 
-import { existsSync } from 'node:fs'
+import { existsSync, statSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
-import { editTeam, parseTeamMarkdown, removeTeam, renderTeamScaffold, renderZcodeTeam, TeamWriteError } from '@prism/agents'
+import {
+  editTeam,
+  parseTeamMarkdown,
+  patchTeamRaw,
+  removeTeam,
+  renderTeamScaffold,
+  renderZcodeTeam,
+  TeamWriteError,
+  WorkflowSectionMissingError,
+} from '@prism/agents'
 import { PrismError } from '@prism/core'
 import type { TrashStore, TrashTrigger } from '@prism/core'
 
-import { loadRoles, type DepositPolicy, type TeamMember, type ValidationIssue } from './index.js'
+import {
+  loadRoles,
+  type DepositPolicy,
+  type TeamMember,
+  type ValidationIssue,
+  type WorkflowSerializeRow,
+} from './index.js'
 
 /** 新建团队请求体（ui-spec-v4 §2.5 `NewTeamInput` / MCP `prism_team_new` 入参）。 */
 export interface NewTeamBody {
@@ -28,6 +43,14 @@ export interface NewTeamBody {
   deposit?: unknown
   /** 工作流模板（ui-spec 口径；映射到 agents `renderTeamScaffold` 的 `template`） */
   workflow_template?: unknown
+  /**
+   * **结构化工作流**（v11 收口）：`{ stages: [...] }`，形状与 PATCH 的 `workflow` **同一单点**
+   * ({@link parseWorkflowPatch})。编排器产出的结构化工作流在新建时不再被丢弃。
+   *
+   * 模板恒有 `## 工作流` 表格 → 提交 stages 无 `rowId`（新建无「原行身份」）= 模板行全换为提交行。
+   * 省略 = 模板工作流原样（产物 byte 级不变）。
+   */
+  workflow?: unknown
   /** **必填**：写入目录（无 env 回落，绝不回落到默认宿主目录） */
   teams_dir?: unknown
   /**
@@ -54,7 +77,10 @@ const KEBAB_CASE_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/
  *
  * 失败一律 `PrismError`（HTTP 走信封状态码；MCP 转 `isError` 文本）：
  * `teams_dir_required` / `team_id_invalid` / `members_invalid` / `member_role_unknown` /
- * 校验未通过（不落盘）/ `id_conflict`（已存在不覆盖）。
+ * `workflow_invalid`（结构化工作流形状非法）/ 校验未通过（不落盘）/ `id_conflict`（已存在不覆盖）。
+ *
+ * v11 收口：可选 `workflow`（`{ stages }`）在模板渲染后经 agents `patchTeamRaw` 写回工作流表
+ * （编排器产出的结构化工作流不再被静默丢弃）；省略 = 模板工作流原样。
  */
 export async function createTeamDefinition(
   body: NewTeamBody,
@@ -98,7 +124,10 @@ export async function createTeamDefinition(
     )
   }
 
-  // ⑤ 渲染（与 CLI `prism team new` 同一实现；只渲染不落盘）
+  // ⑤ 结构化工作流形状校验（v11 收口）：与 PATCH 共用同一单点，非法 → 400 `workflow_invalid`
+  const workflow = parseWorkflowPatch(body.workflow)
+
+  // ⑥ 渲染（与 CLI `prism team new` 同一实现；只渲染不落盘）
   const name = asNonEmptyString(body.name)
   const description = asNonEmptyString(body.description)
   const scaffold = renderTeamScaffold({
@@ -119,10 +148,19 @@ export async function createTeamDefinition(
     )
   }
 
-  // ⑥ 沉淀策略（ui-spec §2.5 表单会提交并**回读核对**；忽略即静默丢弃用户输入 → 必须采用）
-  const markdown = applyDepositOverride(scaffold.markdown, body.deposit)
+  // ⑦ 沉淀策略（ui-spec §2.5 表单会提交并**回读核对**；忽略即静默丢弃用户输入 → 必须采用）
+  let markdown = applyDepositOverride(scaffold.markdown, body.deposit)
 
-  // ⑦ 落盘：`<teams_dir>/<team_id>.md`（扁平形态；registry/wiring 双形态均识别）
+  // ⑦′ 结构化工作流（v11 收口）：模板恒有 `## 工作流` 表格 → 提交 stages 无 `rowId` = 模板行
+  // 全换为提交行（复用 agents `patchTeamRaw`，不重写序列化逻辑）。**无 workflow 时不触碰 markdown**
+  // ——保证与既有 POST 产物 byte 级一致。
+  if (workflow !== undefined) {
+    const patched = patchTeamRaw(markdown, { workflow })
+    markdown = patched.markdown
+    issues.push(...patched.issues)
+  }
+
+  // ⑧ 落盘：`<teams_dir>/<team_id>.md`（扁平形态；registry/wiring 双形态均识别）
   const path = join(targetDir, `${teamId}.md`)
   if (existsSync(path)) {
     throw new PrismError('id_conflict', `团队已存在，未覆盖：${path}（如需修改请直接编辑该文件）`)
@@ -138,6 +176,18 @@ export interface UpdateTeamBody {
   description?: unknown
   members?: unknown
   deposit?: unknown
+  /**
+   * **结构化保存工作流**（v11 F2 / R-v11-13）：`{ stages: [...] }`。
+   *
+   * 形状见 {@link parseWorkflowPatch}；**raw 底账不采信客户端**——由 agents `editTeam` 重读
+   * 文件、按 `rowId` 合并未映射列（缩信任面 + 缩并发窗口）。
+   */
+  workflow?: unknown
+  /**
+   * 陈旧写防护（R-v11-15）：取 `GET /api/teams/:id` 的 `source_mtime`（epoch 毫秒整数）。
+   * 与写前磁盘 mtime 不符 → 409 `stale_write`（不静默 lost update）。
+   */
+  if_match?: unknown
   /** **必填**：目标目录（无 env 回落，绝不回落到默认宿主目录） */
   teams_dir?: unknown
   /** 改 `members` 时用于校验角色是否存在（同样必须显式给出） */
@@ -146,12 +196,16 @@ export interface UpdateTeamBody {
 
 /**
  * `PATCH /api/teams/:id` / `prism_team_edit`：按字段补丁修改既有团队。
- * 改 `members` 时复用 agents `editTeam` 的名册收窄（工作流表就地裁剪），并校验每个角色都在角色库中。
+ *
+ * - 改 `members` 复用 agents `editTeam` 的名册收窄（工作流表就地裁剪，保列集）；
+ * - 给 `workflow` → 结构化保存（与 `members` 同给时 **workflow 胜**，见 agents `patchTeamRaw`）；
+ * - 给 `if_match` → 陈旧写防护（不匹配 409 `stale_write`）；
+ * - 无 `## 工作流` 小节而给 `workflow` → 400 `workflow_section_missing`。
  */
 export async function updateTeamDefinition(
   teamId: string,
   body: UpdateTeamBody,
-): Promise<{ path: string; issues: ValidationIssue[] }> {
+): Promise<{ path: string; issues: ValidationIssue[]; source_mtime: number }> {
   const targetDir = asNonEmptyString(body.teams_dir)
   if (targetDir === undefined) {
     throw new PrismError(
@@ -187,8 +241,21 @@ export async function updateTeamDefinition(
   const name = asNonEmptyString(body.name)
   const description = asNonEmptyString(body.description)
   const deposit = typeof body.deposit === 'object' && body.deposit !== null ? (body.deposit as Partial<DepositPolicy>) : undefined
-  if (name === undefined && description === undefined && members === undefined && deposit === undefined) {
-    throw new PrismError('bad_request', 'team_patch_empty：未给出任何要修改的字段（name/description/members/deposit）')
+  const workflow = parseWorkflowPatch(body.workflow)
+  const ifMatch = parseIfMatch(body.if_match)
+  if (
+    name === undefined &&
+    description === undefined &&
+    members === undefined &&
+    deposit === undefined &&
+    workflow === undefined
+  ) {
+    // v11 F2：workflow 亦计有效字段——旧守卫只认 name/description/members/deposit，
+    // 「只存工作流」的编辑器保存会被 400 team_patch_empty 挡下。
+    throw new PrismError(
+      'bad_request',
+      'team_patch_empty：未给出任何要修改的字段（name/description/members/deposit/workflow）',
+    )
   }
 
   try {
@@ -200,14 +267,135 @@ export async function updateTeamDefinition(
         ...(description !== undefined ? { description } : {}),
         ...(members !== undefined ? { members } : {}),
         ...(deposit !== undefined ? { deposit } : {}),
+        ...(workflow !== undefined ? { workflow } : {}),
       },
+      ...(ifMatch !== undefined ? { ifMatch } : {}),
     })
-    return { path: result.written[0]!, issues: result.issues }
+    const path = result.written[0]!
+    // 写后 mtime：客户端可直接续用为下一次 PATCH 的 `if_match`（省一次 GET）
+    return { path, issues: result.issues, source_mtime: Math.round(statSync(path).mtimeMs) }
   } catch (err) {
     if (err instanceof TeamWriteError) {
+      if (err.code === 'stale_write') {
+        throw new PrismError('stale_write', err.message, { path: err.path })
+      }
       throw new PrismError(err.code === 'team_not_found' ? 'not_found' : 'bad_request', err.message, { path: err.path })
     }
+    if (err instanceof WorkflowSectionMissingError) {
+      throw new PrismError('workflow_section_missing', err.message)
+    }
     throw err
+  }
+}
+
+/**
+ * PATCH `workflow` 的形状校验（v11 F2 / R-v11-13；v11 派修 M-2 增 `columns`）。
+ *
+ * - 未给出（`undefined`/`null`）→ `undefined`（该字段不参与补丁）；
+ * - `{ stages: [] }` = **清空工作流**（显式给出才允许，编辑器所见即所存；守卫层面算有效字段）；
+ * - `columns`（可选）= 提交**列集**（含未映射列，保持列序）：必须是非空字符串数组、
+ *   trim 后唯一，非法 400 `workflow_invalid`（列名重复会造成按列名寻址歧义）；
+ * - 逐项校验，**非法项 400**（`workflow_invalid`），缺省值按 agents 口径补：
+ *   `roles←[]`、`mode←'serial'`、`input/output/done/reflow←''`。
+ */
+export function parseWorkflowPatch(raw: unknown): { stages: WorkflowSerializeRow[]; columns?: string[] } | undefined {
+  if (raw === undefined || raw === null) return undefined
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new PrismError('bad_request', 'workflow_invalid：workflow 必须是对象 { stages: [...] }')
+  }
+  const stages = (raw as { stages?: unknown }).stages
+  if (!Array.isArray(stages)) {
+    throw new PrismError(
+      'bad_request',
+      'workflow_invalid：workflow.stages 必填且必须是数组（空数组 = 清空工作流；省略 stages 无法表达「不改」与「清空」之别）',
+    )
+  }
+  const columns = parseWorkflowColumns((raw as { columns?: unknown }).columns)
+  return {
+    stages: stages.map((item, index) => parseWorkflowStage(item, index)),
+    ...(columns !== undefined ? { columns } : {}),
+  }
+}
+
+/** `workflow.columns`：非空字符串数组、trim 后唯一；非法 → 400 `workflow_invalid`。 */
+function parseWorkflowColumns(raw: unknown): string[] | undefined {
+  if (raw === undefined || raw === null) return undefined
+  if (!Array.isArray(raw) || raw.length === 0 || raw.some((column) => typeof column !== 'string')) {
+    throw new PrismError(
+      'bad_request',
+      'workflow_invalid：workflow.columns 必须是**非空**字符串数组（列集，含未映射列；空数组无法表达列集）',
+    )
+  }
+  const columns = (raw as string[]).map((column) => column.trim())
+  if (columns.some((column) => column === '')) {
+    throw new PrismError('bad_request', 'workflow_invalid：workflow.columns 的列名去空白后不能为空')
+  }
+  if (new Set(columns).size !== columns.length) {
+    throw new PrismError('bad_request', 'workflow_invalid：workflow.columns 去重后必须唯一（列名重复会造成按列名寻址歧义）')
+  }
+  return columns
+}
+
+/** 陈旧写参数：整数（epoch 毫秒）；非整数/非数字 → 400（不静默忽略防护）。 */
+export function parseIfMatch(raw: unknown): number | undefined {
+  if (raw === undefined || raw === null) return undefined
+  if (typeof raw !== 'number' || !Number.isInteger(raw)) {
+    throw new PrismError(
+      'bad_request',
+      'if_match_invalid：if_match 必须是整数（epoch 毫秒，取自 GET /api/teams/:id 的 source_mtime）',
+    )
+  }
+  return raw
+}
+
+function parseWorkflowStage(raw: unknown, index: number): WorkflowSerializeRow {
+  const at = `workflow.stages[${index}]`
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    throw new PrismError('bad_request', `workflow_invalid：${at} 必须是对象`)
+  }
+  const item = raw as Record<string, unknown>
+  const bad = (detail: string): PrismError => new PrismError('bad_request', `workflow_invalid：${detail}`)
+
+  const order = item['order']
+  if (typeof order !== 'number' || !Number.isFinite(order)) throw bad(`${at}.order 必须是数字`)
+  const stage = item['stage']
+  if (typeof stage !== 'string') throw bad(`${at}.stage 必须是字符串`)
+
+  const mode = item['mode']
+  if (mode !== undefined && mode !== 'serial' && mode !== 'parallel') {
+    throw bad(`${at}.mode 只能是 'serial' | 'parallel'`)
+  }
+  const roles = item['roles']
+  if (roles !== undefined && (!Array.isArray(roles) || roles.some((role) => typeof role !== 'string'))) {
+    throw bad(`${at}.roles 必须是字符串数组`)
+  }
+  const rowId = item['rowId']
+  if (rowId !== undefined && typeof rowId !== 'string') throw bad(`${at}.rowId 必须是字符串（原 raw 行身份）`)
+  const extra = item['extra']
+  if (extra !== undefined && (typeof extra !== 'object' || extra === null || Array.isArray(extra))) {
+    throw bad(`${at}.extra 必须是 { 列名: 值 } 对象`)
+  }
+  const extraValues = (extra ?? {}) as Record<string, unknown>
+  for (const [column, value] of Object.entries(extraValues)) {
+    if (typeof value !== 'string') throw bad(`${at}.extra['${column}'] 必须是字符串`)
+  }
+  const text = (key: 'input' | 'output' | 'done' | 'reflow'): string => {
+    const value = item[key]
+    if (value !== undefined && typeof value !== 'string') throw bad(`${at}.${key} 必须是字符串`)
+    return value === undefined ? '' : (value as string)
+  }
+
+  return {
+    ...(rowId !== undefined ? { rowId: rowId as string } : {}),
+    order,
+    stage,
+    roles: roles === undefined ? [] : [...(roles as string[])],
+    mode: mode === undefined ? 'serial' : (mode as 'serial' | 'parallel'),
+    input: text('input'),
+    output: text('output'),
+    done: text('done'),
+    reflow: text('reflow'),
+    ...(extra !== undefined ? { extra: { ...(extraValues as Record<string, string>) } } : {}),
   }
 }
 

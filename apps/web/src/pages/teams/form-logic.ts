@@ -16,6 +16,7 @@ import {
 } from '../../api-team.ts'
 import type { TFunc } from './errors.ts'
 import { DEPOSIT_LAYER_KEYS, ID_RE, TEMPLATE_STAGES } from './templates.ts'
+import { workflowEqual, workflowInput, type WorkflowDraft } from './workflow-model.ts'
 
 /** 表单值（create / edit 共用超集；edit 用不到的字段保持初值）。 */
 export interface TeamFormValues {
@@ -27,6 +28,17 @@ export interface TeamFormValues {
   filter: string
   /** 仅 create：工作流模板。 */
   template: 'minimal' | 'core-dev' | 'custom'
+  /**
+   * 工作流编排草稿（v11 F2）：create 由所选模板预填、edit 由 `adaptWorkflowParse` 得来。
+   * 提交路径见 `buildCreateInput` / `buildUpdatePatch`（web 只产出阶段模型，
+   * **md 表格由服务端 serialize 生成**，R-v11-9）。
+   */
+  workflow: WorkflowDraft
+  /**
+   * 仅 edit：GET 拿到的文件 mtime（design-v11 §3 的 `if_match`）。
+   * 服务端还没下发 ⇒ `undefined` ⇒ **不带该字段**（不带 ≠ 带 undefined 的字符串）。
+   */
+  sourceMtime?: number
   depositEnabled: boolean
   defaultLayer: string
   defaultType: string
@@ -79,7 +91,7 @@ export function validateCreate(
   return e
 }
 
-/** create 请求体（custom 本轮不做编辑器 → 不传模板，服务端按最小可用骨架落盘）。 */
+/** create 请求体（custom 本轮不做模板 → 不传模板，服务端按最小可用骨架落盘）。 */
 export function buildCreateInput(v: TeamFormValues, members: TeamMember[]): NewTeamInput {
   return {
     team_id: v.teamId.trim(),
@@ -89,6 +101,9 @@ export function buildCreateInput(v: TeamFormValues, members: TeamMember[]): NewT
     teams_dir: v.teamsDir.trim(),
     ...(v.description.trim() === '' ? {} : { description: v.description.trim() }),
     ...(v.template === 'custom' ? {} : { workflow_template: v.template as 'minimal' | 'core-dev' }),
+    // 编排器里的工作流（列集 + 阶段；模板预填 + 用户增删改）。零阶段（custom 且用户把
+    // 起点的空白卡也删光了）= 不发，让服务端走自己的骨架——「什么都不说」与「说我要零个阶段」是两件事。
+    ...(v.workflow.cards.length > 0 ? { workflow: workflowInput(v.workflow) } : {}),
   }
 }
 
@@ -113,15 +128,19 @@ export async function verifyCreated(t: TFunc, input: NewTeamInput, members: Team
     const notes: string[] = []
     if (diff.length > 0) notes.push(t('teams.warn.readback', { fields: diff.join(' / ') }))
     // 服务端会跳过「模板里角色未入选」的阶段（实测：core-dev 7 阶段 + 仅 dev-1/tester → 落盘 5 阶段）
-    const expectedStages = TEMPLATE_STAGES[input.workflow_template ?? 'minimal'].length
-    if (actual.workflow.length !== expectedStages) {
-      notes.push(
-        t('teams.warn.stages', {
-          actual: actual.workflow.length,
-          expected: expectedStages,
-          stages: TEMPLATE_STAGES[input.workflow_template ?? 'minimal'].map((k) => t(k)).join(' → '),
-        }),
-      )
+    // v11 F2：用户若是**自己编排**过阶段（带了 workflow），模板数就不再是预期值——那时不比对，
+    // 否则会拿一个已经作废的模板去「警告」用户（模板只是起点）。
+    if (input.workflow === undefined) {
+      const expectedStages = TEMPLATE_STAGES[input.workflow_template ?? 'minimal'].length
+      if (actual.workflow.length !== expectedStages) {
+        notes.push(
+          t('teams.warn.stages', {
+            actual: actual.workflow.length,
+            expected: expectedStages,
+            stages: TEMPLATE_STAGES[input.workflow_template ?? 'minimal'].map((k) => t(k)).join(' → '),
+          }),
+        )
+      }
     }
     return notes.join(' ')
   } catch (e) {
@@ -175,6 +194,22 @@ export function buildUpdatePatch(
     patch.roles_dir = rolesDir
     fields.push('members')
   }
+  /**
+   * 工作流段（design-v11 §3 / R-v11-13）。
+   *
+   * **members 与 workflow 同给时由服务端裁决（workflow 胜，跳过收窄）**——编辑器所见即所存。
+   * 这里两个都给：谁赢是服务端的事，前端不预判（预判就等于把「收窄」这条服务端语义抄到 web，
+   * 一旦服务端口径变了无从发现）。
+   */
+  if (!workflowEqual(v.workflow, baseline.workflow)) {
+    // 列集与阶段同源（`workflowInput` 单点）——列编辑（增 / 删自定义列、补核心列）靠它上报，
+    // 否则服务端只按 raw.columns 写回，用户的列改动被静默丢弃（M-2）。
+    patch.workflow = workflowInput(v.workflow)
+    fields.push('workflow')
+  }
+  // 乐观并发（R-v11-15）：只在**拿到过** mtime 时带——服务端未下发 source_mtime（旧响应）
+  // 就不带，宁可没有防护也不拿编造的值去撞假冲突。
+  if (v.sourceMtime !== undefined) patch.if_match = v.sourceMtime
   const depositChanged =
     v.depositEnabled !== baseline.depositEnabled ||
     v.defaultLayer !== baseline.defaultLayer ||

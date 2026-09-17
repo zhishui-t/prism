@@ -268,6 +268,86 @@ describe('editRole（外科式补丁：只动点名字段，正文不重排）',
     expect(content).not.toContain('## 能力（Skill 白名单）') // 没有多塞 overlay 节
   })
 
+  it('D-1 回归（overlay 形态 + body 同给，即 UI PATCH 形态）→ 结构化字段仍落正文 overlay，绝不被 body 快照覆盖', async () => {
+    // UI（buildRoleInput）恒带正文快照：D-1 铁证 = `skills` 与 `body` 同时出现在 PATCH 载荷。
+    // 修复前：overlay 小节先写入、随后被 patch.body 整段替换 → skills/books 静默丢失且报成功。
+    const rolesDir = makeTmp()
+    await newRole({
+      name: 'dev-x',
+      rolesDir,
+      description: '旧述',
+      skills: ['old-skill'],
+      knowledge: { layers: ['global', 'project'] },
+      body: '# dev-x\n\n## 核心第一原则\n**先收敛再动手。**\n',
+    })
+    // 表单播种用的正文快照 = 文件的正文部分（不含 frontmatter）
+    const bodySnapshot = splitFrontmatter(readFileSync(join(rolesDir, 'dev-x.md'), 'utf8')).body
+
+    await editRole({
+      name: 'dev-x',
+      rolesDir,
+      patch: {
+        skills: ['prism', 'v11-skill-x'],
+        knowledge: { layers: ['project'], books: ['mini-snake'] },
+        body: bodySnapshot,
+      },
+    })
+
+    const content = readFileSync(join(rolesDir, 'dev-x.md'), 'utf8')
+    const { data } = splitFrontmatter(content)
+    expect(data).not.toHaveProperty('skills') // 仍不进 frontmatter（宿主原生形态）
+    expect(data).not.toHaveProperty('knowledge')
+    const parsed = parseRoleMarkdown(content)
+    expect(parsed.skills).toEqual(['prism', 'v11-skill-x']) // 修复前 = []（被 body 覆盖）
+    expect(parsed.knowledge.layers).toEqual(['project'])
+    expect(parsed.knowledge.books).toEqual(['mini-snake'])
+    // 用户正文本体不被吃掉
+    expect(content).toContain('# dev-x')
+    expect(content).toContain('**先收敛再动手。**')
+  })
+
+  it('D-1 回归（frontmatter 形态 + body 同给）→ frontmatter 键更新、正文替换（黑盒已 PASS 面不回归）', async () => {
+    const rolesDir = makeTmp()
+    const file = join(rolesDir, 'fm.md')
+    mkdirSync(rolesDir, { recursive: true })
+    writeFileSync(
+      file,
+      [
+        '---',
+        'name: fm',
+        'description: d',
+        'skills: [old-skill]',
+        'knowledge:',
+        '  layers: [global]',
+        '  books: [old-book]',
+        '---',
+        '',
+        '# fm 旧正文',
+        '',
+      ].join('\n'),
+    )
+
+    await editRole({
+      name: 'fm',
+      rolesDir,
+      patch: {
+        skills: ['prism'],
+        knowledge: { layers: ['project'], books: ['mini-snake'] },
+        body: '# fm 新正文\n',
+      },
+    })
+
+    const content = readFileSync(file, 'utf8')
+    const { data } = splitFrontmatter(content)
+    expect(data?.skills).toEqual(['prism'])
+    const knowledge = data?.knowledge as { layers: string[]; books?: string[] }
+    expect(knowledge.layers).toEqual(['project'])
+    expect(knowledge.books).toEqual(['mini-snake'])
+    expect(content).toContain('# fm 新正文')
+    expect(content).not.toContain('# fm 旧正文')
+    expect(content).not.toContain('## 能力（Skill 白名单）') // frontmatter 形态不塞 overlay 节
+  })
+
   it('color/model/thoughtLevel = null → 删除该 frontmatter 键（不留 color: "" 半残态）', async () => {
     const rolesDir = makeTmp()
     await newRole({ name: 'dev-x', rolesDir, color: 'blue', model: 'custom:m', thoughtLevel: 'max' })
@@ -328,6 +408,35 @@ describe('patchRoleRaw（纯函数：落点判定 + marker 保持）', () => {
     const cleared = patchRoleRaw(raw, { skills: [] })
     expect(cleared).not.toContain('## 能力（Skill 白名单）')
     expect(cleared).not.toContain('- old-skill')
+  })
+
+  it('D-1 回归：body 与 skills/knowledge 同给 → overlay 注入发生在 body 应用之后（结构化字段胜出）', () => {
+    const raw = [
+      '---',
+      'name: r1',
+      'description: d',
+      '---',
+      '',
+      '# r1',
+      '',
+      '## 能力（Skill 白名单）',
+      '- old-skill',
+      '',
+      '## 知识绑定',
+      '- layers: global, project',
+      '',
+    ].join('\n')
+    const next = patchRoleRaw(raw, {
+      skills: ['prism'],
+      knowledge: { layers: ['project'], books: ['mini-snake'] },
+      body: '# r1 新正文\n',
+    })
+    expect(next).toContain('# r1 新正文')
+    expect(next).not.toContain('- old-skill')
+    const parsed = parseRoleMarkdown(next)
+    expect(parsed.skills).toEqual(['prism'])
+    expect(parsed.knowledge.layers).toEqual(['project'])
+    expect(parsed.knowledge.books).toEqual(['mini-snake'])
   })
 })
 

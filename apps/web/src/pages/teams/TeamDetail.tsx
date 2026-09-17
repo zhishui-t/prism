@@ -18,9 +18,10 @@
 
 import { useEffect, useState } from 'react'
 
-import { teamApi, type TeamActivation, type TeamDefinition } from '../../api-team.ts'
+import { adaptWorkflowParse, teamApi, type TeamActivation, type TeamDefinition } from '../../api-team.ts'
 import { ConfirmModal } from '../../components/ConfirmModal.tsx'
 import { CountLine } from '../../components/CountLine.tsx'
+import { Markdown } from '../../components/Markdown.tsx'
 import { Ref } from '../../components/ref.tsx'
 import { State } from '../../components/State.tsx'
 import { Pane, StatusTag, firstSentence } from '../../components/ui.tsx'
@@ -28,6 +29,7 @@ import { useT, type DictKey } from '../../i18n.ts'
 import { describeFailure } from './errors.ts'
 import { TeamEffectiveSkills } from './parts/TeamEffectiveSkills.tsx'
 import { WorkflowFlow } from './parts/WorkflowFlow.tsx'
+import { toFlowStages, workflowStateOf } from './workflow-model.ts'
 
 /** 层 → 字典键（静态映射，避免模板串拼 key）。 */
 const LAYER_LABEL: Record<string, DictKey> = {
@@ -220,18 +222,46 @@ export function TeamDetail({
       </Pane>
 
       {/* F8 §2.1/§2.2：**工作流提到概览之上**——它是团队的灵魂，保持第一眼，不得降级/折叠。
-          §2.4 #2：「阶段 N」不再单列一行，计数并入本 Pane 头的 `CountLine`（与名册同槽）。 */}
-      {detail !== undefined && (
-        <Pane
-          head={
-            <div className="pane-head">
-              <CountLine size="section" bare label={t('teams.workflow')} count={detail.workflow.length} />
-            </div>
-          }
-        >
-          <WorkflowFlow workflow={detail.workflow} />
-        </Pane>
-      )}
+          §2.4 #2：「阶段 N」不再单列一行，计数并入本 Pane 头的 `CountLine`（与名册同槽）。
+
+          v11 F2 三态（design-v11 §3）：`WorkflowFlow` 的渲染代码**不动**，改的是喂给它的数据。
+          - `prose`（小节存在但只有自由文本）：渲染 Markdown + 说明「结构化后可编排」；
+          - `sectionMissing`（文件里没有这个小节）：显式说明，**不留空白**；
+          - 其余：`toFlowStages` 兜缺省（order 非法按位置、mode 空按 serial、缺 roles/reflow 留空）
+            ⇒ 缺 roles 画不出徽章、缺 reflow 不画回流线、只有序号+名称也照样成链。 */}
+      {detail !== undefined &&
+        (() => {
+          const parse = adaptWorkflowParse(detail)
+          const state = workflowStateOf(parse)
+          return (
+            <Pane
+              head={
+                <div className="pane-head">
+                  <CountLine size="section" bare label={t('teams.workflow')} count={detail.workflow.length} />
+                </div>
+              }
+            >
+              {state === 'prose' ? (
+                <>
+                  <div className="small muted">{t('teams.wf.prose.title')}</div>
+                  {parse.proseText !== undefined && parse.proseText !== '' ? (
+                    <div className="wf-prose-body">
+                      <Markdown src={parse.proseText} />
+                    </div>
+                  ) : (
+                    // 没拿到小节原文（服务端未下发该键 / 响应来自旧版本）：如实说「看不到」，
+                    // 不拿空串当正文渲染
+                    <div className="small muted">{t('teams.wf.prose.noText')}</div>
+                  )}
+                </>
+              ) : state === 'missing' ? (
+                <div className="small muted">{t('teams.wf.missing.title')}</div>
+              ) : (
+                <WorkflowFlow workflow={toFlowStages(detail.workflow)} />
+              )}
+            </Pane>
+          )
+        })()}
 
       {/* F8 §2.1 常用带①：成员表（紧凑网格：`Ref kind="role"` + `×N` 的 `StatusTag`）。
           §2.4 #6：`teams.rosterHint` 由常驻说明行降级为 Pane 头 `CountLine` 的 `title`。 */}

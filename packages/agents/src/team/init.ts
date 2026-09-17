@@ -203,18 +203,38 @@ export function parseMembersSpec(spec: string): { members: TeamMember[]; issues:
 }
 
 /**
+ * `narrowWorkflow` 的两语义开关（v11 F2 / R-v11-1）。
+ *
+ * 关键区分：阶段 `roles` 为空有两种成因——「roles 列已映射但该行没填」（名册里也确实没有，
+ * 该阶段应随裁剪消失）与「表里**根本没有** roles 列」（`roles: []` 是缺列产物，**不能**据此
+ * 删阶段，否则整段工作流会被清空——这正是 R-v11-1 的数据丢失红线）。
+ */
+export interface NarrowWorkflowOptions {
+  /**
+   * `roles` 列是否被成功映射。`false` = 「roles 未映射」：不裁剪、不删阶段、不重编号，
+   * 原样返回（pruned* 均为空，keptIndexes 为恒等序列）。缺省 `true` = 「roles 已映射」。
+   */
+  rolesMapped?: boolean
+}
+
+/**
  * 按成员名册收窄工作流：剔除不属于名册的**非编排**角色引用；
  * 整段被剔空（且不含编排角色）的阶段删除，其余阶段重编号（1..n）。
- * 返回被剔除的角色与被删除的阶段名，供调用方出 warning。
+ * 返回被剔除的角色、被删除的阶段名与**保留阶段的原索引**（供调用方按 rowId 合并未映射列），
+ * 供调用方出 warning / 序列化。
  */
 export function narrowWorkflow(
   stages: WorkflowStage[],
   memberRoles: ReadonlySet<string>,
-): { stages: WorkflowStage[]; prunedRoles: string[]; prunedStages: string[] } {
+  opts: NarrowWorkflowOptions = {},
+): { stages: WorkflowStage[]; prunedRoles: string[]; prunedStages: string[]; keptIndexes: number[] } {
+  if (opts.rolesMapped === false) {
+    return { stages, prunedRoles: [], prunedStages: [], keptIndexes: stages.map((_, index) => index) }
+  }
   const prunedRoles: string[] = []
   const prunedStages: string[] = []
-  const kept: WorkflowStage[] = []
-  for (const stage of stages) {
+  const kept: { stage: WorkflowStage; index: number }[] = []
+  for (const [index, stage] of stages.entries()) {
     const roles = stage.roles.filter((ref) => {
       const base = stripInstanceMarker(ref)
       const ok = ORCHESTRATOR_ROLES.includes(base) || memberRoles.has(base)
@@ -225,12 +245,13 @@ export function narrowWorkflow(
       prunedStages.push(stage.stage)
       continue
     }
-    kept.push({ ...stage, roles })
+    kept.push({ stage: { ...stage, roles }, index })
   }
   return {
-    stages: kept.map((stage, index) => ({ ...stage, order: index + 1 })),
+    stages: kept.map((entry, index) => ({ ...entry.stage, order: index + 1 })),
     prunedRoles,
     prunedStages,
+    keptIndexes: kept.map((entry) => entry.index),
   }
 }
 

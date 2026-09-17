@@ -19,7 +19,14 @@ import { useAsync } from '../components/useAsync.ts'
 import { parseMarkdown } from '../markdown.ts'
 import { hrefOf, navigate } from '../route.ts'
 import { useT } from '../i18n.ts'
-import { groupSkills, UNCATEGORIZED, cleanSkillDescription, externalDeleteErrorKey } from './skills-logic.ts'
+import {
+  groupSkills,
+  mergeSkillCatalog,
+  UNCATEGORIZED,
+  cleanSkillDescription,
+  externalDeleteErrorKey,
+  type SkillCatalogRow,
+} from './skills-logic.ts'
 
 /**
  * 技能页（v7 §4.3 S1-S10）：**三正交轴的技能台账**，不是「带徽标的列表」。
@@ -54,27 +61,12 @@ import { groupSkills, UNCATEGORIZED, cleanSkillDescription, externalDeleteErrorK
  * （只清 Prism 产物）。字段缺失 / `false` 一律按现状走卸载（内置与 Prism 产物零变更）。
  */
 
-interface SkillRow {
-  name: string
-  summary: string
-  builtin: boolean
-  installed: boolean
-  roles: string[]
-  teams: string[]
-  /**
-   * 分类（F7 / R-v8-5 / F7-1）：两路**各自**合并的字段——内置技能来自 `GET /api/skills`，
-   * 外部技能（只出现在 usage 路）来自 `GET /api/skills/usage`（F7-1 起服务端已并）。
-   * 两路口径一致：服务端在映射里没有这条时**不加键** ⇒ 缺省 = 未分类，分组判据见
-   * `skills-logic.ts`（消费按 `?? ''`）。
-   */
-  category?: string
-  /**
-   * 外部可删态（v10 F3ui）：`true` 才把详情工具条的「卸载」换成「删除」（整目录进回收站）。
-   * 来源是 `GET /api/skills/usage` 的 `external_removable`（详情接口不下发该字段，故详情侧
-   * 按名字回查本行）；服务端不加键 / 给 `false` ⇒ 保持现状走卸载。
-   */
-  externalRemovable?: boolean
-}
+/**
+ * 技能台账行（F1 起抽到 `skills-logic.ts#SkillCatalogRow` 并**与角色表单选取器共用**）：
+ * 两路合并的口径、排序与字段来源注释都在那里——本页只消费，不再自己合并
+ * （此前内联在下面的 `useMemo` 里，选取器若再抄一遍就是第二处镜像）。
+ */
+type SkillRow = SkillCatalogRow
 
 export function SkillsPage({ sel }: { sel?: string }) {
   const t = useT()
@@ -111,41 +103,15 @@ export function SkillsPage({ sel }: { sel?: string }) {
 
   useEffect(() => setView('detail'), [key])
 
-  const rows = useMemo<SkillRow[]>(() => {
-    const map = new Map<string, SkillRow>()
-    const ensure = (name: string): SkillRow => {
-      let row = map.get(name)
-      if (row === undefined) {
-        row = { name, summary: '', builtin: false, installed: false, roles: [], teams: [] }
-        map.set(name, row)
-      }
-      return row
-    }
-    for (const skill of skills.data?.skills ?? []) {
-      const row = ensure(skill.name)
-      row.builtin = true
-      row.summary = skill.description
-      // F7：`category` 与内置清单同源送达（R-v8-5）——分组只吃**行上**的该字段
-      // （内置走这一路、外部走下面的 usage 路），不回头查 `/api/skills/categories`。
-      row.category = skill.category
-    }
-    for (const item of (usage.data ?? []) as SkillUsage[]) {
-      const row = ensure(item.name)
-      row.builtin = row.builtin || item.builtin
-      row.installed = item.installed
-      row.roles = item.roles
-      row.teams = item.teams
-      // F7-1：usage 路是**外部技能**唯一的分类来源（`/api/skills` 只列内置）——服务端已按
-      // 同一口径逐条合并，这里按 `??=` 补齐。用 `??=`（而非 `=`）是**顺序契约**：内置路
-      // 已写过的 `category` 不被这条覆盖；`item` 无该键时是 `undefined`，`??=` 不落键
-      // ⇒ 未分类就是 undefined，与「服务端不加键」同形态（分组哨兵仍由 `groupSkills` 归一）。
-      row.category ??= item.category
-      // F3ui（v10）：外部可删态与 `category` **同源同路**（都只出现在 usage 路）——用 `=== true`
-      // 而非真值判断：服务端不下发该键时是 `undefined`，与 `false` 同档（保持现状走卸载）。
-      row.externalRemovable = item.external_removable === true
-    }
-    return [...map.values()].sort((a, b) => a.name.localeCompare(b.name))
-  }, [skills.data, usage.data])
+  /**
+   * 台账行 = 两路合并（口径与排序都在 `mergeSkillCatalog`，F1 起与角色表单选取器共用一份）。
+   * 外部技能的 `category` / `external_removable` 与 `installed` / `roles` / `teams` 同源同路
+   * （都只出现在 usage 路）——逐字段语义见 `skills-logic.ts`。
+   */
+  const rows = useMemo<SkillRow[]>(
+    () => mergeSkillCatalog(skills.data?.skills ?? [], (usage.data ?? []) as SkillUsage[]),
+    [skills.data, usage.data],
+  )
 
   /**
    * S1 页头三轴计数（F8 §3.4 #3 后只剩两轴）：「内置 / 外部」这一列已删——来源是行内文字标记

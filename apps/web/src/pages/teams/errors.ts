@@ -36,7 +36,33 @@ export function describeFailure(t: TFunc, raw: string, teamId: string): string {
     return t('teams.err.membersInvalid', { msg: detail })
   }
   if (code === 'id_conflict' || code === 'team_exists') return t('teams.err.exists', { id: teamId })
+  // v11 F2（R-v11-15）：乐观并发失败——文件在「读到 → 保存」之间被外部改过。
+  if (code === 'stale_write') return t('teams.err.stale')
+  // v11 F2 写侧契约（design-v11 §3 表：400 三码）。`workflow_invalid` / `if_match_invalid`
+  // 落在 **`bad_request` 信封 + message 开头的具体码**（同 `teams_dir_required` 那一档），
+  // `workflow_section_missing` 则是独立信封码——两种形态都在上面被 `code` 归一，故此处并列即可。
+  if (code === 'workflow_invalid') return t('teams.err.workflowInvalid', { msg: detail })
+  if (code === 'if_match_invalid') return t('teams.err.ifMatchInvalid')
+  // R-v11-11：服务端**不自动插小节**，故文案必须给出「去文件里补」这一可执行动作，
+  // 否则用户只知道存不下去、不知道下一步做什么。
+  if (code === 'workflow_section_missing') return t('teams.err.workflowSectionMissing', { id: teamId })
   // bad_request 且无具体码：直接把服务端原因（已含可执行信息）呈现出来
   if (envelopeCode === 'bad_request') return detail
   return t('teams.err.generic', { code, msg: message })
+}
+
+/**
+ * 是否为「陈旧写」（design-v11 §3 / R-v11-15 的 409 `stale_write`）。
+ *
+ * 单独抽出来的理由：调用方要按它**分流动作**（给「重新加载」出口，而不是只把文案改个词），
+ * 而 code 的解析规则属于本模块（`describeFailure` 刚做过同一件事）——调用方不该自己
+ * `startsWith` 猜信封形态。
+ */
+export function isStaleWrite(raw: string): boolean {
+  // 与 `describeFailure` 同款两来源（信封码 + message 开头的具体码），免得一处认得、一处认不得。
+  const idx = raw.indexOf(': ')
+  const envelope = idx === -1 ? '' : raw.slice(0, idx)
+  const message = idx === -1 ? raw : raw.slice(idx + 2)
+  const detail = /^([a-z_]+)\s*[:：]/.exec(message)?.[1] ?? ''
+  return envelope === 'stale_write' || detail === 'stale_write'
 }

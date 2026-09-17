@@ -19,7 +19,7 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { UNCATEGORIZED, cleanSkillDescription, externalDeleteErrorKey, groupSkills } from '../src/pages/skills-logic.ts'
+import { UNCATEGORIZED, cleanSkillDescription, externalDeleteErrorKey, groupSkills, mergeSkillCatalog } from '../src/pages/skills-logic.ts'
 
 /** 判据只要求 `name` + 可选 `category`（不依赖技能台账的其它字段）。 */
 type Row = { name: string; category?: string }
@@ -163,5 +163,65 @@ describe('v10 F3ui 外部删除失败码 → 字典键', () => {
 
   it('**前缀**匹配：码作为子串出现在别处不算命中（码必须打头）', () => {
     expect(externalDeleteErrorKey('error: id_conflict happened')).toBeNull()
+  })
+})
+
+/**
+ * F1（v11）：技能台账的两路合并（`/api/skills` 内置清单 ∪ `/api/skills/usage` 使用情况）。
+ *
+ * 这段逻辑原本内联在 `Skills.tsx` 的 `useMemo` 里、只由技能页的 DOM 测试间接覆盖；
+ * F1 起**角色表单的技能选取器也吃它**（同一份实现），故在本文件里直接钉住逐字段来源。
+ */
+describe('F1 技能台账合并：内置清单 ∪ 使用情况', () => {
+  it('同名条目合并：内置路给来源/描述/分类，usage 路给宿主态与引用方', () => {
+    const rows = mergeSkillCatalog(
+      [{ name: 'tech-doc', description: '写文档', category: 'docs' }],
+      [{ name: 'tech-doc', builtin: true, installed: true, roles: ['dev-1'], teams: ['core'] }],
+    )
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toEqual({
+      name: 'tech-doc',
+      summary: '写文档',
+      builtin: true,
+      installed: true,
+      roles: ['dev-1'],
+      teams: ['core'],
+      category: 'docs',
+      externalRemovable: false,
+    })
+  })
+
+  it('外部技能（只出现在 usage 路）恒成立：无描述、非内置，分类只可能来自该路', () => {
+    const rows = mergeSkillCatalog([], [{ name: 'mine', installed: true, category: 'ui' }])
+    expect(rows[0]).toMatchObject({ name: 'mine', summary: '', builtin: false, installed: true, category: 'ui' })
+  })
+
+  it('顺序契约：内置路写过的 `category` **不被** usage 路覆盖（`??=` 而非 `=`）', () => {
+    const rows = mergeSkillCatalog(
+      [{ name: 'a', description: '', category: 'docs' }],
+      [{ name: 'a', category: 'ui' }],
+    )
+    expect(rows[0]!.category).toBe('docs')
+  })
+
+  it('`builtin` 取或、`installed` / `roles` / `teams` / `externalRemovable` 缺键即缺省', () => {
+    const rows = mergeSkillCatalog([], [{ name: 'a', installed: true }])
+    expect(rows[0]).toMatchObject({ builtin: false, installed: true, roles: [], teams: [], externalRemovable: false })
+    // 两路都没给分类 ⇒ **值**是 undefined（= 未分类）。
+    // ⚠ 不按键是否存在断言：`??=` 会把键落成 `undefined` 值（键在、值为空），
+    // 消费方（`groupSkills` / 选取器）一律按值读——这正是它必须按值读的原因。
+    expect(rows[0]!.category).toBeUndefined()
+  })
+
+  it('`external_removable` 只认 `=== true`（服务端不给键时与 `false` 同档：仍走卸载）', () => {
+    const rows = mergeSkillCatalog([], [{ name: 'a' }, { name: 'b', external_removable: true }])
+    expect(rows.find((r) => r.name === 'a')!.externalRemovable).toBe(false)
+    expect(rows.find((r) => r.name === 'b')!.externalRemovable).toBe(true)
+  })
+
+  it('结果按技能名排序（与技能页列表原有排序同口径），且未分类可由 groupSkills 归一', () => {
+    const rows = mergeSkillCatalog([{ name: 'zeta' }, { name: 'alpha' }], [])
+    expect(rows.map((r) => r.name)).toEqual(['alpha', 'zeta'])
+    expect(groupSkills(rows)[0]!.category).toBe(UNCATEGORIZED)
   })
 })

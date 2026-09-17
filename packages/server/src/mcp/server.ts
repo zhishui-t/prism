@@ -32,6 +32,7 @@ import {
   loadTeam,
   loadTeams,
 
+  readTeamDetail,
   renderZcodeTeam,
   resolveDirsFromHome,
   harnessPaths,
@@ -565,7 +566,10 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
     return { count: teams.length, teams, teams_dir: teamsDir }
   }
 
-  /** 修改团队（字段补丁；改 members 时工作流就地收窄）。 */
+  /**
+   * 修改团队（字段补丁；改 members 时工作流就地收窄；给 workflow 时结构化保存；if_match 防陈旧写）。
+   * 与 HTTP `PATCH /api/teams/:id`、CLI `prism team edit` 共用 `updateTeamDefinition`（三入口同口径）。
+   */
   const teamEdit = async (args: Record<string, unknown>): Promise<unknown> => {
     const teamId = asString(args.team_id)
     if (teamId === undefined) {
@@ -589,8 +593,22 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
     return { team_id: team.team_id, target: join(teamsDir, `${team.team_id}.md`), content: renderZcodeTeam(team) }
   }
 
+  /**
+   * 取单个团队 + 工作流底账（v11 派修 M-3）：与 HTTP `GET /api/teams/:id` 共用
+   * `roles/team-read.ts` 的单点，故响应含 `workflow_raw`（rowIds/proseText 等）与
+   * `source_mtime`——`prism_team_edit` 的 schema 以二者为前置（rowId 对齐未映射列、
+   * if_match 防陈旧写），此前 MCP 面拿不到，照 schema 走会丢自定义列值。
+   */
   const teamGet = async (args: Record<string, unknown>): Promise<unknown> => {
-    return await requireTeam(args.team_id)
+    const id = asString(args.team_id)
+    if (id === undefined) {
+      throw new Error('缺少 team_id')
+    }
+    const detail = await readTeamDetail(teamsDir, id, { rolesDir })
+    if (detail === null) {
+      throw new Error(teamNotFoundMessage(teamsDir, id))
+    }
+    return { ...detail.team, workflow_raw: detail.workflow_raw, source_mtime: detail.source_mtime }
   }
 
   const teamActivate = async (args: Record<string, unknown>): Promise<unknown> => {
@@ -1526,7 +1544,8 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
     },
     {
       name: 'prism_team_get',
-      description: '取团队定义（frontmatter + 工作流 + 沉淀规则；数据源 = 宿主团队目录 teams_dir）',
+      description:
+        '取团队定义（frontmatter + 工作流 + 沉淀规则；数据源 = 宿主团队目录 teams_dir）。v11：响应增只读 `workflow_raw`（被编辑文件本体的原始工作流表：columns/rows/rowIds/unmapped/prose/sectionMissing/proseText，**不经 extends 合并**）与 `source_mtime`（epoch 毫秒整数）——前者供 prism_team_edit 的 rowId 对齐未映射列，后者供 if_match 防陈旧写；读侧行级诊断以 warning 并入 issues',
       inputSchema: {
         type: 'object',
         properties: { team_id: { type: 'string' } },
@@ -1569,6 +1588,38 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
             description: '沉淀策略（enabled/default_layer/default_type/priority/require_note；可选）',
           },
           workflow_template: { enum: ['minimal', 'core-dev'], description: '工作流模板，缺省 minimal' },
+          workflow: {
+            type: 'object',
+            description:
+              '结构化保存工作流（v11 F2）：{ stages: [...], columns?: [...] }。stages 为空数组 = 清空工作流；每项 {rowId?, order, stage, roles?, mode?, input?, output?, done?, reflow?, extra?}，缺省 roles=[] / mode=serial / 文本字段为空串。新建无原行身份，rowId 通常省略（= 模板行全换为提交行）；columns = 提交列集（含未映射列，非空、trim 后唯一）；不给 = 模板列集',
+            properties: {
+              stages: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    rowId: { type: 'string', description: '原 raw 行身份（对齐未映射列合并用；新行省略）' },
+                    order: { type: 'number' },
+                    stage: { type: 'string' },
+                    roles: { type: 'array', items: { type: 'string' } },
+                    mode: { enum: ['serial', 'parallel'] },
+                    input: { type: 'string' },
+                    output: { type: 'string' },
+                    done: { type: 'string' },
+                    reflow: { type: 'string' },
+                    extra: { type: 'object', description: '未映射列值（列名 → 单元格文本）' },
+                  },
+                  required: ['order', 'stage'],
+                },
+              },
+              columns: {
+                type: 'array',
+                items: { type: 'string' },
+                description: '提交列集（含未映射列，保持列序；非空、trim 后唯一）；不给 = 模板列集',
+              },
+            },
+            required: ['stages'],
+          },
           teams_dir: { type: 'string', description: '**必填**：写入目录（防误写真实宿主）' },
           roles_dir: {
             type: 'string',
@@ -1582,7 +1633,7 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
     {
       name: 'prism_team_edit',
       description:
-        '修改团队（字段补丁：name/description/members/deposit）。改 members 时工作流表**就地按名册收窄**（剔除不属于名册的角色，空阶段删除并重编号），并校验角色都在角色库中。teams_dir 必填',
+        '修改团队（字段补丁：name/description/members/deposit/workflow）。改 members 时工作流表**就地按名册收窄**（剔除不属于名册的角色，空阶段删除并重编号），并校验角色都在角色库中。**workflow = 结构化保存工作流**（每项含 rowId/order/stage/roles/mode/input/output/done/reflow/extra；raw 底账由服务端重读文件并按 rowId 合并未映射列）——members 与 workflow 同给时 **workflow 胜**（编辑器所见即所存）。if_match 取 prism_team_get 同源的 source_mtime，不匹配 → 409 stale_write。teams_dir 必填',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1597,10 +1648,46 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
               properties: { role: { type: 'string' }, count: { type: 'integer', minimum: 1 } },
               required: ['role'],
             },
-            description: '新名册（替换式；给定时必须同时给 roles_dir）',
+            description: '新名册（替换式；给定时必须同时给 roles_dir；与 workflow 同给时 workflow 胜）',
           },
           roles_dir: { type: 'string', description: '改 members 时必填：用于校验角色存在' },
           deposit: { type: 'object', description: '沉淀策略补丁（只覆盖给出的键）' },
+          workflow: {
+            type: 'object',
+            description:
+              '结构化保存工作流（v11 F2）：{ stages: [...], columns?: [...] }。stages 为空数组 = 清空工作流；每项 {rowId?, order, stage, roles?, mode?, input?, output?, done?, reflow?, extra?}，缺省 roles=[] / mode=serial / 文本字段为空串。rowId 取自 prism_team_get 的 workflow_raw.rowIds（缺省 = 新增行；原行未提交 = 删除该行）。columns = 提交列集（含未映射列，保持列序；非空且 trim 后唯一，非法 400 workflow_invalid）：核心字段列不在其中 = 该列不入表，自定义列按名取 extra；不给 = 沿用原表列集',
+            properties: {
+              stages: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    rowId: { type: 'string', description: '原 raw 行身份（对齐未映射列合并用；新行省略）' },
+                    order: { type: 'number' },
+                    stage: { type: 'string' },
+                    roles: { type: 'array', items: { type: 'string' } },
+                    mode: { enum: ['serial', 'parallel'] },
+                    input: { type: 'string' },
+                    output: { type: 'string' },
+                    done: { type: 'string' },
+                    reflow: { type: 'string' },
+                    extra: { type: 'object', description: '未映射列值（列名 → 单元格文本）' },
+                  },
+                  required: ['order', 'stage'],
+                },
+              },
+              columns: {
+                type: 'array',
+                items: { type: 'string' },
+                description: '提交列集（含未映射列，保持列序；非空、trim 后唯一）；不给 = 沿用原表列集',
+              },
+            },
+            required: ['stages'],
+          },
+          if_match: {
+            type: 'integer',
+            description: '陈旧写防护：取 GET 的 source_mtime（epoch 毫秒整数）；与磁盘 mtime 不符 → 409 stale_write',
+          },
         },
         required: ['team_id', 'teams_dir'],
       },

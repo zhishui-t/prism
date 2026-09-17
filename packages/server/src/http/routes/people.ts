@@ -24,6 +24,7 @@ import {
   loadRoles,
   loadTeam,
   loadTeams,
+  readTeamDetail,
   resolveDirsFromHome,
   harnessPaths,
   roleNotFoundMessage,
@@ -155,11 +156,29 @@ export function peopleRoutes(deps: PeopleDeps): {
 
   /**
    * 单个团队（ui-spec §8-D5：错误文案指向真实源 `<teams_dir>/<id>.md`，目录式仅作兼容形态）。
+   *
+   * v11 F2（design-v11 §3 / R-v11-13/15）：响应增三个**只读**字段（server 侧包装，同
+   * `GET /api/roles` 的 `installed` 先例，**不改** agents 的 `TeamDefinition` 冻结类型）：
+   * - `workflow_raw`：**被编辑文件本体**的原始工作流表（`columns`/`rows`/`rowIds`/`unmapped`/
+   *   `prose`/`sectionMissing`/`proseText`）——编辑器的保真底账；**不经 extends 合并**（否则写回会打到错文件）；
+   * - `source_mtime`：epoch 毫秒整数（`statSync(file).mtimeMs` 取整），PATCH 的 `if_match` 用；
+   * - `issues`：`parseWorkflowSection` 的行级降级诊断（`ParseIssue`）以 **warning** 级并入
+   *   「既有校验 issues」，不覆盖（R-v11-5：读侧不再抛错，诊断可见）。
+   *
+   * v11 派修 M-3：包装抽到 `roles/team-read.ts` 的 `readTeamDetail` 单点，与 MCP
+   * `prism_team_get` 同调（此前 MCP 面拿不到这两个字段，照 schema 走必丢未映射列）。
    */
   const team = async (ctx: RouteContext): Promise<Envelope> => {
     const id = ctx.params.id ?? ''
-    const found = await loadTeam(teamsDir, id, { rolesDir, knownSkills: await knownSkills() })
-    return found === null ? fail('not_found', teamNotFoundMessage(teamsDir, id)) : ok(found)
+    const detail = await readTeamDetail(teamsDir, id, { rolesDir, knownSkills: await knownSkills() })
+    if (detail === null) {
+      return fail('not_found', teamNotFoundMessage(teamsDir, id))
+    }
+    return ok({
+      ...detail.team,
+      workflow_raw: detail.workflow_raw,
+      source_mtime: detail.source_mtime,
+    })
   }
 
   /**

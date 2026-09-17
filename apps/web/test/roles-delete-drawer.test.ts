@@ -43,6 +43,9 @@ vi.mock('../src/api-team.ts', () => ({
     role: (name: string) =>
       Promise.resolve(data.roles.find((r) => (r as RoleDefinition).name === name) ?? null),
     teams: () => Promise.resolve({ teams: [], teamsDir: '/tmp/prism-teams' }),
+    /** F1：表单里的技能选取器会拉这两路（本文件不开选取器，给空库即可）。 */
+    skills: () => Promise.resolve({ skills: [], skills_dir: '/tmp/prism-skills' }),
+    skillUsage: () => Promise.resolve([]),
     effectiveSkills: (role: string) => Promise.resolve({ role, skills: [], warnings: [] }),
     updateRole: () => Promise.resolve({ path: '/tmp/prism-roles/x.md', issues: [] }),
     /** 删除 = 真从列表里摘掉（teams 式 reload 必须能读到「空一个该角色」的列表）。 */

@@ -221,12 +221,15 @@ export function Drawer({
  *
  * 浮层契约与 `Drawer` **同源**（`useOverlayLayer` + `useScrollLock`）：Esc 只在栈顶时关、
  * 点遮罩关、Tab 圈闭、关闭还原焦点、挂载期锁滚动。差别只有版式两处：
- * 1. 面板走 `.modal`（K12 确认模态同一套 scrim / 面板 / 进场动画）+ `.modal-lg` 大版；
+ * 1. 面板走 `.modal`（K12 确认模态同一套 scrim / 面板 / 进场动画）+ `.modal-lg` / `.modal-md`；
  * 2. 结构是「头（标题 + 关闭）/ 内容（自滚）/ 脚（动作）」——**内容区吃剩余高度并自滚**，
  *    长正文不会把面板撑出视口（`Drawer` 是整栏高度，这里必须有上限）。
  *
  * ⚠ 与 `ConfirmModal` 的分工：那个是**唯一确认零件**（danger 色确认钮、busy、二选一出口）；
- * 本组件是**阅读容器**，不替调用方决定动作语义（footer 由调用方给）。
+ * 本组件是**阅读 / 选取容器**，不替调用方决定动作语义（footer 由调用方给）。
+ *
+ * `size` 是**同一版式的两个上限**（F1：`md` 给选取器，与 560px 的表单抽屉同宽；
+ * 尺寸差异只在 CSS 的 `width`，头 / 内容 / 脚三段结构与 `.modal` 的进场动画两档共用）。
  */
 export function Modal({
   title,
@@ -234,6 +237,7 @@ export function Modal({
   onClose,
   children,
   footer,
+  size = 'lg',
 }: {
   /** 面板标题：字符串直接作无障碍名；节点形态（如「色点 + 名字」）由调用方给 `ariaLabel`。 */
   title: ReactNode
@@ -242,6 +246,8 @@ export function Modal({
   onClose: () => void
   children: ReactNode
   footer?: ReactNode
+  /** 面板尺寸档：`lg`（880px，读全文）/ `md`（560px，选取器）。 */
+  size?: 'lg' | 'md'
 }) {
   const t = useT()
   const box = useRef<HTMLDivElement>(null)
@@ -258,7 +264,7 @@ export function Modal({
       <div
         ref={box}
         tabIndex={-1}
-        className="modal modal-lg"
+        className={`modal modal-${size}`}
         role="dialog"
         aria-modal="true"
         aria-label={ariaLabel ?? (typeof title === 'string' ? title : t('common.details'))}

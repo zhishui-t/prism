@@ -72,6 +72,45 @@ describe('describeFailure · 逐码分支', () => {
   it('设计期码 team_exists 也认（两套都认，避免任一侧改动后静默失败）', () => {
     expect(describeFailure(t, 'team_exists: nope', ID)).toBe(t('teams.err.exists', { id: ID }))
   })
+
+  it('stale_write（信封码）→ 陈旧写文案', () => {
+    expect(describeFailure(t, 'stale_write: 文件已被外部修改', ID)).toBe(t('teams.err.stale'))
+  })
+
+  // v11 阶段 C（design-v11 §3 的 400 三码）：`workflow_invalid` / `if_match_invalid` 是
+  // 「bad_request 信封 + message 开头具体码」，`workflow_section_missing` 是独立信封码。
+  it('workflow_invalid（含全角冒号）→ 带上服务端的具体原因', () => {
+    const raw = 'bad_request: workflow_invalid：workflow.stages[1].order 必须是数字'
+    const out = describeFailure(t, raw, ID)
+    expect(out).toBe(t('teams.err.workflowInvalid', { msg: 'workflow.stages[1].order 必须是数字' }))
+    expect(out).toContain('workflow.stages[1].order 必须是数字')
+  })
+
+  it('workflow_invalid 在半角冒写下也认', () => {
+    const out = describeFailure(t, 'bad_request: workflow_invalid: workflow 必须是对象', ID)
+    expect(out).toContain('workflow 必须是对象')
+  })
+
+  it('if_match_invalid → 独立文案（不吃 bad_request 的 detail 兜底）', () => {
+    const raw = 'bad_request: if_match_invalid：if_match 必须是整数（epoch 毫秒…）'
+    expect(describeFailure(t, raw, ID)).toBe(t('teams.err.ifMatchInvalid'))
+    expect(describeFailure(t, raw, ID)).not.toContain('epoch 毫秒')
+  })
+
+  it('workflow_section_missing（独立信封码，message 里再带一次同名码）→ 带 team id 的可行动指引', () => {
+    // 服务端形态：agents 抛 `workflow_section_missing: 未找到「## 工作流」小节`，
+    // 信封再包一层同名码 → 抛出的字符串里该码出现两次（两处解析路径都要认）。
+    const raw = 'workflow_section_missing: workflow_section_missing: 未找到「## 工作流」小节'
+    const out = describeFailure(t, raw, ID)
+    expect(out).toBe(t('teams.err.workflowSectionMissing', { id: ID }))
+    expect(out).toContain(ID)
+    expect(out).toContain('## 工作流')
+  })
+
+  it('三个新码都优先于 bad_request 的 detail 兜底', () => {
+    // 若新分支被放到兜底之后，这里会退化成「把服务端原文直接甩出来」
+    expect(describeFailure(t, 'bad_request: workflow_invalid：x', ID)).not.toBe('x')
+  })
 })
 
 describe('describeFailure · 信封码优先于具体码', () => {

@@ -47,6 +47,9 @@ vi.mock('../src/api-team.ts', () => ({
     role: (name: string) =>
       Promise.resolve(data.roles.find((r) => (r as RoleDefinition).name === name) ?? null),
     teams: () => Promise.resolve({ teams: data.teams, teamsDir: '/tmp/prism-teams' }),
+    /** F1：表单里的技能选取器会拉这两路（本文件不开选取器，给空库即可——只影响 chip 的「未装」灯）。 */
+    skills: () => Promise.resolve({ skills: [], skills_dir: '/tmp/prism-skills' }),
+    skillUsage: () => Promise.resolve([]),
     /** 故意返回**白名单之外**的技能——旧实现据此渲染「有效新增」差集清单。 */
     effectiveSkills: (role: string) =>
       Promise.resolve({

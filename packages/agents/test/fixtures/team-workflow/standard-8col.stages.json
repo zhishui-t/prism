@@ -1,0 +1,114 @@
+[
+  {
+    "order": 1,
+    "stage": "需求收集",
+    "roles": [
+      "队长"
+    ],
+    "mode": "serial",
+    "input": "用户输入 + 代码库现状",
+    "output": "需求要点清单 + 现状摘要（recon.md）",
+    "done": "用户逐条确认需求要点；现状不明未探明不进设计",
+    "reflow": "有歧义 → 多维度追问；现状不明 → 并行派 dev 只读探索"
+  },
+  {
+    "order": 2,
+    "stage": "设计",
+    "roles": [
+      "队长"
+    ],
+    "mode": "serial",
+    "input": "需求要点",
+    "output": "design.md + spec.md（spec-writer 产出，验收标准一律 Given/When/Then）+ api.md（如涉及接口）",
+    "done": "三份文档齐、需求全覆盖",
+    "reflow": "缺项 → 回需求"
+  },
+  {
+    "order": 3,
+    "stage": "设计审核",
+    "roles": [
+      "reviewer"
+    ],
+    "mode": "serial",
+    "input": "三份文档",
+    "output": "review-意见清单",
+    "done": "通过或有条件通过（≤2 轮）",
+    "reflow": "驳回 → 队长改设计 → 再审（≤2 轮）"
+  },
+  {
+    "order": 4,
+    "stage": "任务分解",
+    "roles": [
+      "队长"
+    ],
+    "mode": "serial",
+    "input": "已审设计",
+    "output": "任务清单（含验收标准、依赖关系）",
+    "done": "每条任务可独立验证",
+    "reflow": "—"
+  },
+  {
+    "order": 5,
+    "stage": "开发+自测",
+    "roles": [
+      "dev",
+      "junior-dev",
+      "frontend-dev"
+    ],
+    "mode": "parallel",
+    "input": "任务清单 + 设计文档",
+    "output": "代码 + 自测报告",
+    "done": "自测全过 + 编译/构建通过",
+    "reflow": "卡住 → 队长拆小或换思路"
+  },
+  {
+    "order": 6,
+    "stage": "代码检视",
+    "roles": [
+      "reviewer"
+    ],
+    "mode": "serial",
+    "input": "代码 diff + 设计文档",
+    "output": "检视意见清单",
+    "done": "无 blocker 级问题",
+    "reflow": "blocker → dev 修复 → 复检"
+  },
+  {
+    "order": 7,
+    "stage": "规格符合性验证",
+    "roles": [
+      "tester-whitebox",
+      "tester-blackbox"
+    ],
+    "mode": "parallel",
+    "input": "代码 + spec.md + design.md",
+    "output": "需求↔代码对账矩阵（VERIFIED/PARTIAL/MISSING/DEVIATED）+ 有效测试集（spec-verify）",
+    "done": "无 MISSING/DEVIATED（缺口清单交阶段 8 定向补）",
+    "reflow": "缺口 → dev 修复 → 复验"
+  },
+  {
+    "order": 8,
+    "stage": "测试",
+    "roles": [
+      "tester-whitebox",
+      "tester-blackbox"
+    ],
+    "mode": "parallel",
+    "input": "代码 + spec.md + 对账矩阵",
+    "output": "测试报告（含缺陷清单）+ E2E 证据（playwright-cli / e2e-testing）+ 视觉审计（design-consistency-auditor，仅界面任务）",
+    "done": "全项有运行证据",
+    "reflow": "缺陷 → dev 修复 → 两路 tester 回归"
+  },
+  {
+    "order": 9,
+    "stage": "验收",
+    "roles": [
+      "队长"
+    ],
+    "mode": "serial",
+    "input": "全部产物",
+    "output": "验收结论",
+    "done": "用户确认交付",
+    "reflow": "—"
+  }
+]

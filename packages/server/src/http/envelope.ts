@@ -25,6 +25,11 @@ export const ERROR_CODES = [
   // 一旦 HTTP/MCP 暴露 restore 即为该面的 409）
   'trash_busy',
   'harness_not_found',
+  // v11 F2 批 B：团队工作流结构化保存的两个新码
+  // - `workflow_section_missing`：PATCH 要写结构化工作流，但文件没有 `## 工作流` 小节
+  //   （不自动插小节 → 400）；- `stale_write`：PATCH 的 `if_match` 与磁盘 mtime 不符（409）。
+  'workflow_section_missing',
+  'stale_write',
   'internal',
 ] as const
 
@@ -62,6 +67,10 @@ const ERROR_STATUS: Record<ErrorCode, number> = {
   trash_source_residue: 500,
   trash_busy: 409,
   harness_not_found: 400,
+  // 「没有工作流小节可写」= 请求与文件形态不符（客户端应改为引导用户先建小节）→ 400
+  workflow_section_missing: 400,
+  // 陈旧写（if_match 不符）= 并发冲突语义，与 id_conflict / build_in_progress 同档 409
+  stale_write: 409,
   internal: 500,
 }
 

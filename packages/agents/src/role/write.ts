@@ -166,6 +166,12 @@ export async function editRole(input: EditRoleInput): Promise<RoleWriteResult> {
  * - frontmatter **已有** `skills` / `knowledge` 键（Prism 规范形态 / 手写形态）→ 改 frontmatter；
  * - 否则（宿主原生形态，键不存在）→ 改正文的 overlay 小节。
  *   这样既不会给宿主原生文件擅自塞进白名单外的 frontmatter 键，也不会把 Prism 形态的键丢掉。
+ *
+ * **应用顺序（v11 黑盒 D-1 修复）**：`patch.body` **先**整段替换，`skills` / `knowledge` 的
+ * overlay 注入**后**发生——UI 的 PATCH 恒带正文快照（`buildRoleInput`），若 overlay 先写、
+ * body 后落，刚注入的 `## 能力（Skill 白名单）` / `## 知识绑定` 会被快照无痕覆盖，skills/books
+ * 静默丢失且报成功。顺序反转后，两形态语义都正确：frontmatter 形态两路本就互不相干；
+ * overlay 形态下结构化字段永远写进（可能已被替换的）新正文。
  */
 export function patchRoleRaw(raw: string, patch: RolePatch): string {
   const { data, body } = splitFrontmatter(raw)
@@ -188,6 +194,10 @@ export function patchRoleRaw(raw: string, patch: RolePatch): string {
     else fm.thoughtLevel = patch.thoughtLevel
   }
 
+  // ① body 先落（overlay 注入必须在它之后，见函数注释的 D-1 修复说明）
+  if (patch.body !== undefined) nextBody = patch.body.trimEnd()
+
+  // ② 结构化字段后写：overlay 形态注进①产出的新正文；frontmatter 形态改 frontmatter（与 body 无涉）
   if (patch.skills !== undefined) {
     if (Object.prototype.hasOwnProperty.call(fm, 'skills')) {
       fm.skills = [...patch.skills]
@@ -203,8 +213,6 @@ export function patchRoleRaw(raw: string, patch: RolePatch): string {
       nextBody = replaceSection(nextBody, OVERLAY_KNOWLEDGE_HEADING, knowledgeToOverlay(patch.knowledge))
     }
   }
-
-  if (patch.body !== undefined) nextBody = patch.body.trimEnd()
 
   const content = renderMarkdownFile(fm, normalizeBlankLines(nextBody.trimEnd()))
   if (!hadMarker) return content

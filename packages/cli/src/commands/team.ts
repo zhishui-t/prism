@@ -3,6 +3,7 @@ import { join } from 'node:path'
 
 import { prismHome } from '@prism/core'
 import {
+  assertTeamId,
   editTeam,
   parseMembersSpec,
   removeTeam,
@@ -205,6 +206,9 @@ export async function runTeam(ctx: CommandContext, args: string[], values: ArgVa
         ctx.stderr(TEAM_EDIT_USAGE)
         return 1
       }
+      // M-10：写操作先校验 id 形状（kebab-case = 天然阻断 `../` 路径穿越），不触盘。
+      // 读侧（show/validate/render）不拦——不存在就是 not_found，无副作用。
+      if (!ensureTeamId(id, ctx)) return 1
       let members: TeamMember[] | undefined
       if (values.members !== undefined) {
         const parsed = parseMembersSpec(String(values.members))
@@ -253,6 +257,9 @@ export async function runTeam(ctx: CommandContext, args: string[], values: ArgVa
         ctx.stderr('用法: prism team rm <id> [--source <dir>] [--harness-root <dir>|--yes]')
         return 1
       }
+      // M-10：`prism team rm ../roles/dev-1` 曾能绕过 kebab 不变量把角色目录搬进团队回收站；
+      // 与 HTTP/MCP 的 team_id_invalid 拦法对齐，先校验再进写守卫/回收站。
+      if (!ensureTeamId(id, ctx)) return 1
       if (!guardWriteTarget(ctx, values, writeDirs, 'teams', 1, 'delete')) return 1
       try {
         // v9 F3：删除 = 搬进回收站；回收站与审计归属 ctx.home（I-2），绝不落默认 ~/.prism
@@ -306,6 +313,21 @@ export async function runTeam(ctx: CommandContext, args: string[], values: ArgVa
 
 const TEAM_EDIT_USAGE =
   '用法: prism team edit <id> [--name <名>] [--description <述>] [--members <role[:n],...>] [--harness-root <dir>|--yes]'
+
+/**
+ * 写操作前的团队 id 校验（M-10）：复用 agents 导出的 `assertTeamId`（kebab-case 单点），
+ * 非法 → `错误 [team_id_invalid] …` 并**不触盘**。与 HTTP/MCP 的 `team_id_invalid` 同码同口径。
+ */
+function ensureTeamId(id: string, ctx: CommandContext): boolean {
+  try {
+    assertTeamId(id)
+    return true
+  } catch (error) {
+    const code = (error as { code?: string }).code ?? 'team_id_invalid'
+    ctx.stderr(`错误 [${code}] ${error instanceof Error ? error.message : String(error)}`)
+    return false
+  }
+}
 
 const TEAM_NEW_USAGE =
   '用法: prism team new <id> [--from <team>|--members <role[:n],...>] [--name <名>] [--description <述>] [--template minimal|core-dev] [--harness-root <dir>|--yes]'

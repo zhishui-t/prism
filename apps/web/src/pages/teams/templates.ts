@@ -36,6 +36,11 @@ export const TEMPLATE_LABEL: Record<Template, DictKey> = {
  * 依据 `packages/agents/src/team/templates.ts` 的 `MINIMAL_TEAM_MD`（3 阶段）与
  * `CORE_DEV_TEAM_MD`（7 阶段）。ui-spec §2.1 把 core-dev 写成「5 阶段」= 把「5 成员」记成了阶段数，
  * 以模板为准；服务端渲染的就是这些阶段（联调实测见 stream-d-web.md）。
+ *
+ * ⚠ `custom` 记的是「**服务端**在没收到 `workflow_template` 时落什么盘」（v11 F2 起
+ * `buildCreateInput` 对 custom 不发 template，服务端按 minimal 兜底，`verifyCreated` 的回读
+ * 预期也读这张表）——**不是**编排器的起点：选 custom 时编排器从一张空白卡开始
+ * （O-1 队长裁决；`TeamForm.templateStages`）。两者有意不同，别「顺手对齐」。
  */
 export const TEMPLATE_STAGES: Record<Template, DictKey[]> = {
   minimal: ['teams.tpl.stage.dev', 'teams.tpl.stage.test', 'teams.tpl.stage.wrap'],

@@ -12,6 +12,12 @@ export type {
   RoleDefinition,
   TeamMember,
   WorkflowStage,
+  WorkflowCoreField,
+  RawWorkflowTable,
+  ParseIssue,
+  WorkflowParseResult,
+  WorkflowSerializeRow,
+  WorkflowSerializeInput,
   DepositRule,
   DepositPolicy,
   TeamDefinition,
@@ -61,6 +67,25 @@ export type { RenderEnv } from './role/render.js'
 // 团队
 export { TeamParseError, parseTeamMarkdown, parseWorkflowTable, parseRoleCell } from './team/parse.js'
 export type { ParseTeamOptions } from './team/parse.js'
+// 工作流弹性解析（v11 F2）：小节硬截断 / 同义词表头 / 行级降级 issue 通道 + 转义读侧
+export {
+  parseWorkflowSection,
+  locateWorkflowSection,
+  mapWorkflowColumns,
+  WORKFLOW_HEADING,
+  WORKFLOW_CORE_FIELDS,
+  CORE_COLUMN_NAMES,
+} from './team/parse.js'
+export type {
+  ParseWorkflowSectionOptions,
+  WorkflowSectionBounds,
+} from './team/parse.js'
+// 工作流序列化（v11 F2）：列集保真 / rowId 合并未映射列 / 小节写回定位
+export {
+  serializeWorkflowTable,
+  serializeWorkflowSection,
+  WorkflowSectionMissingError,
+} from './team/serialize.js'
 export { validateTeam, stripInstanceMarker, ORCHESTRATOR_ROLES, ENTRY_TYPES, KNOWLEDGE_LAYERS } from './team/validate.js'
 export type { ValidateTeamOptions } from './team/validate.js'
 export {
@@ -164,7 +189,7 @@ export type { ImportFailures } from './registry.js'
 // 无 installRoles / installTeamDefinitions / migrateTeams）
 export { newRole, editRole, removeRole, patchRoleRaw, replaceSection, RoleWriteError, ROLE_DESCRIPTION_PLACEHOLDER } from './role/write.js'
 export type { NewRoleInput, EditRoleInput, RemoveRoleInput, RolePatch, RoleRenderer } from './role/write.js'
-export { editTeam, removeTeam, patchTeamRaw, assertTeamId, TeamWriteError } from './team/write.js'
+export { editTeam, removeTeam, patchTeamRaw, assertTeamId, resolveTeamFile, TeamWriteError } from './team/write.js'
 export type { EditTeamInput, RemoveTeamInput, TeamPatch, TeamWriteResult } from './team/write.js'
 
 // 宿主适配器注册表（deployment-model §1：编译期多适配器，运行期只激活一个）

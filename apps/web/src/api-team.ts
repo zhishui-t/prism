@@ -41,6 +41,346 @@ export interface WorkflowStage {
   reflow: string
 }
 
+/* ==================== 工作流弹性表格模型（v11 F2 / design-v11 §1–§3） ====================
+ *
+ * 这一段的类型**全部是** `packages/agents/src/types.ts` 的镜像（跨包契约冻结：改 agents 侧
+ * 必须同步本文件）。web 没有 `@prism/*` 依赖，故只能镜像、不能 import（design-v11 §3 / R-v11-9）。
+ */
+
+/** 工作流核心字段名（镜像 agents `WorkflowCoreField`）。 */
+export type WorkflowCoreField = 'order' | 'name' | 'roles' | 'mode' | 'input' | 'output' | 'done' | 'reflow'
+
+/** 阶段模式（镜像 agents 的写入口径：PATCH 只认这两档）。 */
+export type WorkflowMode = 'serial' | 'parallel'
+
+/**
+ * 核心字段顺序（= 无表格起点时的列序）。镜像 agents `WORKFLOW_CORE_FIELDS`（`team/parse.ts`）。
+ */
+export const WORKFLOW_CORE_FIELDS: readonly WorkflowCoreField[] = [
+  'order',
+  'name',
+  'roles',
+  'mode',
+  'input',
+  'output',
+  'done',
+  'reflow',
+]
+
+/**
+ * 核心字段 → 认的列名（**列名 trim 后全等**，不是「包含」；表序首中即用）。
+ * 镜像 agents `HEADER_SYNONYMS`（`team/parse.ts`）——它是**解析契约**的一部分，
+ * 编排器要靠它判断「某核心字段有没有对应列」。
+ *
+ * ⚠ 表里的中文用 `\u` 转义书写，**不是**走 `t()`：这些是**宿主数据**（团队文件里写死的表头
+ * 字面量），认的是文件内容，不随界面语言变。转义与 `pages/teams/templates.ts` 的
+ * `MODE_SERIAL` / `MODE_PARALLEL` 同一手法（语义完全一致，只是不触发裸 CJK 守卫）。
+ * 每行末尾的注释是可读形态；改这里必须同步 agents 的 `HEADER_SYNONYMS`。
+ */
+export const WORKFLOW_HEADER_SYNONYMS: Readonly<Record<WorkflowCoreField, readonly string[]>> = {
+  order: ['#', '\u5e8f\u53f7' /* 序号 */, 'Order'],
+  name: ['\u9636\u6bb5' /* 阶段 */, '\u540d\u79f0' /* 名称 */, 'Stage'],
+  roles: ['\u8d1f\u8d23\u89d2\u8272' /* 负责角色 */, '\u89d2\u8272' /* 角色 */, 'Roles'],
+  mode: [
+    '\u4e32/\u5e76\u884c' /* 串/并行 */,
+    '\u4e32\u00b7\u5e76\u884c' /* 串·并行 */,
+    '\u6a21\u5f0f' /* 模式 */,
+    'Mode',
+  ],
+  input: ['\u8f93\u5165' /* 输入 */, 'Input'],
+  output: ['\u8f93\u51fa' /* 输出 */, 'Output'],
+  done: ['\u5b8c\u6210\u5224\u5b9a' /* 完成判定 */, '\u5224\u5b9a' /* 判定 */, 'Done'],
+  reflow: ['\u56de\u6d41\u8def\u5f84' /* 回流路径 */, '\u56de\u6d41' /* 回流 */, 'Reflow'],
+}
+
+/** 标准 8 列列名（= 各核心字段的首个同义词）。镜像 agents `CORE_COLUMN_NAMES`。 */
+export const WORKFLOW_CORE_COLUMNS: readonly string[] = WORKFLOW_CORE_FIELDS.map(
+  (field) => WORKFLOW_HEADER_SYNONYMS[field][0]!,
+)
+
+/**
+ * 自由文本 → 表格的起始列集里的那一列（design-v11 §2 / R-v11-9：起点列集三处口径统一）。
+ * 镜像 agents `serialize.ts` 的同一字面量（同样是宿主数据，故同样转义书写：`原文`）。
+ */
+export const WORKFLOW_PROSE_COLUMN = '\u539f\u6587'
+
+/**
+ * 列 → 核心字段（`null` = 未映射列）。**贪心、表序靠前者胜**——与 agents
+ * `mapWorkflowColumns` 逐行为等价：一列命中某字段后该字段即为「已用」，
+ * 于是「既有 `输出` 又有 `Output`」时靠后的那列落成未映射列（R-v11-8）。
+ *
+ * 放在这里（而不是 `pages/teams/workflow-model.ts`）的原因：**读原始表格**（`workflow_raw`
+ * → 阶段）也用它，那条路径属本文件（`adaptWorkflowParse`，见下），而 `workflow-model` 反向
+ * 依赖 api-team ⇒ 定义只能落在被依赖的一侧（该文件只 re-export，见其 `mapColumns`）。
+ */
+export function mapWorkflowColumns(columns: readonly string[]): Array<WorkflowCoreField | null> {
+  const used = new Set<WorkflowCoreField>()
+  return columns.map((column) => {
+    const name = column.trim()
+    for (const field of WORKFLOW_CORE_FIELDS) {
+      if (used.has(field)) continue
+      if (WORKFLOW_HEADER_SYNONYMS[field].includes(name)) {
+        used.add(field)
+        return field
+      }
+    }
+    return null
+  })
+}
+
+/**
+ * roles 单元格 → 角色 token（镜像 agents `parseRoleCell`）：`+` 分隔、`—` 视作空、
+ * `dev-1/2` 展开为 `dev-1#1` / `dev-1#2`（实例记号），非法记号**原样保留**（不编造、不吞）。
+ * 行级诊断归服务端（`workflow_role_cell_invalid`），web 只复现同一份 token 列表。
+ */
+function rolesFromCell(cell: string): string[] {
+  const text = cell.trim()
+  if (text === '' || text === '—' || text === '-') return []
+  const tokens = text
+    .split('+')
+    .map((part) => part.trim())
+    .filter((part) => part !== '' && part !== '—')
+  const roles: string[] = []
+  for (const token of tokens) {
+    const shorthand = /^([^/#]+)\/(\d+)$/.exec(token)
+    const count = shorthand === null ? 0 : Number.parseInt(shorthand[2]!, 10)
+    if (shorthand !== null && !Number.isNaN(count) && count >= 1) {
+      for (let k = 1; k <= count; k++) roles.push(`${shorthand[1]!.trim()}#${k}`)
+    } else {
+      roles.push(token)
+    }
+  }
+  return roles
+}
+
+/**
+ * **本文件表格**（`workflow_raw` 的 `columns` / `rows`）→ 阶段数组。
+ *
+ * 为什么 web 要从原始表格自己推阶段，而不是直接用 `TeamDefinition.workflow`（M-6 混源）：
+ * GET 的 `workflow` 是 **extends 合并之后**的结果，而合并判据 `declared` 取的是 **frontmatter 键**
+ * ——工作流在正文表格里，故 `declared` 永不含 `workflow`，`extends.ts` 的 `pick()` 于是
+ * **父级的表恒胜出**（实测：子表 `子级自有阶段` → 合并结果 `父级阶段甲/乙`）；`workflow_raw`
+ * 却是**被编辑文件本体**。两者混用 ⇒ 编辑器显示父级的阶段、却拿本文件的列集与行身份，
+ * 保存时把父级的阶段写进本文件（子文件自己的表从未展示即被覆盖）。故**只认 `workflow_raw`**：
+ * 所见 = 本文件所有。口径镜像 agents `team/parse.ts` 的 `buildStage`（同一张表，两处同一读法）。
+ */
+function stagesFromRawTable(columns: readonly string[], rows: readonly string[][]): WorkflowStage[] {
+  const mapping = mapWorkflowColumns(columns)
+  const valueOf = (cells: readonly string[], field: WorkflowCoreField): string => {
+    const index = mapping.indexOf(field)
+    return index === -1 ? '' : (cells[index] ?? '').trim()
+  }
+  return rows.map((cells, row) => {
+    const orderText = valueOf(cells, 'order')
+    const parsed = Number.parseInt(orderText, 10)
+    return {
+      // 缺列 / 非整数 → 按行号（与 agents 同口径；行级 issue 由服务端记）
+      order: orderText === '' || Number.isNaN(parsed) ? row + 1 : parsed,
+      stage: valueOf(cells, 'name'),
+      // 与 agents 同口径：仅当 roles 列存在才解析
+      roles: mapping.includes('roles') ? rolesFromCell(valueOf(cells, 'roles')) : [],
+      // 与 agents 同口径：非「并行」即串行（`\u5e76\u884c` = 宿主数据「并行」，不走翻译）
+      mode: valueOf(cells, 'mode').includes('\u5e76\u884c') ? 'parallel' : 'serial',
+      input: valueOf(cells, 'input'),
+      output: valueOf(cells, 'output'),
+      done: valueOf(cells, 'done'),
+      reflow: valueOf(cells, 'reflow'),
+    }
+  })
+}
+
+/**
+ * 工作流表的**原始底账**（镜像 agents `RawWorkflowTable`）。
+ * `rowIds` 是编辑合并未映射列的锚（R-v11-3）：排序 / 增删后未映射列值跟随行身份走，不错行。
+ */
+export interface RawWorkflowTable {
+  columns: string[]
+  rows: string[][]
+  rowIds: string[]
+}
+
+/** 行级降级诊断（镜像 agents `ParseIssue`）。 */
+export interface WorkflowParseIssue {
+  code: string
+  message: string
+  /** 1 起始的整份文件行号（可判定时给）。 */
+  line?: number
+}
+
+/** `## 工作流` 小节的弹性解析结果（镜像 agents `WorkflowParseResult` + 一处契约缺口补充）。 */
+export interface WorkflowParseResult {
+  stages: WorkflowStage[]
+  /** 原始表格（有表格时必带）——序列化的保真底账。 */
+  raw?: RawWorkflowTable
+  /** 未映射列名（含同义双列冲突中被表序靠前者挤掉的那列）。 */
+  unmappedColumns: string[]
+  /** 小节存在但无表格（仅自由文本）。 */
+  prose?: boolean
+  /** 全文无 `## 工作流` 小节（与 `prose` 是两个态）。 */
+  sectionMissing?: boolean
+  issues: WorkflowParseIssue[]
+  /**
+   * 自由文本态的**小节原文**（`workflow_raw.proseText` 直传；服务端已下发，非 prose 态为空串）。
+   *
+   * design-v11 §3 要求 `prose` 态「Markdown 渲染 + 可一键结构化为表格」，两件事都要原文；
+   * 服务端在 prose 态下发小节原文（`readTeamDetail` → `workflow_raw.proseText`），有表格时
+   * 原文在 `原文` 列里。
+   *
+   * 只在**真的拿到**时给：拿不到就保持 `undefined`，UI 如实说「拿不到原文」——
+   * **不编造、不把空串当原文**。
+   */
+  proseText?: string
+  /**
+   * M-6：本文件**没有**工作流表格（`prose` / `sectionMissing`）而**合并结果**有阶段时，
+   * 这里带上那份「生效的」阶段——即**继承自父级**（extends 合并）的那份。
+   *
+   * 语义边界（两个方向都不能越）：
+   * - 它是**只读提示**，不是本文件的内容：**绝不参与播种、绝不进提交**（写回只认本文件的
+   *   `stages` / `raw`）；编辑器只在提示条里说明「来源是父级」；
+   * - 只在这一态出现：本文件**有**表时 `stages` 就是本文件的（`def.workflow` 那份合并结果
+   *   在没有 extends 时与本文件同源，在有 extends 时是父级的——但**不入本字段**，因为编辑器
+   *   此时编排的是本文件的表，来源已由「本文件有表」自证，不需要提示条）。
+   */
+  inheritedStages?: WorkflowStage[]
+}
+
+/**
+ * `GET /api/teams/:id` 的 `workflow_raw`（服务端包装，同 `installed` 先例 / design-v11 §3）。
+ * 只有底账 + 两态标记：stages 仍走 `TeamDefinition.workflow`（不重复下发）。
+ *
+ * ⚠ 字段名以**服务端实际形态**为准（`packages/server/src/http/routes/people.ts` 的 `team` 路由）：
+ * 未映射列那一个是 **`unmapped`**（design-v11 §3 的清单写的也是 `unmapped`）——不是 agents
+ * `WorkflowParseResult.unmappedColumns`（那是解析层的名字，server 包装时改了名）。
+ * 行级诊断**不在这里**：服务端把它并入**顶层** `issues`（`TeamDefinition.issues`，level=warning）。
+ */
+export interface WorkflowRawView {
+  columns: string[]
+  rows: string[][]
+  rowIds: string[]
+  /** 未映射列名（server 包装口径：`unmapped`）。 */
+  unmapped: string[]
+  prose?: boolean
+  sectionMissing?: boolean
+  /** prose 态小节原文（v11 后端收口批已下发，恒为字符串、非 prose 态为空串）。 */
+  proseText?: string
+}
+
+/**
+ * 一行序列化输入（镜像 agents `WorkflowSerializeRow`）——即 PATCH body 的
+ * `workflow.stages[]` 元素（design-v11 §3，逐字段）。
+ */
+export interface WorkflowStageInput {
+  /** 原 raw 行身份；有 → 对齐原行合并未映射列值，无 → 新行按序插入。 */
+  rowId?: string
+  order: number
+  stage: string
+  roles: string[]
+  mode: WorkflowMode
+  input: string
+  output: string
+  done: string
+  reflow: string
+  /** 未映射列值（列名 → 值）；**省略时服务端回落到 raw 中该 rowId 的原值**。 */
+  extra?: Record<string, string>
+}
+
+/** PATCH / POST body 的 workflow 段（design-v11 §3 / R-v11-13；v11 派修 M-2 增 `columns`）。 */
+export interface TeamWorkflowInput {
+  /**
+   * 提交的**列集**（含未映射列，保序）：服务端按它渲染表头，未映射列的值按**列名**从
+   * `stages[].extra` 取——故列名与 extra 的键必须由**同一份草稿**产出（`workflowInput` 单点）。
+   *
+   * 服务端契约（`parseWorkflowColumns`）：**非空**字符串数组、trim 后唯一；非法 400
+   * `workflow_invalid`（空数组无法表达列集；列名重复会造成按列名寻址歧义）。
+   *
+   * 语义（`serializeWorkflowTable` 的列集优先级）：**提交 columns > raw.columns > 八列 + `原文`**。
+   * 故它同时是「增列 / 删列」的生效通道：不在 columns 里的核心字段列不入表（值随列弃），
+   * 不在其中的自定义列连同其 extra 值一并消失。
+   */
+  columns: string[]
+  stages: WorkflowStageInput[]
+}
+
+/**
+ * M-8：`TeamDefinition.issues` 是服务端 `readTeamDetail` 组装的**合并流**——字段校验类
+ * （`name_required` / `member_role_unknown` / `deposit_*` …）与工作流相关诊断混在一起。
+ * 编排器的提示条只讲**工作流**，故只放行工作流相关的那些。
+ *
+ * 判据取 **code 前缀 `workflow_`**：工作流相关 code 一律以此打头（parse 侧 5 个降级诊断 +
+ * 校验侧的 `workflow_role_unknown`）。不取 `level`（parse 诊断与多数字段校验同为 `warning`，
+ * 区分不了）、不取 `where`（服务端组装时未填充，只有 level/code/message）。
+ */
+function isWorkflowIssue(code: string): boolean {
+  return code.startsWith('workflow_')
+}
+
+/**
+ * 把 GET 的字段适配成编排器要的 `WorkflowParseResult`（web 读侧的**唯一适配点**：服务端包装
+ * 形状变化只改这里，所有调用点不变）。
+ *
+ * **有 `workflow_raw` 时**（服务端已落地）：**以本文件的表为唯一真相**——阶段由原始表格
+ * 逐行推出（`stagesFromRawTable`），列集 / 未映射列 / 两态 / 顶层 issues 照实传。
+ * ⚠ **不拿 `TeamDefinition.workflow`（extends 合并结果）播种**：那是父级胜出的表，混用会让
+ * 编辑器显示父级阶段、保存又写进本文件（M-6 混源）。合并结果只在**本文件没有表**时降级成
+ * 只读提示（`inheritedStages`）。
+ *
+ * **没有 `workflow_raw` 时**（旧响应，未含该包装字段）：从 `TeamDefinition.workflow` 合成——
+ * - 列集按**核心八列**假设（与 agents serialize 的「无表格起点」同一份列集）；
+ * - `unmappedColumns` 空（没有底账 ⇒ 认不出自定义列，**不猜**）；
+ * - `prose` / `sectionMissing` 一律 `false`（保守缺省：没有原文与边界信息时**不编造文件状态**，
+ *   UI 于是走「空表格 + 可加阶段」的中性态，而不是谎报「自由文本」骗用户点转换）；
+ * - `rowIds` 仍按行序合成 `r1..rn`：agents `parse.ts` 就是按行序这么编号的，故这份 rowId 与
+ *   原底账天然对齐（未映射列值由服务端按 rowId 从 raw 回落，不会错行）。
+ *   这一支没有底账可判继承，故也不给 `inheritedStages`（宁缺不猜）。
+ *
+ * 两态判据与服务端**同源**（`sectionMissing` 优于 `prose`，见 `workflowStateOf`）。
+ */
+export function adaptWorkflowParse(def: TeamDefinition): WorkflowParseResult {
+  const view = def.workflow_raw
+  if (view !== undefined) {
+    // 本文件没有表 = 服务端解析出的两态（有表时二者恒为 false，故不必看 raw.rows 是否为空：
+    // 表头在、零数据行也是「本文件有表」）
+    const noLocalTable = view.prose === true || view.sectionMissing === true
+    return {
+      stages: stagesFromRawTable(view.columns, view.rows),
+      raw: { columns: view.columns, rows: view.rows, rowIds: view.rowIds },
+      // server 的包装名是 `unmapped`，解析层的名字是 `unmappedColumns`——这里是改名点
+      unmappedColumns: view.unmapped,
+      prose: view.prose === true,
+      sectionMissing: view.sectionMissing === true,
+      // 行级诊断在**顶层** `issues`（server 已把它与校验 issue 合并），不在 workflow_raw 里；
+      // M-8：只透传工作流相关的那批（见 `isWorkflowIssue`），字段校验类不冒充工作流提示
+      issues: (def.issues ?? [])
+        .filter((issue) => isWorkflowIssue(issue.code))
+        .map((issue) => ({ code: issue.code, message: issue.message })),
+      ...(view.proseText !== undefined ? { proseText: view.proseText } : {}),
+      // 本文件无表而合并有阶段 ⇒ 那份阶段来自父级（extends；非 extends 团队此时合并结果必为空，
+      // 见 `stagesFromRawTable` 的注）——只作提示，绝不参与播种/写回
+      ...(noLocalTable && def.workflow.length > 0 ? { inheritedStages: [...def.workflow] } : {}),
+    }
+  }
+  const columns = [...WORKFLOW_CORE_COLUMNS]
+  const cell = (stage: WorkflowStage, field: WorkflowCoreField): string => {
+    if (field === 'order') return String(stage.order)
+    if (field === 'name') return stage.stage
+    if (field === 'roles') return stage.roles.join(' + ')
+    if (field === 'mode') return stage.mode
+    return stage[field]
+  }
+  return {
+    stages: def.workflow,
+    raw: {
+      columns,
+      rows: def.workflow.map((stage) => WORKFLOW_CORE_FIELDS.map((field) => cell(stage, field))),
+      rowIds: def.workflow.map((_, index) => `r${index + 1}`),
+    },
+    unmappedColumns: [],
+    prose: false,
+    sectionMissing: false,
+    issues: [],
+  }
+}
+
 export interface DepositPolicy {
   enabled: boolean
   default_layer: string
@@ -60,6 +400,30 @@ export interface TeamDefinition {
   deposit: DepositPolicy
   arbitration: string[]
   workflow: WorkflowStage[]
+  /**
+   * 只读：`GET /api/teams/:id` 的 `## 工作流` 小节原始底账 + 两态标记（服务端包装，
+   * **不改** agents 的 `TeamDefinition` 冻结类型 / design-v11 §3）。
+   *
+   * 页面**不直接读它**，一律经 `adaptWorkflowParse()`（改服务端包装形状时只改适配函数内部）。
+   * 服务端未下发时（旧响应）该键缺席，适配函数退化为从 `workflow` 合成。
+   */
+  workflow_raw?: WorkflowRawView
+  /**
+   * 只读：文件 mtime（epoch 毫秒整数）。PATCH 时回传为 `if_match` 做乐观并发
+   * （design-v11 §3 / R-v11-15），不符 → 409 `stale_write`。
+   *
+   * 未下发时**不带 `if_match`**（不带 ≠ 带 undefined 的字符串）：宁可没有防护，
+   * 也不拿一个编造的值去触发假冲突。
+   */
+  source_mtime?: number
+  /**
+   * 只读：服务端 `readTeamDetail` 组装的**合并 issue 流**——字段校验 issue + 工作流降级诊断
+   * （parse 侧以 `level:'warning'` 并入）。
+   *
+   * ⚠ 混流不是工作流提示：`adaptWorkflowParse` 按 code 前缀 `workflow_` 过滤后（M-8）才交给
+   * 编排器，故提示条只数**工作流相关**的那批。本字段本身不据此改行为。
+   */
+  issues?: ValidationIssue[]
 }
 
 /** 图 status 详情（镜像 server `graph/registry.ts` 的 `GraphStatusDetail`，只读展示用）。 */
@@ -253,6 +617,15 @@ export interface NewTeamInput {
   deposit?: Partial<DepositPolicy>
   /** 工作流模板（后端缺省 = minimal）。 */
   workflow_template?: 'minimal' | 'core-dev'
+  /**
+   * 编排后的工作流（POST 侧服务端已落地：`createTeamDefinition` 经 `parseWorkflowPatch` →
+   * agents `patchTeamRaw` 写回模板产物的 `## 工作流` 表格）。
+   *
+   * 语义（v11 收口）：模板恒有工作流表格，而新建提交的 stages **无 `rowId`** ⇒ 模板行**全换**
+   * 为提交行；**省略该键** = 模板工作流原样（产物 byte 级不变）。新建表单的编排器是
+   * 「模板预填 + 可增删改」，不同步提交就会把用户在新建时的编排改动静默丢弃——故必须发。
+   */
+  workflow?: TeamWorkflowInput
   teams_dir: string
 }
 
@@ -332,6 +705,24 @@ export interface UpdateTeamInput {
   description?: string
   members?: TeamMember[]
   deposit?: Partial<DepositPolicy>
+  /**
+   * 编排后的工作流（design-v11 §3 PATCH 契约；服务端已落地）。
+   *
+   * 服务端口径：
+   * - **raw 底账由服务端重读文件获得**，不采信客户端回传的整份 raw（缩信任面）；
+   * - `members` 与 `workflow` 同给 → **workflow 胜**，跳过收窄并记 issue `workflow_narrow_skipped`；
+   * - `team_patch_empty` 守卫把 workflow 计为有效字段（否则 workflow-only 补丁会 400）；
+   * - 提交 `columns` = 列集生效通道（增 / 删列，见 `TeamWorkflowInput.columns`）。
+   */
+  workflow?: TeamWorkflowInput
+  /**
+   * 乐观并发（design-v11 §3 / R-v11-15）：取 GET 的 `source_mtime`，与文件当前 mtime 不符
+   * → 409 `stale_write`；服务端 `parseIfMatch` 只认**整数**（非整数 400 `if_match_invalid`）。
+   *
+   * 放在 **body** 而非 `If-Match` 头：本模块的 `request()` 是 JSON body 单一通道，且
+   * design 把它列在「PATCH 契约逐字段」清单里。页面侧只传值、不碰传输层（`updateTeam`）。
+   */
+  if_match?: number
   /** **必填**：目标 teams 目录 */
   teams_dir: string
   /** 改 `members` 时必填（校验角色存在） */
@@ -341,6 +732,19 @@ export interface UpdateTeamInput {
 /** `DELETE /api/teams/:id` 结果。 */
 export interface RemoveResult {
   removed: string[]
+}
+
+/**
+ * `PATCH /api/teams/:id` 结果（服务端 `team-create.ts` 的 `PatchTeamResult`）。
+ *
+ * `source_mtime` 是**写后**的文件 mtime：保存成功后必须用它顶掉表单里那个旧值，
+ * 否则下一次保存带着旧 mtime 必然 409 `stale_write`（文件刚被自己改过）。
+ * 标可选以兼容未升级的服务端（旧响应没有这个键）。
+ */
+export interface TeamPatchResult {
+  path: string
+  issues: ValidationIssue[]
+  source_mtime?: number
 }
 
 /** Skill 有效集（F-D2，角色 × 团队 → 能用的 skill）。 */
@@ -378,9 +782,12 @@ export const teamApi = {
   create: (input: NewTeamInput) =>
     request<NewTeamResult>('/api/teams', { method: 'POST', body: JSON.stringify(input) }),
 
-  /** 修改团队（v5 → PATCH /api/teams/:id）。改 members 时服务端会就地收窄工作流。 */
+  /**
+   * 修改团队（v5 → PATCH /api/teams/:id）。改 members 时服务端会就地收窄工作流；
+   * 带 `workflow` 时**所见即所存**（同给 members 也以 workflow 为准）。
+   */
   updateTeam: (id: string, input: UpdateTeamInput) =>
-    request<{ path: string; issues: ValidationIssue[] }>(`/api/teams/${encodeURIComponent(id)}`, {
+    request<TeamPatchResult>(`/api/teams/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       body: JSON.stringify(input),
     }),

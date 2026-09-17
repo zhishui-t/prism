@@ -127,6 +127,28 @@ describe('prism team --source / --roles-dir（v6.2）', () => {
     expect(lines.join('\n')).not.toContain('guard_required')
   })
 
+  it('M-10：team rm / edit 拒绝非 kebab id（`../roles/dev-1` 不触盘）', async () => {
+    const root = await mkSrc('prism-team-traversal-')
+    const teams = join(root, 'teams')
+    await mkdir(join(root, 'roles', 'dev-1'), { recursive: true })
+    const victim = join(root, 'roles', 'dev-1', 'AGENTS.md')
+    await writeFile(victim, ROLE_DEV1, 'utf-8')
+
+    lines = []
+    expect(await runCommand(ctx, ['team', 'rm', '../roles/dev-1', '--source', teams])).toBe(1)
+    expect(lines.join('\n')).toContain('team_id_invalid')
+    expect(existsSync(victim)).toBe(true)
+
+    lines = []
+    expect(await runCommand(ctx, ['team', 'edit', '../roles/dev-1', '--source', teams, '--name', 'x'])).toBe(1)
+    expect(lines.join('\n')).toContain('team_id_invalid')
+    expect(existsSync(victim)).toBe(true)
+
+    // 不触盘：回收站里什么都没有
+    const units = await new TrashStore({ trashDir: join(home, 'trash') }).list('team')
+    expect(units).toHaveLength(0)
+  })
+
   it('--roles-dir：成员校验用显式角色库（隔离库缺成员 → 报错，不落盘）', async () => {
     const src = await mkSrc('prism-team-source-roles-')
     const bareRoles = await mkSrc('prism-team-source-bareroles-') // 空角色库

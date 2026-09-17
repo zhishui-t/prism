@@ -105,3 +105,93 @@ export function externalDeleteErrorKey(
   if (message.startsWith('not_found')) return 'skills.delete.notFound'
   return null
 }
+
+/* ==================== 技能台账（两路合并，F1 起两处共用） ==================== */
+
+/**
+ * `GET /api/skills` 的一条（**内置清单**；F7-1 起外部技能不在这一路）。
+ *
+ * 结构型入参（不 import `api-team.ts` 的 `PrismSkill`）：本模块保持零耦合、可 node 直测，
+ * 且调用方传什么形状都能过（服务端不加 `category` 键时就是 `undefined`）。
+ */
+export interface SkillCatalogInput {
+  name: string
+  description?: string
+  /** 分类映射（缺键 = 未分类） */
+  category?: string
+}
+
+/** `GET /api/skills/usage` 的一条（外部技能**只**出现在这一路）。 */
+export interface SkillUsageInput {
+  name: string
+  builtin?: boolean
+  installed?: boolean
+  roles?: string[]
+  teams?: string[]
+  /** 分类映射（与内置路同源同口径；缺键 = 未分类） */
+  category?: string
+  /** 外部可删态（v10 F3ui）：`true` 才把详情工具条的「卸载」换成「删除」 */
+  external_removable?: boolean
+}
+
+/**
+ * 技能台账行：内置清单 ∪ 使用情况**按名字合并**的结果。
+ *
+ * 这是技能页列表与角色表单选取器（F1）**共用的唯一一份**合并实现——此前它内联在
+ * `Skills.tsx` 的 `useMemo` 里，选取器若再抄一遍就是第二处镜像（AGENTS.md 的「镜像契约」坑）。
+ *
+ * 合并口径（逐条照搬原实现，回归由 `skills-logic.test.ts` 锁）：
+ * - `name` 是主键，两路都出现时**后者补前者的缺**（不是覆盖）；
+ * - `builtin` 取或（两路任一说内置即内置）；
+ * - `summary` / `category` **以内置路为准**（`row.category = skill.category` 是赋值；
+ *   内置路没写过的才由 usage 路的 `??=` 补——即「内置清单优先，usage 兜底」）；
+ * - `installed` / `roles` / `teams` / `externalRemovable` 只来自 usage 路
+ *   （缺省 = `false` / `[]` / `[]` / `false`，与「服务端没这条」同档）；
+ * - 结果按技能名 `localeCompare` 排序（与技能页列表原有排序同口径）。
+ */
+export interface SkillCatalogRow {
+  name: string
+  summary: string
+  builtin: boolean
+  installed: boolean
+  roles: string[]
+  teams: string[]
+  category?: string
+  externalRemovable: boolean
+}
+
+export function mergeSkillCatalog(
+  builtin: readonly SkillCatalogInput[],
+  usage: readonly SkillUsageInput[],
+): SkillCatalogRow[] {
+  const map = new Map<string, SkillCatalogRow>()
+  const ensure = (name: string): SkillCatalogRow => {
+    let row = map.get(name)
+    if (row === undefined) {
+      row = { name, summary: '', builtin: false, installed: false, roles: [], teams: [], externalRemovable: false }
+      map.set(name, row)
+    }
+    return row
+  }
+  for (const skill of builtin) {
+    const row = ensure(skill.name)
+    row.builtin = true
+    row.summary = skill.description ?? ''
+    row.category = skill.category
+  }
+  for (const item of usage) {
+    const row = ensure(item.name)
+    row.builtin = row.builtin || item.builtin === true
+    row.installed = item.installed === true
+    row.roles = item.roles ?? []
+    row.teams = item.teams ?? []
+    // `??=`（而非 `=`）是**顺序契约**：内置路已写过的分类不被 usage 路覆盖；
+    // 两路都没给 ⇒ **值**仍是 `undefined`（= 未分类）——注意 `??=` 会把键落成
+    // `undefined` 值（键在、值为空），故消费方一律按**值**读（`?? ''` / `=== undefined`），
+    // 不按「键在不在」读。分组哨兵由 `groupSkills` 归一。
+    row.category ??= item.category
+    // `=== true` 而非真值判断：服务端不下发该键时是 `undefined`，与 `false` 同档（保持走卸载）。
+    row.externalRemovable = item.external_removable === true
+  }
+  return [...map.values()].sort((a, b) => a.name.localeCompare(b.name))
+}

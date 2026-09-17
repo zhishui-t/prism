@@ -38,7 +38,10 @@ const data = vi.hoisted(() => ({
   teamsFail: false,
 }))
 
-vi.mock('../src/api-team.ts', () => ({
+vi.mock('../src/api-team.ts', async (importOriginal) => ({
+  // 部分 mock：只换 `teamApi`，其余（v11 F2 起页面还会 import 列名同义词表等常量）保持真身。
+  // 全量替换会让「页面 import 了某个新常量」变成一条与本用例无关的假红。
+  ...(await importOriginal<typeof import('../src/api-team.ts')>()),
   teamApi: {
     teams: async () => {
       const gate = data.teamsGate

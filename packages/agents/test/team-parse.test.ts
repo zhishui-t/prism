@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
-import { TeamParseError, parseRoleCell, parseTeamMarkdown, parseWorkflowTable } from '../src/team/parse.js'
+import {
+  TeamParseError,
+  parseRoleCell,
+  parseTeamMarkdown,
+  parseWorkflowSection,
+  parseWorkflowTable,
+} from '../src/team/parse.js'
 import { renderZcodeTeam } from '../src/team/render.js'
 
 /** 与 team-definition.md §2.1/§2.2/§8 同构的出厂团队（多角色工作流 + 队长 + 实例记号 + 规则沉淀）。 */
@@ -115,7 +121,8 @@ describe('团队解析（frontmatter + 工作流表格）', () => {
     expect(bare.workflow).toEqual([])
   })
 
-  it('表格行不合法 → team_parse_failed 带行号（design-v3 §7）', () => {
+  // 行为变更（v11 R-v11-5）：工作流表格行级错误**不再抛** TeamParseError，改为降级 + issue 通道。
+  it('工作流行列数不齐 → 不抛（降级：截断/补空 + workflow_row_ragged）', () => {
     const bad = [
       '---',
       'team_id: t',
@@ -129,13 +136,14 @@ describe('团队解析（frontmatter + 工作流表格）', () => {
       '| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |',
       '| 1 | 探索 | dev-1 | 并行 | 任务书 | exploration.md | 结论落盘 |',
     ].join('\n')
-    expect(() => parseTeamMarkdown(bad)).toThrow(TeamParseError)
-    try {
-      parseTeamMarkdown(bad)
-    } catch (err) {
-      expect((err as TeamParseError).code).toBe('team_parse_failed')
-      expect((err as TeamParseError).line).toBe(11) // 坏行在整份文件的第 11 行
-    }
+    const team = parseTeamMarkdown(bad)
+    expect(team.workflow).toHaveLength(1)
+    expect(team.workflow[0].order).toBe(1)
+    expect(team.workflow[0].reflow).toBe('')
+    const result = parseWorkflowSection(bad)
+    expect(result.issues.map((i) => i.code)).toEqual(['workflow_row_ragged'])
+    // 行号仍按整份文件计（11 = 坏行所在行）
+    expect(result.issues[0]?.line).toBe(11)
   })
 
   it('缺 frontmatter → team_parse_failed；frontmatter 不支持语法同样可读报错', () => {

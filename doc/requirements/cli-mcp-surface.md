@@ -252,9 +252,9 @@ prism
 | `prism_role_rm` | 删除角色文件本体（**搬进回收站**，可 `prism trash restore <trash_id>` 还原；默认 3 天后彻底清除、自动清除需 serve 运行；`roles_dir` 必填；v6 新增） |
 | `prism_role_render` | 渲染宿主格式角色文件（原文漏列） |
 | `prism_team_list` | 列出团队库（v6 新增） |
-| `prism_team_get` | 查看团队定义 |
-| `prism_team_new` | 新建团队定义（`teams_dir` 必填；`roles_dir` 可选＝成员角色校验用；v4 新增为 `prism_team_create`，v6 更名） |
-| `prism_team_edit` | 修改团队（`name`/`description`/`members`/`deposit`；改 `members` 时**工作流表按名册就地收窄**；v6 新增） |
+| `prism_team_get` | 查看团队定义；响应含只读 `workflow_raw`（被编辑文件本体的原始表：`columns`/`rows`/`rowIds`/`unmapped`/`prose`/`sectionMissing`/`proseText`，**不经 extends 合并**）与 `source_mtime`（epoch 毫秒整数）——与 HTTP `GET /api/teams/:id` 同一包装单点（v11 派修 M-3） |
+| `prism_team_new` | 新建团队定义（`teams_dir` 必填；`roles_dir` 可选＝成员角色校验用；**可带 `workflow.stages` / `workflow.columns`（v11）**，`workflow_template` 语义不变；v4 新增为 `prism_team_create`，v6 更名） |
+| `prism_team_edit` | 修改团队（`name`/`description`/`members`/`deposit`/`workflow`/`if_match`；改 `members` 时**工作流表按名册就地收窄**；`workflow`＝结构化保存（`stages` + 可选 `columns` 列集，与 `members` 同给时 **workflow 胜**）；`if_match`＝mtime 并发防护，不符 → 409 `stale_write`；v6 新增） |
 | `prism_team_rm` | 删除团队文件本体（**搬进回收站**，可 `prism trash restore <trash_id>` 还原；默认 3 天后彻底清除、自动清除需 serve 运行；`teams_dir` 必填；v6 新增） |
 | `prism_team_render` | 渲染宿主格式团队文件（v6 新增） |
 | `prism_team_activate` | 拉取团队运行时配置（含装配状态） |

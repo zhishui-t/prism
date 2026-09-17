@@ -344,10 +344,12 @@ const ZH = {
   'roles.form.name': '角色名',
   'roles.form.description': '描述（一句话职责 + 适用/不适用）',
   'roles.form.color': '颜色',
-  'roles.form.skills': '能力（Skill 白名单，逗号分隔）',
-  'roles.form.layers': '知识范围（逗号分隔：global / project / role）',
-  /* B1：books 绑定不在表单内，但保存时会原样回传——不说明会让用户误以为此处可改/可清 */
-  'roles.form.booksHint': 'books 绑定暂不在表单内编辑，保存时原样保留。',
+  /* F1（v11）：技能白名单从逗号文本框升级为**多选选取器**——不再写「逗号分隔」。 */
+  'roles.form.skills': '能力（Skill 白名单）',
+  'roles.form.layers': '知识层（逗号分隔：global / project / role）',
+  /* F1（v11）：books 从「表单外、原样回传」升级为**可编辑的选取器**（原 `roles.form.booksHint`
+     已无消费方，随实现删除——dead-keys 守卫会拦死键）。 */
+  'roles.form.books': '知识书目（books）',
   'roles.form.dir': '写入目录（roles_dir）',
   'roles.form.dirHint': '来自 GET /api/roles 读回的受管目录，可改；提交时显式带上。',
   'roles.form.dirMissing': '没读到 roles_dir：先确认服务端能读到角色目录，再提交（不猜默认路径）。',
@@ -362,6 +364,36 @@ const ZH = {
   'roles.form.saving': '提交中…',
   'roles.form.created': '已新建角色「{name}」。',
   'roles.form.updated': '已更新角色「{name}」。',
+
+  /* ---- F1（v11）：库内选取器（角色表单的 skills / books 两用，后续团队编排器复用）----
+     `kind` 决定文案（技能 / 书目），组件侧走静态键映射表（禁动态拼 key，见 §6.2）。 */
+  'picker.open.skill': '从技能库选择…',
+  'picker.open.book': '从书目选择…',
+  'picker.title.skill': '选择技能',
+  'picker.title.book': '选择书目',
+  'picker.title.role': '选择负责角色',
+  'picker.search.skill': '按技能名 / 分类筛选…',
+  'picker.search.book': '按书目名筛选…',
+  'picker.search.role': '按角色名筛选…',
+  'picker.library': '库内勾选',
+  'picker.manual.skill': '手动添加（未装技能）',
+  'picker.manual.book': '手动添加（库外书目）',
+  'picker.manualPlaceholder.skill': '输入技能名，回车或点「添加」',
+  'picker.manualPlaceholder.book': '输入书目名，回车或点「添加」',
+  /* 手动项的语义要说清：它按既有 `available: false` 口径呈现，且**不改**校验路径（F1 #4）。 */
+  'picker.manualHint.skill':
+    '库内没有的技能名可直接加进来：它按「未装」标记（available: false），保存后校验仍会给出 skill_unknown。',
+  'picker.manualHint.book': '书目不以 Prism 索引为准：库外名字会原样写进角色的 books 绑定。',
+  'picker.add': '添加',
+  'picker.done': '完成',
+  /* 空态分两档：库本身是空的（没得选）与过滤后无命中（换个词）——出路不同，不复用同一句。 */
+  'picker.empty.skill': '技能库是空的。',
+  'picker.empty.book': '知识库里还没有书目。',
+  'picker.empty.role': '角色库是空的——先建角色，阶段才能派活。',
+  'picker.filterNone': '没有匹配项。',
+  'picker.selected': '已选 {n}',
+  /* chip 上那个移除钮的无障碍名（视觉是 `×`，读屏要能说出移的是哪一个）。 */
+  'picker.remove': '移除 {name}',
 
   'teams.title': '团队',
   'teams.desc': '团队 = 成员引用角色库 ∪ 固定工作流 ∪ 沉淀规则 ∪ 优先级。Prism 只定义与校验，不执行调度。',
@@ -458,12 +490,12 @@ const ZH = {
   'teams.form.selectedMembers': '已选 {n} 个成员（{list}）',
   'teams.form.noMembers': '未选成员',
   'teams.form.availableRoles': '还可选：{n} 个角色',
-  'teams.form.workflowTitle': '工作流模板',
-  'teams.form.templateStages': '模板阶段（{n}）：{stages}',
+  'teams.form.workflowTitle': '工作流模板（新建起点）',
   'teams.form.templateHint':
     '实际落盘 = 其中「角色已入选」的阶段；缺对应成员的阶段由服务端跳过（创建后回读核对并给出实际阶段数）。',
-  'teams.form.customHint': '自定义工作流本轮不做编辑器：创建后编辑 {path} 的 workflow 段即可；这里按「最小可用」骨架落盘。',
-  'teams.form.editHint': '只提交改动过的字段；改成员会就地把工作流收窄。',
+  'teams.form.customHint':
+    '自定义 = 不预填阶段名：下面的编排器从一张空白卡开始（删光卡片则按「最小可用」骨架落盘）。',
+  'teams.form.editHint': '只提交改动过的字段；改成员会就地把工作流收窄（同时改了工作流则以编排器为准）。',
   'teams.form.submitNew': '创建团队',
   'teams.form.submittingNew': '创建中…',
   'teams.form.submitEdit': '保存修改',
@@ -475,6 +507,54 @@ const ZH = {
   'teams.form.rolesDirMissing':
     '改动成员需要 roles_dir（服务端用于校验角色存在），但没从 GET /api/roles 拿到 → 请刷新角色库',
   'teams.form.writeDirHint': '写入目录（teams_dir，必填；写真实宿主前请确认）',
+
+  /* ── F2（v11）工作流编排器 ──────────────────────────────────────────────
+     阶段卡片 + 列映射 + 三态（有表 / 自由文本 / 无小节）。 */
+  'teams.wf.title': '阶段编排',
+  'teams.wf.hint':
+    '卡片 = 文件里「## 工作流」小节的表格行；列集按文件实际列给，认不出的列原样保留、可逐格编辑。',
+  'teams.wf.preview': '流程预览（所见即所存）',
+  'teams.wf.unnamed': '（未命名阶段）',
+  'teams.wf.addStage': '添加阶段',
+  'teams.wf.empty': '还没有阶段。点「添加阶段」开始编排。',
+  'teams.wf.up': '上移',
+  'teams.wf.down': '下移',
+  'teams.wf.remove': '移除阶段 {n}',
+  'teams.wf.removeHint': '删除该行：它的自定义列值一并消失（不做回收站）。',
+  'teams.wf.field.order': '序号',
+  'teams.wf.orderDerived': '序号由卡片顺序决定（用上移 / 下移改），不能单独编辑。',
+  'teams.wf.field.name': '阶段名',
+  'teams.wf.field.input': '输入',
+  'teams.wf.field.output': '输出',
+  'teams.wf.roles.empty': '未指派角色',
+  'teams.wf.roles.pick': '从角色库选择…',
+  'teams.wf.addColumn': '添加「{field}」列',
+  'teams.wf.addColumnHint': '文件里没有「{field}」这一列；加上它，这个字段才有写回的位置。',
+  'teams.wf.customTitle': '自定义列（未映射列）',
+  'teams.wf.customHint': '文件里本来就有的（或你新加的）列，不参与语义映射——逐格自由编辑，保存时原样写回。',
+  'teams.wf.customAdd': '增自定义列',
+  'teams.wf.customPlaceholder': '列名，如「备注」',
+  'teams.wf.customRemove': '删除列「{name}」',
+  'teams.wf.issues': '服务端给了 {n} 条解析提示',
+  'teams.wf.prose.title': '这个团队的工作流是自由文本',
+  'teams.wf.prose.hint':
+    '结构化成表格之后才能用卡片编排。转换在本地进行（核心八列 + 「原文」列，全文进「原文」），保存前可取消。',
+  'teams.wf.prose.noText': '没拿到这一节的原文（服务端未下发该字段），暂时看不到也转换不了。',
+  'teams.wf.convert': '结构化为表格',
+  'teams.wf.revert': '恢复为自由文本',
+  'teams.wf.revertHint': '原文只存在「原文」列里（文件为真相，没有隐藏副本）——删掉该列就等于放弃原文。',
+  'teams.wf.prose.warn':
+    '已转换为表格：原文整段只存在「原文」列里（文件为真相，没有隐藏副本）。保存后仍能从该列找回；删掉该列就等于放弃原文。未保存前可点「恢复为自由文本」退回。',
+  'teams.wf.prose.noticeDismiss': '知道了',
+  'teams.wf.missing.title': '团队文件里没有「## 工作流」小节',
+  'teams.wf.missing.hint':
+    'Prism 不会替你新建小节（避免静默改写文件结构）。在文件里加一个「## 工作流」小节与表格后，这里就能编排。',
+  'teams.wf.inherited.title': '本文件没有工作流表格：生效的 {n} 个阶段继承自父级（extends 合并）',
+  'teams.wf.inherited.proseHint':
+    '点「结构化为表格」会以这 {n} 个继承来的阶段为起点（原文整段保留在第一行的「原文」列）；保存后这张表写进「本文件」——即本文件该小节的自由文本被替换。注意：extends 合并以父级的表为准，写进本文件的表不会改变合并结果。',
+  'teams.wf.inherited.missingHint':
+    '本文件没有「## 工作流」小节，所以这里不能编排，保存也不会把工作流写进本文件。',
+  'teams.wf.staleReload': '重新加载',
 
   'teams.v.idRequired': '团队 ID 不能为空',
   'teams.v.idInvalid': '只能用小写字母、数字和连字符（-），且以字母或数字开头',
@@ -501,6 +581,13 @@ const ZH = {
   'teams.err.roleUnknown': '创建失败：角色「{role}」不存在。刷新角色库后重选。',
   'teams.err.membersInvalid': '创建失败：成员列表不合法（{msg}）。',
   'teams.err.exists': '创建失败：团队「{id}」已存在（未覆盖）。换一个 ID，或先删除原定义文件。',
+  'teams.err.stale':
+    '保存失败：团队文件已被外部修改（stale_write）。为避免覆盖别人的改动，请先「重新加载」再改再存。',
+  'teams.err.workflowInvalid': '保存失败：工作流数据不合法（{msg}）。修正后再存。',
+  'teams.err.ifMatchInvalid':
+    '保存失败：并发的版本标记不合法（if_match_invalid，应为取自 source_mtime 的整数毫秒）。刷新页面后重试。',
+  'teams.err.workflowSectionMissing':
+    '保存失败：团队文件「{id}」里没有「## 工作流」小节，编辑器不会自动插入（workflow_section_missing）。请在定义文件里补一节「## 工作流」并放一张表格，然后「重新加载」再存。',
   'teams.err.generic': '创建失败：{code}：{msg}',
 
   'skills.title': '技能',
@@ -895,9 +982,9 @@ const EN: Record<keyof typeof ZH, string> = {
   'roles.form.name': 'Role name',
   'roles.form.description': 'Description (one-line duty + applies / does not apply)',
   'roles.form.color': 'Color',
-  'roles.form.skills': 'Capabilities (skill allowlist, comma separated)',
-  'roles.form.layers': 'Knowledge scope (comma separated: global / project / role)',
-  'roles.form.booksHint': 'books bindings are not editable here; they are kept as-is on save.',
+  'roles.form.skills': 'Capabilities (skill allowlist)',
+  'roles.form.layers': 'Knowledge layers (comma separated: global / project / role)',
+  'roles.form.books': 'Knowledge books',
   'roles.form.dir': 'Target directory (roles_dir)',
   'roles.form.dirHint': 'Read back from GET /api/roles; editable, and submitted explicitly with the form.',
   'roles.form.dirMissing': 'No roles_dir was read back; check that the server can see the roles directory before submitting (no guessed default).',
@@ -910,6 +997,32 @@ const EN: Record<keyof typeof ZH, string> = {
   'roles.form.saving': 'Submitting…',
   'roles.form.created': 'Created role "{name}".',
   'roles.form.updated': 'Updated role "{name}".',
+
+  /* ---- F1 (v11): library picker shared by the roles form (skills / books) ---- */
+  'picker.open.skill': 'Pick from skill library…',
+  'picker.open.book': 'Pick from books…',
+  'picker.title.skill': 'Select skills',
+  'picker.title.book': 'Select books',
+  'picker.title.role': 'Select owner roles',
+  'picker.search.skill': 'Filter by skill name or category…',
+  'picker.search.book': 'Filter by book name…',
+  'picker.search.role': 'Filter by role name…',
+  'picker.library': 'From the library',
+  'picker.manual.skill': 'Add manually (not installed)',
+  'picker.manual.book': 'Add manually (outside the library)',
+  'picker.manualPlaceholder.skill': 'Type a skill name, then Enter or Add',
+  'picker.manualPlaceholder.book': 'Type a book name, then Enter or Add',
+  'picker.manualHint.skill':
+    'Names missing from the library can be added as-is: they count as not installed (available: false), and validation still reports skill_unknown after saving.',
+  'picker.manualHint.book': 'Books are not limited to the Prism index: a name outside the library is written into the role books binding as-is.',
+  'picker.add': 'Add',
+  'picker.done': 'Done',
+  'picker.empty.skill': 'The skill library is empty.',
+  'picker.empty.book': 'No books in the knowledge base yet.',
+  'picker.empty.role': 'The role library is empty — create roles first so stages can assign work.',
+  'picker.filterNone': 'No matches.',
+  'picker.selected': '{n} selected',
+  'picker.remove': 'Remove {name}',
 
   'teams.title': 'Teams',
   'teams.desc': 'A team = members referencing the role library ∪ a fixed workflow ∪ accumulation rules ∪ priority. Prism defines and validates; it never schedules.',
@@ -1005,12 +1118,13 @@ const EN: Record<keyof typeof ZH, string> = {
   'teams.form.selectedMembers': '{n} members selected ({list})',
   'teams.form.noMembers': 'No members selected',
   'teams.form.availableRoles': 'Available: {n} roles',
-  'teams.form.workflowTitle': 'Workflow template',
-  'teams.form.templateStages': 'Template stages ({n}): {stages}',
+  'teams.form.workflowTitle': 'Workflow template (new-team starting point)',
   'teams.form.templateHint':
     'What lands on disk = only stages whose roles are selected; the server skips stages without a matching member (verified by read-back after create).',
-  'teams.form.customHint': 'No custom workflow editor yet: after creating, edit the workflow section of {path}; here it lands with the minimal skeleton.',
-  'teams.form.editHint': 'Only changed fields are submitted; changing members narrows the workflow in place.',
+  'teams.form.customHint':
+    'Custom = no prefilled stage names: the orchestrator below starts with one blank card (delete all cards to land with the minimal skeleton).',
+  'teams.form.editHint':
+    'Only changed fields are submitted; changing members narrows the workflow in place (if the workflow changed too, the orchestrator wins).',
   'teams.form.submitNew': 'Create team',
   'teams.form.submittingNew': 'Creating…',
   'teams.form.submitEdit': 'Save changes',
@@ -1022,6 +1136,58 @@ const EN: Record<keyof typeof ZH, string> = {
   'teams.form.rolesDirMissing':
     'Changing members needs roles_dir (the server validates role existence), but GET /api/roles did not provide it → refresh the role library',
   'teams.form.writeDirHint': 'Target directory (teams_dir, required; confirm before writing to a real host)',
+
+  /* ── F2（v11）workflow orchestrator ── */
+  'teams.wf.title': 'Stage orchestrator',
+  'teams.wf.hint':
+    'A card = a table row under the "## 工作流" section; the column set follows the file, and unknown columns are kept as-is and editable cell by cell.',
+  'teams.wf.preview': 'Flow preview (what you see is what gets stored)',
+  'teams.wf.unnamed': '(unnamed stage)',
+  'teams.wf.addStage': 'Add stage',
+  'teams.wf.empty': 'No stages yet. Click "Add stage" to start.',
+  'teams.wf.up': 'Move up',
+  'teams.wf.down': 'Move down',
+  'teams.wf.remove': 'Remove stage {n}',
+  'teams.wf.removeHint': 'Removes this row: its custom column values go with it (no trash bin).',
+  'teams.wf.field.order': 'Order',
+  'teams.wf.orderDerived': 'Order comes from card position (use move up/down); it cannot be edited on its own.',
+  'teams.wf.field.name': 'Stage name',
+  'teams.wf.field.input': 'Input',
+  'teams.wf.field.output': 'Output',
+  'teams.wf.roles.empty': 'No roles assigned',
+  'teams.wf.roles.pick': 'Pick from the role library…',
+  'teams.wf.addColumn': 'Add "{field}" column',
+  'teams.wf.addColumnHint':
+    'The file has no "{field}" column; add it so this field has somewhere to be written back to.',
+  'teams.wf.customTitle': 'Custom columns (unmapped)',
+  'teams.wf.customHint':
+    'Columns already in the file (or ones you add): not semantically mapped — edit the cells freely, written back as-is.',
+  'teams.wf.customAdd': 'Add custom column',
+  'teams.wf.customPlaceholder': 'Column name, e.g. Notes',
+  'teams.wf.customRemove': 'Delete column "{name}"',
+  'teams.wf.issues': 'The server reported {n} parse note(s)',
+  'teams.wf.prose.title': 'This team workflow is free-form text',
+  'teams.wf.prose.hint':
+    'Only a table can be orchestrated with cards. The conversion happens locally (core 8 columns plus a "原文" column holding the whole section), and can be cancelled before saving.',
+  'teams.wf.prose.noText':
+    'This section text was not provided (the server did not send the field), so it cannot be shown or converted.',
+  'teams.wf.convert': 'Structure into a table',
+  'teams.wf.revert': 'Revert to free-form text',
+  'teams.wf.revertHint':
+    'The text lives only in the "原文" column (files are the truth, no hidden copy) — deleting that column discards it.',
+  'teams.wf.prose.warn':
+    'Converted to a table: the whole original text now lives only in the "原文" column (files are the truth, no hidden copy). It stays recoverable from that column after saving; deleting the column discards it. Before saving you can revert to free-form text.',
+  'teams.wf.prose.noticeDismiss': 'Got it',
+  'teams.wf.missing.title': 'The team file has no "## 工作流" section',
+  'teams.wf.missing.hint':
+    'Prism will not create the section for you (that would silently rewrite the file structure). Add a "## 工作流" section with a table, then orchestrate here.',
+  'teams.wf.inherited.title':
+    'This file has no workflow table: the {n} effective stage(s) are inherited from the parent team (extends merge)',
+  'teams.wf.inherited.proseHint':
+    '"Structure into a table" starts from those {n} inherited stage(s) (the original text is kept in the "原文" cell of the first row); saving writes that table into this file, replacing the free-form text of this section. Note: the extends merge takes the parent\'s table, so a table saved into this file does not change the merged result.',
+  'teams.wf.inherited.missingHint':
+    'This file has no "## 工作流" (Workflow) section, so nothing can be orchestrated here and saving will not write a workflow into this file.',
+  'teams.wf.staleReload': 'Reload',
 
   'teams.v.idRequired': 'Team ID is required',
   'teams.v.idInvalid': 'Only lowercase letters, digits and hyphens (-), starting with a letter or digit',
@@ -1047,6 +1213,13 @@ const EN: Record<keyof typeof ZH, string> = {
   'teams.err.roleUnknown': 'Create failed: role "{role}" does not exist. Refresh the role library and reselect.',
   'teams.err.membersInvalid': 'Create failed: invalid member list ({msg}).',
   'teams.err.exists': 'Create failed: team "{id}" already exists (not overwritten). Pick another ID, or delete the existing definition first.',
+  'teams.err.stale':
+    'Save failed: the team file was modified externally (stale_write). To avoid overwriting someone else\'s change, reload first, then edit and save again.',
+  'teams.err.workflowInvalid': 'Save failed: invalid workflow data ({msg}). Fix it, then save again.',
+  'teams.err.ifMatchInvalid':
+    'Save failed: invalid concurrency marker (if_match_invalid; must be the integer milliseconds from source_mtime). Refresh the page and retry.',
+  'teams.err.workflowSectionMissing':
+    'Save failed: team file "{id}" has no "## 工作流" (Workflow) section, and the editor never inserts one (workflow_section_missing). Add a "## 工作流" section with a table to the definition file, then reload and save again.',
   'teams.err.generic': 'Create failed: {code}: {msg}',
 
   'skills.title': 'Skills',

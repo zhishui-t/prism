@@ -24,6 +24,13 @@
 > - `rm` = **硬删**文件本体（不可逆）：CLI 在默认宿主目录下需 `--yes`，MCP / HTTP 的
 >   `roles_dir` / `teams_dir` **必填**（写路径一律显式参数化）。
 > 原 `prism_team_create` 更名为 `prism_team_new`。MCP 工具总数 36 → 43。
+>
+> **v11 修订（2026-09-17）：工作流表从「固定 8 列模版」升级为弹性表格契约。**
+> 小节硬截断 + 同义词表头 + 未映射列保真 + `rowId` 行身份 + 读写转义成对；团队写路径
+> 不再把非标准表整段清空（收窄改走 serialize，roles 未映射则整体跳过）。服务端新增
+> `GET /api/teams/:id` 的 `workflow_raw` / `source_mtime`，`PATCH /api/teams/:id` 的
+> `workflow` / `if_match`（三入口同口径；MCP `prism_team_edit` schema 同步）。
+> 详见 §4.4 / §4.5。设计源：`.agent-team/design-v11.md` §1–§3。
 
 ---
 
@@ -206,6 +213,141 @@ rework_limit: 2                    # 返工上限（轮）
 
 门禁文件（`.design_ok` / `.qa_ok`）由**执笔角色**在完成后写入，Prism 只记录、不强制校验（因为 Prism 不在执行链路里）。
 
+### 4.4 弹性表格契约（v11，design-v11 §1/§2）
+
+工作流表**不是固定 8 列的模版**——列集由文件本身决定，读取按列名（同义词）映射，其余列原样保留。
+
+**小节与表头认定**
+
+| 规则 | 说明 |
+| :--- | :--- |
+| 小节硬截断 | 只扫描 `## 工作流` 行（trim 全等）到下一个 **`#` / `##`（同级或更高级）** 标题行**之间**。`###`~`######` **属小节内容**（不截断）。后续小节的普通表格（如「前端三技能组合」的 `\| 阶段 \| 技能 \| 输出 \|`）**不会**被误当工作流 |
+| 直下区间 | 表**只在 `## 工作流` 直下区间认**：区间内出现 `###` 及更深标题即停止找表，其后内容（含形似工作流的表）一律按正文处理——不解析、不记工作流 issue（防「散文小节里的说明表」静默变流水线） |
+| 表头认定 | 候选行按单元格 **trim 后全等**匹配同义词，命中 **≥2 个核心字段**且下一行是 **分隔行**才认表头；直下区间内**第一张**认定的表胜出，其后的表格按正文保留并记 `workflow_multiple_tables` |
+| 标题变体 | 只认 `## 工作流`（`##工作流` / `### 工作流` 记 `workflow_heading_variant`，不硬兼容） |
+| 两态 | 小节在但无表格 → `prose:true`；**全文无**该小节 → `sectionMissing:true` |
+| 行级错误不抛 | 列数不符 → 截断/补空 + `workflow_row_ragged`；`#` 缺失/非整数/**非正整数**（`2abc` / `-3` / `0`）→ `order` 回退行号 + `workflow_order_defaulted`；实例记号非法（`dev-1/0`）→ 原样保留 + `workflow_role_cell_invalid`。frontmatter 解析错误**仍抛** `TeamParseError` |
+
+**同义词表**（核心字段 → 认的列名，trim 后全等，首中即用）
+
+| 核心字段 | 认的列名 |
+| :--- | :--- |
+| order | `#` / `序号` / `Order` |
+| name | `阶段` / `名称` / `Stage` |
+| roles | `负责角色` / `角色` / `Roles` |
+| mode | `串/并行` / `串·并行` / `模式` / `Mode` |
+| input / output | `输入` / `Input`、`输出` / `Output` |
+| done | `完成判定` / `判定` / `Done` |
+| reflow | `回流路径` / `回流` / `Reflow` |
+
+两列映射到同一核心字段（如既有 `输出` 又有 `Output`）→ **表序靠前者胜**，靠后者按未映射列原样保留。
+缺列缺省值：`order←行号`、`mode←serial`（非「并行」即串行）、`roles←[]`、`input/output/done/reflow←''`。
+
+**转义契约（读写成对）**
+
+| 方向 | 规则 |
+| :--- | :--- |
+| 写 | `\|` → `\\\|`；单元格内换行 → `<br>`（表头同规则） |
+| 读 | `\\\|` → `\|` 解码；`<br>` **不**解码（原样文本）；其余 `\` 序列不动（GFM 兼容） |
+
+**行身份与序列化（`rowId`）**
+
+- 读侧为每行发 `rowId`（`r1..rn`，原始行序）；写侧按提交行的 `rowId` 对齐原 raw 行合并**未映射列**值——
+  阶段上移/下移/增删后未映射列**不会整体错行**；
+- 无 `rowId` = 新行（未映射列留空）；原 raw 有而未提交的 `rowId` = 该行连同未映射列**删除**；
+- 未映射列的 raw 回落**按列名寻址**（`raw.columns.indexOf(列名)`，不是本表列位）——列集通道调序后不错位。
+
+**写回范围（B-1，红线 R7）**
+
+写侧只替换 `## 工作流` 小节内的**表格区行区间**（`raw.headerLine`..`raw.lastLine`，0 基、按解析入参计）：
+小节内的段落 / 引用块 / 第二张表**逐行原样保留**（旧实现整节替换 → 保存即静默删正文）；
+**只有** prose → 表格转换（无 raw 起点，原文由 `原文` 列承载）才整节替换。详见 §4.5。
+
+**保真 vs 允许改写**
+
+| 必须保真（深等价） | 允许改写（用户可见 diff） |
+| :--- | :--- |
+| 语义字段（order/stage/roles/mode/input/output/done/reflow）、列集与列序、未映射列值 | `dev-1/2` 展开为 `dev-1#1 + dev-1#2`；`—`/空 mode → `串行`；列宽/空白归一；CRLF → LF |
+
+即 `parse(serialize(parse(md)))` 与 `parse(md)` 在上述口径下深等价。实现单点：
+`packages/agents/src/team/{parse,serialize}.ts`（`parseTeamMarkdown` 对外签名不变，工作流只含语义 stages）。
+
+### 4.5 服务端读写契约（v11，design-v11 §3）
+
+**`GET /api/teams/:id` 响应增三个只读字段**（server 侧包装，同 `installed` 先例，不改 `TeamDefinition` 冻结类型）：
+
+```jsonc
+{
+  // …既有 TeamDefinition 字段 + issues…
+  "workflow_raw": {
+    "columns": ["#", "阶段", "负责角色", "串/并行", "输入", "输出", "完成判定", "回流路径", "备注"],
+    "rows": [["1", "探索", "dev-1", "串行", "任务书", "recon.md", "结论落盘", "—", "时间盒 2 天"]],
+    "rowIds": ["r1"],
+    "unmapped": ["备注"],          // 未映射列名
+    "prose": false,                // 小节在但无表格
+    "sectionMissing": false        // 全文无 `## 工作流`
+  },
+  "source_mtime": 1758096000000,   // epoch 毫秒整数（statSync mtimeMs 取整）→ PATCH 的 if_match
+  "issues": [{ "level": "warning", "code": "workflow_row_ragged", "message": "…（第 12 行）" }]
+}
+```
+
+`workflow_raw` 取**被编辑文件本体**的小节原文——**不经 `extends` 合并**（否则写回会打到错文件）。
+无表格时 `columns/rows/rowIds` 为空数组、`unmapped: []`。**列表路由 `GET /api/teams` 不加该字段**。
+
+**`PATCH /api/teams/:id` 请求体**（`teams_dir` 必填；`roles_dir` 在改 `members` 时必填。
+`POST /api/teams` 的 `workflow` 与 MCP `prism_team_new|edit` 的 `workflow` **同一单点**校验，
+故三端同口径）：
+
+```jsonc
+{
+  "teams_dir": "<显式目录>",
+  "if_match": 1758096000000,          // 可选；陈旧写 → 409 stale_write
+  "members": [{ "role": "dev-1", "count": 1 }],   // 可选
+  "workflow": {                       // 可选；与 members 同给时 workflow 胜
+    "columns": ["#", "阶段", "负责角色", "串/并行", "输入", "输出", "完成判定", "回流路径", "备注"],
+    "stages": [
+      { "rowId": "r1", "order": 1, "stage": "探索", "roles": ["dev-1"], "mode": "serial",
+        "input": "任务书", "output": "recon.md", "done": "结论落盘", "reflow": "",
+        "extra": { "备注": "时间盒 2 天" } }
+    ]
+  }
+}
+```
+
+| 规则 | 行为 |
+| :--- | :--- |
+| raw 底账 | **服务端重读文件**获得，不采信客户端回传的整份 raw（缩信任面、缩并发窗口） |
+| `stages` 形状 | 必填数组；`{stages: []}` = **清空工作流**（显式给出即允许）；每项 `order:number` + `stage:string` 必填，`roles/mode/input/output/done/reflow/rowId/extra` 可选，缺省 `roles=[]`/`mode=serial`/文本空串；**非法项 400** `workflow_invalid` |
+| `columns` 形状（M-2） | 可选**列集**（含未映射列，保持列序）：必须非空、字符串、trim 后唯一，否则 400 `workflow_invalid`。输出列集 = 提交 `columns` > `raw.columns` > 核心八列 + `原文`；**核心字段列不在 columns 里 = 该字段不入表（值随列弃）**，自定义列按列名取 `extra` |
+| 写回范围（B-1） | 有 raw 且行号齐备 → **只 splice 表格区行区间**（`raw.headerLine..lastLine`），小节内段落/引用块/第二张表逐行存活；无 raw（prose 转换）才整节替换（原文仅存于 `原文` 列）。无表格却给 `workflow` 且小节缺失 → 400 `workflow_section_missing` |
+| prose 转换 warning（M-12） | prose 态保存（无 raw）→ warning `workflow_prose_replaced`：提示自由文本已被表格替换、原文不会自动保留（**不填充、不改契约**） |
+| `team_patch_empty` | 扩容：`workflow` 亦计有效字段（workflow-only PATCH 不再 400） |
+| `members` + `workflow` 同给 | **workflow 胜**（编辑器所见即所存）：跳过名册收窄 + warning `workflow_narrow_skipped` |
+| `members` 单给 | 走名册收窄（保列集 serialize）；**roles 列缺失 / prose / 无小节 → 收窄与回流校验整体跳过**，工作流正文原样保留 + warning `workflow_narrow_skipped`（绝不整段清空） |
+| 响应 | `{ path, issues, source_mtime }`（写后 mtime，可续用为下次 `if_match`） |
+
+**已知限制：`extends` 团队不保证「所见即所存」（M-6）**：`GET /api/teams/:id` 的 `workflow` 是
+**extends 合并结果**（父级 workflow 胜出，`extends.ts` 的 declared 不含 `'workflow'`），而
+`workflow_raw` 是**本文件**的表——编辑器显示父级阶段、保存却把父级阶段写进子文件（子文件自己的表
+从未展示即被覆盖）。**编辑器保存前请以 `workflow_raw` 为准**；本条为声明，不做合并口径调整。
+
+**落点形态对齐（M-7）**：`resolveTeamFile`（写）与 `wiring.loadTeam`（读）候选序一致，均为
+**目录式 `<id>/AGENTS.md` 优先**，其次扁平 `<id>.md`——两形态共存（病理态）时 GET 的 raw/mtime
+与写落点是**同一文件**。
+
+**两个新错误码（HTTP 状态）**
+
+| code | 状态 | 语义 |
+| :--- | :--- | :--- |
+| `workflow_section_missing` | 400 | 要写结构化工作流，但文件没有 `## 工作流` 小节（**不自动插小节**、不静默空操作） |
+| `stale_write` | 409 | `if_match` 与磁盘 mtime 不符（宿主手改是常态；无防护的 read→write 会整段覆盖未碰过的单元格） |
+
+**自由/模板约束（原 §9 第 8 项的落定）**：工作流**自由**——阶段数、命名、列集都由文件决定，
+Prism 只按上表做弹性读写。**自由文本 → 结构化的唯一起点形态 = 核心八列 + `原文` 列**：
+转换在控制台本地完成（apps/web 无 `@prism/*` 依赖），**序列化恒在服务端单点**；
+保存后原文**仅存于 `原文` 列**（R7 文件为真相，无隐藏副本）——删列即弃，转换未保存可取消。
+
 ---
 
 ## 5. 沉淀规则与优先级（用户明确要求）
@@ -374,6 +516,10 @@ rework_limit: 2
 安全红线类强制 global 层、high 优先级；其余落 project 层。
 ```
 
+> **v11 补充**：上例 `## 工作流` 是**一个合法实例**，不是必须照抄的模版——列集、列序、阶段数
+> 由文件自己决定（见 §4.4 弹性表格契约）。`GET /api/teams/:id` 的 `workflow_raw` 给编辑器
+> 保真底账，`PATCH` 的 `workflow` 按 `rowId` 合并未映射列写回（见 §4.5）。
+
 ---
 
 ## 9. 待确认项
@@ -387,4 +533,4 @@ rework_limit: 2
 | 5 | 团队定义是否可继承 | ⏳ 支持 `extends` / 不支持 |
 | 6 | 同一角色多实例如何区分 | ⏳ dev-1#1 / dev-1#2 / 自动编号 |
 | 7 | 团队定义是否也支持项目级覆盖 | ⏳ 支持 / 仅全局 |
-| 8 | 工作流阶段数与命名是否固定 | ⏳ 自由 / 模板约束 |
+| 8 | 工作流阶段数与命名是否固定 | ✅ **自由**（弹性表格：阶段数与列集由文件决定，同义词映射 + 未映射列保真，见 §4.4；自由文本转结构化的唯一起点 = 核心八列 + `原文` 列） |
