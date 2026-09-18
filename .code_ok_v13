@@ -1,0 +1,12 @@
+code-review-v13 通过（reviewer 2026-09-17）
+
+门禁全绿（reviewer 本机实跑）：typecheck / lint / build / vitest knowledge 271 + server 565+2skip
++ cli 195 + web 1025 / test:e2e 161/161（真实宿主零污染、临时目录零残留）。
+
+无 BLOCKER。1 MAJOR（文档级）：HTTP/MCP kb search value 信封数组→SearchResponse，
+SPEC-3.6「旧消费方不受影响」在信封层不成立——需队长归档前二选一补口径：
+① cli-mcp-surface.md + spec 补记声明式破坏变更；② 加 opt-in 参数缺省保持数组。
+3 MINOR：m-2 CRLF 归一差异护栏注释（types.ts SearchHit）；m-3 段 BM25 物化列收窄记债；
+m-4 dev 报告（v13-backend/web-report.md）+ 33 条 SPEC 验收矩阵缺失，需补归档。
+
+明细：.agent-team/code-review-v13.md

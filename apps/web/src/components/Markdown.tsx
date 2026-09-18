@@ -17,6 +17,22 @@ function isExternal(href: string): boolean {
   return /^https?:\/\//i.test(href)
 }
 
+/**
+ * W-1：块的源区间 → `data-src-*` 属性。**只消费、不推算**——`srcStart/srcEnd` 由
+ * `markdown.ts` 在解析时算好（原始 src 的 UTF-16 偏移）；二者缺省时不注入任何属性，
+ * 手写 `Block` 的旧调用方行为不变。W-3 的滚动定位读这两个属性。
+ */
+interface SrcAttrs {
+  'data-src-start'?: number
+  'data-src-end'?: number
+}
+
+function srcAttrs(block: Block): SrcAttrs {
+  return block.srcStart !== undefined && block.srcEnd !== undefined
+    ? { 'data-src-start': block.srcStart, 'data-src-end': block.srcEnd }
+    : {}
+}
+
 /** 纯数字单元格（含千分位/小数/百分号）→ 走 tabular-nums 对齐。 */
 function isNumericCell(nodes: Inline[]): boolean {
   const text = nodes.map((n) => ('text' in n ? n.text : '')).join('').trim()
@@ -63,10 +79,19 @@ function InlineRuns({ nodes }: { nodes: Inline[] }): ReactNode {
   })
 }
 
-function ListNodes({ items, ordered }: { items: ListItem[]; ordered: boolean }): ReactNode {
+function ListNodes({
+  items,
+  ordered,
+  attrs,
+}: {
+  items: ListItem[]
+  ordered: boolean
+  /** 只有**顶层**列表（一个块）带源区间；嵌套子列表不单独计区间（W-1）。 */
+  attrs?: SrcAttrs
+}): ReactNode {
   const Tag = ordered ? 'ol' : 'ul'
   return (
-    <Tag className={ordered ? 'md-ol' : 'md-ul'}>
+    <Tag className={ordered ? 'md-ol' : 'md-ul'} {...attrs}>
       {items.map((item, idx) => (
         <li key={idx} className={item.plain === true ? 'md-li md-li-plain' : 'md-li'}>
           <InlineRuns nodes={item.content} />
@@ -85,39 +110,47 @@ function BlockNode({ block }: { block: Block }): ReactNode {
       const content = <InlineRuns nodes={block.content} />
       // h5/h6 无对应字号阶梯：按「段落加粗」处理（K8）。
       if (block.level >= 5) {
-        return <p className="md-p md-h-plain">{content}</p>
+        return (
+          <p className="md-p md-h-plain" {...srcAttrs(block)}>
+            {content}
+          </p>
+        )
       }
       const Tag = `h${block.level}` as 'h1' | 'h2' | 'h3' | 'h4'
-      return <Tag className={`md-h${block.level}`}>{content}</Tag>
+      return (
+        <Tag className={`md-h${block.level}`} {...srcAttrs(block)}>
+          {content}
+        </Tag>
+      )
     }
     case 'paragraph':
       return (
-        <p className="md-p">
+        <p className="md-p" {...srcAttrs(block)}>
           <InlineRuns nodes={block.content} />
         </p>
       )
     case 'code':
       return (
-        <pre className="md-pre">
+        <pre className="md-pre" {...srcAttrs(block)}>
           {block.lang !== '' ? <span className="md-lang">{block.lang}</span> : null}
           <code className="md-code-block">{block.code}</code>
         </pre>
       )
     case 'list':
-      return <ListNodes items={block.items} ordered={block.ordered} />
+      return <ListNodes items={block.items} ordered={block.ordered} attrs={srcAttrs(block)} />
     case 'quote':
       return (
-        <blockquote className="md-quote">
+        <blockquote className="md-quote" {...srcAttrs(block)}>
           {block.blocks.map((inner, idx) => (
             <BlockNode key={idx} block={inner} />
           ))}
         </blockquote>
       )
     case 'hr':
-      return <hr className="md-hr" />
+      return <hr className="md-hr" {...srcAttrs(block)} />
     case 'table':
       return (
-        <div className="md-table-wrap">
+        <div className="md-table-wrap" {...srcAttrs(block)}>
           <table className="md-table">
             <thead>
               <tr>

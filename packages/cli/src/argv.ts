@@ -129,7 +129,9 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
                                           书结构：show 读合并清单（父链在前）/ generate 产 _modules.yaml + _summary.md / freeze 固化
   prism kb deposit --file <md|-> --title <t> --type <ty> [--layer --owner --book --module --team --by --task --note --tags]
                                           落库（--team 走团队沉淀策略；--file - 读 stdin）
-  prism kb reindex                        以文件为真相重建索引（手工改过知识文件后用）
+  prism kb reindex [--chunks] [--book <b>]    以文件为真相重建索引（手工改过知识文件后用）
+                                           --chunks 只补**段级索引**（存量库迁移；缺段行的补切、
+                                           缺段向量的补算，可中断重跑），--book 限定单本
   prism arch types | validate <type> <ir.json> | render <type> <ir.json> [--out <html>]
   prism audit query [--type ...] [--task/--request/--knowledge/--session <id>] [--limit N]
   prism harness list | show               运行时宿主适配器（prism.yaml: harness 键）
@@ -253,6 +255,8 @@ const CLI_OPTIONS = {
   category: { type: 'string' },
   /** trash restore --overwrite：允许覆盖已存在的原路径（缺省拒绝并报 target_exists） */
   overwrite: { type: 'boolean' },
+  /** `kb reindex --chunks`：只补段级索引（存量库迁移；v13 §7 / SPEC-5.1） */
+  chunks: { type: 'boolean' },
   /** kb structure freeze --modules a,b（显式冻结清单） */
   modules: { type: 'string' },
   /** kb structure generate|freeze --confirmed-by <who> */
@@ -358,6 +362,8 @@ export type ArgValues = {
   category?: string
   /** `trash restore --overwrite` */
   overwrite?: boolean
+  /** `kb reindex --chunks`：只补段级索引（存量库迁移） */
+  chunks?: boolean
   modules?: string
   'confirmed-by'?: string
   skills?: string

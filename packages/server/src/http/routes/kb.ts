@@ -2,7 +2,7 @@ import { PrismError } from '@prism/core'
 
 import { ok, type Envelope } from '../envelope.js'
 import type { RouteContext } from '../router.js'
-import { ENTRY_TYPES, LAYERS, type DepositInput, type EdgeRelation, type KnowledgeService, type Layer } from '../../kb/port.js'
+import { ENTRY_TYPES, LAYERS, type DepositInput, type EdgeRelation, type KnowledgeService, type Layer, type SearchQuery, type SearchResponse } from '../../kb/port.js'
 import { exportKnowledgeGraph } from '../../kb/graph-export.js'
 import { ScanHistory } from '../../kb/scan-history.js'
 import { buildContextPack } from '../../kb/context-pack.js'
@@ -53,9 +53,7 @@ export function kbRoutes(
     // B3：visibility 过滤（opt-in，不传即不过滤）
     const visibilities = parseLayers(ctx.query.get('visibilities'))
     const limit = parseLimit(ctx.query.get('limit'), SEARCH_LIMIT_MAX)
-    const results = await (
-      await getKb()
-    ).search({
+    const query: SearchQuery = {
       q,
       layers: layers ?? undefined,
       owner: ctx.query.get('owner') ?? undefined,
@@ -64,8 +62,18 @@ export function kbRoutes(
       limit: limit ?? undefined,
       all_versions: parseBool(ctx.query.get('all_versions')),
       ...(visibilities !== null ? { visibilities } : {}),
-    })
-    return ok(results)
+    }
+    // v13 §5 契约链：`searchWithMeta` 是**可选**实现（内存桩可不提供）——有则用之，
+    // 额外带回响应级 `chunk_scan_degraded` / `hits_truncated` 与每条目的段级 `hits`；
+    // 无则回落到 `search()`。两条路径**归一为同一 `SearchResponse` 形状**，故
+    // `value.results` 与旧版返回的数组逐字节相同；可选字段缺省时**不下发**
+    // （undefined 不进 JSON，消费方按「缺键」判定）。此处**不做字段白名单重组**，
+    // 否则会把 undefined 变成 null 键（SPEC-3.6「缺省不下发」）。
+    const kb = await getKb()
+    const response: SearchResponse = kb.searchWithMeta
+      ? await kb.searchWithMeta(query)
+      : { results: await kb.search(query) }
+    return ok(response)
   }
 
   const get = async (ctx: RouteContext): Promise<Envelope> => {

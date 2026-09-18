@@ -27,7 +27,8 @@ import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { SearchResult } from '../src/api.ts'
+import type { SearchHitSegment, SearchResult } from '../src/api.ts'
+import { setLang } from '../src/i18n.ts'
 import { SearchHitRow } from '../src/pages/SearchHitRow.tsx'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -53,6 +54,7 @@ let container: HTMLDivElement
 let root: Root
 
 beforeEach(() => {
+  setLang('zh')
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
@@ -65,7 +67,15 @@ afterEach(() => {
   container.remove()
 })
 
-function render(entry: SearchResult, props: { active?: boolean; onOpen?: () => void } = {}): void {
+function render(
+  entry: SearchResult,
+  props: {
+    active?: boolean
+    onOpen?: () => void
+    query?: string
+    onLocateSegment?: (seg: SearchHitSegment) => void
+  } = {},
+): void {
   act(() => {
     root.render(
       createElement(SearchHitRow, {
@@ -75,8 +85,16 @@ function render(entry: SearchResult, props: { active?: boolean; onOpen?: () => v
         onOpen: props.onOpen ?? (() => {}),
         layerText: '项目',
         moduleText: 'performance',
+        query: props.query ?? '',
+        onLocateSegment: props.onLocateSegment,
       }),
     )
+  })
+}
+
+function click(node: Element): void {
+  act(() => {
+    node.dispatchEvent(new MouseEvent('click', { bubbles: true }))
   })
 }
 
@@ -166,5 +184,126 @@ describe('SearchHitRow（D-1：标题不可被压成 0）', () => {
     expect(cssRule('.book-toc .toc-hit-main')).not.toMatch(/display:\s*flex/)
     expect(cssRule('.book-toc .toc-hit .toc-title')).toMatch(/display:\s*block/)
     expect(cssRule('.book-toc .toc-source')).toMatch(/margin-left:\s*auto/)
+  })
+})
+
+/**
+ * v13 W-2（SPEC-4.2）：命中段列表。`hits` 是 wire snake_case 的可选字段（服务端 B-4 已落地，
+ * 单测仍用夹具 mock 覆盖缺省/有值两态）；缺省时**渲染必须与旧行为逐字一致**（行根仍是 `<a>`，
+ * 无任何新 DOM）。W-3 追加：段行可点定位、条目级 `hits_truncated` 不再被消费。
+ */
+describe('SearchHitRow · W-2 命中段列表', () => {
+  const HITS = [
+    { seq: 1, heading_path: '性能 › 守则', excerpt: '异步等待用 waitFor 轮询，不要裸 sleep。', score: 0.9 },
+    { seq: 2, heading_path: '性能 › 边界', excerpt: '裸 sleep 在负载下会抖动。', score: 0.5 },
+  ]
+
+  it('hits 缺省 / 空：结构与旧行为逐字一致（根仍是 `<a>`，无展开件）', () => {
+    render(hit())
+    const a = el<HTMLAnchorElement>('a.toc-hit')
+    expect(container.children).toHaveLength(1)
+    expect(container.firstElementChild).toBe(a)
+    expect(container.querySelector('.toc-hit-seg-toggle')).toBeNull()
+    expect(container.querySelector('.toc-hit-segs')).toBeNull()
+
+    render(hit({ hits: [] }))
+    expect(container.querySelector('.toc-hit-seg-toggle')).toBeNull()
+    expect(container.querySelector('.toc-hit-segs')).toBeNull()
+  })
+
+  it('默认收起；展开按钮在 `<a>` 之外、原生 button（键盘可达）+ aria-expanded', () => {
+    render(hit({ hits: HITS }))
+    const toggle = el<HTMLButtonElement>('.toc-hit-seg-toggle')
+    expect(toggle.tagName).toBe('BUTTON')
+    // 视觉复用既有 `.toc-chip`（与「限当前层/限当前书」同一零件语言），不另造一套按钮样式
+    expect(toggle.className).toBe('toc-chip toc-hit-seg-toggle')
+    expect(toggle.closest('a')).toBeNull()
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(toggle.textContent).toBe('展开命中段 (2)')
+    expect(container.querySelector('.toc-hit-segs')).toBeNull()
+  })
+
+  it('展开：逐段渲染 heading_path + excerpt，查询词切 run 包 `<mark>`（大小写不敏感）', () => {
+    render(hit({ hits: HITS }), { query: 'WAITFOR' })
+    click(el<HTMLButtonElement>('.toc-hit-seg-toggle'))
+
+    const segs = [...container.querySelectorAll('.toc-hit-seg')]
+    expect(segs).toHaveLength(2)
+    expect(segs[0].querySelector('.toc-hit-seg-path')?.textContent).toBe('性能 › 守则')
+    expect(segs[0].querySelector('.toc-hit-seg-excerpt')?.textContent).toBe('异步等待用 waitFor 轮询，不要裸 sleep。')
+    expect(segs[1].querySelector('.toc-hit-seg-excerpt')?.textContent).toBe('裸 sleep 在负载下会抖动。')
+
+    // 高亮是 run 数组 + `<mark>` 节点，不是 innerHTML 拼串
+    const marks = [...container.querySelectorAll('.toc-hit-seg-excerpt .toc-hit-mark')]
+    expect(marks.map((m) => m.textContent)).toEqual(['waitFor'])
+    expect(segs[0].querySelector('.toc-hit-seg-excerpt')?.innerHTML).toContain('<mark')
+
+    const toggle = el<HTMLButtonElement>('.toc-hit-seg-toggle')
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(toggle.textContent).toBe('收起命中段 (2)')
+  })
+
+  it('空 query 不高亮；查询词无命中时 excerpt 保持纯文本', () => {
+    render(hit({ hits: HITS }), { query: '' })
+    click(el<HTMLButtonElement>('.toc-hit-seg-toggle'))
+    expect(container.querySelector('.toc-hit-mark')).toBeNull()
+  })
+
+  it('查询词不在段文本里时不高亮', () => {
+    render(hit({ hits: HITS }), { query: 'zzz-not-here' })
+    click(el<HTMLButtonElement>('.toc-hit-seg-toggle'))
+    expect(container.querySelector('.toc-hit-mark')).toBeNull()
+  })
+
+  /**
+   * W-3 炸点 2 回归：`hits_truncated` 是**响应级**（`SearchResponse.hits_truncated`），
+   * 条目级同名字段已从契约删除。旧实现读 `entry.hits_truncated` → 该提示**永不出现**；
+   * 修复后即便夹具硬塞这个已删字段，组件也必须不渲染列表尾提示（提示改由结果区顶部承担）。
+   */
+  it('条目级 hits_truncated 不再被消费（列表尾恒无提示行）', () => {
+    render(hit({ hits: HITS, ...({ hits_truncated: true } as Record<string, unknown>) } as Partial<SearchResult>))
+    click(el<HTMLButtonElement>('.toc-hit-seg-toggle'))
+    expect(container.querySelector('.toc-hit-seg-more')).toBeNull()
+    expect(container.querySelectorAll('.toc-hit-seg')).toHaveLength(2)
+  })
+
+  it('不给 onLocateSegment：段行是纯 `<li>` 内容，无按钮（不假装可点）', () => {
+    render(hit({ hits: HITS }))
+    click(el<HTMLButtonElement>('.toc-hit-seg-toggle'))
+    expect(container.querySelector('.toc-hit-seg-go')).toBeNull()
+  })
+
+  /**
+   * W-3（SPEC-4.3）：命中段点击定位。每段包一层原生 `<button>`（键盘可达），点击回调
+   * 收到该段（`seq` 供页面反查 chunk 区间）。
+   */
+  it('给 onLocateSegment：每段是原生 button，点击回调收到对应段', () => {
+    const onLocate = vi.fn()
+    render(hit({ hits: HITS }), { onLocateSegment: onLocate })
+    click(el<HTMLButtonElement>('.toc-hit-seg-toggle'))
+
+    const gos = [...container.querySelectorAll<HTMLButtonElement>('.toc-hit-seg-go')]
+    expect(gos).toHaveLength(2)
+    expect(gos[0].tagName).toBe('BUTTON')
+    expect(gos[0].closest('a')).toBeNull()
+    // `<button>` 内容模型只允许 phrasing content：段内两个子块必须是 `<span>`（不能是 `<div>`）。
+    expect(gos[0].querySelectorAll('div')).toHaveLength(0)
+    expect(gos[0].querySelectorAll('span')).toHaveLength(2)
+
+    click(gos[1])
+    expect(onLocate).toHaveBeenCalledTimes(1)
+    expect(onLocate).toHaveBeenCalledWith(HITS[1])
+
+    click(gos[0])
+    expect(onLocate).toHaveBeenCalledTimes(2)
+    expect(onLocate).toHaveBeenCalledWith(HITS[0])
+  })
+
+  it('再点一次收起段列表（展开/收起往返）', () => {
+    render(hit({ hits: HITS }))
+    click(el<HTMLButtonElement>('.toc-hit-seg-toggle'))
+    expect(container.querySelector('.toc-hit-segs')).not.toBeNull()
+    click(el<HTMLButtonElement>('.toc-hit-seg-toggle'))
+    expect(container.querySelector('.toc-hit-segs')).toBeNull()
   })
 })

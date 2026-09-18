@@ -200,6 +200,7 @@ prism kb structure freeze --layer global --book java-standards --modules excepti
 prism kb versions JAVA-01-002        # 条目版次历史
 prism kb deposit 说明.md --title 禁止吞异常 --type rule --team core-dev --note 来源说明
 prism kb reindex
+prism kb reindex --chunks            # 存量库迁移：只补段级索引（段行/段 FTS/段向量），可中断重跑
 prism kb remove KB-1                 # 软删；prism kb restore KB-1 恢复
 ```
 
@@ -341,7 +342,7 @@ prism
 ├── team       list | show | new | edit | rm | validate | render | activate
 ├── skill      list | install | update | uninstall | validate | effective | categorize | category
 ├── kb         import | sync | search | get | tree | stats | graph | path
-│              | export | remove | restore | conflicts | resolve | history | reindex
+│              | export | remove | restore | conflicts | resolve | history | reindex [--chunks]
 │              | convert | enrich | structure | versions | deposit
 ├── graph      build | query | path | explain | affected | god-nodes | summary | status | export
 ├── arch       types | validate | render
@@ -423,3 +424,8 @@ pnpm run package   # 打包 tarball
 ## 9. 许可证
 
 MIT。`3rd/` 下是 git submodule，各自保留原始许可证（archify: MIT；graphify: Apache-2.0 + MIT 双许可；llama.cpp: MIT），再分发时须一并保留。
+
+
+## 检索接口破坏性变更（v13）
+
+`/api/kb/search` 与 `prism_kb_search` 的 `value` 从裸结果数组改为 `{ results, chunk_scan_degraded?, hits_truncated? }` 信封（条目内新增可选 `hits` 段级命中）。控制台已适配；直接消费 HTTP 的第三方需改读 `value.results`。

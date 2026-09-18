@@ -241,9 +241,11 @@ describe('跨语言与候选池参数化（F-B3：混合检索）', () => {
 
       const keywordOnly = await kb.search({ q: '苹果', limit: 10, route_weights: { keyword: 1, vector: 0 } })
       expect(keywordOnly.map((r) => r.id)).toEqual(['W-1'])
-      // W-1 原先是双路命中（两路各贡献 1/(k+1)）→ 关掉向量路后只剩关键词路那一份
-      expect(keywordOnly[0]?.score).toBeCloseTo(1 / (RRF_K + 1), 10)
-      expect(both.find((r) => r.id === 'W-1')!.score).toBeCloseTo(2 / (RRF_K + 1), 10)
+      // v13 §M-4 权重映射冻结：`keyword` 同时作用于**两条** BM25 路（条目 + 段），各两路同权
+      // ——不再是「两条路各贡献 1/(k+1)」的旧两路口径。语料里的条目都是短文档（恰 1 段、
+      // 段文本含「苹果」），故 W-1 在四条路上均居第 1：关键词双路 = 2/(k+1)，四路全命中 = 4/(k+1)。
+      expect(keywordOnly[0]?.score).toBeCloseTo(2 / (RRF_K + 1), 10)
+      expect(both.find((r) => r.id === 'W-1')!.score).toBeCloseTo(4 / (RRF_K + 1), 10)
     } finally {
       kb.close()
     }

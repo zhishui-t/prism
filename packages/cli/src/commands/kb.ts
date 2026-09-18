@@ -1,10 +1,13 @@
 import { basename, resolve } from 'node:path'
 import { readFile, access, writeFile } from 'node:fs/promises'
 
-import { splitFrontmatter, type FrontmatterData } from '@prism/knowledge'
+import { splitFrontmatter, ensureKbChunks, type FrontmatterData } from '@prism/knowledge'
 import {
+  activeModel,
   convertFileToMarkdown,
   writeEnrichment,
+  embedText,
+  embeddingInstalled,
   ENTRY_TYPES,
   ProjectRegistry,
   ScanHistory,
@@ -13,6 +16,7 @@ import {
   depositWithPolicy,
   exportKnowledgeGraph,
   makeDryRunKb,
+  resolveKbConfigForHome,
   scanProject,
   GATE_SKIP_REASONS,
   SKIP_REASONS,
@@ -21,10 +25,11 @@ import {
   type KnowledgeService,
   type TeamDefinition,
 } from '@prism/server'
-import { PrismError, isPrismError, prismPaths } from '@prism/core'
+import { PrismError, isPrismError, openPersistence, prismPaths } from '@prism/core'
 
 import type { ArgValues, CommandContext } from '../argv.js'
 import { readStdinDefault, resolveTargetDirs } from '../argv.js'
+import { backfillChunks, chunkReportLines } from './chunk-index.js'
 
 /** 获取知识服务（注入优先；否则运行时经 @prism/knowledge 装载）。 */
 async function getKb(ctx: CommandContext): Promise<KnowledgeService> {
@@ -53,7 +58,7 @@ export async function runKb(ctx: CommandContext, args: string[], values: ArgValu
     case 'path':
       return await kbPath(ctx, rest, values)
     case 'reindex':
-      return await kbReindex(ctx)
+      return await kbReindex(ctx, values)
     case 'sync':
       return await kbSync(ctx, rest, values)
     case 'remove':
@@ -1098,7 +1103,18 @@ async function kbHistory(ctx: CommandContext, args: string[], values: ArgValues)
   return 0
 }
 
-/** `prism kb reindex`：以文件为真相重建索引（Z2；手工编辑/迁移知识文件后收敛漂移）。 */async function kbReindex(ctx: CommandContext): Promise<number> {  const kb = await getKb(ctx)
+/**
+ * `prism kb reindex [--chunks] [--book <b>]`。
+ *
+ * - 无 `--chunks`：以文件为真相**整体**重建索引（Z2；手工编辑/迁移知识文件后收敛漂移）。
+ * - `--chunks`：**存量段级索引补齐**（v13 §7 / SPEC-5.1–5.3）——不重建条目行、不改正文
+ *   文件，只保证每个最新版条目都有一份与当前索引正文一致的段级索引（段行 + 段 FTS **恒**
+ *   补，段向量随嵌入可用性；逐条目一个事务，中断可重跑且不锁检索）。老库（无段级三表）
+ *   直跑不会 `no such table`——入口先 `ensureKbChunks`（N-6）。
+ */
+async function kbReindex(ctx: CommandContext, values: ArgValues): Promise<number> {
+  if (values.chunks === true) return await kbReindexChunks(ctx, values)
+  const kb = await getKb(ctx)
   if (kb.reindex === undefined) {
     ctx.stderr('错误 [unsupported] 当前知识服务未实现 reindex')
     return 1
@@ -1113,6 +1129,62 @@ async function kbHistory(ctx: CommandContext, args: string[], values: ArgValues)
     ctx.stderr(`  SKIP ${err.path}: ${err.reason}`)
   }
   return report.skipped > 0 ? 1 : 0
+}
+
+/**
+ * `prism kb reindex --chunks [--book <b>]` 的落地。
+ *
+ * 走**直查路径**（`openPersistence`，不经 `KnowledgeService`）：这是存量库的一次性补齐，
+ * 需要按条目逐个事务、可中断重跑，不适合套 service 的整体 reindex 事务。代价是段级三表
+ * 不会由构造函数 ensure——故此处显式 `ensureKbChunks`（N-6）。
+ *
+ * 切分选项必须与 service **同一份**（`resolveKbConfigForHome`）：否则本命令重切出的段与
+ * service 写入的段不一致，跳过判据永不收敛。
+ */
+async function kbReindexChunks(ctx: CommandContext, values: ArgValues): Promise<number> {
+  const rawBook = values.book
+  const book = rawBook !== undefined && String(rawBook).trim() !== '' ? String(rawBook) : undefined
+  const opened = ctx.persistence === undefined
+  const persistence = ctx.persistence ?? openPersistence({ home: ctx.home })
+  try {
+    // N-6：老库直跑没有 kb_chunks/kb_chunk_vectors/kb_chunk_fts（本路径不过 service 构造器）
+    ensureKbChunks(persistence.knowledge)
+    const config = resolveKbConfigForHome(ctx.home)
+    for (const warning of config.warnings) ctx.stderr(`警告 [config] ${warning}`)
+    const installed = embeddingInstalled()
+    const embed =
+      installed
+        ? async (text: string): Promise<Float32Array | null> => {
+            const r = await embedText(text)
+            return r.ok && r.vector !== undefined ? r.vector : null
+          }
+        : undefined
+    const report = await backfillChunks({
+      knowledge: persistence.knowledge,
+      chunkOptions: config.chunkOptions,
+      ...(book !== undefined ? { book } : {}),
+      ...(embed !== undefined ? { embed, model: activeModel().id } : {}),
+    })
+    if (ctx.json) {
+      ctx.stdout(JSON.stringify({ ok: true, value: report }))
+      return report.failed.length > 0 ? 1 : 0
+    }
+    for (const line of chunkReportLines(report, `段级索引补齐${book !== undefined ? `（书 ${book}）` : ''}`)) {
+      ctx.stdout(line)
+    }
+    if (!installed) {
+      ctx.stdout('  提示：未安装 embedding，本次只补段行与段 FTS；装好后跑 prism embedding reindex 补段向量')
+    }
+    return report.failed.length > 0 ? 1 : 0
+  } catch (error) {
+    if (isPrismError(error)) {
+      ctx.stderr(`错误 [${error.code}] ${error.message}`)
+      return 1
+    }
+    throw error
+  } finally {
+    if (opened) persistence.close()
+  }
 }
 
 /** 取首个一级标题作为落库标题。 */

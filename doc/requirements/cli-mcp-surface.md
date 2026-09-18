@@ -118,7 +118,7 @@ prism
 │   ├── remove / restore    软删 / 恢复
 │   ├── conflicts / resolve 层间冲突查看与解决
 │   ├── export              导出（Graphify 图谱 / 全库）
-│   └── reindex             以文件为真相重建索引（手工改过知识文件后用）
+│   └── reindex [--chunks]  以文件为真相重建索引；--chunks 只补段级索引（存量库迁移，可中断重跑）
 │
 ├── arch                    架构图谱（Archify 子工程）
 │   ├── types               列出五类图

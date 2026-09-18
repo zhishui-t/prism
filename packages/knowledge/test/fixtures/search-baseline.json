@@ -1,0 +1,1238 @@
+{
+  "corpus": [
+    {
+      "id": "PERF-001",
+      "title": "性能优化指南",
+      "type": "guide",
+      "layer": "global",
+      "book": "perf-book",
+      "module": "bench",
+      "content": "## 基准\n接口性能优化的第一步是建立基准，再谈缓存与并发。基准必须可复现。\n\n## 缓存\n缓存命中率是首要指标；未命中时回落到数据库查询。\n\n### 并发压测\n并发压测要固定线程数与数据量，否则数字不可比。\n"
+    },
+    {
+      "id": "PERF-002",
+      "title": "前端性能预算",
+      "type": "rule",
+      "layer": "global",
+      "book": "perf-book",
+      "module": "web",
+      "content": "首屏性能预算：包体不超过 200KB；超出必须走评审。"
+    },
+    {
+      "id": "PERF-003",
+      "title": "缓存淘汰策略",
+      "type": "doc",
+      "layer": "global",
+      "book": "perf-book",
+      "module": "bench",
+      "content": "LRU 与 LFU 的取舍：命中率优先时用 LFU，实现简单时用 LRU。"
+    },
+    {
+      "id": "LOG-001",
+      "title": "日志规范",
+      "type": "rule",
+      "layer": "global",
+      "book": "observability",
+      "module": "logging",
+      "content": "日志必须带 trace id；禁止打印敏感字段。"
+    },
+    {
+      "id": "LOG-002",
+      "title": "日志采集链路",
+      "type": "doc",
+      "layer": "global",
+      "book": "observability",
+      "module": "logging",
+      "content": "采集链路：应用日志 → 采集器 → 存储。"
+    },
+    {
+      "id": "DB-POOL-EN",
+      "title": "Connection Pool Tuning",
+      "type": "guide",
+      "layer": "global",
+      "book": "backend",
+      "module": "db",
+      "content": "Connection pool size follows concurrency peaks; slow query must be investigated."
+    },
+    {
+      "id": "JAVA-001",
+      "title": "异常处理规范",
+      "type": "rule",
+      "layer": "project",
+      "owner": "acme",
+      "book": "java-standards",
+      "module": "exception",
+      "content": "## 铁律\n异常必须带上下文信息，禁止吞掉堆栈。\n\n## 命名\n异常类以 Exception 结尾。"
+    },
+    {
+      "id": "JAVA-002",
+      "title": "数据库连接池配置",
+      "type": "guide",
+      "layer": "project",
+      "owner": "acme",
+      "book": "java-standards",
+      "module": "db",
+      "content": "连接池大小按并发峰值设定，慢查询要单独排查。"
+    },
+    {
+      "id": "ROLE-001",
+      "title": "评审角色职责",
+      "type": "pattern",
+      "layer": "role",
+      "owner": "reviewer",
+      "book": "duties",
+      "module": "review",
+      "content": "## 职责\n评审角色负责命名规范与异常处理规范的落实。"
+    }
+  ],
+  "queries": [
+    {
+      "q": "性能",
+      "limit": 10
+    },
+    {
+      "q": "性能 缓存",
+      "limit": 5
+    },
+    {
+      "q": "缓存",
+      "limit": 10
+    },
+    {
+      "q": "database",
+      "limit": 10
+    },
+    {
+      "q": "connection pool",
+      "limit": 10
+    },
+    {
+      "q": "日志",
+      "limit": 10
+    },
+    {
+      "q": "连接池",
+      "limit": 3
+    },
+    {
+      "q": "量子纠缠",
+      "limit": 10
+    },
+    {
+      "q": "命名规范",
+      "limit": 10
+    },
+    {
+      "q": "并发 压测",
+      "limit": 10
+    },
+    {
+      "q": "缓存 日志",
+      "match_mode": "any",
+      "limit": 10
+    },
+    {
+      "q": "规范",
+      "layers": [
+        "project"
+      ],
+      "limit": 10
+    },
+    {
+      "q": "缓存",
+      "book": "perf-book",
+      "limit": 10
+    },
+    {
+      "q": "规范",
+      "owner": "acme",
+      "limit": 10
+    },
+    {
+      "q": "规范",
+      "all_versions": true,
+      "limit": 10
+    },
+    {
+      "q": "命名规范",
+      "graph_boost": true,
+      "limit": 10
+    },
+    {
+      "q": "规范",
+      "route_weights": {
+        "keyword": 1,
+        "vector": 0
+      },
+      "limit": 10
+    }
+  ],
+  "noEmbed": [
+    {
+      "query": {
+        "q": "性能",
+        "limit": 10
+      },
+      "results": [
+        {
+          "id": "PERF-002",
+          "version": 1,
+          "title": "前端性能预算",
+          "type": "rule",
+          "layer": "global",
+          "book": "perf-book",
+          "module": "web",
+          "excerpt": "首屏性能预算：包体不超过 200KB；超出必须走评审。",
+          "score": 1.6135159146715392,
+          "source": "global/perf-book/web/PERF-002@v1",
+          "freshness": 1
+        },
+        {
+          "id": "PERF-001",
+          "version": 1,
+          "title": "性能优化指南",
+          "type": "guide",
+          "layer": "global",
+          "book": "perf-book",
+          "module": "bench",
+          "excerpt": "## 基准 接口性能优化的第一步是建立基准，再谈缓存与并发。基准必须可复现。 ## 缓存 缓存命中率是首要指标；未命中时回落到数据库查询。 ### 并发压测 并发压测要固定线程…",
+          "score": 1.0359870190091678,
+          "source": "global/perf-book/bench/PERF-001@v1",
+          "freshness": 1
+        }
+      ]
+    },
+    {
+      "query": {
+        "q": "性能 缓存",
+        "limit": 5
+      },
+      "results": [
+        {
+          "id": "PERF-001",
+          "version": 1,
+          "title": "性能优化指南",
+          "type": "guide",
+          "layer": "global",
+          "book": "perf-book",
+          "module": "bench",
+          "excerpt": "## 基准 接口性能优化的第一步是建立基准，再谈缓存与并发。基准必须可复现。 ## 缓存 缓存命中率是首要指标；未命中时回落到数据库查询。 ### 并发压测 并发压测要固定线程…",
+          "score": 2.4863047573436847,
+          "source": "global/perf-book/bench/PERF-001@v1",
+          "freshness": 1
+        }
+      ]
+    },
+    {
+      "query": {
+        "q": "缓存",
+        "limit": 10
+      },
+      "results": [
+        {
+          "id": "PERF-001",
+          "version": 1,
+          "title": "性能优化指南",
+          "type": "guide",
+          "layer": "global",
+          "book": "perf-book",
+          "module": "bench",
+          "excerpt": "## 基准 接口性能优化的第一步是建立基准，再谈缓存与并发。基准必须可复现。 ## 缓存 缓存命中率是首要指标；未命中时回落到数据库查询。 ### 并发压测 并发压测要固定线程数与数据量，否则数字不可比。",
+          "score": 1.450317738334517,
+          "source": "global/perf-book/bench/PERF-001@v1",
+          "freshness": 1
+        },
+        {
+          "id": "PERF-003",
+          "version": 1,
+          "title": "缓存淘汰策略",
+          "type": "doc",
+          "layer": "global",
+          "book": "perf-book",
+          "module": "bench",
+          "excerpt": "LRU 与 LFU 的取舍：命中率优先时用 LFU，实现简单时用 LRU。",
+          "score": 1.1174635958139878,
+          "source": "global/perf-book/bench/PERF-003@v1",
+          "freshness": 1
+        }
+      ]
+    },
+    {
+      "query": {
+        "q": "database",
+        "limit": 10
+      },
+      "results": []
+    },
+    {
+      "query": {
+        "q": "connection pool",
+        "limit": 10
+      },
+      "results": [
+        {
+          "id": "DB-POOL-EN",
+          "version": 1,
+          "title": "Connection Pool Tuning",
+          "type": "guide",
+          "layer": "global",
+          "book": "backend",
+          "module": "db",
+          "excerpt": "Connection pool size follows concurrency peaks; slow query must be investigated.",
+          "score": 5.730090792876501,
+          "source": "global/backend/db/DB-POOL-EN@v1",
+          "freshness": 1
+        }
+      ]
+    },
+    {
+      "query": {
+        "q": "日志",
+        "limit": 10
+      },
+      "results": [
+        {
+          "id": "LOG-002",
+          "version": 1,
+          "title": "日志采集链路",
+          "type": "doc",
+          "layer": "global",
+          "book": "observability",
+          "module": "logging",
+          "excerpt": "采集链路：应用日志 → 采集器 → 存储。",
+          "score": 1.725755336045452,
+          "source": "global/observability/logging/LOG-002@v1",
+          "freshness": 1
+        },
+        {
+          "id": "LOG-001",
+          "version": 1,
+          "title": "日志规范",
+          "type": "rule",
+          "layer": "global",
+          "book": "observability",
+          "module": "logging",
+          "excerpt": "日志必须带 trace id；禁止打印敏感字段。",
+          "score": 1.6921245933004305,
+          "source": "global/observability/logging/LOG-001@v1",
+          "freshness": 1
+        }
+      ]
+    },
+    {
+      "query": {
+        "q": "连接池",
+        "limit": 3
+      },
+      "results": [
+        {
+          "id": "JAVA-002",
+          "version": 1,
+          "title": "数据库连接池配置",
+          "type": "guide",
+          "layer": "project",
+          "owner": "acme",
+          "book": "java-standards",
+          "module": "db",
+          "excerpt": "连接池大小按并发峰值设定，慢查询要单独排查。",
+          "score": 5.002214394862459,
+          "source": "project/acme/java-standards/db/JAVA-002@v1",
+          "freshness": 1
+        }
+      ]
+    },
+    {
+      "query": {
+        "q": "量子纠缠",
+        "limit": 10
+      },
+      "results": []
+    },
+    {
+      "query": {
+        "q": "命名规范",
+        "limit": 10
+      },
+      "results": [
+        {
+          "id": "ROLE-001",
+          "version": 1,
+          "title": "评审角色职责",
+          "type": "pattern",
+          "layer": "role",
+          "owner": "reviewer",
+          "book": "duties",
+          "module": "review",
+          "excerpt": "## 职责 评审角色负责命名规范与异常处理规范的落实。",
+          "score": 3.9308174024073077,
+          "source": "role/reviewer/duties/review/ROLE-001@v1",
+          "freshness": 1
+        }
+      ]
+    },
+    {
+      "query": {
+        "q": "并发 压测",
+        "limit": 10
+      },
+      "results": [
+        {
+          "id": "PERF-001",
+          "version": 1,
+          "title": "性能优化指南",
+          "type": "guide",
+          "layer": "global",
+          "book": "perf-book",
+          "module": "bench",
+          "excerpt": "## 基准 接口性能优化的第一步是建立基准，再谈缓存与并发。基准必须可复现。 ## 缓存 缓存命中率是首要指标；未命中时回落到数据库查询。 ### 并发压测 并发压测要固定线程数与数据量，否则数字不可比。",
+          "score": 2.915437302808253,
+          "source": "global/perf-book/bench/PERF-001@v1",
+          "freshness": 1
+        }
+      ]
+    },
+    {
+      "query": {
+        "q": "缓存 日志",
+        "match_mode": "any",
+        "limit": 10
+      },
+      "results": [
+        {
+          "id": "LOG-002",
+          "version": 1,
+          "title": "日志采集链路",
+          "type": "doc",
+          "layer": "global",
+          "book": "observability",
+          "module": "logging",
+          "excerpt": "采集链路：应用日志 → 采集器 → 存储。",
+          "score": 1.725755336045452,
+          "source": "global/observability/logging/LOG-002@v1",
+          "freshness": 1
+        },
+        {
+          "id": "LOG-001",
+          "version": 1,
+          "title": "日志规范",
+          "type": "rule",
+          "layer": "global",
+          "book": "observability",
+          "module": "logging",
+          "excerpt": "日志必须带 trace id；禁止打印敏感字段。",
+          "score": 1.6921245933004305,
+          "source": "global/observability/logging/LOG-001@v1",
+          "freshness": 1
+        },
+        {
+          "id": "PERF-001",
+          "version": 1,
+          "title": "性能优化指南",
+          "type": "guide",
+          "layer": "global",
+          "book": "perf-book",
+          "module": "bench",
+          "excerpt": "## 基准 接口性能优化的第一步是建立基准，再谈缓存与并发。基准必须可复现。 ## 缓存 缓存命中率是首要指标；未命中时回落到数据库查询。 ### 并发压测 并发压测要固定线程数与数据量，否则数字不可比。",
+          "score": 1.450317738334517,
+          "source": "global/perf-book/bench/PERF-001@v1",
+          "freshness": 1
+        },
+        {
+          "id": "PERF-003",
+          "version": 1,
+          "title": "缓存淘汰策略",
+          "type": "doc",
+          "layer": "global",
+          "book": "perf-book",
+          "module": "bench",
+          "excerpt": "LRU 与 LFU 的取舍：命中率优先时用 LFU，实现简单时用 LRU。",
+          "score": 1.1174635958139878,
+          "source": "global/perf-book/bench/PERF-003@v1",
+          "freshness": 1
+        }
+      ]
+    },
+    {
+      "query": {
+        "q": "规范",
+        "layers": [
+          "project"
+        ],
+        "limit": 10
+      },
+      "results": [
+        {
+          "id": "JAVA-001",
+          "version": 1,
+          "title": "异常处理规范",
+          "type": "rule",
+          "layer": "project",
+          "owner": "acme",
+          "book": "java-standards",
+          "module": "exception",
+          "excerpt": "## 铁律 异常必须带上下文信息，禁止吞掉堆栈。 ## 命名 异常类以 Exception 结尾。",
+          "score": 0.61386137116119,
+          "source": "project/acme/java-standards/exception/JAVA-001@v1",
+          "freshness": 1
+        }
+      ]
+    },
+    {
+      "query": {
+        "q": "缓存",
+        "book": "perf-book",
+        "limit": 10
+      },
+      "results": [
+        {
+          "id": "PERF-001",
+          "version": 1,
+          "title": "性能优化指南",
+          "type": "guide",
+          "layer": "global",
+          "book": "perf-book",
+          "module": "bench",
+          "excerpt": "## 基准 接口性能优化的第一步是建立基准，再谈缓存与并发。基准必须可复现。 ## 缓存 缓存命中率是首要指标；未命中时回落到数据库查询。 ### 并发压测 并发压测要固定线程数与数据量，否则数字不可比。",
+          "score": 1.450317738334517,
+          "source": "global/perf-book/bench/PERF-001@v1",
+          "freshness": 1
+        },
+        {
+          "id": "PERF-003",
+          "version": 1,
+          "title": "缓存淘汰策略",
+          "type": "doc",
+          "layer": "global",
+          "book": "perf-book",
+          "module": "bench",
+          "excerpt": "LRU 与 LFU 的取舍：命中率优先时用 LFU，实现简单时用 LRU。",
+          "score": 1.1174635958139878,
+          "source": "global/perf-book/bench/PERF-003@v1",
+          "freshness": 1
+        }
+      ]
+    },
+    {
+      "query": {
+        "q": "规范",
+        "owner": "acme",
+        "limit": 10
+      },
+      "results": [
+        {
+          "id": "JAVA-001",
+          "version": 1,
+          "title": "异常处理规范",
+          "type": "rule",
+          "layer": "project",
+          "owner": "acme",
+          "book": "java-standards",
+          "module": "exception",
+          "excerpt": "## 铁律 异常必须带上下文信息，禁止吞掉堆栈。 ## 命名 异常类以 Exception 结尾。",
+          "score": 0.61386137116119,
+          "source": "project/acme/java-standards/exception/JAVA-001@v1",
+          "freshness": 1
+        }
+      ]
+    },
+    {
+      "query": {
+        "q": "规范",
+        "all_versions": true,
+        "limit": 10
+      },
+      "results": [
+        {
+          "id": "ROLE-001",
+          "version": 1,
+          "title": "评审角色职责",
+          "type": "pattern",
+          "layer": "role",
+          "owner": "reviewer",
+          "book": "duties",
+          "module": "review",
+          "excerpt": "## 职责 评审角色负责命名规范与异常处理规范的落实。",
+          "score": 0.8925876153641089,
+          "source": "role/reviewer/duties/review/ROLE-001@v1",
+          "freshness": 1
+        },
+        {
+          "id": "LOG-001",
+          "version": 1,
+          "title": "日志规范",
+          "type": "rule",
+          "layer": "global",
+          "book": "observability",
+          "module": "logging",
+          "excerpt": "日志必须带 trace id；禁止打印敏感字段。",
+          "score": 0.7334978738139263,
+          "source": "global/observability/logging/LOG-001@v1",
+          "freshness": 1
+        },
+        {
+          "id": "JAVA-001",
+          "version": 1,
+          "title": "异常处理规范",
+          "type": "rule",
+          "layer": "project",
+          "owner": "acme",
+          "book": "java-standards",
+          "module": "exception",
+          "excerpt": "## 铁律 异常必须带上下文信息，禁止吞掉堆栈。 ## 命名 异常类以 Exception 结尾。",
+          "score": 0.61386137116119,
+          "source": "project/acme/java-standards/exception/JAVA-001@v1",
+          "freshness": 1
+        }
+      ]
+    },
+    {
+      "query": {
+        "q": "命名规范",
+        "graph_boost": true,
+        "limit": 10
+      },
+      "results": [
+        {
+          "id": "ROLE-001",
+          "version": 1,
+          "title": "评审角色职责",
+          "type": "pattern",
+          "layer": "role",
+          "owner": "reviewer",
+          "book": "duties",
+          "module": "review",
+          "excerpt": "## 职责 评审角色负责命名规范与异常处理规范的落实。",
+          "score": 3.9308174024073077,
+          "source": "role/reviewer/duties/review/ROLE-001@v1",
+          "freshness": 1
+        }
+      ]
+    },
+    {
+      "query": {
+        "q": "规范",
+        "route_weights": {
+          "keyword": 1,
+          "vector": 0
+        },
+        "limit": 10
+      },
+      "results": [
+        {
+          "id": "ROLE-001",
+          "version": 1,
+          "title": "评审角色职责",
+          "type": "pattern",
+          "layer": "role",
+          "owner": "reviewer",
+          "book": "duties",
+          "module": "review",
+          "excerpt": "## 职责 评审角色负责命名规范与异常处理规范的落实。",
+          "score": 0.8925876153641089,
+          "source": "role/reviewer/duties/review/ROLE-001@v1",
+          "freshness": 1
+        },
+        {
+          "id": "LOG-001",
+          "version": 1,
+          "title": "日志规范",
+          "type": "rule",
+          "layer": "global",
+          "book": "observability",
+          "module": "logging",
+          "excerpt": "日志必须带 trace id；禁止打印敏感字段。",
+          "score": 0.7334978738139263,
+          "source": "global/observability/logging/LOG-001@v1",
+          "freshness": 1
+        },
+        {
+          "id": "JAVA-001",
+          "version": 1,
+          "title": "异常处理规范",
+          "type": "rule",
+          "layer": "project",
+          "owner": "acme",
+          "book": "java-standards",
+          "module": "exception",
+          "excerpt": "## 铁律 异常必须带上下文信息，禁止吞掉堆栈。 ## 命名 异常类以 Exception 结尾。",
+          "score": 0.61386137116119,
+          "source": "project/acme/java-standards/exception/JAVA-001@v1",
+          "freshness": 1
+        }
+      ]
+    }
+  ],
+  "withEmbed": [
+    {
+      "query": {
+        "q": "性能",
+        "limit": 10
+      },
+      "results": [
+        {
+          "id": "PERF-002",
+          "version": 1,
+          "title": "前端性能预算",
+          "type": "rule",
+          "layer": "global",
+          "book": "perf-book",
+          "module": "web",
+          "excerpt": "首屏性能预算：包体不超过 200KB；超出必须走评审。",
+          "score": 0.03252247488101534,
+          "source": "global/perf-book/web/PERF-002@v1",
+          "freshness": 1
+        },
+        {
+          "id": "PERF-001",
+          "version": 1,
+          "title": "性能优化指南",
+          "type": "guide",
+          "layer": "global",
+          "book": "perf-book",
+          "module": "bench",
+          "excerpt": "## 基准 接口性能优化的第一步是建立基准，再谈缓存与并发。基准必须可复现。 ## 缓存 缓存命中率是首要指标；未命中时回落到数据库查询。 ### 并发压测 并发压测要固定线程…",
+          "score": 0.03252247488101534,
+          "source": "global/perf-book/bench/PERF-001@v1",
+          "freshness": 1
+        },
+        {
+          "id": "PERF-003",
+          "version": 1,
+          "title": "缓存淘汰策略",
+          "type": "doc",
+          "layer": "global",
+          "book": "perf-book",
+          "module": "bench",
+          "excerpt": "LRU 与 LFU 的取舍：命中率优先时用 LFU，实现简单时用 LRU。",
+          "score": 0.015873015873015872,
+          "source": "global/perf-book/bench/PERF-003@v1",
+          "freshness": 1
+        }
+      ]
+    },
+    {
+      "query": {
+        "q": "性能 缓存",
+        "limit": 5
+      },
+      "results": [
+        {
+          "id": "PERF-001",
+          "version": 1,
+          "title": "性能优化指南",
+          "type": "guide",
+          "layer": "global",
+          "book": "perf-book",
+          "module": "bench",
+          "excerpt": "## 基准 接口性能优化的第一步是建立基准，再谈缓存与并发。基准必须可复现。 ## 缓存 缓存命中率是首要指标；未命中时回落到数据库查询。 ### 并发压测 并发压测要固定线程…",
+          "score": 0.03278688524590164,
+          "source": "global/perf-book/bench/PERF-001@v1",
+          "freshness": 1
+        },
+        {
+          "id": "PERF-002",
+          "version": 1,
+          "title": "前端性能预算",
+          "type": "rule",
+          "layer": "global",
+          "book": "perf-book",
+          "module": "web",
+          "excerpt": "首屏性能预算：包体不超过 200KB；超出必须走评审。",
+          "score": 0.016129032258064516,
+          "source": "global/perf-book/web/PERF-002@v1",
+          "freshness": 1
+        },
+        {
+          "id": "PERF-003",
+          "version": 1,
+          "title": "缓存淘汰策略",
+          "type": "doc",
+          "layer": "global",
+          "book": "perf-book",
+          "module": "bench",
+          "excerpt": "LRU 与 LFU 的取舍：命中率优先时用 LFU，实现简单时用 LRU。",
+          "score": 0.015873015873015872,
+          "source": "global/perf-book/bench/PERF-003@v1",
+          "freshness": 1
+        }
+      ]
+    },
+    {
+      "query": {
+        "q": "缓存",
+        "limit": 10
+      },
+      "results": [
+        {
+          "id": "PERF-001",
+          "version": 1,
+          "title": "性能优化指南",
+          "type": "guide",
+          "layer": "global",
+          "book": "perf-book",
+          "module": "bench",
+          "excerpt": "## 基准 接口性能优化的第一步是建立基准，再谈缓存与并发。基准必须可复现。 ## 缓存 缓存命中率是首要指标；未命中时回落到数据库查询。 ### 并发压测 并发压测要固定线程数与数据量，否则数字不可比。",
+          "score": 0.03278688524590164,
+          "source": "global/perf-book/bench/PERF-001@v1",
+          "freshness": 1
+        },
+        {
+          "id": "PERF-003",
+          "version": 1,
+          "title": "缓存淘汰策略",
+          "type": "doc",
+          "layer": "global",
+          "book": "perf-book",
+          "module": "bench",
+          "excerpt": "LRU 与 LFU 的取舍：命中率优先时用 LFU，实现简单时用 LRU。",
+          "score": 0.03200204813108039,
+          "source": "global/perf-book/bench/PERF-003@v1",
+          "freshness": 1
+        },
+        {
+          "id": "PERF-002",
+          "version": 1,
+          "title": "前端性能预算",
+          "type": "rule",
+          "layer": "global",
+          "book": "perf-book",
+          "module": "web",
+          "excerpt": "首屏性能预算：包体不超过 200KB；超出必须走评审。",
+          "score": 0.016129032258064516,
+          "source": "global/perf-book/web/PERF-002@v1",
+          "freshness": 1
+        }
+      ]
+    },
+    {
+      "query": {
+        "q": "database",
+        "limit": 10
+      },
+      "results": []
+    },
+    {
+      "query": {
+        "q": "connection pool",
+        "limit": 10
+      },
+      "results": [
+        {
+          "id": "DB-POOL-EN",
+          "version": 1,
+          "title": "Connection Pool Tuning",
+          "type": "guide",
+          "layer": "global",
+          "book": "backend",
+          "module": "db",
+          "excerpt": "Connection pool size follows concurrency peaks; slow query must be investigated.",
+          "score": 5.730090792876501,
+          "source": "global/backend/db/DB-POOL-EN@v1",
+          "freshness": 1
+        }
+      ]
+    },
+    {
+      "query": {
+        "q": "日志",
+        "limit": 10
+      },
+      "results": [
+        {
+          "id": "LOG-002",
+          "version": 1,
+          "title": "日志采集链路",
+          "type": "doc",
+          "layer": "global",
+          "book": "observability",
+          "module": "logging",
+          "excerpt": "采集链路：应用日志 → 采集器 → 存储。",
+          "score": 0.03252247488101534,
+          "source": "global/observability/logging/LOG-002@v1",
+          "freshness": 1
+        },
+        {
+          "id": "LOG-001",
+          "version": 1,
+          "title": "日志规范",
+          "type": "rule",
+          "layer": "global",
+          "book": "observability",
+          "module": "logging",
+          "excerpt": "日志必须带 trace id；禁止打印敏感字段。",
+          "score": 0.03252247488101534,
+          "source": "global/observability/logging/LOG-001@v1",
+          "freshness": 1
+        }
+      ]
+    },
+    {
+      "query": {
+        "q": "连接池",
+        "limit": 3
+      },
+      "results": [
+        {
+          "id": "JAVA-002",
+          "version": 1,
+          "title": "数据库连接池配置",
+          "type": "guide",
+          "layer": "project",
+          "owner": "acme",
+          "book": "java-standards",
+          "module": "db",
+          "excerpt": "连接池大小按并发峰值设定，慢查询要单独排查。",
+          "score": 5.002214394862459,
+          "source": "project/acme/java-standards/db/JAVA-002@v1",
+          "freshness": 1
+        }
+      ]
+    },
+    {
+      "query": {
+        "q": "量子纠缠",
+        "limit": 10
+      },
+      "results": []
+    },
+    {
+      "query": {
+        "q": "命名规范",
+        "limit": 10
+      },
+      "results": [
+        {
+          "id": "ROLE-001",
+          "version": 1,
+          "title": "评审角色职责",
+          "type": "pattern",
+          "layer": "role",
+          "owner": "reviewer",
+          "book": "duties",
+          "module": "review",
+          "excerpt": "## 职责 评审角色负责命名规范与异常处理规范的落实。",
+          "score": 3.9308174024073077,
+          "source": "role/reviewer/duties/review/ROLE-001@v1",
+          "freshness": 1
+        }
+      ]
+    },
+    {
+      "query": {
+        "q": "并发 压测",
+        "limit": 10
+      },
+      "results": [
+        {
+          "id": "PERF-001",
+          "version": 1,
+          "title": "性能优化指南",
+          "type": "guide",
+          "layer": "global",
+          "book": "perf-book",
+          "module": "bench",
+          "excerpt": "## 基准 接口性能优化的第一步是建立基准，再谈缓存与并发。基准必须可复现。 ## 缓存 缓存命中率是首要指标；未命中时回落到数据库查询。 ### 并发压测 并发压测要固定线程数与数据量，否则数字不可比。",
+          "score": 2.915437302808253,
+          "source": "global/perf-book/bench/PERF-001@v1",
+          "freshness": 1
+        }
+      ]
+    },
+    {
+      "query": {
+        "q": "缓存 日志",
+        "match_mode": "any",
+        "limit": 10
+      },
+      "results": [
+        {
+          "id": "PERF-001",
+          "version": 1,
+          "title": "性能优化指南",
+          "type": "guide",
+          "layer": "global",
+          "book": "perf-book",
+          "module": "bench",
+          "excerpt": "## 基准 接口性能优化的第一步是建立基准，再谈缓存与并发。基准必须可复现。 ## 缓存 缓存命中率是首要指标；未命中时回落到数据库查询。 ### 并发压测 并发压测要固定线程数与数据量，否则数字不可比。",
+          "score": 0.032266458495966696,
+          "source": "global/perf-book/bench/PERF-001@v1",
+          "freshness": 1
+        },
+        {
+          "id": "PERF-003",
+          "version": 1,
+          "title": "缓存淘汰策略",
+          "type": "doc",
+          "layer": "global",
+          "book": "perf-book",
+          "module": "bench",
+          "excerpt": "LRU 与 LFU 的取舍：命中率优先时用 LFU，实现简单时用 LRU。",
+          "score": 0.03149801587301587,
+          "source": "global/perf-book/bench/PERF-003@v1",
+          "freshness": 1
+        },
+        {
+          "id": "LOG-002",
+          "version": 1,
+          "title": "日志采集链路",
+          "type": "doc",
+          "layer": "global",
+          "book": "observability",
+          "module": "logging",
+          "excerpt": "采集链路：应用日志 → 采集器 → 存储。",
+          "score": 0.01639344262295082,
+          "source": "global/observability/logging/LOG-002@v1",
+          "freshness": 1
+        },
+        {
+          "id": "LOG-001",
+          "version": 1,
+          "title": "日志规范",
+          "type": "rule",
+          "layer": "global",
+          "book": "observability",
+          "module": "logging",
+          "excerpt": "日志必须带 trace id；禁止打印敏感字段。",
+          "score": 0.016129032258064516,
+          "source": "global/observability/logging/LOG-001@v1",
+          "freshness": 1
+        },
+        {
+          "id": "PERF-002",
+          "version": 1,
+          "title": "前端性能预算",
+          "type": "rule",
+          "layer": "global",
+          "book": "perf-book",
+          "module": "web",
+          "excerpt": "首屏性能预算：包体不超过 200KB；超出必须走评审。",
+          "score": 0.016129032258064516,
+          "source": "global/perf-book/web/PERF-002@v1",
+          "freshness": 1
+        }
+      ]
+    },
+    {
+      "query": {
+        "q": "规范",
+        "layers": [
+          "project"
+        ],
+        "limit": 10
+      },
+      "results": [
+        {
+          "id": "JAVA-001",
+          "version": 1,
+          "title": "异常处理规范",
+          "type": "rule",
+          "layer": "project",
+          "owner": "acme",
+          "book": "java-standards",
+          "module": "exception",
+          "excerpt": "## 铁律 异常必须带上下文信息，禁止吞掉堆栈。 ## 命名 异常类以 Exception 结尾。",
+          "score": 0.61386137116119,
+          "source": "project/acme/java-standards/exception/JAVA-001@v1",
+          "freshness": 1
+        }
+      ]
+    },
+    {
+      "query": {
+        "q": "缓存",
+        "book": "perf-book",
+        "limit": 10
+      },
+      "results": [
+        {
+          "id": "PERF-001",
+          "version": 1,
+          "title": "性能优化指南",
+          "type": "guide",
+          "layer": "global",
+          "book": "perf-book",
+          "module": "bench",
+          "excerpt": "## 基准 接口性能优化的第一步是建立基准，再谈缓存与并发。基准必须可复现。 ## 缓存 缓存命中率是首要指标；未命中时回落到数据库查询。 ### 并发压测 并发压测要固定线程数与数据量，否则数字不可比。",
+          "score": 0.03278688524590164,
+          "source": "global/perf-book/bench/PERF-001@v1",
+          "freshness": 1
+        },
+        {
+          "id": "PERF-003",
+          "version": 1,
+          "title": "缓存淘汰策略",
+          "type": "doc",
+          "layer": "global",
+          "book": "perf-book",
+          "module": "bench",
+          "excerpt": "LRU 与 LFU 的取舍：命中率优先时用 LFU，实现简单时用 LRU。",
+          "score": 0.03200204813108039,
+          "source": "global/perf-book/bench/PERF-003@v1",
+          "freshness": 1
+        },
+        {
+          "id": "PERF-002",
+          "version": 1,
+          "title": "前端性能预算",
+          "type": "rule",
+          "layer": "global",
+          "book": "perf-book",
+          "module": "web",
+          "excerpt": "首屏性能预算：包体不超过 200KB；超出必须走评审。",
+          "score": 0.016129032258064516,
+          "source": "global/perf-book/web/PERF-002@v1",
+          "freshness": 1
+        }
+      ]
+    },
+    {
+      "query": {
+        "q": "规范",
+        "owner": "acme",
+        "limit": 10
+      },
+      "results": [
+        {
+          "id": "JAVA-001",
+          "version": 1,
+          "title": "异常处理规范",
+          "type": "rule",
+          "layer": "project",
+          "owner": "acme",
+          "book": "java-standards",
+          "module": "exception",
+          "excerpt": "## 铁律 异常必须带上下文信息，禁止吞掉堆栈。 ## 命名 异常类以 Exception 结尾。",
+          "score": 0.61386137116119,
+          "source": "project/acme/java-standards/exception/JAVA-001@v1",
+          "freshness": 1
+        }
+      ]
+    },
+    {
+      "query": {
+        "q": "规范",
+        "all_versions": true,
+        "limit": 10
+      },
+      "results": [
+        {
+          "id": "ROLE-001",
+          "version": 1,
+          "title": "评审角色职责",
+          "type": "pattern",
+          "layer": "role",
+          "owner": "reviewer",
+          "book": "duties",
+          "module": "review",
+          "excerpt": "## 职责 评审角色负责命名规范与异常处理规范的落实。",
+          "score": 0.8925876153641089,
+          "source": "role/reviewer/duties/review/ROLE-001@v1",
+          "freshness": 1
+        },
+        {
+          "id": "LOG-001",
+          "version": 1,
+          "title": "日志规范",
+          "type": "rule",
+          "layer": "global",
+          "book": "observability",
+          "module": "logging",
+          "excerpt": "日志必须带 trace id；禁止打印敏感字段。",
+          "score": 0.7334978738139263,
+          "source": "global/observability/logging/LOG-001@v1",
+          "freshness": 1
+        },
+        {
+          "id": "JAVA-001",
+          "version": 1,
+          "title": "异常处理规范",
+          "type": "rule",
+          "layer": "project",
+          "owner": "acme",
+          "book": "java-standards",
+          "module": "exception",
+          "excerpt": "## 铁律 异常必须带上下文信息，禁止吞掉堆栈。 ## 命名 异常类以 Exception 结尾。",
+          "score": 0.61386137116119,
+          "source": "project/acme/java-standards/exception/JAVA-001@v1",
+          "freshness": 1
+        }
+      ]
+    },
+    {
+      "query": {
+        "q": "命名规范",
+        "graph_boost": true,
+        "limit": 10
+      },
+      "results": [
+        {
+          "id": "ROLE-001",
+          "version": 1,
+          "title": "评审角色职责",
+          "type": "pattern",
+          "layer": "role",
+          "owner": "reviewer",
+          "book": "duties",
+          "module": "review",
+          "excerpt": "## 职责 评审角色负责命名规范与异常处理规范的落实。",
+          "score": 3.9308174024073077,
+          "source": "role/reviewer/duties/review/ROLE-001@v1",
+          "freshness": 1
+        }
+      ]
+    },
+    {
+      "query": {
+        "q": "规范",
+        "route_weights": {
+          "keyword": 1,
+          "vector": 0
+        },
+        "limit": 10
+      },
+      "results": [
+        {
+          "id": "ROLE-001",
+          "version": 1,
+          "title": "评审角色职责",
+          "type": "pattern",
+          "layer": "role",
+          "owner": "reviewer",
+          "book": "duties",
+          "module": "review",
+          "excerpt": "## 职责 评审角色负责命名规范与异常处理规范的落实。",
+          "score": 0.8925876153641089,
+          "source": "role/reviewer/duties/review/ROLE-001@v1",
+          "freshness": 1
+        },
+        {
+          "id": "LOG-001",
+          "version": 1,
+          "title": "日志规范",
+          "type": "rule",
+          "layer": "global",
+          "book": "observability",
+          "module": "logging",
+          "excerpt": "日志必须带 trace id；禁止打印敏感字段。",
+          "score": 0.7334978738139263,
+          "source": "global/observability/logging/LOG-001@v1",
+          "freshness": 1
+        },
+        {
+          "id": "JAVA-001",
+          "version": 1,
+          "title": "异常处理规范",
+          "type": "rule",
+          "layer": "project",
+          "owner": "acme",
+          "book": "java-standards",
+          "module": "exception",
+          "excerpt": "## 铁律 异常必须带上下文信息，禁止吞掉堆栈。 ## 命名 异常类以 Exception 结尾。",
+          "score": 0.61386137116119,
+          "source": "project/acme/java-standards/exception/JAVA-001@v1",
+          "freshness": 1
+        }
+      ]
+    }
+  ]
+}

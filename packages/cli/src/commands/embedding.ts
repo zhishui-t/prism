@@ -5,7 +5,7 @@
  *   prism embedding install    跑 scripts/setup-embedding.mjs（下载+编译）
  *   prism embedding start      拉起常驻 llama-server
  *   prism embedding stop       停止常驻服务
- *   prism embedding reindex    为已有条目补齐向量（重算，幂等）
+ *   prism embedding reindex    为已有条目补齐向量（条目级 + 段级；重算，幂等）
  *
  * 设计：Prism 自理 embedding，不依赖宿主 LLM；未安装时全链路纯 BM25 降级。
  */
@@ -14,6 +14,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { ensureKbChunks } from '@prism/knowledge'
 import { openPersistence, prismPaths, repoRoot } from '@prism/core'
 import {
   EMBEDDING_MODELS,
@@ -26,11 +27,13 @@ import {
   ensureEmbeddingServer,
   gpuBackendLabel,
   preferredBackend,
+  resolveKbConfigForHome,
   resolveTier,
   stopEmbeddingServer,
 } from '@prism/server'
 
 import type { ArgValues, CommandContext } from '../argv.js'
+import { backfillChunks, chunkReportLines } from './chunk-index.js'
 
 /** vendored 模型目录（与 server 的运行时布局一致；发行根向上查找，兼容打包布局）。 */
 function modelDir(): string {
@@ -212,9 +215,12 @@ async function stop(ctx: CommandContext): Promise<number> {
 }
 
 /**
- * 为库中所有「最新版且尚无**当前模型**向量」的条目补齐向量。
+ * 为库中所有「最新版且尚无**当前模型**向量」的条目补齐向量；**兼补段级**——段行/段 FTS 与
+ * 段向量缺口（v13 §7：二选一入口都能补齐 chunk 向量，AC-5.1/M-9）。
+ *
  * 幂等：已有当前模型同版次向量的跳过；换档后旧模型向量视为缺失 → 重算并改写 model。
- * 正文从 FTS 副本读取（自有型与引用型都有）。
+ * 正文从 FTS 副本读取（自有型与引用型都有）；段级口径与 `kb reindex --chunks` **共用**
+ * `backfillChunks`（单点，避免两条命令来回重切）。
  */
 async function reindex(ctx: CommandContext): Promise<number> {
   if (!embeddingInstalled()) {
@@ -225,6 +231,8 @@ async function reindex(ctx: CommandContext): Promise<number> {
   const persistence = openPersistence({ home: ctx.home })
   try {
     const raw = persistence.knowledge.raw
+    // N-6：老库直跑没有段级三表（本命令走直查路径，不过 KnowledgeService 构造器）
+    ensureKbChunks(persistence.knowledge)
     const rows = raw
       .prepare(
         `SELECT e.id, e.version, e.title,
@@ -262,10 +270,33 @@ async function reindex(ctx: CommandContext): Promise<number> {
       })
       done++
     }
-    const payload = { total: rows.length, embedded: done, skipped, failed, model: def.id, tier: def.tier }
+    // 段级：与 `kb reindex --chunks` 同判据、同实现（缺段行则重切，缺当前模型向量则补算）
+    const config = resolveKbConfigForHome(ctx.home)
+    for (const warning of config.warnings) ctx.stderr(`警告 [config] ${warning}`)
+    const chunkReport = await backfillChunks({
+      knowledge: persistence.knowledge,
+      chunkOptions: config.chunkOptions,
+      embed: async (text) => {
+        const r = await embedText(text)
+        return r.ok && r.vector !== undefined ? r.vector : null
+      },
+      model: def.id,
+    })
+    const payload = {
+      total: rows.length,
+      embedded: done,
+      skipped,
+      failed,
+      model: def.id,
+      tier: def.tier,
+      chunks: chunkReport,
+    }
     if (ctx.json) ctx.stdout(JSON.stringify({ ok: true, value: payload }))
-    else ctx.stdout(`向量补齐（档位 ${def.tier} / ${def.id}）：共 ${rows.length} 条，新算 ${done}，跳过 ${skipped}，失败 ${failed}`)
-    return failed === 0 ? 0 : 1
+    else {
+      ctx.stdout(`向量补齐（档位 ${def.tier} / ${def.id}）：共 ${rows.length} 条，新算 ${done}，跳过 ${skipped}，失败 ${failed}`)
+      for (const line of chunkReportLines(chunkReport)) ctx.stdout(line)
+    }
+    return failed === 0 && chunkReport.failed.length === 0 ? 0 : 1
   } finally {
     persistence.close()
   }

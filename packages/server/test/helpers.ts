@@ -1,4 +1,4 @@
-import type { BookNode, BookStructure, CatalogEntry, DepositResult, EntryVersion, GraphPath, GraphQuery, GraphView, KnowledgeEntry, KnowledgeService, KbStats, Layer, SearchQuery, SearchResult } from '../src/kb/port.js'
+import type { BookNode, BookStructure, CatalogEntry, DepositResult, EntryVersion, GraphPath, GraphQuery, GraphView, KnowledgeEntry, KnowledgeService, KbStats, Layer, SearchQuery, SearchResponse, SearchResult } from '../src/kb/port.js'
 import { PrismError } from '@prism/core'
 import { createHash } from 'node:crypto'
 import { mkdtemp, writeFile, mkdir } from 'node:fs/promises'
@@ -92,6 +92,19 @@ export class MemoryKb implements KnowledgeService {
       })
     }
     return query.limit !== undefined ? results.slice(0, query.limit) : results
+  }
+
+  /**
+   * 端口一致性（v13 §5）：`searchWithMeta` 在契约里是**可选成员**，但 HTTP/MCP 会给它
+   * 接线（`chunk_scan_degraded` / `hits_truncated` 与每条目的 `hits`）——桩上没有它
+   * 就是一个「调用即 not a function」的雷（与 `restore` 同类，见
+   * `kb-port-conformance.test.ts` 的守护）。
+   *
+   * **未建模**：桩不落段级索引，故只回传 `search` 的结果、不下发任何标记位——
+   * 正好等于「无段级降级/截断」的真实语义。
+   */
+  async searchWithMeta(query: SearchQuery): Promise<SearchResponse> {
+    return { results: await this.search(query) }
   }
 
   async get(id: string, version?: number): Promise<KnowledgeEntry | null> {

@@ -51,7 +51,14 @@ export type {
   KbFactory,
 } from './kb/port.js'
 export { LAYERS, ENTRY_TYPES } from './kb/port.js'
-export { loadKnowledgeService, applyEmbeddingConfig } from './kb/wiring.js'
+export {
+  loadKnowledgeService,
+  applyEmbeddingConfig,
+  // v13 §1.1：CLI 的 `kb reindex --chunks` 需与服务**同一份** chunkOptions（单点解析）
+  resolveKbConfigForHome,
+  CHUNK_MIN_CHARS,
+  type KbWiringConfig,
+} from './kb/wiring.js'
 // 落库入口（F-E2：MCP/HTTP/CLI 共用同一团队沉淀策略；CLI `prism kb deposit --team` 用）
 export {
   depositWithPolicy,

@@ -35,19 +35,37 @@ export interface ListItem {
   plain?: boolean
 }
 
+/**
+ * 块在**原始 src**（调用方传给 `parseMarkdown` 的字符串，含 BOM / frontmatter）中的
+ * 半开字符区间 `[srcStart, srcEnd)`。
+ *
+ * - 单位 = UTF-16 code unit；`\r\n` 计 2（`srcEnd` 落在末行的 `\r` 之前，即**不含**行终止符）。
+ * - 口径 = 块的**首行行首 → 末行行尾**；段落软换行合并、表格吞后续行、代码块含围栏行，
+ *   都按这个包络自然覆盖（列表块整体一个区间，列表项不单独计）。
+ * - 显式豁免：frontmatter 行、空行、独立成段的 `<!-- … -->` 注释不产生区间；quote 的
+ *   `>` 前缀**不进内层块**区间（内层行起点 = 该行行首 + `> ` 前缀长度）——外层 quote 是
+ *   跨行包络区间，起于首行行首，故其区间会覆盖这些标记字符（见 `parseBlocks` 注记）。
+ * - 可选：手写 `Block` 或旧消费方不传时为 `undefined`；`components/Markdown.tsx` 只在有值时
+ *   注入 `data-src-start` / `data-src-end`（W-3 的滚动定位据此）。
+ */
+export interface SrcRange {
+  srcStart: number
+  srcEnd: number
+}
+
 export type Block =
-  | { type: 'heading'; level: 1 | 2 | 3 | 4 | 5 | 6; content: Inline[] }
-  | { type: 'paragraph'; content: Inline[] }
-  | { type: 'code'; lang: string; code: string }
-  | { type: 'list'; ordered: boolean; items: ListItem[] }
-  | { type: 'quote'; blocks: Block[] }
-  | { type: 'hr' }
-  | {
+  | ({ type: 'heading'; level: 1 | 2 | 3 | 4 | 5 | 6; content: Inline[] } & Partial<SrcRange>)
+  | ({ type: 'paragraph'; content: Inline[] } & Partial<SrcRange>)
+  | ({ type: 'code'; lang: string; code: string } & Partial<SrcRange>)
+  | ({ type: 'list'; ordered: boolean; items: ListItem[] } & Partial<SrcRange>)
+  | ({ type: 'quote'; blocks: Block[] } & Partial<SrcRange>)
+  | ({ type: 'hr' } & Partial<SrcRange>)
+  | ({
       type: 'table'
       align: Array<'left' | 'center' | 'right' | null>
       header: Inline[][]
       rows: Inline[][][]
-    }
+    } & Partial<SrcRange>)
 
 export interface ParsedMarkdown {
   /** YAML frontmatter（`---` 包围），**不进正文块**。 */
@@ -127,11 +145,14 @@ function readBlockScalar(
  * 拆出 frontmatter：仅当**首行**为 `---` 且随后存在闭合 `---` 行时生效。
  * 只做一层 `key: value`（去引号）+ `>`/`|` 块标量（`readBlockScalar`），
  * 不做嵌套/数组/锚点——K8 的定位是「结构化 kv 展示」。
+ *
+ * **行数组入参**（W-1）：调用方已按 `\n` 切好并去掉行尾 `\r`，含 BOM 偏移。返回值
+ * `bodyStart` = 正文字首的**行号**（无 frontmatter 时为 0）——解析层据此把行游标直接落进
+ * 原始 src，**不再重组 body 字符串**（重组的 `lines.join('\n')` 会在含 `\r\n` 或 frontmatter
+ * 的文档上丢掉偏移，N-1）。
  */
-function splitFrontmatter(src: string): { frontmatter?: Record<string, string>; body: string } {
-  const normalized = src.replace(/^\uFEFF/, '')
-  if (!/^---[ \t]*\r?\n/.test(normalized)) return { body: normalized }
-  const lines = normalized.split(/\r?\n/)
+function splitFrontmatter(lines: string[]): { frontmatter?: Record<string, string>; bodyStart: number } {
+  if (lines.length === 0 || !/^---[ \t]*$/.test(lines[0])) return { bodyStart: 0 }
   let end = -1
   for (let i = 1; i < lines.length; i++) {
     if (/^---[ \t]*$/.test(lines[i])) {
@@ -139,7 +160,7 @@ function splitFrontmatter(src: string): { frontmatter?: Record<string, string>; 
       break
     }
   }
-  if (end === -1) return { body: normalized }
+  if (end === -1) return { bodyStart: 0 }
   const frontmatter: Record<string, string> = {}
   for (let i = 1; i < end; i++) {
     const line = lines[i]
@@ -161,7 +182,7 @@ function splitFrontmatter(src: string): { frontmatter?: Record<string, string>; 
     }
     frontmatter[key] = value
   }
-  return { frontmatter, body: lines.slice(end + 1).join('\n') }
+  return { frontmatter, bodyStart: end + 1 }
 }
 
 /**
@@ -338,7 +359,10 @@ function parseTable(lines: string[], start: number): { block: Block; next: numbe
 }
 
 /** 列表：按缩进栈定层级，**上限 2 层**；更深的项标 `plain`（无符号缩进文本）。 */
-function parseList(lines: string[], start: number): { block: Block; next: number } {
+function parseList(
+  lines: string[],
+  start: number,
+): { block: Extract<Block, { type: 'list' }>; next: number } {
   const items: ListItem[] = []
   const indentStack: number[] = []
   const byLevel: ListItem[] = []
@@ -368,9 +392,19 @@ function parseList(lines: string[], start: number): { block: Block; next: number
   return { block: { type: 'list', ordered: topOrdered, items }, next: i }
 }
 
-function parseBlocks(lines: string[]): Block[] {
+/**
+ * 行游标解析：`lines[k]` 与 `starts[k]`（该行行首在**原始 src** 中的偏移）一一对应。
+ * 区间由行游标**直接查表**得到，零额外扫描——`srcEnd` = 末行行首 + 该行文本长度
+ * （`lines[k]` 已去行尾 `\r`，故 `\r\n` 的 `\r` 不计入，见 `SrcRange`）。
+ *
+ * `start` = 首行行号（frontmatter 已剥离时 > 0）；递归（quote）时传入内层行数组与
+ * **映射回原始 src 的内层起点表**，于是内层块区间天然落在原始坐标里。
+ */
+function parseBlocks(lines: string[], starts: number[], start: number): Block[] {
   const blocks: Block[] = []
-  let i = 0
+  /** 第 line 行的行尾偏移（不含该行换行符）。 */
+  const lineEnd = (line: number): number => starts[line] + lines[line].length
+  let i = start
   while (i < lines.length) {
     const line = lines[i]
     if (isBlank(line)) {
@@ -386,6 +420,7 @@ function parseBlocks(lines: string[]): Block[] {
     }
     const fence = FENCE.exec(line)
     if (fence !== null) {
+      const fenceStart = i
       const marker = fence[1][0]
       const code: string[] = []
       i++
@@ -393,44 +428,70 @@ function parseBlocks(lines: string[]): Block[] {
         code.push(lines[i])
         i++
       }
+      // 闭合围栏行 = i（未闭合则为末行）；区间含围栏行本身。
+      const fenceEnd = Math.min(i, lines.length - 1)
       i++ // 吃掉闭合围栏（缺失则到文末）
-      blocks.push({ type: 'code', lang: fence[2], code: code.join('\n') })
+      blocks.push({
+        type: 'code',
+        lang: fence[2],
+        code: code.join('\n'),
+        srcStart: starts[fenceStart],
+        srcEnd: lineEnd(fenceEnd),
+      })
       continue
     }
     if (HR.test(line)) {
-      blocks.push({ type: 'hr' })
+      blocks.push({ type: 'hr', srcStart: starts[i], srcEnd: lineEnd(i) })
       i++
       continue
     }
     const heading = HEADING.exec(line)
     if (heading !== null) {
       const level = Math.min(heading[1].length, 6) as 1 | 2 | 3 | 4 | 5 | 6
-      blocks.push({ type: 'heading', level, content: parseInline(heading[2]) })
+      blocks.push({
+        type: 'heading',
+        level,
+        content: parseInline(heading[2]),
+        srcStart: starts[i],
+        srcEnd: lineEnd(i),
+      })
       i++
       continue
     }
     if (QUOTE.test(line)) {
+      const quoteStart = i
       const inner: string[] = []
+      const innerStarts: number[] = []
       while (i < lines.length && QUOTE.test(lines[i])) {
-        inner.push(QUOTE.exec(lines[i])![1])
+        const m = QUOTE.exec(lines[i])!
+        inner.push(m[1])
+        // 内层行起点 = 该行行首 + `> ` 前缀长度（`m[0]` 整行匹配 = 前缀 + `m[1]` 内容）。
+        innerStarts.push(starts[i] + (m[0].length - m[1].length))
         i++
       }
-      blocks.push({ type: 'quote', blocks: parseBlocks(inner) })
+      // 外层 quote = 跨行**包络**区间（首行行首 → 末行行尾）；内层块区间已映射回原始坐标。
+      blocks.push({
+        type: 'quote',
+        blocks: parseBlocks(inner, innerStarts, 0),
+        srcStart: starts[quoteStart],
+        srcEnd: lineEnd(i - 1),
+      })
       continue
     }
     const table = parseTable(lines, i)
     if (table !== null) {
-      blocks.push(table.block)
+      blocks.push({ ...table.block, srcStart: starts[i], srcEnd: lineEnd(table.next - 1) })
       i = table.next
       continue
     }
     if (LIST.test(line)) {
       const list = parseList(lines, i)
-      blocks.push(list.block)
+      blocks.push({ ...list.block, srcStart: starts[i], srcEnd: lineEnd(list.next - 1) })
       i = list.next
       continue
     }
     // 段落：吃到下一个空行或新的块起始（`\n\n` 分段；软换行并成空格）。
+    const paraStart = i
     const para: string[] = []
     while (i < lines.length) {
       const cur = lines[i]
@@ -448,14 +509,57 @@ function parseBlocks(lines: string[]): Block[] {
       para.push(cur.trim())
       i++
     }
-    blocks.push({ type: 'paragraph', content: parseInline(para.join(' ')) })
+    blocks.push({
+      type: 'paragraph',
+      content: parseInline(para.join(' ')),
+      srcStart: starts[paraStart],
+      srcEnd: lineEnd(i - 1),
+    })
   }
   return blocks
 }
 
+/**
+ * 原始 src → 行数组 + 行首偏移表。
+ *
+ * - BOM 计入「原始 src 偏移」：`starts[0]` 起于 `bom`（0/1），故
+ *   `src.slice(srcStart, srcEnd)` 仍取到块原文；
+ * - 按 `\n` 切行并去掉行尾 `\r`（与旧 `split(/\r?\n/)` 的**行内容**等价），
+ *   同时逐 `\n` 记行首偏移（`\r\n` 计 2）。
+ *
+ * `parseMarkdown` 与 `frontmatterPrefix` **共用**这一份切行/偏移逻辑——两处各写一遍
+ * 必然漂移（W-3 的前缀口径就建立在这张表上）。
+ */
+function splitSrcLines(src: string): { lines: string[]; starts: number[] } {
+  const bom = src.startsWith('\uFEFF') ? 1 : 0
+  const normalized = bom === 1 ? src.slice(1) : src
+  const lines = normalized.split('\n').map((l) => (l.endsWith('\r') ? l.slice(0, -1) : l))
+  const starts: number[] = [bom]
+  for (let at = 0; at < normalized.length; at++) {
+    if (normalized[at] === '\n') starts.push(bom + at + 1)
+  }
+  return { lines, starts }
+}
+
 /** 解析入口。frontmatter 独立返回，`blocks` 只含正文。 */
 export function parseMarkdown(src: string): ParsedMarkdown {
-  const { frontmatter, body } = splitFrontmatter(src)
-  const blocks = parseBlocks(body.split(/\r?\n/))
+  const { lines, starts } = splitSrcLines(src)
+  const { frontmatter, bodyStart } = splitFrontmatter(lines)
+  const blocks = parseBlocks(lines, starts, bodyStart)
   return frontmatter === undefined ? { blocks } : { frontmatter, blocks }
+}
+
+/**
+ * 正文体（已剥 frontmatter）起点在**原始 src** 中的 UTF-16 code unit 偏移
+ * （= frontmatter 前缀长度，BOM 计 1；无 frontmatter 时即 BOM 长度 0/1）。
+ *
+ * W-3 定位链路的坐标换算支点：块区间（`Block.srcStart/srcEnd`）按**含前缀**的原始
+ * src 计，而 `chunkMarkdown` 的输入要求**已剥 FM 的 body**、chunk 区间按 body 计——
+ * 故 `body = src.slice(frontmatterPrefix(src))`，chunk 区间逐段 `+ prefix` 即回到
+ * 块区间的坐标系（两者都含 BOM 偏移）。
+ */
+export function frontmatterPrefix(src: string): number {
+  const { lines, starts } = splitSrcLines(src)
+  const { bodyStart } = splitFrontmatter(lines)
+  return starts[bodyStart] ?? src.length
 }

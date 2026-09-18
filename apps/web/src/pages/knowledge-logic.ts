@@ -351,3 +351,55 @@ export function archVisible(item: ArchNode, needle: string, layer: string): bool
   if (item.layer === undefined || item.layer === '') return true
   return layer === 'all' || item.layer === layer
 }
+
+/* ── W-3 定位（SPEC-4.3/4.4）：chunk 区间 → 块下标 / 偏移 → 行号 ────────────────
+ *
+ * 坐标空间（与波次 1 的 `Block.srcStart/srcEnd` **同一套**）：按**原始 entry.content**
+ * 计，含 frontmatter 前缀、`\r\n` 各计 1。调用方负责把 chunk 的 body 区间加回前缀
+ * （`markdown.ts#frontmatterPrefix`），这两个函数只做纯几何，不碰字符串内容。
+ */
+
+/**
+ * 块数组里**首个与 `[charStart, charEnd)` 相交**的块下标；无相交（含所有块缺区间）→ -1。
+ *
+ * 相交判据为半开区间重叠：`block.srcStart < charEnd && block.srcEnd > charStart`。
+ * 为什么是「相交」而不是「包含起点」：后端 chunk 区间**包含标题行**（SPEC-1.1），而
+ * 解析层的标题块与内容块各有自己的区间——按「包含起点」判会漏掉 `charStart` 恰落在
+ * 标题行行首时的内容块；按「相交」则稳定落到首个真的重叠的块（通常就是那条标题块）。
+ *
+ * 纯几何，不依赖 DOM、不 import 解析层类型（结构型入参，与 `BookDeepLinkRef` 同路）。
+ * 调用方传 `parsed.blocks`（顶层块）即可——顶层块区间已是「首行行首 → 末行行尾」的包络，
+ * quote 内层块另有区间但不需要单独参与（定位到 quote 外层即可见）。
+ */
+export function locateChunkBlock(
+  blocks: ReadonlyArray<{ srcStart?: number; srcEnd?: number }>,
+  charStart: number,
+  charEnd: number,
+): number {
+  const lo = Math.min(charStart, charEnd)
+  const hi = Math.max(charStart, charEnd)
+  for (let i = 0; i < blocks.length; i++) {
+    const start = blocks[i].srcStart
+    const end = blocks[i].srcEnd
+    if (start === undefined || end === undefined) continue
+    if (start < hi && end > lo) return i
+  }
+  return -1
+}
+
+/**
+ * 字符偏移 → 该偏移所在行的 **1 基行号**（`\n` 分行；`\r` 不单独计行）。
+ *
+ * 语义细节：偏移落在某个 `\n` **字符本身**上时算作**上一行**（循环取 `i < offset`，
+ * 不含该 `\n`）；偏移恰在某行行首（前一个字符是 `\n`）时算作**该行**。越界（负 / 超长）
+ * 夹到 `[1, 行数]`。`>256KB` 降级走源码视图时用它把 char 偏移换算成 `.md-line` 的下标。
+ */
+export function lineAtOffset(text: string, offset: number): number {
+  if (offset <= 0) return 1
+  const end = Math.min(offset, text.length)
+  let line = 1
+  for (let i = 0; i < end; i++) {
+    if (text[i] === '\n') line++
+  }
+  return line
+}

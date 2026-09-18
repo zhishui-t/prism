@@ -303,7 +303,8 @@ async function main() {
     const health = await fetchJson(`${base}/api/health`)
     check('8.1 /api/health', health.status === 200 && health.body.ok === true)
     const kbSearch = await fetchJson(`${base}/api/kb/search?q=${encodeURIComponent('性能')}`)
-    check('8.2 /api/kb/search 命中', kbSearch.body.value.length >= 1)
+    // v13 §5：响应为 SearchResponse，命中数组在 `value.results`（B-4 契约链）
+    check('8.2 /api/kb/search 命中', kbSearch.body.value.results.length >= 1)
     const kbGraph = await fetchJson(`${base}/api/kb/graph`)
     check('8.3 /api/kb/graph 返回节点/边', kbGraph.body.value.nodes.length >= 2)
     const kbStats = await fetchJson(`${base}/api/kb/stats`)

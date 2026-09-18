@@ -282,7 +282,12 @@ prism embedding reindex                    # 为已有条目补齐/重算向量�
 - 中文检索用 **bigram + unicode61**——两字词（如「性能」）能命中，四字词也行；
 - 默认**只返回每个 id 的最新版次**；要全部版次传 \`all_versions: true\`；
 - 过滤：\`layers\` / \`owner\` / \`book\` / \`module\` / \`limit\`；
-- 每条结果带 \`source\`（\`层[/owner]/书/模块/ID@版次\`）与 \`excerpt\`。
+- 每条结果带 \`source\`（\`层[/owner]/书/模块/ID@版次\`）与 \`excerpt\`；
+- **长文档按标题分段建索引**：命中的结果额外带段级定位 \`hits\`（数组，缺省即为空/无该字段）
+  —— 每项 \`{seq, heading_path, excerpt, score}\` 指出「**命中落在文档哪一节**」，回答长文档时
+  优先据此定位（\`heading_path\` 为 \`A › B › C\` 形式的标题路径，导语段为空串）；
+  响应级 \`chunk_scan_degraded: true\` 表示段向量扫描超护栏而整体缺席（退化为无段定位），
+  \`hits_truncated: true\` 表示段列表被预算（每条目最多 4 段）截断——**未截断时这两个键不下发**。
 
 **回答时必须标注来源**，让用户能溯源。
 
@@ -321,6 +326,11 @@ prism embedding reindex                    # 为已有条目补齐/重算向量�
 ## 手工改过文件后
 
 正文是**真相**、DB 只是索引。手工编辑过 Markdown 后跑 \`prism kb reindex\` 重建索引与边表。
+
+**段级索引的存量补齐**（长文档分段检索）：\`prism kb reindex --chunks [--book <书>]\` ——
+按当前正文重切并补齐段行/段 FTS（幂等、逐条目事务、可中断重跑；已切且未变动的自动跳过）；
+换过 embedding 档位后跑一次可一并补上段向量（嵌入未装时只补段行，不报错）。
+\`prism embedding reindex\` 同样会顺带补齐段向量缺口，二选一入口即可。
 `,
   },
   {

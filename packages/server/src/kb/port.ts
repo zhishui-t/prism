@@ -18,6 +18,8 @@ export type {
   DepositResult,
   KnowledgeEntry,
   SearchQuery,
+  SearchHit,
+  SearchResponse,
   SearchResult,
   BookNode,
   BookStructure,

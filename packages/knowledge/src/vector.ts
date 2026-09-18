@@ -21,6 +21,20 @@ export const VECTOR_RELATIVE = 0.92
 /** 混合检索时每路取回的候选数上限（最终再截断到 limit）。 */
 export const HYBRID_CANDIDATES = 50
 
+/**
+ * 段向量全扫的段数上限（v13 §4/SPEC-3.7，扁平键 `vector_scan_cap` 的**唯一真相源**）。
+ *
+ * 为什么按「段数」而非字节：每段向量 ≈ 维度 × 4B（1024 维 ≈ 4KB），段数即成本的
+ * 决定变量。design-review-v13 §M-3 以「5 万 chunk ≈ 每查询 200MB BLOB 全扫」标定本默认值。
+ * 超过 → 段向量路**整体缺席**并置 `chunk_scan_degraded`（冻结：不做按 book 收窄）。
+ *
+ * `packages/server/src/kb/wiring.ts` 直接 re-export 本常量（消除双真相源）。
+ */
+export const DEFAULT_VECTOR_SCAN_CAP = 50_000
+
+/** 每条目回传的段级命中上限（v13 §M-6：K=4，按段分截断，截断时置 `hits_truncated`）。 */
+export const CHUNK_HITS_PER_ENTRY = 4
+
 /** 余弦相似度（显式归一，容忍未单位化的向量）。 */
 export function cosine(a: Float32Array, b: Float32Array): number {
   let dot = 0

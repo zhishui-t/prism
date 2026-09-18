@@ -84,3 +84,20 @@ describe('validateSkill（design-v3 §3.2 + skill-loading §4）', () => {
     expect(result.issues.filter((i) => i.level === 'warning').length).toBeGreaterThanOrEqual(2)
   })
 })
+
+describe('内置 prism skill 正文：v13 段级检索与段级索引维护句（B-4）', () => {
+  /** 正文 + 附带文件（宿主实际读到的全部文本）。 */
+  const allText = `${prismSkill.content}\n${(prismSkill.assets ?? []).map((a) => a.content).join('\n')}`
+
+  it('检索段说明长文档段级定位（hits / heading_path / 两个响应级标记）', () => {
+    expect(allText).toContain('长文档按标题分段建索引')
+    expect(allText).toContain('heading_path')
+    expect(allText).toContain('chunk_scan_degraded')
+    expect(allText).toContain('hits_truncated')
+  })
+
+  it('维护段补 `kb reindex --chunks`（及 embedding reindex 顺带补段向量）', () => {
+    expect(allText).toContain('prism kb reindex --chunks')
+    expect(allText).toContain('prism embedding reindex')
+  })
+})

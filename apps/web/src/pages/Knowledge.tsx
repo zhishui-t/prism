@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
 
-import { api, type ArchDiagram, type BookNode, type BookStructure, type CatalogEntry, type EntryVersion, type SearchResult } from '../api.ts'
+import { api, type ArchDiagram, type BookNode, type BookStructure, type CatalogEntry, type EntryVersion, type SearchHitSegment, type SearchResponse } from '../api.ts'
 import { ConfirmModal } from '../components/ConfirmModal.tsx'
 import { MarkdownBlocks } from '../components/Markdown.tsx'
 import { Ref } from '../components/ref.tsx'
@@ -9,9 +9,13 @@ import { State } from '../components/State.tsx'
 import { CopyButton, EmptyBlock, PageHead } from '../components/ui.tsx'
 import { useAsync } from '../components/useAsync.ts'
 import { useT, type DictKey } from '../i18n.ts'
-import { parseMarkdown } from '../markdown.ts'
+import { frontmatterPrefix, parseMarkdown } from '../markdown.ts'
 import { hrefOf } from '../route.ts'
 import { fmtTime } from '../time.ts'
+/* W-3 定位：**直接 import 切分器源码**（本仓首个 web → packages 的源码依赖边）。
+ * 队长批准 2026-09-17；单一真相源防镜像漂移——段序号 `seq` 的区间由**同一个** `chunkMarkdown`
+ * 产出，不在 web 侧复述一份切分规则。只 import，不改 packages 任何文件。 */
+import { chunkMarkdown } from '../../../../packages/knowledge/src/chunker.ts'
 import {
   archSel,
   archVisible,
@@ -19,6 +23,8 @@ import {
   countTree,
   filterTree,
   isSelMiss,
+  lineAtOffset,
+  locateChunkBlock,
   mountArch,
   parseArchSel,
   resolveBookDeepLink,
@@ -98,6 +104,11 @@ const SEARCH_PAGE = 50
  * `catalog()`：`Math.min(Math.max(1, limit ?? 2000), 5000)`）。仍被截断时书末给「还有 N 条」。
  */
 const CATALOG_LIMIT = 5000
+/**
+ * W-3：命中块的强调持续时长（ms）——到点移除 `.hit-highlight`，由该类的
+ * `background-color` 过渡淡出。取值与既有 `.swap-in` 的过渡档同级（视觉上「指一下就走」）。
+ */
+const HIT_HIGHLIGHT_MS = 1600
 
 /** 右侧面板展示所需的条目摘要（目录条目与搜索结果同形，取公共字段）。 */
 interface EntryMeta {
@@ -173,6 +184,15 @@ export function KnowledgePage({
   /** 软删后就地反馈 + 12s 内可撤销（K12）；hash 不变。 */
   const [removed, setRemoved] = useState<{ id: string; references: number } | null>(null)
   const [showConflicts, setShowConflicts] = useState(false)
+  /** W-3：一次「定位到命中段」请求（点命中段置入；由下方 effect 消费）。 */
+  const [locate, setLocate] = useState<{ id: string; seq: number } | null>(null)
+  /**
+   * 正文滚动容器（`.book-content`，`styles.css` 里 `overflow-y: auto`）——定位到块后对它
+   * 内的目标节点 `scrollIntoView`。容器是 `.book-content` 而非 `.page`（F3 后两栏各自内滚）。
+   */
+  const contentRef = useRef<HTMLDivElement | null>(null)
+  /** 强调类淡出的定时器（连续定位时先清上一枚，避免两处同时闪）。 */
+  const highlightTimer = useRef<number | null>(null)
 
   const books = useMemo<BookNode[]>(() => {
     const list = tree.data ?? []
@@ -218,6 +238,7 @@ export function KnowledgePage({
 
   const searching = queryText !== ''
   // K6：多请求 1 条判截断（51），只展示前 50。
+  // W-3：`kbSearch` 归一为 `SearchResponse`（旧服务端裸数组也归一），两个标记位是**响应级**。
   const searchRun = useAsync(
     () =>
       searching
@@ -227,10 +248,14 @@ export function KnowledgePage({
             book: scope === 'book' ? currentBook?.book : undefined,
             limit: SEARCH_PAGE + 1,
           })
-        : Promise.resolve<SearchResult[]>([]),
+        : Promise.resolve<SearchResponse>({ results: [] }),
     [queryText, scope, layer, currentBook?.book],
   )
-  const searchRaw = searchRun.data ?? []
+  const searchRaw = searchRun.data?.results ?? []
+  /** 响应级截断（每条目段预算 K 用尽）——**不是**条目级字段，只在结果区提示一次。 */
+  const hitsTruncated = searchRun.data?.hits_truncated === true
+  /** 响应级降级（段向量路因扫描量超上限整体缺席）。 */
+  const chunkDegraded = searchRun.data?.chunk_scan_degraded === true
   const truncated = searchRaw.length > SEARCH_PAGE
   const hits = truncated ? searchRaw.slice(0, SEARCH_PAGE) : searchRaw
 
@@ -422,7 +447,7 @@ export function KnowledgePage({
     if (selectedId === '') return null
     const cached = entryIndex.get(selectedId)
     if (cached !== undefined) return cached
-    return (searchRun.data ?? []).find((r) => r.id === selectedId) ?? null
+    return (searchRun.data?.results ?? []).find((r) => r.id === selectedId) ?? null
   }, [entryIndex, selectedId, searchRun.data])
 
   /**
@@ -578,11 +603,29 @@ export function KnowledgePage({
     onQuery?.({ layer: bk.layer, owner: bk.owner, book: bk.book })
   }
 
-  /** 选中某条目（用户主动选择时清掉上一次的操作提示，并回写 hash 深链）。 */
+  /**
+   * 选中某条目（用户主动选择时清掉上一次的操作提示，并回写 hash 深链）。
+   * W-3：一并清掉未完成的「定位」请求——用户重新点条目时不该被上一次的滚动劫持。
+   */
   const select = (id: string) => {
     setSelectedId(id)
     setNotice('')
+    setLocate(null)
     onSelect?.(id)
+  }
+
+  /**
+   * W-3：点命中段 → 「选中该条目 + 定位到该段」。
+   *
+   * 与 `select` 的差别只在**多置一个 `locate`**：先复用同一条选中语义（回写 hash、清提示），
+   * 再把 `{id, seq}` 交给下面的 effect。后者等正文到位后按 `seq` 反查 chunk 区间、找首个
+   * 相交块、滚动 + 强调；查不到段 / 无相交块就**静默回落条目顶部**（不弹错、不阻断阅读）。
+   */
+  const locateSegment = (id: string, seg: SearchHitSegment) => {
+    setSelectedId(id)
+    setNotice('')
+    onSelect?.(id)
+    setLocate({ id, seq: seg.seq })
   }
 
   /**
@@ -849,6 +892,68 @@ export function KnowledgePage({
   }, [tooLarge])
 
   /**
+   * W-3 定位（SPEC-4.3/4.4）：消费 `locate` 请求——正文到位后把 chunk 区间映射到解析层
+   * 块区间，滚动到该块并短暂强调。
+   *
+   * **坐标空间**：块区间（`Block.srcStart/srcEnd`）与 chunk 输入都在**原始 `entry.content`**
+   * 上。`frontmatterPrefix` 给出「FM 前缀 + BOM」的 code unit 长度；`body = content.slice(prefix)`
+   * 喂 `chunkMarkdown`（它要求**已剥 FM 的 body**），chunk 区间再 `+ prefix` 加回前缀，
+   * 与块区间同坐标系比较（两者都含 BOM 偏移）。无 FM 条目前缀 = BOM 长度（0/1），两种都覆盖。
+   *
+   * **>256KB 降级**：`parsed === null`（源码视图）——用 `lineAtOffset` 把 char 偏移换算成
+   * `.md-line` 下标滚动（源码视图无块区间）。降级提示由渲染层按 `locate` 常驻给出。
+   *
+   * **失败静默**：`seq` 找不到 / 无相交块 / 目标 DOM 缺席 → 清掉请求、落到条目顶部，
+   * 不报错、不阻断阅读（SPEC-4.3 定位失败静默降级）。
+   */
+  useEffect(() => {
+    if (locate === null) return
+    const entry = selectedContent.data
+    if (entry === null || entry === undefined || entry.id !== locate.id) return
+    const root = contentRef.current
+    if (root === null) return
+    const src = entry.content
+    const prefix = frontmatterPrefix(src)
+    const chunk = chunkMarkdown(src.slice(prefix)).find((c) => c.seq === locate.seq)
+    if (chunk === undefined) {
+      setLocate(null)
+      return
+    }
+    const lo = chunk.charStart + prefix
+    const hi = chunk.charEnd + prefix
+    let target: Element | null = null
+    if (parsed === null) {
+      // 源码视图：偏移 → 行号 → 第 n 个 `.md-line`。
+      const line = lineAtOffset(src, lo)
+      target = root.querySelectorAll('.md-line')[line - 1] ?? null
+    } else {
+      const idx = locateChunkBlock(parsed.blocks, lo, hi)
+      const block = idx === -1 ? undefined : parsed.blocks[idx]
+      target =
+        block?.srcStart === undefined
+          ? null
+          : root.querySelector(`[data-src-start="${block.srcStart}"]`)
+    }
+    if (target === null) {
+      setLocate(null)
+      return
+    }
+    if (typeof target.scrollIntoView === 'function') target.scrollIntoView({ block: 'start' })
+    target.classList.add('hit-highlight')
+    if (highlightTimer.current !== null) window.clearTimeout(highlightTimer.current)
+    highlightTimer.current = window.setTimeout(() => target.classList.remove('hit-highlight'), HIT_HIGHLIGHT_MS)
+    // 成功后**保留** `locate`：>256KB 的降级提示据此常驻（直到用户换条目 / 再点别的段）。
+  }, [locate, selectedContent.data, parsed])
+
+  // 换条目 / 卸载时清掉强调淡出的定时器，避免对已离开 DOM 的节点操作。
+  useEffect(
+    () => () => {
+      if (highlightTimer.current !== null) window.clearTimeout(highlightTimer.current)
+    },
+    [],
+  )
+
+  /**
    * 书头定位：选中条目的书优先，否则 `?book=` 命中的书。
    * F2：选中架构图时**没有书头**（图视图整块替换右栏），故这里直接给 `undefined`——
    * 顺带省掉一次对图的选中毫无意义的 `kbBookStructure` 请求。
@@ -885,6 +990,8 @@ export function KnowledgePage({
   const notFound = isSelMiss(selectedId, selectedContent.loading, selectedContent.data)
   /** 复检 MINOR-②：pane 合流了「真未命中」与「500/网络错」——后者的错误原文在 pane 里捎带，不许被「不存在」标题吞掉。 */
   const missError = selMissDetail(selectedContent.error)
+  /** W-3：>256KB 降级定位的提示条件——源码视图 + 本次定位正对当前条目（SPEC-4.3 声明降级）。 */
+  const sourceLocating = tooLarge && locate !== null && locate.id === selectedId
 
   // R-6 Q5：owner 的落点由 `Ref`/`refRoute` 统一表达（role → #/roles/<name>，project → #/projects），
   // 页面不再自建 href 拼接。
@@ -996,9 +1103,19 @@ export function KnowledgePage({
                       )}
                       {searchRun.error && <div className="error small toc-note">{searchRun.error}</div>}
 
+                      {/* W-3：两个**响应级**标记位在结果区**顶部各呈现一次**（非条目级，
+                          故不挂在任何结果行上）。缺省不下发 → 不占位。 */}
+                      {(chunkDegraded || hitsTruncated) && (
+                        <div className="toc-note small muted">
+                          {chunkDegraded && <div>{t('knowledge.search.degraded')}</div>}
+                          {hitsTruncated && <div>{t('knowledge.hits.truncated')}</div>}
+                        </div>
+                      )}
+
                       {/* 结果行（K7）：标题 + 副行「层 › 归属 › 书 › 模块」+ excerpt + 命中来源；不做高亮
                           D-1：行抽成 `SearchHitRow`（原内联结构把标题压成 width:0），形状由
-                          `apps/web/test/knowledge-search-hit.test.ts` 锁。 */}
+                          `apps/web/test/knowledge-search-hit.test.ts` 锁。
+                          W-2：`query` 传下去供命中段列表做高亮（只作用于段列表，不动主行 excerpt）。 */}
                       {hits.map((r) => (
                         <SearchHitRow
                           key={r.id}
@@ -1008,6 +1125,8 @@ export function KnowledgePage({
                           onOpen={() => select(r.id)}
                           layerText={layerLabel(r.layer)}
                           moduleText={modLabel(r.module)}
+                          query={queryText}
+                          onLocateSegment={(seg) => locateSegment(r.id, seg)}
                         />
                       ))}
 
@@ -1143,7 +1262,7 @@ export function KnowledgePage({
               </div>
 
               {/* 右栏：书页（K4 书头 + K8 渲染/源码 + K9 frontmatter + K11 页边 + K12 软删） */}
-              <div className="book-content">
+              <div className="book-content" ref={contentRef}>
                 {notice !== '' && <div className="banner small swap-in">{notice}</div>}
                 {/* K12：软删后就地反馈 + 12s 内可撤销（hash 不变） */}
                 {removed !== null && (
@@ -1380,6 +1499,10 @@ export function KnowledgePage({
                             <div className="md-source-bar">
                               <CopyButton text={content} label={t('common.copy')} />
                               {tooLarge && <span className="small muted">{t('knowledge.entry.tooLarge')}</span>}
+                              {/* W-3：>256KB 走源码视图时的定位降级声明（i18n，SPEC-4.3）。 */}
+                              {sourceLocating && (
+                                <span className="small muted">{t('knowledge.hits.sourceDegraded')}</span>
+                              )}
                             </div>
                             <pre className="md-source">
                               {content.split('\n').map((line, i) => (

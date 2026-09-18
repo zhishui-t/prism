@@ -115,16 +115,16 @@ describe('MCP stdio（手写 JSON-RPC，design.md §4 最小 5 工具 + design-v
     expect(value.edges.map((e) => `${e.from_id}->${e.to_id}`)).toContain('M-B->M-A')
   })
 
-  it('tools/call prism_kb_search → content 文本 JSON', async () => {
+  it('tools/call prism_kb_search → content 文本 JSON（v13 §5：SearchResponse.results）', async () => {
     const kb = new MemoryKb()
     await kb.deposit({ title: '性能守则', type: 'rule', layer: 'global', book: 'h', content: '含性能两字' })
     const tools = createMcpTools({ home: await makeTempDir('prism-mcp-'), kb })
     const res = await handleRpcRequest(rpc('tools/call', { name: 'prism_kb_search', arguments: { q: '性能' } }), tools)
     const result = res?.result as { isError: boolean; content: Array<{ text: string }> }
     expect(result.isError).toBe(false)
-    const parsed = JSON.parse(result.content[0].text) as Array<{ title: string }>
-    expect(parsed).toHaveLength(1)
-    expect(parsed[0].title).toBe('性能守则')
+    const parsed = JSON.parse(result.content[0].text) as { results: Array<{ title: string }> }
+    expect(parsed.results).toHaveLength(1)
+    expect(parsed.results[0].title).toBe('性能守则')
   })
 
   it('tools/call 工具执行错误 → isError:true（非 JSON-RPC error）', async () => {

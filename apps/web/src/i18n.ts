@@ -92,6 +92,19 @@ const ZH = {
   'knowledge.search.limitLayer': '限当前层',
   'knowledge.search.limitBook': '限当前书',
   'knowledge.search.hint': '换个词，或去掉层过滤。',
+  /* v13 W-3（SPEC-3.7）：`chunk_scan_degraded` 是**响应级**标记——段向量路因扫描量超上限
+     整体缺席，本次结果只含条目级检索。在结果区顶部提示一次（非条目级、不挂在结果行上）。 */
+  'knowledge.search.degraded': '段级向量检索已降级（扫描量超上限），本次仅用条目级检索。',
+  /* v13 W-2（SPEC-4.2）：检索命中的「命中段列表」展开件。zh/en 均用 展开/收起 动词对
+     （同 `common.showDetails` / `common.hideDetails` 的口径），两态都带段数以免信息跳变。
+     W-3：`hits_truncated` 改为**响应级**（`SearchResponse.hits_truncated`）——提示从列表尾
+     移到结果区顶部一次。文案点明**作用域 = 单个条目的命中段**（与相邻的
+     `knowledge.search.truncated`「已显示前 N 条」＝结果条数截断区分开，避免被读成同一件事）。 */
+  'knowledge.hits.expand': '展开命中段 ({n})',
+  'knowledge.hits.collapse': '收起命中段 ({n})',
+  'knowledge.hits.truncated': '部分条目的命中段未全部列出',
+  /* v13 W-3（SPEC-4.3）：单条 >256KB 走源码视图时的定位降级声明。 */
+  'knowledge.hits.sourceDegraded': '条目过大，已在源码视图按字符偏移定位。',
   'knowledge.entry.versionsCount': '版本 ({n})',
   'knowledge.entry.current': '当前',
   'knowledge.entry.viewing': '查看中',
@@ -776,6 +789,19 @@ const EN: Record<keyof typeof ZH, string> = {
   'knowledge.search.limitLayer': 'Limit to layer',
   'knowledge.search.limitBook': 'Limit to book',
   'knowledge.search.hint': 'Try another word, or drop the layer filter.',
+  /* v13 W-3 (SPEC-3.7): chunk_scan_degraded is a response-level flag (the chunk-vector route is
+     absent because the scan cap was exceeded); shown once at the top of the results list. */
+  'knowledge.search.degraded': 'Chunk-level vector search is degraded (scan cap exceeded). Showing entry-level results only.',
+  /* v13 W-2 (SPEC-4.2): expandable "hit segments" list on a search result row. Both states use
+     the show/hide verb pair (matching common.showDetails / common.hideDetails) and keep the count
+     so the label never loses information on toggle. W-3: hits_truncated moved to the response
+     level, so this notice now renders once at the top of the results list; the wording names the
+     scope (per-entry hit segments) so it is not read as the result-count truncation notice. */
+  'knowledge.hits.expand': 'Show hit segments ({n})',
+  'knowledge.hits.collapse': 'Hide hit segments ({n})',
+  'knowledge.hits.truncated': 'Some entries have more hit segments than listed',
+  /* v13 W-3 (SPEC-4.3): locating a hit in an entry over 256KB falls back to the source view. */
+  'knowledge.hits.sourceDegraded': 'Entry too large; located by character offset in the source view.',
   'knowledge.entry.versionsCount': 'Versions ({n})',
   'knowledge.entry.current': 'Current',
   'knowledge.entry.viewing': 'Viewing',

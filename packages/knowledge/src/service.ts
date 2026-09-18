@@ -19,7 +19,18 @@ import { AuditLog, openPersistence, PrismError, prismPaths } from '@prism/core'
 import type { DatabaseSync } from 'node:sqlite'
 import type { PrismPersistence } from '@prism/core'
 
-import { bodyForRowid, ensureKbFts, indexEntry, searchFts } from './index-db.js'
+import {
+  bodyForRowid,
+  deleteChunks,
+  deleteOwnedChunks,
+  ensureKbChunks,
+  ensureKbFts,
+  indexChunks,
+  indexEntry,
+  searchFts,
+} from './index-db.js'
+import type { IndexedChunk } from './index-db.js'
+import { chunkMarkdown } from './chunker.js'
 import { renderMarkdownFile, splitFrontmatter, parseFrontmatter } from './frontmatter.js'
 import type { FrontmatterData, FrontmatterValue } from './frontmatter.js'
 import {
@@ -33,7 +44,9 @@ import {
 import { bigram, toMatchExpression } from './tokenize.js'
 import {
   blobToVector,
+  CHUNK_HITS_PER_ENTRY,
   cosine,
+  DEFAULT_VECTOR_SCAN_CAP,
   HYBRID_CANDIDATES,
   RRF_K,
   rrfFuse,
@@ -68,7 +81,9 @@ import type {
   ReindexReport,
   RemoveResult,
   RestoreResult,
+  SearchHit,
   SearchQuery,
+  SearchResponse,
   SearchResult,
   EntryProvenance,
 } from './types.js'
@@ -297,6 +312,43 @@ interface BookEntryLite {
   updated_at: string
 }
 
+/** 分路权重缺省值 `[keyword, vector]`（等于既有「每路 1」，行为不变）。 */
+const DEFAULT_ROUTE_WEIGHTS: readonly number[] = [1, 1]
+
+/**
+ * 检索上下文（v13 B-3）：条目路与段路**共用同一份过滤子句与融合参数**——
+ * 抽成对象是为了让两条路（以及回落路径）无法各自镜像一份条件（M-5 的防漂移要求）。
+ */
+interface SearchContext {
+  query: SearchQuery
+  match: string
+  /** 条目路 WHERE 子句（**以 `e.` 别名引用**；段路逐字复用同一份）。 */
+  clauses: string[]
+  params: string[]
+  limit: number
+  hybridCandidates: number
+  rrfK: number
+  vectorFloor: number
+  vectorRelative: number
+  /** 分路权重 `[keyword, vector]`（缺省 `[1, 1]`）。 */
+  weights: readonly number[]
+}
+
+/**
+ * 段级原始命中（段 BM25 / 段向量两路共用形状）。
+ * `score` 越大越相关——BM25 路存 `-bm25`、向量路存余弦，与条目路同口径。
+ */
+interface ChunkHit {
+  /** `kb_chunks.id`（= `kb_chunk_fts.rowid`）。 */
+  chunkId: number
+  /** 所属条目的 `knowledge_entries.rowid`（段路按它聚合回条目）。 */
+  entryRowid: number
+  seq: number
+  headingPath: string
+  text: string
+  score: number
+}
+
 export class PrismKnowledgeService implements KnowledgeService {
   readonly home: string
   readonly knowledgeDir: string
@@ -308,6 +360,13 @@ export class PrismKnowledgeService implements KnowledgeService {
   readonly #embed: KnowledgeServiceOptions['embed']
   /** 当前 embedding 模型 id（分档）；检索只比同模型向量。未装配时为 undefined。 */
   readonly #embeddingModel: KnowledgeServiceOptions['embeddingModel']
+  /** 段切分参数（v13 §2）；缺省 `{}` → 切分器自身默认。 */
+  readonly #chunkOptions: KnowledgeServiceOptions['chunkOptions']
+  /** 段向量全扫的段数上限（v13 §4/SPEC-3.7）；缺省 `DEFAULT_VECTOR_SCAN_CAP`。 */
+  readonly #vectorScanCap: KnowledgeServiceOptions['vectorScanCap']
+  /** 段粒度余弦阈值（缺省沿用条目路生效值——**不盲调**，E-4 冻结）。 */
+  readonly #chunkVectorFloor: KnowledgeServiceOptions['chunkVectorFloor']
+  readonly #chunkVectorRelative: KnowledgeServiceOptions['chunkVectorRelative']
 
   constructor(options: KnowledgeServiceOptions = {}) {
     this.home = options.home ?? prismPaths().home
@@ -322,7 +381,12 @@ export class PrismKnowledgeService implements KnowledgeService {
       options.idFactory ?? (() => `KB-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`)
     this.#embed = options.embed
     this.#embeddingModel = options.embeddingModel
+    this.#chunkOptions = options.chunkOptions ?? {}
+    this.#vectorScanCap = options.vectorScanCap
+    this.#chunkVectorFloor = options.chunkVectorFloor
+    this.#chunkVectorRelative = options.chunkVectorRelative
     ensureKbFts(this.persistence.knowledge)
+    ensureKbChunks(this.persistence.knowledge)
   }
 
   /** 释放内部创建的持久化（注入的连接由注入方负责关闭）。 */
@@ -521,6 +585,8 @@ export class PrismKnowledgeService implements KnowledgeService {
 
     // 本地向量（变更 2）：装配了 embedding 才写；失败静默（增强不阻断落库）
     await this.#writeVector(deposited.id, deposited.version, `${address.title}\n${content}`)
+    // 段级索引（v13 §2）：恒写（不依赖嵌入）；段向量随嵌入可用
+    await this.#writeChunks(deposited.id, deposited.version, address.title, content)
 
     // B2：层间冲突检测（只记录不阻断，§12.3）
     await this.#detectConflicts(this.persistence.knowledge.raw, {
@@ -720,6 +786,8 @@ export class PrismKnowledgeService implements KnowledgeService {
         .get(address.id) as { version: number } | undefined
       if (latest !== undefined) {
         await this.#writeVector(address.id, latest.version, `${address.title}\n${input.content}`)
+        // 段级索引（v13 §2）：引用型正文即真相副本，同样恒写段行 + 段 FTS
+        await this.#writeChunks(address.id, latest.version, address.title, input.content)
       }
     }
     return { id: address.id, action }
@@ -1449,6 +1517,8 @@ export class PrismKnowledgeService implements KnowledgeService {
         tx.prepare('DELETE FROM knowledge_entries WHERE id = ?').run(id)
         tx.prepare('DELETE FROM knowledge_edges WHERE from_id = ? OR to_id = ?').run(id, id)
         tx.prepare('DELETE FROM kb_vectors WHERE entry_id = ?').run(id)
+        // v13 §2：段级三表一并清理（段 FTS 随 rowid、段向量随 chunk_id）
+        deleteChunks(tx, id)
         tx.exec('COMMIT')
       } catch (error) {
         try {
@@ -1551,6 +1621,11 @@ export class PrismKnowledgeService implements KnowledgeService {
     // **仅在装配了 embedding 时才清+重算**：没装配就无法重算，删了等于永久丢向量。
     const rebuildVectors = this.#embed !== undefined
 
+    // 段级重建（v13 §2 / SPEC-2.2）：**无条件**（脱离嵌入门控）——事务内先删 owned
+    // 三表行、按新 body 重切 + 恒写段 FTS；段向量在事务外随嵌入可用性补。
+    let chunks = 0
+    const indexedChunks: IndexedChunk[] = []
+
     await this.persistence.knowledge.run((raw) => {
       raw.exec('BEGIN IMMEDIATE')
       try {
@@ -1560,6 +1635,8 @@ export class PrismKnowledgeService implements KnowledgeService {
           `DELETE FROM kb_fts WHERE rowid IN (SELECT rowid FROM knowledge_entries WHERE origin = 'owned')`,
         )
         raw.exec(`DELETE FROM knowledge_edges WHERE from_id IN (SELECT id FROM knowledge_entries WHERE origin = 'owned')`)
+        // 段级三表同源过滤（走 origin='owned'，引用型段行原样保留）
+        deleteOwnedChunks(raw)
         if (rebuildVectors) {
           // 先清自有型向量（删除 entries 前，子查询才取得到 id）；下方按新文重算
           raw.exec(`DELETE FROM kb_vectors WHERE entry_id IN (SELECT id FROM knowledge_entries WHERE origin = 'owned')`)
@@ -1613,6 +1690,18 @@ export class PrismKnowledgeService implements KnowledgeService {
         for (const r of latestRows) {
           this.#writeEdges(raw, r.id, { content: r.body, overrides: r.overrides, nowIso: r.updatedAt })
         }
+        // 段级重建：只对**最新版**（库内仅最新版；历史版次行不产段）
+        for (const r of latestRows) {
+          const written = indexChunks(
+            raw,
+            r.id,
+            r.version,
+            r.title,
+            chunkMarkdown(r.body, this.#chunkOptions),
+          )
+          for (const w of written) indexedChunks.push(w)
+          chunks += written.length
+        }
         raw.exec('COMMIT')
       } catch (error) {
         try {
@@ -1630,8 +1719,10 @@ export class PrismKnowledgeService implements KnowledgeService {
         await this.#writeVector(r.id, r.version, `${r.title}\n${r.body}`)
       }
     }
+    // 段向量随嵌入可用（事务外；嵌入不可用 → no-op，缺口可由 reindex/embedding 补）
+    await this.#writeChunkVectors(indexedChunks)
 
-    return { scanned: files.length, indexed, skipped: errors.length, errors }
+    return { scanned: files.length, indexed, skipped: errors.length, errors, chunks }
   }
 
   /** 递归收集 `<knowledgeDir>` 下所有 `v<NN>.md`（跳过最新版副本 `<id>.md`）。 */
@@ -1736,6 +1827,40 @@ export class PrismKnowledgeService implements KnowledgeService {
   // ===== search =====
 
   async search(query: SearchQuery): Promise<SearchResult[]> {
+    return (await this.#search(query)).results
+  }
+
+  /**
+   * 同 `search`，另带回**响应级**段级标记与每条目的 `hits`（v13 §5）。
+   * 单列一层而不改 `search` 的返回类型：`SearchResult[]` 是既有 wire 形状
+   * （HTTP/MCP/CLI 三处直接消费），改型即破坏兼容（SPEC-3.6）。
+   */
+  async searchWithMeta(query: SearchQuery): Promise<SearchResponse> {
+    return this.#search(query)
+  }
+
+  /**
+   * 检索主入口：先判「全库有无 chunks」二分，再分派两条路径。
+   *
+   * - **全库无 chunks**（存量库 / 未跑 `kb reindex --chunks`）→ 现状路径，
+   *   与 step0 固定基线（`test/fixtures/search-baseline.json`）逐字节一致（SPEC-3.4②）。
+   *   必须靠真实基线对比验收，不能口头断言。
+   * - **有 chunks** → 单层四路 RRF（v13 §4）。
+   */
+  async #search(query: SearchQuery): Promise<SearchResponse> {
+    const ctx = this.#searchContext(query)
+    const raw = this.persistence.knowledge.raw
+    if (countRows(raw, 'kb_chunks') === 0) {
+      return { results: await this.#legacyResults(raw, ctx) }
+    }
+    return this.#fusedResults(raw, ctx)
+  }
+
+  /**
+   * 组装检索上下文（参数归一 + 过滤子句）。**条目路与段路共用这一份**：
+   * 段路的 WHERE 逐字复用 `clauses`（M-5——抽函数就是为了不存在第二份镜像）。
+   */
+  #searchContext(query: SearchQuery): SearchContext {
     if (typeof query?.q !== 'string' || query.q.trim() === '') {
       throw new PrismError('bad_request', '检索词 q 必填')
     }
@@ -1753,7 +1878,7 @@ export class PrismKnowledgeService implements KnowledgeService {
     const rrfK = numberParam(query.rrf_k, RRF_K, 'rrf_k', 0)
     const vectorFloor = numberParam(query.vector_floor, VECTOR_FLOOR, 'vector_floor', 0)
     const vectorRelative = numberParam(query.vector_relative, VECTOR_RELATIVE, 'vector_relative', 0)
-    const routeWeights = normalizeRouteWeights(query.route_weights)
+    const weights = normalizeRouteWeights(query.route_weights) ?? DEFAULT_ROUTE_WEIGHTS
 
     // owner 只存在于 project/role 层；未指定 layers 时默认限定这两层
     let layers = this.#validateLayers(query.layers)
@@ -1794,23 +1919,40 @@ export class PrismKnowledgeService implements KnowledgeService {
       params.push(query.owner, ...patterns)
     }
 
-    const raw = this.persistence.knowledge.raw
+    return {
+      query,
+      match,
+      clauses,
+      params,
+      limit,
+      hybridCandidates,
+      rrfK,
+      vectorFloor,
+      vectorRelative,
+      weights,
+    }
+  }
 
-    // 装配了 embedding 且未禁用 → 混合检索（BM25 + 向量 RRF 融合）。
+  /**
+   * **现状路径**（v13 之前的行为，逐字节保留）：条目 BM25 单路，或在装配了 embedding
+   * 时「条目 BM25 + 条目向量」两路 RRF。全库无 chunks 时走这里（SPEC-3.4②）。
+   */
+  async #legacyResults(raw: DatabaseSync, ctx: SearchContext): Promise<SearchResult[]> {
+    const { query, match, clauses, params, limit } = ctx
     // query 向量算不出（未安装/启动失败）时静默回落纯 BM25，结果与既有一致。
     if (this.#embed !== undefined && query.hybrid !== false) {
       const qVec = await this.#embed(query.q)
       if (qVec !== null && qVec.length > 0) {
         // 向量召回全量扫描（见 #vectorHits 注释：SQL LIMIT 会任意截断丢失相关条目）
-        const pool = Math.max(limit, hybridCandidates)
+        const pool = Math.max(limit, ctx.hybridCandidates)
         const vectorRowids = await this.#vectorHits(
           raw,
           clauses,
           params,
           qVec,
           pool,
-          vectorFloor,
-          vectorRelative,
+          ctx.vectorFloor,
+          ctx.vectorRelative,
         )
         if (vectorRowids.length > 0) {
           return this.#applyOverridesBoost(
@@ -1821,9 +1963,9 @@ export class PrismKnowledgeService implements KnowledgeService {
               limit,
               q: query.q,
               vectorRowids,
-              candidates: hybridCandidates,
-              rrfK,
-              routeWeights,
+              candidates: ctx.hybridCandidates,
+              rrfK: ctx.rrfK,
+              routeWeights: ctx.weights,
             }),
             query.graph_boost,
           )
@@ -1845,6 +1987,221 @@ export class PrismKnowledgeService implements KnowledgeService {
       if (row) results.push(this.#toSearchResult(raw, row, hit.score, query.q))
     }
     return this.#applyOverridesBoost(results, query.graph_boost)
+  }
+
+  /**
+   * **单层四路 RRF**（v13 §4）：条目 BM25 / 条目向量 / 段 BM25 / 段向量进同一融合
+   * （弃两层，避免二次有损——M-3）。
+   *
+   * - 段级两路先按 entry **聚合**（entry 在该路的排名依据 = 其最高段分），聚合后才截断
+   *   到候选池——池语义保持「池 = 条目数」，`HYBRID_CANDIDATES` 复用，不单设 chunk 池；
+   * - 权重映射（M-4 冻结）：`keyword` 同时作用于两条 BM25 路、`vector` 作用于两条向量路，
+   *   各两路同权（非四路等权）；权重 0 → 对应两路同时关闭（SPEC-3.4a）；
+   * - `all_versions=true` → 段级两路整体不参与（段只存最新版——M-7 的有意差异）。
+   */
+  async #fusedResults(raw: DatabaseSync, ctx: SearchContext): Promise<SearchResponse> {
+    const { query, match, clauses, params, limit } = ctx
+    const pool = Math.max(limit, ctx.hybridCandidates)
+    const keyword = ctx.weights[0] ?? 1
+    const vector = ctx.weights[1] ?? 1
+
+    // ① 条目 BM25（现状路）
+    const entryBm25Rank = searchFts(raw, {
+      match,
+      where: clauses.join(' AND '),
+      params,
+      limit: ctx.hybridCandidates,
+    }).map((h) => h.rowid)
+
+    // ② 条目向量（现状路）
+    let qVec: Float32Array | null = null
+    if (this.#embed !== undefined && query.hybrid !== false) {
+      const vec = await this.#embed(query.q)
+      if (vec !== null && vec.length > 0) qVec = vec
+    }
+    const entryVecRank =
+      qVec !== null
+        ? await this.#vectorHits(raw, clauses, params, qVec, pool, ctx.vectorFloor, ctx.vectorRelative)
+        : []
+
+    // ③④ 段级两路：`all_versions=true` 时**整体不参与**（段只存最新版——M-7 的有意差异）
+    const chunkRoutesOn = ctx.query.all_versions !== true
+
+    // ③ 段 BM25（`keyword` 路之一）
+    const chunkBm25 = chunkRoutesOn ? this.#chunkBm25Hits(raw, match, clauses, params) : []
+
+    // ④ 段向量（`vector` 路之一）：扫描护栏——超限则**整体缺席**并置标记（SPEC-3.7）
+    let chunkVec: ChunkHit[] = []
+    let chunkScanDegraded = false
+    if (chunkRoutesOn && qVec !== null) {
+      const cap = this.#vectorScanCap ?? DEFAULT_VECTOR_SCAN_CAP
+      if (countRows(raw, 'kb_chunk_vectors') > cap) {
+        chunkScanDegraded = true
+      } else {
+        chunkVec = this.#chunkVectorHits(
+          raw,
+          clauses,
+          params,
+          qVec,
+          this.#chunkVectorFloor ?? ctx.vectorFloor,
+          this.#chunkVectorRelative ?? ctx.vectorRelative,
+        )
+      }
+    }
+
+    const degraded: Pick<SearchResponse, 'chunk_scan_degraded'> = chunkScanDegraded
+      ? { chunk_scan_degraded: true }
+      : {}
+
+    const fused = rrfFuse(
+      [
+        entryBm25Rank,
+        entryVecRank,
+        entryRankFromChunkHits(chunkBm25, pool),
+        entryRankFromChunkHits(chunkVec, pool),
+      ],
+      ctx.rrfK,
+      [keyword, vector, keyword, vector],
+    )
+    if (fused.size === 0) return { results: [], ...degraded }
+
+    const ranked = [...fused.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit)
+    const ids = ranked.map(([rowid]) => rowid)
+    const rows = raw
+      .prepare(`SELECT ${ENTRY_COLUMNS} FROM knowledge_entries WHERE rowid IN (${ids.map(() => '?').join(', ')})`)
+      .all(...ids) as unknown as EntryRow[]
+    const byRowid = new Map(rows.map((r) => [r.rowid, r]))
+
+    // 段级 hits：段融合分与条目**同口径**（两条段路各贡献 keyword/vector 权重）
+    const chunkScores = rrfFuse(
+      [chunkBm25.map((h) => h.chunkId), chunkVec.map((h) => h.chunkId)],
+      ctx.rrfK,
+      [keyword, vector],
+    )
+    const { byEntry, truncated } = groupChunkHits(chunkScores, [...chunkBm25, ...chunkVec], CHUNK_HITS_PER_ENTRY)
+
+    const results: SearchResult[] = []
+    for (const [rowid, score] of ranked) {
+      const row = byRowid.get(rowid)
+      if (row === undefined) continue
+      const result = this.#toSearchResult(raw, row, score, query.q)
+      const chunkHits = byEntry.get(rowid)
+      if (chunkHits !== undefined && chunkHits.length > 0) {
+        // 无段级命中的条目不设该字段（缺省不下发——SPEC-3.6）
+        result.hits = chunkHits.map(
+          (hit): SearchHit => ({
+            seq: hit.seq,
+            heading_path: hit.headingPath,
+            excerpt: computeExcerpt(hit.text, query.q),
+            score: hit.score,
+          }),
+        )
+      }
+      results.push(result)
+    }
+
+    return {
+      results: this.#applyOverridesBoost(results, query.graph_boost),
+      ...degraded,
+      ...(truncated ? { hits_truncated: true } : {}),
+    }
+  }
+
+  /**
+   * 段 BM25 命中：`kb_chunk_fts`（rowid ≡ `kb_chunks.id`）与条目表按
+   * `c.version = e.version` 联查，过滤子句**逐字复用条目路**（`e.` 别名）。
+   *
+   * **SQL 层不带 LIMIT**：段级命中必须先全量取出、在 JS 里按 entry 聚合，
+   * 任何小 LIMIT 都会在聚合前截断掉同一条目的其他段（N-4：只修向量半边不够）。
+   */
+  #chunkBm25Hits(raw: DatabaseSync, match: string, clauses: string[], params: string[]): ChunkHit[] {
+    const where = clauses.length > 0 ? `AND ${clauses.join(' AND ')}` : ''
+    const rows = raw
+      .prepare(
+        `SELECT c.id AS chunk_id, e.rowid AS entry_rowid, c.seq AS seq,
+                c.heading_path AS heading_path, c.text AS text, bm25(kb_chunk_fts) AS rank
+         FROM kb_chunk_fts
+         JOIN kb_chunks c ON c.id = kb_chunk_fts.rowid
+         JOIN knowledge_entries e ON e.id = c.entry_id AND c.version = e.version
+         WHERE kb_chunk_fts MATCH ? ${where}
+         ORDER BY rank ASC`,
+      )
+      .all(match, ...params) as unknown as Array<{
+      chunk_id: number
+      entry_rowid: number
+      seq: number
+      heading_path: string
+      text: string
+      rank: number
+    }>
+    return rows.map((r) => ({
+      chunkId: r.chunk_id,
+      entryRowid: r.entry_rowid,
+      seq: r.seq,
+      headingPath: r.heading_path,
+      text: r.text,
+      score: -Number(r.rank),
+    }))
+  }
+
+  /**
+   * 段向量命中：全量扫描可见段向量（同 `#vectorHits` 的全扫理由——SQL LIMIT 只能按
+   * rowid 任意截断），只比**当前模型**的向量（换档后旧空间向量不参与）。
+   *
+   * `VECTOR_RELATIVE` 截断发生在 **entry 聚合之后**（SPEC-3.7）：先算每段的余弦、
+   * 聚出每条目的最高段分，再以条目层 top × relative 与 floor 过滤——返回的段因此
+   * 与其条目同进同出（避免「条目被过滤、其段却仍出现在 hits 里」）。
+   */
+  #chunkVectorHits(
+    raw: DatabaseSync,
+    clauses: string[],
+    params: string[],
+    qVec: Float32Array,
+    floorValue: number,
+    relative: number,
+  ): ChunkHit[] {
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : ''
+    const modelClause = this.#embeddingModel !== undefined ? ' AND v.model = ?' : ''
+    const rows = raw
+      .prepare(
+        `SELECT c.id AS chunk_id, e.rowid AS entry_rowid, c.seq AS seq,
+                c.heading_path AS heading_path, c.text AS text, v.vec AS vec, v.dim AS dim
+         FROM knowledge_entries e
+         JOIN kb_chunks c ON c.entry_id = e.id AND c.version = e.version
+         JOIN kb_chunk_vectors v ON v.chunk_id = c.id
+         ${where}${modelClause}`,
+      )
+      .all(...params, ...(this.#embeddingModel !== undefined ? [this.#embeddingModel] : [])) as unknown as Array<{
+      chunk_id: number
+      entry_rowid: number
+      seq: number
+      heading_path: string
+      text: string
+      vec: Buffer
+      dim: number
+    }>
+    const scored: ChunkHit[] = []
+    for (const row of rows) {
+      if (row.dim !== qVec.length) continue
+      const vec = blobToVector(row.vec)
+      if (vec.length !== qVec.length) continue
+      scored.push({
+        chunkId: row.chunk_id,
+        entryRowid: row.entry_rowid,
+        seq: row.seq,
+        headingPath: row.heading_path,
+        text: row.text,
+        score: cosine(qVec, vec),
+      })
+    }
+    if (scored.length === 0) return []
+    scored.sort((a, b) => b.score - a.score)
+    const best = bestChunkScoreByEntry(scored)
+    // 逐项求最大（不用 `Math.max(...)`：段数可达数万，展开成实参会撞实参上限）
+    let top = Number.NEGATIVE_INFINITY
+    for (const score of best.values()) if (score > top) top = score
+    const floor = Math.max(floorValue, top * relative)
+    return scored.filter((hit) => (best.get(hit.entryRowid) ?? 0) >= floor)
   }
 
   /**
@@ -2687,6 +3044,56 @@ export class PrismKnowledgeService implements KnowledgeService {
     return true
   }
 
+  // ===== 段级索引（v13 §2）=====
+
+  /**
+   * 重建一个条目某版次的段级索引：先删该条目**全部版次**三表行（段级只留最新版——
+   * 与 kb_vectors「旧版行保留、all_versions 可召回」的既有口径**有意不同**，M-7），
+   * 再按 body 切段、**恒写** `kb_chunks` + `kb_chunk_fts`（不依赖嵌入），最后段向量
+   * 随嵌入可用性补写。
+   *
+   * body = 已剥 frontmatter 的正文（切分器输入口径 SPEC-1.14；chunker 不做 FM 处理）。
+   */
+  async #writeChunks(id: string, version: number, title: string, body: string): Promise<void> {
+    const chunks = chunkMarkdown(body, this.#chunkOptions)
+    const indexed = await this.persistence.knowledge.run((raw) => {
+      deleteChunks(raw, id)
+      return indexChunks(raw, id, version, title, chunks)
+    })
+    await this.#writeChunkVectors(indexed)
+  }
+
+  /**
+   * 段向量写入（逐段 upsert）。未装配 embedding 或某段计算失败 → 跳过该段；
+   * **不抛**（与整篇向量同口径：增强不阻断主流程，缺口可由 reindex 补——SPEC-2.3）。
+   */
+  async #writeChunkVectors(rows: ReadonlyArray<IndexedChunk>): Promise<void> {
+    const embed = this.#embed
+    if (embed === undefined || rows.length === 0) return
+    const nowIso = this.#now().toISOString()
+    const model = this.#embeddingModel ?? 'unknown'
+    for (const row of rows) {
+      let vec: Float32Array | null
+      try {
+        vec = await embed(row.embedText)
+      } catch {
+        continue
+      }
+      if (vec === null || vec.length === 0) continue
+      const value = vec
+      const blob = vectorToBlob(value)
+      await this.persistence.knowledge.run((raw) => {
+        raw
+          .prepare(
+            `INSERT INTO kb_chunk_vectors (chunk_id, dim, vec, model, updated_at)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(chunk_id) DO UPDATE SET dim = excluded.dim, vec = excluded.vec, model = excluded.model, updated_at = excluded.updated_at`,
+          )
+          .run(row.id, value.length, blob, model, nowIso)
+      })
+    }
+  }
+
   /**
    * 向量召回：**全量扫描**符合条件的条目（JOIN kb_vectors 拿当前版向量），
    * 按余弦降序返回 rowid。
@@ -3060,6 +3467,65 @@ function normalizeRouteWeights(
   const keyword = numberParam(weights.keyword, 1, 'route_weights.keyword', 0)
   const vector = numberParam(weights.vector, 1, 'route_weights.vector', 0)
   return [keyword, vector]
+}
+
+// ===== 段级检索的纯函数（v13 §4）=====
+
+/** 计数（段表存在性判定与扫描护栏用）。表名为字面量联合，无注入面。 */
+function countRows(raw: DatabaseSync, table: 'kb_chunks' | 'kb_chunk_vectors'): number {
+  const row = raw.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }
+  return Number(row.n)
+}
+
+/** 每条目的最高段分（段路两路共用的聚合依据——M-3「entry 排名依据 = 其最高段分」）。 */
+function bestChunkScoreByEntry(hits: readonly ChunkHit[]): Map<number, number> {
+  const best = new Map<number, number>()
+  for (const hit of hits) {
+    const prev = best.get(hit.entryRowid)
+    if (prev === undefined || hit.score > prev) best.set(hit.entryRowid, hit.score)
+  }
+  return best
+}
+
+/** 段路 → 条目排名：先按 entry 聚合（取最高段分），聚合后截断到候选池（池 = 条目数）。 */
+function entryRankFromChunkHits(hits: readonly ChunkHit[], limit: number): number[] {
+  return [...bestChunkScoreByEntry(hits).entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([rowid]) => rowid)
+}
+
+/**
+ * 段融合分 → 每条目的 `hits`（按段分降序、每条目上限 `perEntry`）。
+ *
+ * 返回 `truncated = true` 表示至少有一条目被 K 截断——调用方据此置
+ * `hits_truncated`（M-6：**截断不静默**）。
+ */
+function groupChunkHits(
+  scores: ReadonlyMap<number, number>,
+  hits: readonly ChunkHit[],
+  perEntry: number,
+): { byEntry: Map<number, ChunkHit[]>; truncated: boolean } {
+  const detail = new Map<number, ChunkHit>()
+  for (const hit of hits) detail.set(hit.chunkId, hit)
+  const byEntry = new Map<number, ChunkHit[]>()
+  for (const [chunkId, score] of scores) {
+    const source = detail.get(chunkId)
+    if (source === undefined) continue
+    const item: ChunkHit = { ...source, score }
+    const list = byEntry.get(source.entryRowid)
+    if (list === undefined) byEntry.set(source.entryRowid, [item])
+    else list.push(item)
+  }
+  let truncated = false
+  for (const [entry, list] of byEntry) {
+    list.sort((a, b) => b.score - a.score)
+    if (list.length > perEntry) {
+      byEntry.set(entry, list.slice(0, perEntry))
+      truncated = true
+    }
+  }
+  return { byEntry, truncated }
 }
 
 /**

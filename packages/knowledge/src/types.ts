@@ -7,6 +7,8 @@
  */
 import type { AuditLog, PrismPersistence } from '@prism/core'
 
+import type { ChunkOptions } from './chunker.js'
+
 /** 知识分层：global（全局）/ project（项目）/ role（角色）。 */
 export type Layer = 'global' | 'project' | 'role'
 
@@ -331,6 +333,55 @@ export interface SearchResult {
   deposited_by?: { subject?: string; team?: string; at?: string; task_id?: string }
   /** 沉淀来源（v5 / A-1；两列均 NULL → 不设该字段）。 */
   provenance?: EntryProvenance
+  /**
+   * 命中的段（v13 §5；**可选，缺省不下发**——该条目无段级命中时字段为 `undefined`，
+   * `JSON.stringify` 不产出该键，旧消费方不受影响）。
+   *
+   * 字段一律 snake_case（`heading_path`）——这是**跨包 wire 契约对象**（S-15 冻结：
+   * 内部 TS 字段 camelCase 只用于 chunker 的 `Chunk`，wire 层一律 snake_case）。
+   * 排序按段融合分降序，每条目上限 `CHUNK_HITS_PER_ENTRY`。
+   */
+  hits?: SearchHit[]
+}
+
+/**
+ * 一条命中段的 wire 形状（v13 §5 冻结：`{seq, heading_path, excerpt, score}`）。
+ *
+ * 不含 `char_start/char_end`：定位由 `seq` + `heading_path` 决定（界面的源区间
+ * 由条目正文解析层产出，不随检索结果携带偏移）。
+ *
+ * ⚠ 坐标系护栏（检视 v13 m-2）：后端 chunk 偏移基于 **CRLF→LF 归一化后的 body**
+ * （`frontmatter.ts splitFrontmatter`），web 侧解析层偏移按**原串**计（`\r\n` 计 2）
+ * ——两套偏移不同系（每处 `\r\n` 差 1）。wire 只传 `seq` 时两侧各自内部一致、不可观测；
+ * **永久禁止**把 `char_start/char_end` 放上 wire，除非先统一行尾归一口径。
+ */
+export interface SearchHit {
+  /** 段在原文档中的序号（0 起，`Chunk.seq`）。 */
+  seq: number
+  /** 段的标题路径（分隔符 `' › '`；导语段为 `''`）。 */
+  heading_path: string
+  /** 段内命中窗口的摘要（`computeExcerpt` 口径）。 */
+  excerpt: string
+  /** 段融合分（与条目 score 同源：RRF 融合分，越大越相关）。 */
+  score: number
+}
+
+/**
+ * 检索响应（v13 §4/§5）：`searchWithMeta` 的返回形状。
+ *
+ * 为什么单列一层而不是改 `search()` 的返回类型：`search()` 的 `SearchResult[]`
+ * 是既有 wire 形状（HTTP/MCP/CLI 三处直接消费），改型即破坏兼容；两个标记位
+ * 属**响应级**（非条目级），故以附加层的形态增量引入（SPEC-3.6 兼容口径）。
+ *
+ * 两个标记位**缺省不下发**（未降级/未截断时为 `undefined`，不序列化）。
+ */
+export interface SearchResponse {
+  /** 同 `search()` 的返回（顺序、分数、字段完全一致）。 */
+  results: SearchResult[]
+  /** 段向量路因扫描量超 `vectorScanCap` 整体缺席（SPEC-3.7）；未降级 → 不设该字段。 */
+  chunk_scan_degraded?: boolean
+  /** 段级 `hits` 被每条目预算 K 截断（SPEC-3.3/M-6）；未截断 → 不设该字段。 */
+  hits_truncated?: boolean
 }
 
 /** 书节点（design.md §3.2 BookNode）。 */
@@ -468,6 +519,15 @@ export interface KnowledgeService {
   index?(input: IndexInput): Promise<IndexResult>
   /** 全文检索（bigram + FTS5 unicode61），默认只返回最新版。 */
   search(query: SearchQuery): Promise<SearchResult[]>
+  /**
+   * 与 `search` 同源同结果，额外带回**响应级**段级标记（v13 §4：`chunk_scan_degraded`
+   * / `hits_truncated`）与每条目的 `hits`。
+   *
+   * **可选实现**（与 `index?`/`reindex?` 同口径）：内存桩可不实现；调用方按
+   * 「有则用之、无则回落到 `search()`（无标记）」处理。真实现
+   * `PrismKnowledgeService` 恒提供。
+   */
+  searchWithMeta?(query: SearchQuery): Promise<SearchResponse>
   /** 取单条；version 省略取最新版；历史版可读。查无 → null。 */
   get(id: string, version?: number): Promise<KnowledgeEntry | null>
   /** 层→书→模块结构树（只统计最新版）。 */
@@ -527,6 +587,11 @@ export interface ReindexReport {
   skipped: number
   /** 跳过明细 */
   errors: Array<{ path: string; reason: string }>
+  /**
+   * 重建的**段行**数（v13 §2；可选——老消费方只读上面四个字段，不受影响）。
+   * 只统计最新版（段级只留最新版），与 `indexed`（含历史版次行）口径不同。
+   */
+  chunks?: number
 }
 
 /** createKnowledgeService 选项（实现层扩展，非 §3.2 契约的一部分）。 */
@@ -555,4 +620,26 @@ export interface KnowledgeServiceOptions {
    * 不共通，换档后旧向量自动失效，由 reindex 重算。
    */
   embeddingModel?: string
+  /**
+   * 长文档分段切分参数（v13 §2）：透传给 `chunkMarkdown`。
+   * 缺省 `{}` → 切分器自身默认（maxChars 2000 / minChars 120 / splitDepth 3）；
+   * server 装配时按**嵌入客户端分档**注入 maxChars（SPEC-1.13，`defaultMaxChars`）。
+   */
+  chunkOptions?: ChunkOptions
+  /**
+   * 段向量全扫的 chunk 数上限（SPEC-3.7，扁平键 `vector_scan_cap`，缺省 50000）。
+   * 超过 → 段向量路整体缺席并置 `chunk_scan_degraded`（冻结：不做按 book 收窄）。
+   * v13 批 b 只贯通管道，消费在 B-3 检索融合。
+   */
+  vectorScanCap?: number
+  /**
+   * 段粒度向量余弦下限（v13 §4：段粒度余弦分布更高更尖，允许独立参数）。
+   * 缺省 = 条目路生效值（query 的 `vector_floor` → 模块常量 `VECTOR_FLOOR`）。
+   */
+  chunkVectorFloor?: number
+  /**
+   * 段粒度向量相对阈值（同上）。缺省 = 条目路生效值（query 的 `vector_relative`
+   * → 模块常量 `VECTOR_RELATIVE`）。
+   */
+  chunkVectorRelative?: number
 }

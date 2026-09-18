@@ -3,6 +3,26 @@ export type Envelope<T> =
   | { ok: true; value: T }
   | { ok: false; error: { code: string; message: string } }
 
+/**
+ * 一条命中段（v13 W-2，SPEC-3.1/3.6）——与 `packages/knowledge/src/types.ts` 的
+ * **冻结 wire 契约 `SearchHit` 逐字对齐**（`{ seq, heading_path, excerpt, score }`，
+ * 四个字段全部必填）。**wire 一律 snake_case**（`heading_path`）。
+ *
+ * 命名说明：web 侧叫 `SearchHitSegment`（W-2 既有的消费名），服务端叫 `SearchHit`；
+ * 同名同义、同一形状，**不许**再加字段（尤其 `char_start/char_end`——定位由 `seq` +
+ * 解析层块区间决定，见 `Knowledge.tsx` 的 W-3 链路）。
+ */
+export interface SearchHitSegment {
+  /** 段序号（0 起，等于 chunker 的 `Chunk.seq`；定位按它寻址）。 */
+  seq: number
+  /** 标题路径（分隔符 `' › '`；导语段为 `''`）。 */
+  heading_path: string
+  /** 段内命中窗口的摘要（`computeExcerpt` 口径）。 */
+  excerpt: string
+  /** 段融合分（与条目 `score` 同源：RRF 融合分，越大越相关）。 */
+  score: number
+}
+
 export interface SearchResult {
   id: string
   version: number
@@ -15,6 +35,29 @@ export interface SearchResult {
   excerpt: string
   score: number
   source: string
+  /**
+   * 命中的段（可选；**缺省不下发**——该条目无段级命中时键不存在）。
+   * 服务端 B-4 后随 `SearchResponse.results` 一起下发。
+   */
+  hits?: SearchHitSegment[]
+}
+
+/**
+ * 检索响应（v13 §4/§5）——与 `packages/knowledge/src/types.ts` 的冻结 `SearchResponse`
+ * 同名同义。`results` 与旧 `search()` 的裸数组逐字节一致；两个标记位是**响应级**
+ * （非条目级）、**缺省不下发**。
+ *
+ * **接线状态（W-3 收尾时实测）**：HTTP `GET /api/kb/search` 已由 B-4 归一为该对象
+ * （`packages/server/src/http/routes/kb.ts` 的 search handler → `ok(response)`）；
+ * 客户端仍按**双形状兼容**消费（旧服务端裸数组 / 新对象两种都收，见 `kbSearch`）。
+ */
+export interface SearchResponse {
+  /** 同 `search()` 的返回（顺序、分数、字段完全一致）。 */
+  results: SearchResult[]
+  /** 段向量路因扫描量超 `vectorScanCap` 整体缺席（SPEC-3.7）；未降级 → 不下发。 */
+  chunk_scan_degraded?: boolean
+  /** 段级 `hits` 被每条目预算 K 截断（SPEC-3.3/M-6）；未截断 → 不下发。 */
+  hits_truncated?: boolean
 }
 
 export interface KnowledgeEntry {
@@ -410,14 +453,25 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   health: () => request<HealthInfo>('/api/health'),
 
-  kbSearch: (params: {
+  /**
+   * 全文检索（`GET /api/kb/search`）。
+   *
+   * **归一化返回 `SearchResponse`**（v13 W-3）：服务端 B-4 后是对象
+   * `{ results, chunk_scan_degraded?, hits_truncated? }`，旧服务端仍是裸数组
+   * `SearchResult[]`——这里用 `Array.isArray` 一次性抹平，消费方只看
+   * `data.results` / 两个响应级标记位，**两种形状都工作**，无需感知版本。
+   *
+   * ⚠ 接线状态：HTTP 路由 B-4 已落地（`routes/kb.ts` 的 search handler）；本归一化是
+   * 为「旧产物 / 内存桩 / 灰度」保留的兼容层，不是临时将就——B-4 落地后标记位自动透传。
+   */
+  kbSearch: async (params: {
     q: string
     layers?: string
     book?: string
     module?: string
     limit?: number
     all_versions?: boolean
-  }) => {
+  }): Promise<SearchResponse> => {
     const qs = new URLSearchParams()
     qs.set('q', params.q)
     if (params.layers) qs.set('layers', params.layers)
@@ -425,7 +479,8 @@ export const api = {
     if (params.module) qs.set('module', params.module)
     if (params.limit) qs.set('limit', String(params.limit))
     if (params.all_versions) qs.set('all_versions', 'true')
-    return request<SearchResult[]>(`/api/kb/search?${qs.toString()}`)
+    const data = await request<SearchResult[] | SearchResponse>(`/api/kb/search?${qs.toString()}`)
+    return Array.isArray(data) ? { results: data } : data
   },
 
   kbGet: (id: string, version?: number) =>

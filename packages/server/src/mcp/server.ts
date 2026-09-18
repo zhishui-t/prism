@@ -64,7 +64,7 @@ import { inspectGraphStatus, ProjectRegistry } from '../graph/registry.js'
 import { mergeProjectGraphs, type MergeProjectInput } from '../graph/merge.js'
 import { convertFileToMarkdown } from '../kb/convert-file.js'
 import { makeDryRunKb, scanProject } from '../kb/scan.js'
-import type { GraphQuery, KnowledgeService, Layer, SearchQuery } from '../kb/port.js'
+import type { GraphQuery, KnowledgeService, Layer, SearchQuery, SearchResponse } from '../kb/port.js'
 import { depositWithPolicy, type DepositRequest } from '../kb/deposit-entry.js'
 import { loadKnowledgeService } from '../kb/wiring.js'
 import { buildContextPack } from '../kb/context-pack.js'
@@ -761,7 +761,11 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
   const tools: McpTool[] = [
     {
       name: 'prism_kb_search',
-      description: '检索 Prism 知识库（bigram 中文检索；支持 layer/owner/book/module 过滤，默认只返回最新版次）',
+      description:
+        '检索 Prism 知识库（bigram 中文检索；支持 layer/owner/book/module 过滤，默认只返回最新版次）。' +
+        '长文档按标题分段索引，命中的结果额外带段级定位 `hits`（{seq, heading_path, excerpt, score}，' +
+        '缺省不下发），据此可指出命中落在文档哪一节；响应级 `chunk_scan_degraded` 表示段向量扫描被护栏降级、' +
+        '`hits_truncated` 表示段列表被预算截断。',
       inputSchema: {
         type: 'object',
         properties: {
@@ -797,7 +801,13 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
             ? { visibilities: args.visibilities as SearchQuery['visibilities'] }
             : {}),
         }
-        return await (await kb()).search(query)
+        // v13 §5 契约链：与 HTTP 面同口径——`searchWithMeta` 可选，无则回落 `search()`，
+        // 两条路径归一为同一 `SearchResponse`（`results` 与旧版数组逐字节相同；可选字段缺省不下发）。
+        const service = await kb()
+        const response: SearchResponse = service.searchWithMeta
+          ? await service.searchWithMeta(query)
+          : { results: await service.search(query) }
+        return response
       },
     },
     {

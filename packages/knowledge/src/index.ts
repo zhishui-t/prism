@@ -32,6 +32,8 @@ export type {
   RemoveResult,
   RestoreResult,
   SearchQuery,
+  SearchHit,
+  SearchResponse,
   SearchResult,
 } from './types.js'
 
@@ -61,7 +63,17 @@ export {
   type EntryAddress,
 } from './store.js'
 
-export { KB_FTS_DDL, ensureKbFts, indexEntry, searchFts } from './index-db.js'
+export {
+  KB_FTS_DDL,
+  ensureKbFts,
+  indexEntry,
+  searchFts,
+  // 段级三表原语（v13 §2）：CLI 的 `kb reindex --chunks` 直查路径复用（N-6）
+  ensureKbChunks,
+  deleteChunks,
+  indexChunks,
+  type IndexedChunk,
+} from './index-db.js'
 
 // 文档格式分流与转换（A2）：文本直读、二进制走 anydoc
 export {
@@ -91,3 +103,15 @@ export {
   type GraphifyLink,
   type GraphifyExportSummary,
 } from './graphify-export.js'
+
+// 长文档分段切分（v13 §1）：纯函数，零仓库内依赖
+export {
+  assembleChunkEmbeddingInput,
+  chunkMarkdown,
+  defaultMaxChars,
+  type Chunk,
+  type ChunkOptions,
+} from './chunker.js'
+
+// 检索融合常量（v13 §4）：段向量扫描上限的**唯一真相源**（server wiring 直接复用）
+export { CHUNK_HITS_PER_ENTRY, DEFAULT_VECTOR_SCAN_CAP } from './vector.js'

@@ -42,7 +42,7 @@ vi.mock('../src/api.ts', () => ({
       data.calls.push(params)
       return Promise.resolve(data.catalog)
     },
-    kbSearch: () => Promise.resolve([]),
+    kbSearch: () => Promise.resolve({ results: [] }),
     kbGet: () => Promise.resolve(null),
     kbVersions: () => Promise.resolve([]),
     kbBookStructure: () => Promise.resolve(null),

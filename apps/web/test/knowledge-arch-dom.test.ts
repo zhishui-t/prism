@@ -45,7 +45,7 @@ vi.mock('../src/api.ts', () => ({
     kbStats: () => Promise.resolve({ layers: {}, books: 1, entries: 1 }),
     kbConflicts: () => Promise.resolve([]),
     kbCatalog: () => Promise.resolve(data.catalog),
-    kbSearch: () => Promise.resolve([]),
+    kbSearch: () => Promise.resolve({ results: [] }),
     kbGet: (id: string) => {
       data.kbGetCalls.push(id)
       return Promise.resolve(null)

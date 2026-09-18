@@ -4,6 +4,14 @@ import { isSafeHref, parseInline, parseMarkdown, type Block } from '../src/markd
 
 const first = (blocks: Block[]): Block => blocks[0]
 
+/** 用块的源区间把原文切回来（缺区间直接抛错，免得测试静默拿到空串）。 */
+function sliceOf(src: string, block: Block): string {
+  if (block.srcStart === undefined || block.srcEnd === undefined) {
+    throw new Error(`块 ${block.type} 没有 src 区间`)
+  }
+  return src.slice(block.srcStart, block.srcEnd)
+}
+
 describe('parseMarkdown · 块级', () => {
   it('ATX 标题层级 1–6（h5+ 保留 level 供组件降级为加粗段落）', () => {
     const { blocks } = parseMarkdown('# 一\n\n### 三\n\n##### 五\n\n###### 六')
@@ -75,8 +83,9 @@ describe('parseMarkdown · 块级', () => {
 
   it('水平线', () => {
     expect(first(parseMarkdown('a\n\n---\n\nb').blocks).type).toBe('paragraph')
-    expect(parseMarkdown('---').blocks).toEqual([{ type: 'hr' }])
-    expect(parseMarkdown('***').blocks).toEqual([{ type: 'hr' }])
+    // W-1：块现在带源区间，故整块 toEqual 补上 [srcStart, srcEnd)（`---` 覆盖 0..3）。
+    expect(parseMarkdown('---').blocks).toEqual([{ type: 'hr', srcStart: 0, srcEnd: 3 }])
+    expect(parseMarkdown('***').blocks).toEqual([{ type: 'hr', srcStart: 0, srcEnd: 3 }])
   })
 
   it('GFM 表格：对齐行 → align，行补齐到表头列数', () => {
@@ -175,7 +184,10 @@ describe('parseMarkdown · HTML 注释（F9 病因 8②）', () => {
 
   it('多行注释同样剥离；围栏代码块内的注释**不动**', () => {
     expect(parseMarkdown('<!--\n第一行\n第二行\n-->\n\n正文').blocks.map((b) => b.type)).toEqual(['paragraph'])
-    expect(parseMarkdown('```html\n<!-- keep -->\n```').blocks).toEqual([{ type: 'code', lang: 'html', code: '<!-- keep -->' }])
+    // W-1：整块 toEqual 补上区间（` ```html\n<!-- keep -->\n``` ` 共 25 个 UTF-16 code unit）。
+    expect(parseMarkdown('```html\n<!-- keep -->\n```').blocks).toEqual([
+      { type: 'code', lang: 'html', code: '<!-- keep -->', srcStart: 0, srcEnd: 25 },
+    ])
   })
 
   it('未闭合 / 注释后拖正文 / 行内出现 → 一律按纯文本保留（宁可显示，不丢字）', () => {
@@ -288,5 +300,130 @@ describe('parseMarkdown · 行内', () => {
     expect(parseInline('~~a')).toEqual([{ type: 'text', text: '~~a' }])
     expect(parseInline('~~~~')).toEqual([{ type: 'text', text: '~~~~' }])
     expect(parseInline('见 ~/.zcode 与 ~/x')).toEqual([{ type: 'text', text: '见 ~/.zcode 与 ~/x' }])
+  })
+})
+
+/**
+ * W-1（SPEC-4.1）：解析层源区间。单位 = UTF-16 code unit，按**原始 src** 计（含 BOM /
+ * frontmatter），`\r\n` 计 2；`[srcStart, srcEnd)` 为半开区间，`srcEnd` 落在末行的行尾
+ * （不含该行换行符）。
+ */
+describe('parseMarkdown · W-1 源区间', () => {
+  const SRC = [
+    '# 标题',
+    '',
+    '第一段',
+    '续行',
+    '',
+    '```ts',
+    'const a = 1',
+    '```',
+    '',
+    '- a',
+    '- b',
+    '',
+    '> 引文一',
+    '> 引文二',
+    '',
+    '| h1 | h2 |',
+    '| --- | --- |',
+    '| a | b |',
+    '',
+    '---',
+  ].join('\n')
+
+  it('(a) 每种块都能用 [srcStart, srcEnd) 切回自己的原文行', () => {
+    const { blocks } = parseMarkdown(SRC)
+    expect(blocks.map((b) => b.type)).toEqual([
+      'heading',
+      'paragraph',
+      'code',
+      'list',
+      'quote',
+      'table',
+      'hr',
+    ])
+    expect(blocks.map((b) => sliceOf(SRC, b))).toEqual([
+      '# 标题',
+      '第一段\n续行',
+      '```ts\nconst a = 1\n```',
+      '- a\n- b',
+      '> 引文一\n> 引文二',
+      '| h1 | h2 |\n| --- | --- |\n| a | b |',
+      '---',
+    ])
+  })
+
+  it('(b) 顶层块区间按序排列、互不重叠', () => {
+    const { blocks } = parseMarkdown(SRC)
+    for (let k = 0; k < blocks.length; k++) {
+      expect(blocks[k].srcStart).toBeTypeOf('number')
+      expect(blocks[k].srcEnd).toBeTypeOf('number')
+      if (k > 0) {
+        expect(blocks[k].srcStart!).toBeGreaterThanOrEqual(blocks[k - 1].srcEnd!)
+        expect(blocks[k].srcStart!).toBeGreaterThan(blocks[k - 1].srcStart!)
+      }
+    }
+  })
+
+  it('(c) 豁免：frontmatter / 空行 / 独立注释不落区间；单行 quote 的 `>` 前缀不进内层区间', () => {
+    const src = ['---', 'name: x', '---', '', '<!-- c -->', '', '# T'].join('\n')
+    const { blocks } = parseMarkdown(src)
+    expect(blocks).toHaveLength(1)
+    expect(sliceOf(src, blocks[0])).toBe('# T')
+    // frontmatter 行与注释段的字符落在任何块区间之外
+    for (const at of [src.indexOf('name: x'), src.indexOf('<!-- c -->')]) {
+      expect(at).toBeGreaterThan(-1)
+      for (const b of blocks) {
+        expect(b.srcStart! <= at && at < b.srcEnd!).toBe(false)
+      }
+    }
+
+    // 单行 quote：`>` 前缀不计入内层块区间（外层 quote 是包络区间，起于行首）。
+    const qsrc = '> 引文'
+    const quote = first(parseMarkdown(qsrc).blocks)
+    if (quote.type !== 'quote') throw new Error('expected quote')
+    expect(sliceOf(qsrc, quote.blocks[0])).toBe('引文')
+    expect(quote.blocks[0].srcStart).toBe(qsrc.indexOf('引文'))
+  })
+
+  it('(d) \\r\\n 计 2：偏移差 = 块端点之前的换行数；去行终止符后文本一致', () => {
+    const lf = '# A\n\n段落一\n\n- x\n- y'
+    const crlf = lf.replace(/\n/g, '\r\n')
+    const a = parseMarkdown(lf).blocks
+    const b = parseMarkdown(crlf).blocks
+    expect(a).toHaveLength(b.length)
+    const newlinesBefore = (text: string, at: number): number => (text.slice(0, at).match(/\n/g) ?? []).length
+    for (let k = 0; k < a.length; k++) {
+      const s = a[k].srcStart!
+      const e = a[k].srcEnd!
+      const s2 = b[k].srcStart!
+      const e2 = b[k].srcEnd!
+      expect(s2 - s).toBe(newlinesBefore(lf, s))
+      expect(e2 - e).toBe(newlinesBefore(lf, e))
+      // `\r` 是行终止符而非内容：去掉后半开区间文本相同
+      expect(lf.slice(s, e)).toBe(crlf.slice(s2, e2).replace(/\r/g, ''))
+    }
+  })
+
+  it('(e) frontmatter 前缀加回：正文块偏移对原始 src 有效', () => {
+    const src = ['---', 'name: demo', '---', '# 标题', '', '正文'].join('\n')
+    const { frontmatter, blocks } = parseMarkdown(src)
+    expect(frontmatter).toEqual({ name: 'demo' })
+    expect(sliceOf(src, blocks[0])).toBe('# 标题')
+    expect(blocks[0].srcStart).toBe(src.indexOf('# 标题'))
+    expect(sliceOf(src, blocks[1])).toBe('正文')
+  })
+
+  it('(f) quote 内层块区间映射回原始 src（内层起点 = 外层行首 + `> ` 前缀长度）', () => {
+    const src = '> ## 引文\n> 正文'
+    const quote = first(parseMarkdown(src).blocks)
+    if (quote.type !== 'quote') throw new Error('expected quote')
+    const [h, p] = quote.blocks
+    expect(sliceOf(src, h)).toBe('## 引文')
+    expect(sliceOf(src, p)).toBe('正文')
+    expect(h.srcStart).toBe(2)
+    expect(quote.srcStart).toBe(0)
+    expect(quote.srcEnd).toBe(src.length)
   })
 })

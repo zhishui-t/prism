@@ -48,13 +48,19 @@ describe('kb 路由（注入内存桩，不依赖 @prism/knowledge）', () => {
     expect(Number(body.value.uptime)).toBeGreaterThanOrEqual(0)
   })
 
-  it('GET /api/kb/search?q= → 命中', async () => {
+  it('GET /api/kb/search?q= → 命中（v13 §5：响应为 SearchResponse，数组在 value.results）', async () => {
     const res = await fetch(`${base}/api/kb/search?q=${encodeURIComponent('性能')}`)
-    const body = (await res.json()) as { ok: boolean; value: Array<{ id: string; source: string }> }
+    const body = (await res.json()) as {
+      ok: boolean
+      value: { results: Array<{ id: string; source: string }>; hits_truncated?: boolean; chunk_scan_degraded?: boolean }
+    }
     expect(body.ok).toBe(true)
-    expect(body.value.length).toBeGreaterThanOrEqual(1)
-    expect(body.value[0].id).toBe('kb-perf')
-    expect(body.value[0].source).toContain('kb-perf@1')
+    expect(body.value.results.length).toBeGreaterThanOrEqual(1)
+    expect(body.value.results[0].id).toBe('kb-perf')
+    expect(body.value.results[0].source).toContain('kb-perf@1')
+    // 桩无段级降级/截断 → 两个响应级标记**不下发**（不是 false，是无键）
+    expect('chunk_scan_degraded' in body.value).toBe(false)
+    expect('hits_truncated' in body.value).toBe(false)
   })
 
   it('GET /api/kb/search 缺 q → bad_request', async () => {
