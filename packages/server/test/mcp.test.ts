@@ -40,7 +40,7 @@ describe('MCP stdio（手写 JSON-RPC，design.md §4 最小 5 工具 + design-v
     expect(info?.version).toBe(ownVersion)
   })
 
-  it('tools/list → 固定 48 个工具（kb 17 + graph 8 + arch 1 + 角色/团队/技能/上下文 22；v5 增 graph_merge；v6 角色/团队补齐增删改 + team_create→team_new；v6.2 skill 写入口；v10 arch_generate；v8 F7 skill_categorize；v12 F4 skill_category_add/rename/rm）', async () => {
+  it('tools/list → 固定 49 个工具（kb 17 + graph 8 + arch 1 + 角色/团队/技能/上下文 23；v5 增 graph_merge；v6 角色/团队补齐增删改 + team_create→team_new；v6.2 skill 写入口；v10 arch_generate；v8 F7 skill_categorize；v12 F4 skill_category_add/rename/rm；v15 B-4 skill_rm）', async () => {
     const tools = createMcpTools({ home: await makeTempDir('prism-mcp-') })
     const res = await handleRpcRequest(rpc('tools/list'), tools)
     const names = ((res?.result as { tools: Array<{ name: string }> }).tools).map((t) => t.name)
@@ -81,6 +81,7 @@ describe('MCP stdio（手写 JSON-RPC，design.md §4 最小 5 工具 + design-v
       'prism_skill_list',
       'prism_skill_install',
       'prism_skill_uninstall',
+      'prism_skill_rm',
       'prism_skill_categorize',
       'prism_skill_category_add',
       'prism_skill_category_rename',

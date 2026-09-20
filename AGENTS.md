@@ -156,7 +156,7 @@ pnpm test:package  # 6. 发行冒烟（打包→解压→在解压环境验证�
 | **把「平台」当成「能力」**（Metal 判定，2026-09-12） | `platform==='darwin'` ⇒ Metal 的写法在 Intel Mac 上假阳性：`doctor` 谎报 Metal、`autoTier()` 切到 609MB 的 `large` **在纯 CPU 上跑**、多传无意义的 `-ngl 99`。上游 `release.yml` 里 macOS **arm64 开 Metal、x64 显式 `-DGGML_METAL=OFF`**，而**硬件**照样报 `Metal Support: Metal 3` | 判据取「**实际装了什么**」而非平台/硬件：看包内有无 `libggml-metal*.dylib`（`accelBackend()`），并抽成纯函数 `resolveAccelBackend()` 以便逐分支测试。`PRISM_EMBEDDING_BACKEND` 可显式覆盖 |
 | **上游归档带顶层目录** | 解压出 `<dest>/<包名>/llama-server`，运行时按 `<dest>/llama-server` 找 → 「装了却检测不到」，只在 `doctor` 里以「未安装」出现 | 一律走 `scripts/archive.mjs` 的 `extractArchive()`（解压到暂存目录 → 递归定位 → 摊平 + 补 POSIX 可执行位） |
 | **解压丢软链**（2026-09-12） | 只拷 `entry.isFile()` 会把软链静默丢弃（软链既非 file 也非 dir）。macOS 预编译包的 **dylib 版本链**（16 条 `libX.dylib → libX.0.dylib → libX.0.N.dylib`）全丢 → `dyld: Library not loaded: @rpath/libllama-common.0.dylib` + `Abort trap: 6`。**Windows 的 zip 没有软链，故只在 macOS/Linux 暴露** | 软链单独重建（`readlink` + `symlink`，无权限时退化解引用拷贝）；`packages/server/test/archive-extract.test.ts` 锁定 |
-| **起子进程时 `stdio:'ignore'`** | 启动失败时**线索为零**：用户只看到「模型未就绪（档位模型缺失？）」，而模型其实在——根因不可复原 | 子进程输出落盘（`3rd/llama-runtime/llama-server.log`，超 2MB 截断），失败时在日志里自陈；报错文案也要指向日志 |
+| **起子进程时 `stdio:'ignore'`** | 启动失败时**线索为零**：用户只看到「模型未就绪（档位模型缺失？）」，而模型其实在——根因不可复原 | 子进程输出落盘（`3rd/llama-runtime/llama-server.log`，超 2MB 截断），失败时在日志里自陈；报错文案也要指向日志。**后台 serve 进程**另见 `<home>/state/background-exit-<port>.log`（时间/退出码/stderr 尾，超 64KB 截断保尾）——启动横幅在 `serve-<port>.log`，**退出原因**在退出日志 |
 | **行尾/裸 CR 混入** | `apps/web/src/Shell.tsx` 曾是全仓唯一 CRLF 文件、且夹一个裸 `\r`（JS 视为换行）→ 跨平台 diff 出「整文件重写」，blame 失效 | 仓库根有 `.gitattributes`（`* text=auto eol=lf`，`.cmd/.bat` 例外）；改动大文件前先确认行尾 |
 
 ---

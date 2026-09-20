@@ -378,13 +378,21 @@ export interface SearchHit {
  * 是既有 wire 形状（HTTP/MCP/CLI 三处直接消费），改型即破坏兼容；两个标记位
  * 属**响应级**（非条目级），故以附加层的形态增量引入（SPEC-3.6 兼容口径）。
  *
- * 两个标记位**缺省不下发**（未降级/未截断时为 `undefined`，不序列化）。
+ * 三个标记位**缺省不下发**（未降级/未截断时为 `undefined`，不序列化）。
  */
 export interface SearchResponse {
   /** 同 `search()` 的返回（顺序、分数、字段完全一致）。 */
   results: SearchResult[]
   /** 段向量路因扫描量超 `vectorScanCap` 整体缺席（SPEC-3.7）；未降级 → 不设该字段。 */
   chunk_scan_degraded?: boolean
+  /**
+   * 向量检索**能力降级**（v15 §2 / SPEC-2.1）：装配侧 `vectorCapable` ∧ 查询
+   * `hybrid !== false` ∧ 查询向量算不出（`qVec === null`：假活/超时/失败）**三者同真**
+   * → `true`（检索已回落纯 BM25，结果照常）。合法零命中（向量算得出但无命中）**不报**；
+   * 未装 / off / 显式 `hybrid:false` 亦**不报**（前者由装配侧不置 `vectorCapable` 堵，
+   * 后者是用户选择）——未降级 → 不设该字段。
+   */
+  embedding_degraded?: boolean
   /** 段级 `hits` 被每条目预算 K 截断（SPEC-3.3/M-6）；未截断 → 不设该字段。 */
   hits_truncated?: boolean
 }
@@ -625,6 +633,15 @@ export interface KnowledgeServiceOptions {
    * 不共通，换档后旧向量自动失效，由 reindex 重算。
    */
   embeddingModel?: string
+  /**
+   * 装配侧**向量能力**标志（v15 §2 / SPEC-2.1①）：由注入侧在「embedding 已装且未禁用」
+   * 时显式置 `true`；未装 / `PRISM_EMBEDDING=off` → **不置**（`undefined`）。
+   *
+   * **不**可用 `embed !== undefined` 代替——server 侧 `embed` 是**无条件注入**的闭包
+   * （未装时返回 null），拿它判能力恒真（M-1 修订的假阳性根因）。检索侧据此 + 查询
+   * `hybrid !== false` + 查询向量算不出，三判据同真才发 `embedding_degraded`。
+   */
+  vectorCapable?: boolean
   /**
    * 长文档分段切分参数（v13 §2）：透传给 `chunkMarkdown`。
    * 缺省 `{}` → 切分器自身默认（maxChars 2000 / minChars 120 / splitDepth 3）；

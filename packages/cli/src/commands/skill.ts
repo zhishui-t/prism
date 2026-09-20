@@ -4,7 +4,7 @@ import { join } from 'node:path'
 
 import { PrismError, prismHome } from '@prism/core'
 import { installSkills, listBuiltinSkills, uninstallSkills, validateSkill } from '@prism/skills'
-import { loadEffectiveSkills, SkillCategoryStore, trashStoreFor } from '@prism/server'
+import { loadEffectiveSkills, deleteExternalSkillDefinition, SkillCategoryStore, trashStoreFor } from '@prism/server'
 
 import type { ArgValues, CommandContext } from '../argv.js'
 import { dirProvenanceLabel, guardWriteTarget, resolveTargetDirs } from '../argv.js'
@@ -155,9 +155,46 @@ export async function runSkill(ctx: CommandContext, args: string[], values: ArgV
       return 0
     }
 
+    case 'rm': {
+      // v15 B-4（SPEC-4.2）：删除**外部技能**（人写、无 Prism marker）——整目录搬进回收站。
+      // 逐字对齐 role rm / team rm 的守卫模式：guardWriteTarget（默认宿主目录需 --yes）+
+      // trash 入站 + trash_id 回显。外部判定与 HTTP `DELETE /api/skills/external/:name`、
+      // MCP `prism_skill_rm` **同源**（共用域单点 deleteExternalSkillDefinition）。
+      const name = rest[0]
+      if (name === undefined || name.startsWith('-')) {
+        ctx.stderr('用法: prism skill rm <name> [--harness-root <dir>|--yes]')
+        return 1
+      }
+      // B6 写守卫：默认宿主 skills_dir（非 --harness-root / prism.yaml 显式指定）需 --yes 确认
+      if (!guardWriteTarget(ctx, values, dirs, 'skills', 1, 'delete')) return 1
+      try {
+        // v9 F3：删除 = 搬进回收站；回收站与审计归属 ctx.home（I-2），绝不落默认 ~/.prism
+        const result = await deleteExternalSkillDefinition(
+          name,
+          skillsDir,
+          trashStoreFor(ctx.home ?? prismHome()),
+          'CLI',
+        )
+        if (ctx.json) {
+          ctx.stdout(JSON.stringify({ ok: true, value: { ...result } }))
+          return 0
+        }
+        for (const p of result.removed) ctx.stdout(`  已移入回收站 ${p}`)
+        ctx.stdout(
+          `技能 ${name} 已删除（进回收站 ${result.trash_id}；默认 3 天后彻底清除，` +
+            `prism trash restore ${result.trash_id} 可还原；宿主在会话启动时扫描——下一会话生效）`,
+        )
+        return 0
+      } catch (error) {
+        const code = error instanceof PrismError ? error.code : 'bad_request'
+        ctx.stderr(`错误 [${code}] ${error instanceof Error ? error.message : String(error)}`)
+        return 1
+      }
+    }
+
     default:
       ctx.stderr(
-        `未知子命令: skill ${sub ?? ''}\n用法: prism skill list | install | update | uninstall | validate [name...] | effective --role <r> [--team <t>] | categorize <name...> [--category <分类>] | category add|rename|rm [--harness-root <dir>] [--force]`,
+        `未知子命令: skill ${sub ?? ''}\n用法: prism skill list | install | update | uninstall | rm <name> | validate [name...] | effective --role <r> [--team <t>] | categorize <name...> [--category <分类>] | category add|rename|rm [--harness-root <dir>] [--force]`,
       )
       return 1
   }

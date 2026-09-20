@@ -183,8 +183,10 @@ export async function runRole(ctx: CommandContext, args: string[], values: ArgVa
         ctx.stderr(ROLE_EDIT_USAGE)
         return 1
       }
-      const explicitLayers = parseLayers(values.layers)
-      const books = parseCsv(values.books)
+      // S-3 口径 a（v15 B-1）：**按原始旗标是否出现**判定「是否点名」，不靠值的真假——
+      // `--books ""` / `--layers ""` 视为显式清空（与 HTTP strict「显式 [] = 清空」对齐）。
+      const layersGiven = values.layers !== undefined
+      const booksGiven = values.books !== undefined
       let body: string | undefined
       try {
         body = await readBodyFile(ctx, values)
@@ -192,11 +194,20 @@ export async function runRole(ctx: CommandContext, args: string[], values: ArgVa
         ctx.stderr(`错误 [bad_request] 读取 --body-file 失败：${error instanceof Error ? error.message : String(error)}`)
         return 1
       }
+      // 仅显式给出的旗标覆盖；knowledge 走**读-改-写**（未点名维度取现值，见 mergeKnowledge）。
+      // 修前 edit 从零构造 knowledge（`layers: explicitLayers ?? []`），单给一层会把另一维吞成空值。
       const patch = {
         ...(values.description !== undefined ? { description: values.description } : {}),
         ...(values.skills !== undefined ? { skills: parseCsv(values.skills) ?? [] } : {}),
-        ...(explicitLayers !== undefined || books !== undefined
-          ? { knowledge: { layers: explicitLayers ?? [], ...(books !== undefined ? { books } : {}) } }
+        ...(layersGiven || booksGiven
+          ? {
+              knowledge: await mergeKnowledge(rolesDir, name, {
+                layersGiven,
+                booksGiven,
+                layers: parseLayers(values.layers),
+                books: parseCsv(values.books),
+              }),
+            }
           : {}),
         ...(body !== undefined ? { body } : {}),
         ...(clearable(values.color) !== undefined ? { color: clearable(values.color)! } : {}),
@@ -364,6 +375,32 @@ function parseLayers(value: string | undefined): KnowledgeBinding['layers'] | un
   if (items === undefined) return undefined
   const allowed = ['global', 'project', 'role'] as const
   return items.filter((l): l is (typeof allowed)[number] => (allowed as readonly string[]).includes(l))
+}
+
+/**
+ * `edit` 的 knowledge = **读-改-写**合并（v15 B-1 / SPEC-1.1–1.2 的「未点名维度保值」）：
+ * - 读：`loadRole`（目录式优先）取**现值**——与写侧 `editRole` 同一落点单点，读的就是将要写的那份；
+ * - 改：**显式给出的旗标**才覆盖对应维度（`--books ""` → `[]` = 清空）；
+ * - 写：交给 `editRole`（同一文件）。
+ *
+ * 为什么必须读现值：`RolePatch.knowledge` 是**整块替换**语义——若只拿旗标从零拼，单给
+ * `--layers` 就会把 books 抹成空（修前的吞值缺陷）。角色不存在时 base 缺省为空，随后
+ * `editRole` 依例抛 `role_not_found`（文案单点不在此重复）。
+ */
+async function mergeKnowledge(
+  rolesDir: string,
+  name: string,
+  flags: {
+    layersGiven: boolean
+    booksGiven: boolean
+    layers: KnowledgeBinding['layers'] | undefined
+    books: string[] | undefined
+  },
+): Promise<KnowledgeBinding> {
+  const base = (await loadRole(rolesDir, name))?.knowledge
+  const layers = flags.layersGiven ? (flags.layers ?? []) : (base?.layers ?? [])
+  const books = flags.booksGiven ? (flags.books ?? []) : base?.books
+  return { layers, ...(books !== undefined ? { books } : {}) }
 }
 
 /** `new` 的可选串字段：未给或空串 → `undefined`（不写该字段）。 */

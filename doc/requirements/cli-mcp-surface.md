@@ -94,6 +94,7 @@ prism
 │   ├── install             安装内置 Skill 到宿主 skills 目录
 │   ├── update              强制覆盖重装（v4）
 │   ├── uninstall           删除已装 Skill（v4）
+│   ├── rm <name>           删除外部技能（人写、无 Prism marker）整目录进回收站（v15 B-4）
 │   ├── effective           有效集（global ∪ team ∪ role；v4）
 │   ├── categorize          技能分类映射（写 <PRISM_HOME>/skill-categories.json；v8 F7）
 │   ├── category            分类清单增 / 改名 / 删（add <名称> | rename <旧名> <新名> | rm <名称>；v12 F4）
@@ -158,7 +159,7 @@ prism
 
 ## 2. MCP 工具清单
 
-> **v6.2 取齐说明**（2026-09-12）：工具总数 = **48**（`packages/server/src/mcp/server.ts` 内
+> **v6.2 取齐说明**（2026-09-12）：工具总数 = **49**（`packages/server/src/mcp/server.ts` 内
 > `name: 'prism_*'` 逐条计数）。v4 由 31 增至 35；v5 多项目图谱合并（F-C2）新增 `prism_graph_merge`
 > （代码图谱 7 → 8）到 **36**；v6 把「角色 / 团队」补齐成**增删改查**（`new|edit|rm` 在 CLI / HTTP / MCP
 > 三入口**同名同位**）——新增 `prism_role_new|edit|rm`、`prism_team_list|edit|rm|render` 共 7 个，
@@ -179,6 +180,11 @@ prism
 > 三面**同名同位**（`add`/`rename`/`rm`），实现同一 `SkillCategoryStore`；重名 / 改名目标重名
 > = `409 id_conflict`，源分类不存在 = `404 not_found`，名字 trim 后为空 = `400 bad_request`。
 > 同时 `GET /api/skills/categories` 与 categorize 响应迁为**双节** `{categories: string[], mapping}`。
+> **v15 B-4 外部技能删除三面对称**：新增 `prism_skill_rm { name, skills_dir }`（Skill 8 → 9），**48 → 49**；
+> 外部技能（有 `SKILL.md` 且**无** Prism marker）整目录进回收站（`kind=skill` + `trash_id`），
+> Prism 产物 → `409 id_conflict`（指路卸载）、不存在 / 无 `SKILL.md` → `404 not_found`、
+> 非法名 → `400 bad_request`——与 HTTP `DELETE /api/skills/external/:name`、
+> CLI `prism skill rm <name>` 三面**同一域单点** `deleteExternalSkillDefinition`（仅 trigger 不同）。
 >
 > **口径已入守卫**：本文件与 `README.md` 的「总数 + 分组小计」由
 > `packages/server/test/tool-surface-drift.test.ts` 对着 `createMcpTools` 实测锁定——
@@ -277,7 +283,7 @@ prism
 > | `render`（预览宿主形态） | ✅ role/team | ✅ | ❌ | 本地开发/排障工具，控制台不需要 |
 > | `validate` | ✅ role（全量）/ team（单条） | ❌ | ❌ | 校验结果随 `list`/`detail` 的 `issues` 返回，无需独立入口 |
 > | Skill 写（install/uninstall/update） | ✅ | ✅ | ✅ | **v6.2 已补齐**（原为唯一真缺口）：`skill list|install|uninstall` ↔ `prism_skill_list|install|uninstall` ↔ `POST /api/skills/install|uninstall` |
-> | 外部 Skill 删（`DELETE /api/skills/external/:name`） | ❌ | ❌ | ✅ | **有意不对称**（v10 F3）：外部技能是**落点事实**（人写目录），CLI/MCP 侧用文件系统即可达；控制台是唯一需要走 API 的消费方（要 `trash_id` 与 409/404 的分级提示） |
+> | 外部 Skill 删（`DELETE /api/skills/external/:name`） | ✅ | ✅ | ✅ | **v15 B-4 补齐三面**（此前 v10 F3 起为「有意不对称」的 HTTP-only）：CLI `prism skill rm <name>` ↔ MCP `prism_skill_rm { name, skills_dir }` ↔ HTTP `DELETE /api/skills/external/:name` 共用域单点 `deleteExternalSkillDefinition`——只删人写技能（Prism 产物 → 409 指路卸载），整目录进回收站返回 `trash_id` |
 > | `--from`（从既有定义复制） | ✅ role/team | ❌ | ❌ | 便于人手写；机器侧「读→改」即可 |
 > | 指定写目录 | ✅ `--source`（role=roles_dir / team=teams_dir） | ✅ 必填 | ✅ 必填 | team 侧另可用 `--roles-dir` 指定成员校验库 |
 >
@@ -290,7 +296,7 @@ prism
 | :--- | :--- |
 | `prism_context_pack` | 生成带预算的上下文包（v4 增 `layers/books/symbols/max_excerpt_chars`） |
 
-### 2.6 Skill（8）
+### 2.6 Skill（9）
 
 | 工具 | 作用 |
 | :--- | :--- |
@@ -298,6 +304,7 @@ prism
 | `prism_skill_list` | 列出内置 Skill + 宿主是否已装；返回 `skills_dir`（= 写参数名，读回即可回填；v6.2 新增）。**v8 F7**：每个 skill 合并 `category` 字段（映射里没有则**不加键**；与 `GET /api/skills` 同口径） |
 | `prism_skill_install` | 安装内置 Skill 到显式 `skills_dir`（人写的同名 Skill 不覆盖，写 `.prism-new` 供对比；v6.2 新增） |
 | `prism_skill_uninstall` | 卸载 Skill（**只删 Prism 产物**；人写的保留并记入 `kept`；v6.2 新增） |
+| `prism_skill_rm` | 删除**外部 Skill**（有 `SKILL.md` 且无 Prism marker；v15 B-4）：整目录进回收站（`kind=skill` + `trash_id`）；Prism 产物 → `id_conflict` 指路卸载，不存在 / 无 `SKILL.md` → `not_found`；`{ name, skills_dir }`，`skills_dir` 必填。与 HTTP `DELETE /api/skills/external/:name`、CLI `prism skill rm` 同一域单点 |
 | `prism_skill_categorize` | 技能分类映射（v8 F7）：写 `<PRISM_HOME>/skill-categories.json` 的 Prism 侧映射，**不校验技能是否存在、不碰宿主技能文件**；`category` 省略/空串 = 清除，`names` 必填非空 |
 | `prism_skill_category_add` | 新建分类（v12 F4）：写 `categories` 清单**不写 mapping**（空分类要存得住）；空名 → `bad_request`，重名 → `id_conflict` |
 | `prism_skill_category_rename` | 分类改名（v12 F4）：`{ from, to }`，**级联**改 mapping（原位替换保序）；`from` 不存在 → `not_found`，`to` 与另一分类重名 → `id_conflict`，`from === to` 幂等 no-op |

@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { useId, useState, type ReactNode } from 'react'
 
 import type { SearchHitSegment, SearchResult } from '../api.ts'
 import { useT } from '../i18n.ts'
@@ -21,6 +21,8 @@ import { useT } from '../i18n.ts'
  *   兄弟节点；`hits` 缺省/为空时**只返回那个 `<a>`**，DOM 与旧行为逐字一致（向后兼容）。
  * - 展开按钮直接复用既有 `.toc-chip`（与「限当前层/限当前书」同一零件语言），不另造一套按钮
  *   样式；展开/收起是**瞬时**的（控制台从简，段列表 ≤4 行，不做高度动画）。
+ * - v15 W-1（R-6）：按钮补齐 `aria-expanded` + `aria-controls`（后者指向展开区 `<ul>` 的
+ *   `useId` id；仅在展开时给出——收起时 `<ul>` 不在 DOM，指向空 id 是无效引用）。
  * - 高亮走「切 run 数组组 React 节点 + 命中词包 `<mark>`」——**绝不** `dangerouslySetInnerHTML`。
  * - 查询词从调用方传入（页面检索态），大小写不敏感、简单包含；空串不高亮。
  *
@@ -88,6 +90,7 @@ export function SearchHitRow({
   onLocateSegment,
 }: SearchHitRowProps) {
   const t = useT()
+  const segsId = useId()
   const [open, setOpen] = useState(false)
   const segments = entry.hits ?? []
 
@@ -127,11 +130,15 @@ export function SearchHitRow({
     <>
       {row}
       {/* 展开切换在 `<a>` 之外（嵌套交互元素非法）；`<button>` 原生键盘可达。
-          视觉复用既有 `.toc-chip`（与「限当前层/限当前书」同一零件语言），不再重复声明一遍。 */}
+          视觉复用既有 `.toc-chip`（与「限当前层/限当前书」同一零件语言），不再重复声明一遍。
+          v15 W-1（R-6）：`aria-expanded` 之外补 `aria-controls` 指向展开区 `<ul>` 的 id；
+          `aria-controls` **仅在展开时**给出——收起时那个 `<ul>` 根本不在 DOM 里（v13 契约：
+          收起不留新节点），指向不存在的 id 是无效引用。 */}
       <button
         type="button"
         className="toc-chip toc-hit-seg-toggle"
         aria-expanded={open}
+        aria-controls={open ? segsId : undefined}
         onClick={() => setOpen((v) => !v)}
       >
         {open
@@ -139,7 +146,7 @@ export function SearchHitRow({
           : t('knowledge.hits.expand', { n: segments.length })}
       </button>
       {open && (
-        <ul className="toc-hit-segs">
+        <ul className="toc-hit-segs" id={segsId}>
           {segments.map((seg, idx) => {
             // 两个子块用 `<span>` 而非 `<div>`：可定位分支要把它们放进 `<button>`，
             // 而 `<button>` 的内容模型只允许 phrasing content（`<div>` 非法）。块级观感由

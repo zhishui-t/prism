@@ -26,6 +26,10 @@
  * 不启用——SPEC-1.7）。缩放平移只改内层 `<g transform>`，viewBox 与 `preserveAspectRatio`
  * 都不动；几何与换算全在 `graph-logic.ts` 的纯函数里（组件只负责量容器、挂事件）。
  *
+ * v15 W-1（容器 resize 重 fit）：`useZoom` 带 `pristine` 标志——未手动缩放时容器 resize
+ * 重新适配（防抖 `REFIT_DEBOUNCE_MS`），wheel / 拖拽 / ± 缩放过则保持用户视口；判定与
+ * 时长常量在 `graph-logic.ts`（`shouldRefitOnResize` / `REFIT_DEBOUNCE_MS`）。
+ *
  * ✅ **端点已对账**（本批实施期间后端批同工作树落地）：导出走
  * `POST /api/arch/render` 的 `mode: 'from-graph'` 分支（请求体含 `mode` / `type: 'sequence'`），
  * 与 design-v10 设想的「新路径」不同——实况与理由见 `api.ts` 的 `ARCH_RENDER_ENDPOINT`。
@@ -50,6 +54,7 @@ import {
   RADIAL_CENTER,
   RADIAL_MAX,
   RADIAL_PEER,
+  REFIT_DEBOUNCE_MS,
   ZOOM_STEP,
   annotationLine,
   annotationVisible,
@@ -66,6 +71,7 @@ import {
   radialPoint,
   segmentBetweenBoxes,
   sequenceExportErrorKey,
+  shouldRefitOnResize,
   transformAttr,
   userTransform,
   viewBoxAttr,
@@ -144,6 +150,16 @@ function useZoom(vb: Rect): Zoom {
   const [view, setView] = useState<ZoomTransform>(() => fitTransform(NO_BOX, vb))
   const drag = useRef<{ x: number; y: number } | null>(null)
   const [dragging, setDragging] = useState(false)
+  /**
+   * v15 W-1（SPEC-5.1/5.2，S-8）：用户是否**从未**手动改变视口。
+   *
+   * `true` ⇒ 容器 resize 时重新适配（初始态跟随窗口尺寸，SPEC-5.1）；
+   * `false` ⇒ resize 不打扰（用户手动定下的视口是对 resize 的明确选择，SPEC-5.2）。
+   * **清**它恰好三处：wheel / 拖拽平移 / ± 按钮；**重置回 true** 两处：`refit`（适应窗口
+   * 按钮）与内容切换（下面的 vbKey effect）。用 ref 而非 state：ResizeObserver 回调要读
+   * **当下**值，而它不该触发重渲染、更不该进订阅依赖。
+   */
+  const pristine = useRef(true)
 
   /** 元素自身那条 meet 映射：「适应窗口」的答案就是它，归一化 `<g transform>` 也拿它当基准。 */
   const fit = fitTransform(box, vb)
@@ -156,18 +172,57 @@ function useZoom(vb: Rect): Zoom {
     return rect === undefined ? NO_BOX : { w: rect.width, h: rect.height }
   }
 
-  /** 适应窗口（SPEC-1.4）：**当下**重新量一遍再算 fit——窗口尺寸变了也按现在的算。 */
+  /**
+   * 适应窗口（SPEC-1.4 / v15 W-1）：**当下**重新量一遍再算 fit——窗口尺寸变了也按现在的算；
+   * 同时回到「未手动缩放」态（此后 resize 又该跟随容器，SPEC-5.2 的重置入口之一）。
+   */
   const refit = (): void => {
+    pristine.current = true
     const next = measure()
     setBox(next)
     setView(fitTransform(next, vb))
   }
 
   useLayoutEffect(() => {
-    const next = measure()
-    setBox(next)
-    setView(fitTransform(next, vb))
+    /* v15 W-1：内容换了就回到「未手动缩放」态——旧图的缩放平移不该带到新图上，此后容器
+       resize 也该重新适配（SPEC-5.2 的另一个重置入口）。`refit` 自己会重置 pristine，
+       量盒与算 fit 与旧实现逐字一致。 */
+    refit()
     // ⚠ 依赖只写 vbKey：`vb` 每次渲染都是新对象，进依赖会每次渲染重跑
+  }, [vbKey])
+
+  /**
+   * v15 W-1（SPEC-5.1–5.3）：容器尺寸变化 → **仅 pristine 时**重算 fit；防抖 `REFIT_DEBOUNCE_MS`
+   * 内多次触发合并为一次（拖窗口边缘会连发几十次 resize）。
+   *
+   * ⚠ **能力探测**（不是平台判断——红线）：环境不给 `ResizeObserver` 就干脆不挂，缩放平移的
+   * 其余功能照常。注：happy-dom 的 `ResizeObserver` 是**空实现**（`observe()` 不做事、回调永不
+   * 触发），故 DOM 层测试要么注入假观察器、要么根本不触发；换算与「是否 refit」的决策都在
+   * `graph-logic.ts` 的纯函数里，这里只接线。
+   *
+   * ⚠ 依赖只写 vbKey：`refit` 读的 `measure()` 取当下盒、`vb` 与 vbKey 一一对应，故该闭包
+   * 在两次 vbKey 之间恒为最新；若把 box.w/h 也列进依赖，会变成「观察 → refit → 重建观察器
+   * → 新观察器又投递初始尺寸」的自激循环。容器在空态/有图之间切换时 vbKey 必然改变，
+   * 覆盖了「元素后出现」的挂载时机。
+   */
+  useEffect(() => {
+    const el = ref.current
+    if (el === null) return
+    if (typeof ResizeObserver === 'undefined') return
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const ro = new ResizeObserver(() => {
+      if (timer !== undefined) clearTimeout(timer)
+      timer = setTimeout(() => {
+        timer = undefined
+        if (!shouldRefitOnResize(pristine.current)) return
+        refit()
+      }, REFIT_DEBOUNCE_MS)
+    })
+    ro.observe(el)
+    return () => {
+      if (timer !== undefined) clearTimeout(timer)
+      ro.disconnect()
+    }
   }, [vbKey])
 
   useEffect(() => {
@@ -178,6 +233,8 @@ function useZoom(vb: Rect): Zoom {
        都在纯函数里；这里只把指针位置换算成元素盒坐标。 */
     const onWheel = (e: WheelEvent): void => {
       e.preventDefault()
+      // v15 W-1：滚轮缩放 = 手动改变视口 ⇒ 清 pristine（此后 resize 不再自动拉回 fit）
+      pristine.current = false
       const rect = el.getBoundingClientRect()
       setView((cur) =>
         zoomAt(
@@ -194,6 +251,8 @@ function useZoom(vb: Rect): Zoom {
 
   /** 按钮缩放以**容器中心**为锚：只有滚轮才有指针位置（键盘用户也拿得到可预期的一步）。 */
   const step = (factor: number): void => {
+    // v15 W-1：± 也是手动改变视口 ⇒ 清 pristine（漏了它，点过按钮后 resize 会把视口拉回 fit）
+    pristine.current = false
     setView((cur) => zoomAt(cur, factor, { x: box.w / 2, y: box.h / 2 }, fit))
   }
 
@@ -248,6 +307,8 @@ function useZoom(vb: Rect): Zoom {
         const dy = e.clientY - from.y
         from.x = e.clientX
         from.y = e.clientY
+        // v15 W-1：**真正发生平移**才算手动改视口（原地按下-抬起不清 pristine）
+        if (dx !== 0 || dy !== 0) pristine.current = false
         setView((cur) => panBy(cur, dx, dy))
       },
       onPointerUp: endDrag,

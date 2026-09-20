@@ -173,18 +173,28 @@ export async function isExternalSkillRemovable(skillsDir: string, name: string):
  * - `managedRoot` **必须是 `skills_dir`**：restore 的目标定界只信任它，误传 `PRISM_HOME`
  *   会让还原恒报 `trash_restore_escape`；
  * - 软链目录按 TrashStore 既有行为**只搬链接**、不追目标（`installedSkillNames` 用
- *   `isDirectory()` 过滤，软链技能本就不进控制台列表）。
+ *   `isDirectory()` 过滤，软链技能本就不进控制台列表）；
+ * - `skills_dir` **必填**（v15 B-4）：与 `deleteRoleDefinition` / `deleteTeamDefinition` 同参
+ *   形态——`unknown` 入参 + trim 后非空校验，缺参即 `bad_request skills_dir_required`，绝不
+ *   回落到默认宿主目录（MCP 第三面对称新增后，非法缺参不再以 TypeError 形式暴露）。
  */
 export async function deleteExternalSkillDefinition(
   rawName: string,
-  skillsDir: string,
+  skillsDir: unknown,
   trash: TrashStore,
   trigger: TrashTrigger,
 ): Promise<SkillExternalDeleteOutcome> {
-  const { name, target } = resolveExternalSkillTarget(rawName, skillsDir)
+  const targetDir = asNonEmptyString(skillsDir)
+  if (targetDir === undefined) {
+    throw new PrismError(
+      'bad_request',
+      'skills_dir_required：未指定 Skill 目录（防误写真实宿主，写路径一律显式参数化）。',
+    )
+  }
+  const { name, target } = resolveExternalSkillTarget(rawName, targetDir)
   const state = await externalSkillStateOf(target)
   if (state === 'absent') {
-    throw new PrismError('not_found', `skill_not_found：${target} 不存在（skills_dir = ${skillsDir}）`)
+    throw new PrismError('not_found', `skill_not_found：${target} 不存在（skills_dir = ${targetDir}）`)
   }
   if (state === 'no_skill_md') {
     throw new PrismError(
@@ -198,8 +208,8 @@ export async function deleteExternalSkillDefinition(
       `skill_is_prism_product：${name} 是 Prism 产物（SKILL.md 含 Prism marker），请走卸载（POST /api/skills/uninstall）`,
     )
   }
-  const moved = await trash.put('skill', name, [target], { managedRoot: skillsDir, trigger })
-  return { skills_dir: skillsDir, removed: moved.originalPaths, trash_id: moved.id }
+  const moved = await trash.put('skill', name, [target], { managedRoot: targetDir, trigger })
+  return { skills_dir: targetDir, removed: moved.originalPaths, trash_id: moved.id }
 }
 
 function requireSkillsDir(body: SkillWriteBody): string {

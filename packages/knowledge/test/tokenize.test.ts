@@ -52,6 +52,116 @@ describe('bigram（design §3.4 硬约束：CJK 二元滑窗 + 非 CJK 小写原
   })
 })
 
+// ── D-v15-2：长连段不再撞「实参栈上限」 ───────────────────────────────────────
+//
+// 缺陷：`String.fromCodePoint(...cps.slice(i, j))` 把**整个连段**展开成实参，
+// 每个元素占一个栈槽；单一连段超过约 1.2e5 码点即 `RangeError: Maximum call
+// stack size exceeded`。实测：单一 CJK 连段 130,000 起必炸（120,000 尚可），
+// 黑盒侧 268,868 字符 deposit 稳定复现。后果是 >256KB 条目的降级路径永远到不了。
+
+/** CJK 判定（与 `src/tokenize.ts` 同式；仅用于把修前实现原样冻结成基准）。 */
+function isCjk(cp: number): boolean {
+  return (
+    (cp >= 0x3400 && cp <= 0x4dbf) ||
+    (cp >= 0x4e00 && cp <= 0x9fff) ||
+    (cp >= 0xf900 && cp <= 0xfaff) ||
+    (cp >= 0x20000 && cp <= 0x2a6df)
+  )
+}
+
+const SAFE_WORD_RE = /[\p{L}\p{N}]/u
+
+/**
+ * **修前实现逐字节冻结**（`String.fromCodePoint(...cps.slice(i, j))`）。
+ * 只在「展开实参不会炸」的尺寸（≤ 5 万码点）上用作基准，验证改动零行为差异。
+ */
+function legacyBigram(input: string): string {
+  if (!input) return ''
+  const cps = Array.from(input).map((c) => {
+    const point = c.codePointAt(0)
+    return point === undefined ? 0 : point
+  })
+  const tokens: string[] = []
+  let i = 0
+  while (i < cps.length) {
+    if (isCjk(cps[i])) {
+      let j = i
+      while (j < cps.length && isCjk(cps[j])) j++
+      const run = String.fromCodePoint(...cps.slice(i, j))
+      if (run.length === 1) {
+        tokens.push(run)
+      } else {
+        for (let k = i; k < j - 1; k++) tokens.push(String.fromCodePoint(cps[k], cps[k + 1]))
+      }
+      i = j
+      continue
+    }
+    let j = i
+    while (j < cps.length && !isCjk(cps[j])) j++
+    const run = String.fromCodePoint(...cps.slice(i, j))
+    for (const word of run.toLowerCase().split(/\s+/)) {
+      if (word && SAFE_WORD_RE.test(word)) tokens.push(word)
+    }
+    i = j
+  }
+  return tokens.join(' ')
+}
+
+/** 正常尺寸语料：边界码点/代理对/标点/混排/多行全在内。 */
+const NORMAL_CORPUS: string[] = [
+  '',
+  '性能',
+  '异常处理',
+  'Java性能优化指南',
+  '性能。优化',
+  '性',
+  '   ',
+  '!!!',
+  'Hello World',
+  'DATABASE',
+  'Java 异常处理',
+  '第一行\n第二行\tTabbed',
+  '\u{20000}\u{20001}', // 扩展 B：单码点连段 + 代理对
+  '\u{20000}\u{20001}\u{20002}甲',
+  '\uD800', // 孤立代理项（非 CJK → 丢弃）
+  'a\uD800b',
+  '\u4e00\u3400\uF900\u2A6DF\u9FFF\u3002',
+  '😀 甲😀乙 😀',
+  `${'甲'.repeat(300)}${'word '.repeat(50)}${'乙'.repeat(300)}`,
+]
+
+describe('D-v15-2 大输入（原实参展开会栈溢出）', () => {
+  it('正常尺寸输出与修前实现逐字节一致（含 5 万码点的长连段）', () => {
+    for (const text of NORMAL_CORPUS) {
+      expect(bigram(text), `corpus: ${JSON.stringify(text.slice(0, 40))}`).toBe(legacyBigram(text))
+    }
+    for (const medium of ['甲'.repeat(50_000), 'A'.repeat(50_000), 'ab '.repeat(20_000)]) {
+      expect(bigram(medium)).toBe(legacyBigram(medium))
+    }
+  })
+
+  it('单一 CJK 连段 268,868 码点：不抛 RangeError，词元数与滑窗一致', () => {
+    const n = 268_868
+    const out = bigram('甲'.repeat(n))
+    const tokens = out.split(' ')
+    expect(tokens).toHaveLength(n - 1)
+    expect(tokens[0]).toBe('甲甲')
+    expect(tokens[n - 2]).toBe('甲甲')
+    expect(out).toBe(new Array<string>(n - 1).fill('甲甲').join(' '))
+  })
+
+  it('单一非 CJK 连段 268,868 码点（无空白）：不抛 RangeError，小写原词', () => {
+    const n = 268_868
+    expect(bigram('A'.repeat(n))).toBe('a'.repeat(n))
+  })
+
+  it('连段跨过实测临界（130,000）与黑盒复现长度（268,868）均成立', () => {
+    for (const n of [130_000, 150_000, 268_868]) {
+      expect(bigram('甲'.repeat(n)).split(' ')).toHaveLength(n - 1)
+    }
+  })
+})
+
 describe('toMatchExpression（FTS5 MATCH 表达式）', () => {
   it('逐词双引号包裹（AND 语义）', () => {
     expect(toMatchExpression('性能')).toBe('"性能"')

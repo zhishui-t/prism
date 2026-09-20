@@ -68,7 +68,8 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
   prism role edit <name> [--source <dir>] [--description <述>] [--skills a,b] [--layers ...] [--books ...] [--color <色>]
                         [--model <id>] [--thought-level ...] [--body-file <md|->] [--harness-root <dir>|--yes]
                                            修改角色（只改点名字段，正文与未知键原样保留）
-                                           --skills "" / --color "" / --model "" = 清空该项
+                                           --skills "" / --books "" / --color "" / --model "" = 清空该项
+                                           （--books "" 只清 books，--layers 不受影响）
   prism role rm <name> [--source <dir>] [--harness-root <dir>|--yes]
                                            删除角色（**进回收站**，可 prism trash restore <id> 还原；
                                            默认宿主目录需 --yes）
@@ -84,6 +85,9 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
                                            默认宿主目录需 --yes）
   prism team activate <id> [--source <dir>] [--roles-dir <dir>]
   prism skill list | install | update | uninstall | validate [name...] [--force]
+  prism skill rm <name> [--harness-root <dir>|--yes]
+                                           删除**外部技能**（人写、无 Prism marker）整目录进回收站
+                                           （Prism 产物请用 uninstall）；默认宿主目录需 --yes
   prism skill effective --role <r> [--team <t>] [--json]
                                            角色（可选绑定团队）的生效 Skill 集（global∪team∪role + 缺失告警）
   prism skill categorize <name...> [--category <分类>] [--json]

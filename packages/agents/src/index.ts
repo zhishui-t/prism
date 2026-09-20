@@ -187,7 +187,7 @@ export type { ImportFailures } from './registry.js'
 
 // 角色与团队写盘（new / edit / rm 的唯一实现；「装配」语义已随「角色直接住宿主目录」移除：
 // 无 installRoles / installTeamDefinitions / migrateTeams）
-export { newRole, editRole, removeRole, patchRoleRaw, replaceSection, RoleWriteError, ROLE_DESCRIPTION_PLACEHOLDER } from './role/write.js'
+export { newRole, editRole, removeRole, patchRoleRaw, replaceSection, resolveRoleFile, RoleWriteError, ROLE_DESCRIPTION_PLACEHOLDER } from './role/write.js'
 export type { NewRoleInput, EditRoleInput, RemoveRoleInput, RolePatch, RoleRenderer } from './role/write.js'
 export { editTeam, removeTeam, patchTeamRaw, assertTeamId, resolveTeamFile, TeamWriteError } from './team/write.js'
 export type { EditTeamInput, RemoveTeamInput, TeamPatch, TeamWriteResult } from './team/write.js'

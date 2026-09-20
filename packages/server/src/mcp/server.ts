@@ -22,6 +22,7 @@ import {
   activateTeam,
   createRoleDefinition,
   createTeamDefinition,
+  deleteExternalSkillDefinition,
   deleteRoleDefinition,
   deleteTeamDefinition,
   installedSkillNames,
@@ -74,8 +75,9 @@ import { trashStoreFor } from '../trash.js'
 
 /**
  * MCP stdio 服务（design.md §4 最小集 + design-v3 §3.4 P6 增量，手写 JSON-RPC 2.0）：
- * 知识库 / 图谱 / 角色 / 团队 / 技能，共 48 个工具（v6：角色与团队补齐增删改查；
- * v12 F4：技能分类清单增删改 `prism_skill_category_add|rename|rm`）。
+ * 知识库 / 图谱 / 角色 / 团队 / 技能，共 49 个工具（v6：角色与团队补齐增删改查；
+ * v12 F4：技能分类清单增删改 `prism_skill_category_add|rename|rm`；
+ * v15 B-4：外部技能删除 `prism_skill_rm`）。
  * ⚠ 上面这个数是**对外口径**，由 `packages/server/test/tool-surface-drift.test.ts` 锁定（MIN-1）。
  * 独立进程运行（`node dist/mcp/server.js`），与 prism serve 经 SQLite WAL 并存。
  */
@@ -529,6 +531,21 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
       'MCP',
     )
 
+  /**
+   * 删除**外部技能**（写）：与 CLI `prism skill rm`、HTTP `DELETE /api/skills/external/:name`
+   * 共用域单点 `deleteExternalSkillDefinition`（v15 B-4 第三面对称）。只删「有 `SKILL.md` 且
+   * **无** Prism marker」的技能——Prism 产物 → `id_conflict`（指路卸载）；不存在 / 无 `SKILL.md`
+   * → `not_found`。整目录进回收站，返回 `trash_id`（可 `prism trash restore` 还原）。
+   * `skills_dir` 必填（防误写真实宿主）。
+   */
+  const skillRemove = async (args: Record<string, unknown>): Promise<unknown> => {
+    const name = asString(args.name)
+    if (name === undefined) {
+      throw new Error('prism_skill_rm 需要 { name }')
+    }
+    return await deleteExternalSkillDefinition(name, args.skills_dir, trash, 'MCP')
+  }
+
   /** 取单个角色定义（装配器按名拉取，免拉全量）。 */
   const roleGet = async (args: Record<string, unknown>): Promise<unknown> => {
     const name = asString(args.name)
@@ -765,7 +782,8 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
         '检索 Prism 知识库（bigram 中文检索；支持 layer/owner/book/module 过滤，默认只返回最新版次）。' +
         '长文档按标题分段索引，命中的结果额外带段级定位 `hits`（{seq, heading_path, excerpt, score}，' +
         '缺省不下发），据此可指出命中落在文档哪一节；响应级 `chunk_scan_degraded` 表示段向量扫描被护栏降级、' +
-        '`hits_truncated` 表示段列表被预算截断。',
+        '`hits_truncated` 表示段列表被预算截断、`embedding_degraded`（三判据同真：装配了向量能力 ∧ ' +
+        '查询未显式关混合 ∧ 查询向量算不出）表示向量检索降级、已回落纯关键词检索（结果照常，仅诊断）。',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1530,6 +1548,23 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
         required: ['skills_dir'],
       },
       call: skillUninstall,
+    },
+    {
+      name: 'prism_skill_rm',
+      description:
+        '删除**外部 Skill**（人写、无 Prism marker；v15 B-4）：有 SKILL.md 且无 marker 才删，**整目录搬进回收站**并返回 trash_id（可 `prism trash restore <trash_id>` 还原）。Prism 产物（SKILL.md 含 marker）→ 拒绝并指路卸载（prism_skill_uninstall / POST /api/skills/uninstall）；目录不存在或无 SKILL.md → not_found。与 HTTP DELETE /api/skills/external/:name、CLI `prism skill rm` 同一实现（域单点 deleteExternalSkillDefinition）。skills_dir 必填——写路径一律显式参数化，绝不回落到默认宿主目录',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: '要删除的外部 Skill 名（对应 <skills_dir>/<name> 目录）' },
+          skills_dir: {
+            type: 'string',
+            description: '**必填**：Skill 所在目录（防误写真实宿主）。取值来自 prism_skill_list 的 skills_dir',
+          },
+        },
+        required: ['name', 'skills_dir'],
+      },
+      call: skillRemove,
     },
     {
       name: 'prism_skill_categorize',

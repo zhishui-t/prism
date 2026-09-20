@@ -376,6 +376,11 @@ export class PrismKnowledgeService implements KnowledgeService {
   readonly #embed: KnowledgeServiceOptions['embed']
   /** 当前 embedding 模型 id（分档）；检索只比同模型向量。未装配时为 undefined。 */
   readonly #embeddingModel: KnowledgeServiceOptions['embeddingModel']
+  /**
+   * 装配侧向量能力标志（v15 §2 / SPEC-2.1①）：只有注入侧显式置 `true` 才视作「向量路
+   * 可能有活」。**不**用 `#embed !== undefined` 代替——server 侧 embed 无条件注入（M-1）。
+   */
+  readonly #vectorCapable: KnowledgeServiceOptions['vectorCapable']
   /** 段切分参数（v13 §2）；缺省 `{}` → 切分器自身默认。 */
   readonly #chunkOptions: KnowledgeServiceOptions['chunkOptions']
   /** 段向量全扫的段数上限（v13 §4/SPEC-3.7）；缺省 `DEFAULT_VECTOR_SCAN_CAP`。 */
@@ -405,6 +410,7 @@ export class PrismKnowledgeService implements KnowledgeService {
       options.idFactory ?? (() => `KB-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`)
     this.#embed = options.embed
     this.#embeddingModel = options.embeddingModel
+    this.#vectorCapable = options.vectorCapable
     this.#chunkOptions = options.chunkOptions ?? {}
     this.#vectorScanCap = options.vectorScanCap
     this.#chunkVectorFloor = options.chunkVectorFloor
@@ -1874,14 +1880,39 @@ export class PrismKnowledgeService implements KnowledgeService {
    *   与 step0 固定基线（`test/fixtures/search-baseline.json`）逐字节一致（SPEC-3.4②）。
    *   必须靠真实基线对比验收，不能口头断言。
    * - **有 chunks** → 单层四路 RRF（v13 §4）。
+   *
+   * v15 §2（M-1 修订）：查询向量 `qVec` 在此**单点**解析一次，传入两条分支——故 legacy
+   * 分支也能据它带 `embedding_degraded`（旧实现把 qVec 藏在各自分支内，`#embed !== undefined`
+   * 判据又恒真，标志无从可靠产出）。
    */
   async #search(query: SearchQuery): Promise<SearchResponse> {
     const ctx = this.#searchContext(query)
     const raw = this.persistence.knowledge.raw
+    const qVec = await this.#queryVector(query)
     if (countRows(raw, 'kb_chunks') === 0) {
-      return { results: await this.#legacyResults(raw, ctx) }
+      return this.#legacyResults(raw, ctx, qVec)
     }
-    return this.#fusedResults(raw, ctx)
+    return this.#fusedResults(raw, ctx, qVec)
+  }
+
+  /**
+   * 取查询向量（SPEC-2.1③ 的数据源，单点调用）：
+   * 未装配 `embed` / 显式 `hybrid:false` → `null`（**不发请求**，与既有短路口径一致）；
+   * 算不出（假活/超时/失败）或零长 → `null`。两分支共用这一次结果。
+   */
+  async #queryVector(query: SearchQuery): Promise<Float32Array | null> {
+    if (this.#embed === undefined || query.hybrid === false) return null
+    const vec = await this.#embed(query.q)
+    return vec !== null && vec.length > 0 ? vec : null
+  }
+
+  /**
+   * 能力降级判据（SPEC-2.1，三判据**同真**）：
+   * 装配侧 `vectorCapable` ∧ 查询未显式关混合（`hybrid !== false`——显式关是用户选择，
+   * 不得报）∧ 查询向量算不出（`qVec === null`）。合法零命中不算降级（SPEC-2.2）。
+   */
+  #vectorDegraded(query: SearchQuery, qVec: Float32Array | null): boolean {
+    return this.#vectorCapable === true && query.hybrid !== false && qVec === null
   }
 
   /**
@@ -1964,26 +1995,35 @@ export class PrismKnowledgeService implements KnowledgeService {
   /**
    * **现状路径**（v13 之前的行为，逐字节保留）：条目 BM25 单路，或在装配了 embedding
    * 时「条目 BM25 + 条目向量」两路 RRF。全库无 chunks 时走这里（SPEC-3.4②）。
+   *
+   * v15 §2：`qVec` 由调用方（`#search`）单点解析后传入——本分支据此**也能**带
+   * `embedding_degraded`（legacy 不再返回裸数组，而是 `SearchResponse`；未降级时
+   * 响应仅含 `results`，与旧形状逐字节一致）。
    */
-  async #legacyResults(raw: DatabaseSync, ctx: SearchContext): Promise<SearchResult[]> {
+  async #legacyResults(
+    raw: DatabaseSync,
+    ctx: SearchContext,
+    qVec: Float32Array | null,
+  ): Promise<SearchResponse> {
     const { query, match, clauses, params, limit } = ctx
-    // query 向量算不出（未安装/启动失败）时静默回落纯 BM25，结果与既有一致。
-    if (this.#embed !== undefined && query.hybrid !== false) {
-      const qVec = await this.#embed(query.q)
-      if (qVec !== null && qVec.length > 0) {
-        // 向量召回全量扫描（见 #vectorHits 注释：SQL LIMIT 会任意截断丢失相关条目）
-        const pool = Math.max(limit, ctx.hybridCandidates)
-        const vectorRowids = await this.#vectorHits(
-          raw,
-          clauses,
-          params,
-          qVec,
-          pool,
-          ctx.vectorFloor,
-          ctx.vectorRelative,
-        )
-        if (vectorRowids.length > 0) {
-          return this.#applyOverridesBoost(
+    const degraded = this.#vectorDegraded(query, qVec) ? { embedding_degraded: true as const } : {}
+    // 查询向量可算（`qVec` 已含「未装配 / hybrid:false / 算不出」的短路）→ 两路 RRF；
+    // 否则静默回落纯 BM25，结果与既有一致。
+    if (qVec !== null) {
+      // 向量召回全量扫描（见 #vectorHits 注释：SQL LIMIT 会任意截断丢失相关条目）
+      const pool = Math.max(limit, ctx.hybridCandidates)
+      const vectorRowids = await this.#vectorHits(
+        raw,
+        clauses,
+        params,
+        qVec,
+        pool,
+        ctx.vectorFloor,
+        ctx.vectorRelative,
+      )
+      if (vectorRowids.length > 0) {
+        return {
+          results: this.#applyOverridesBoost(
             this.#hybridResults(raw, {
               match,
               clauses,
@@ -1996,13 +2036,14 @@ export class PrismKnowledgeService implements KnowledgeService {
               routeWeights: ctx.weights,
             }),
             query.graph_boost,
-          )
+          ),
+          ...degraded,
         }
       }
     }
 
     const hits = searchFts(raw, { match, where: clauses.join(' AND '), params, limit })
-    if (hits.length === 0) return []
+    if (hits.length === 0) return { results: [], ...degraded }
 
     const placeholders = hits.map(() => '?').join(', ')
     const rows = raw
@@ -2014,7 +2055,7 @@ export class PrismKnowledgeService implements KnowledgeService {
       const row = byRowid.get(hit.rowid)
       if (row) results.push(this.#toSearchResult(raw, row, hit.score, query.q))
     }
-    return this.#applyOverridesBoost(results, query.graph_boost)
+    return { results: this.#applyOverridesBoost(results, query.graph_boost), ...degraded }
   }
 
   /**
@@ -2027,7 +2068,11 @@ export class PrismKnowledgeService implements KnowledgeService {
    *   各两路同权（非四路等权）；权重 0 → 对应两路同时关闭（SPEC-3.4a）；
    * - `all_versions=true` → 段级两路整体不参与（段只存最新版——M-7 的有意差异）。
    */
-  async #fusedResults(raw: DatabaseSync, ctx: SearchContext): Promise<SearchResponse> {
+  async #fusedResults(
+    raw: DatabaseSync,
+    ctx: SearchContext,
+    qVec: Float32Array | null,
+  ): Promise<SearchResponse> {
     const { query, match, clauses, params, limit } = ctx
     const pool = Math.max(limit, ctx.hybridCandidates)
     const keyword = ctx.weights[0] ?? 1
@@ -2041,12 +2086,7 @@ export class PrismKnowledgeService implements KnowledgeService {
       limit: ctx.hybridCandidates,
     }).map((h) => h.rowid)
 
-    // ② 条目向量（现状路）
-    let qVec: Float32Array | null = null
-    if (this.#embed !== undefined && query.hybrid !== false) {
-      const vec = await this.#embed(query.q)
-      if (vec !== null && vec.length > 0) qVec = vec
-    }
+    // ② 条目向量（现状路）；`qVec` 由 `#search` 单点解析传入（v15 §2）
     const entryVecRank =
       qVec !== null
         ? await this.#vectorHits(raw, clauses, params, qVec, pool, ctx.vectorFloor, ctx.vectorRelative)
@@ -2077,9 +2117,12 @@ export class PrismKnowledgeService implements KnowledgeService {
       }
     }
 
-    const degraded: Pick<SearchResponse, 'chunk_scan_degraded'> = chunkScanDegraded
-      ? { chunk_scan_degraded: true }
-      : {}
+    // v15 §2：两个响应级降级标记同源（此分支与 legacy 各自接线；本分支还能带
+    // `chunk_scan_degraded`）。`embedding_degraded` 只在本分支的 query 向量算不出时置。
+    const degraded: Pick<SearchResponse, 'chunk_scan_degraded' | 'embedding_degraded'> = {
+      ...(chunkScanDegraded ? { chunk_scan_degraded: true } : {}),
+      ...(this.#vectorDegraded(query, qVec) ? { embedding_degraded: true } : {}),
+    }
 
     const fused = rrfFuse(
       [

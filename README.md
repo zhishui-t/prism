@@ -284,7 +284,7 @@ IR 是源、HTML 是派生，两者都可作为 `type: diagram` 条目沉淀。*
 
 **目录字段怎么取**：读接口返回的键名与写参数**同名**，读回即可回填——`GET /api/roles` → `{ roles, roles_dir }`、`prism_role_list` → `roles_dir`；`GET /api/teams` → `{ teams, teams_dir }`、`prism_team_list` → `teams_dir`。
 
-**三入口的取舍（有意不对称，非缺陷）**：`render` 只有 CLI/MCP；`validate` 只有 CLI（校验结果随 `list`/`detail` 的 `issues` 返回）；`--from`（从既有定义复制）只有 CLI。**Skill 的装/卸三入口齐**：CLI `prism skill install|uninstall|update` ↔ MCP `prism_skill_install|uninstall` ↔ HTTP `POST /api/skills/install|uninstall`（写路径 `skills_dir` 必填；先用 `prism_skill_list` 拿回该目录）。三入口真正严格对齐的是**动词与落盘语义**。
+**三入口的取舍（有意不对称，非缺陷）**：`render` 只有 CLI/MCP；`validate` 只有 CLI（校验结果随 `list`/`detail` 的 `issues` 返回）；`--from`（从既有定义复制）只有 CLI。**Skill 的装/卸三入口齐**：CLI `prism skill install|uninstall|update` ↔ MCP `prism_skill_install|uninstall` ↔ HTTP `POST /api/skills/install|uninstall`（写路径 `skills_dir` 必填；先用 `prism_skill_list` 拿回该目录）。三入口真正严格对齐的是**动词与落盘语义**。**外部技能删除三入口齐**（v15 B-4）：CLI `prism skill rm <name>` ↔ MCP `prism_skill_rm` ↔ HTTP `DELETE /api/skills/external/:name`（同一域单点；只删人写技能，Prism 产物走 uninstall）。
 
 ```bash
 prism role list
@@ -345,7 +345,7 @@ prism
 ├── harness    list | show                              宿主适配器（内置 + 运行期插件）
 ├── role       list | show | new | edit | rm | validate | render
 ├── team       list | show | new | edit | rm | validate | render | activate
-├── skill      list | install | update | uninstall | validate | effective | categorize | category
+├── skill      list | install | update | uninstall | rm | validate | effective | categorize | category
 ├── kb         import | sync | search | get | tree | stats | graph | path
 │              | export | remove | restore | conflicts | resolve | history | reindex [--chunks]
 │              | convert | enrich | structure | versions | deposit
@@ -356,7 +356,7 @@ prism
 └── harness / audit
 ```
 
-**MCP 工具 48 个**：知识库 17 · 代码图谱 8 · 架构图谱 1 · 角色/团队/技能 21 · 上下文包 1（`tools/list` 实测）。
+**MCP 工具 49 个**：知识库 17 · 代码图谱 8 · 架构图谱 1 · 角色/团队/技能 22 · 上下文包 1（`tools/list` 实测）。
 
 ---
 

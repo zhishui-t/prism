@@ -13,7 +13,9 @@
  *  8. `formatLocation`（自 `GraphQuery.tsx` 迁入的既有纯函数）；
  *  9. **v12 F1 缩放平移**：适应窗口（双向比取 min + 居中）、倍率 clamp 与百分比、
  *     指针锚缩放、平移、`<g transform>` 归一化（含「不叠加两次」的复合不变式）、
- *     第二行标注（阈值 / 不猜 / 不截断）。
+ *     第二行标注（阈值 / 不猜 / 不截断）；
+ * 10. **v15 W-1 容器 resize 重 fit**：防抖时长常量（200）与 pristine 决策（true → 重算、
+ *     false → 不动视口）——DOM 侧（ResizeObserver 接线）在 `graph-call-chain-zoom-dom.test.ts`。
  *
  * 环境：默认 node（不写环境 pragma，同 `graph-query-styles.test.ts` 的既有做法）——
  * `graph-logic.ts` 只 `import type` 别处的东西，运行时零依赖。
@@ -31,6 +33,7 @@ import {
   RADIAL_CENTER,
   RADIAL_MAX,
   RADIAL_PEER,
+  REFIT_DEBOUNCE_MS,
   VIEW_PAD,
   ZOOM_STEP,
   annotationLine,
@@ -50,6 +53,7 @@ import {
   segmentBetweenBoxes,
   sequenceAddress,
   sequenceExportErrorKey,
+  shouldRefitOnResize,
   transformAttr,
   userTransform,
   viewBoxAttr,
@@ -579,6 +583,19 @@ describe('v12 F1 第二行标注（SPEC-1.8 / R-1 闭合点）', () => {
     const line = annotationLine('pkg/x.ts#veryLongSymbolName', file, '715')
     expect(line).toBe(`pkg/x.ts#veryLongSymbolName · ${file}:715`)
     expect(line).not.toContain('…')
+  })
+})
+
+/* ===== v15 W-1 容器 resize 重 fit（纯函数，SPEC-5.1–5.3） ===== */
+
+describe('v15 W-1 容器 resize 重 fit 的判定与防抖（纯函数）', () => {
+  it('防抖时长是 200ms（SPEC-5.3 的验收数值——钉死它，免得被当成随手取的实现细节改掉）', () => {
+    expect(REFIT_DEBOUNCE_MS).toBe(200)
+  })
+
+  it('pristine 决策：未手动缩放（true）→ 重算 fit；已手动缩放/平移（false）→ 不动视口', () => {
+    expect(shouldRefitOnResize(true)).toBe(true)
+    expect(shouldRefitOnResize(false)).toBe(false)
   })
 })
 

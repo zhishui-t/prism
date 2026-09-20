@@ -343,6 +343,11 @@ export async function loadKnowledgeService(home?: string): Promise<KnowledgeServ
       home,
       embed,
       embeddingModel: model.id,
+      // v15 §2 / SPEC-2.1①：装配侧**能力标志**——只在「已装且未禁用」时置。
+      // `embeddingInstalled()` 已把 `PRISM_EMBEDDING=off` 折成 false，故未装 / off 均不置。
+      // **不**可用 `embed !== undefined` 判能力：上面 `embed` 是无条件注入的闭包，
+      // 未装时只是恒返回 null（M-1 修订的假阳性根因）。
+      vectorCapable: embeddingInstalled(),
       chunkOptions: config.chunkOptions,
       vectorScanCap: config.vectorScanCap,
       rerankCandidates: rerank.candidates,

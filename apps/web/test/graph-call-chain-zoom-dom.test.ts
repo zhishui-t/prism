@@ -12,7 +12,9 @@
  *  4. **形态边界**（SPEC-1.7）：`affected` 分组列表**不出现**工具条、也不挂 wheel 监听；
  *  5. **第二行标注**（SPEC-1.8）：倍率 ≥ 1.5 追加 `id · file:line`、不截断；没有定位数据不编造；
  *  6. **reduced-motion**（SPEC-1.6）：系统要求减少动态时功能不受限（过渡那一侧由
- *     `styles-call-chain-graph.test.ts` 的 CSS 断言锁）。
+ *     `styles-call-chain-graph.test.ts` 的 CSS 断言锁）；
+ *  7. **v15 W-1 容器 resize 重 fit**（SPEC-5.1–5.3）：pristine（未手动缩放）时 resize 重算
+ *     fit、防抖 200ms；wheel / 拖拽 / ± 缩放过则不动视口；适应窗口与内容切换重置 pristine。
  *
  * 环境与 mock 口径同 `graph-call-chain-dom.test.ts`（happy-dom + 裸 `react-dom/client` + `react.act`，
  * 根 vitest.config.ts 只收 `.test.ts`，故不写 JSX；`fetch` 走最外层 stub，页面与 `api.ts` 跑真代码）。
@@ -32,8 +34,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 import { setLang, t } from '../src/i18n.ts'
+import { CallChainGraph } from '../src/pages/CallChainGraph.tsx'
 import { CodeGraphPage } from '../src/pages/CodeGraph.tsx'
-import { ZOOM_MAX, ZOOM_MIN, ZOOM_STEP, transformAttr, userTransform } from '../src/pages/graph-logic.ts'
+import type { GraphQueryResult } from '../src/pages/GraphQuery.tsx'
+import {
+  REFIT_DEBOUNCE_MS,
+  ZOOM_MAX,
+  ZOOM_MIN,
+  ZOOM_STEP,
+  transformAttr,
+  userTransform,
+} from '../src/pages/graph-logic.ts'
 
 const PROJECT = { project: 'demo', root: '/tmp/demo' }
 const STATUS = {
@@ -465,5 +476,213 @@ describe('v12 F1 reduced-motion（SPEC-1.6）', () => {
     // 过渡/动画一律在 styles.css（`.chain-zoom-layer` 与 `.chain-graph` 都不声明），组件不写 inline
     expect(one('.chain-zoom-layer')?.getAttribute('style')).toBeNull()
     expect(svg().getAttribute('style')).toBeNull()
+  })
+})
+
+/* ===== 7. 容器 resize 重 fit（v15 W-1 / SPEC-5.1–5.3） ===== */
+
+/**
+ * v15 W-1：容器尺寸变化时**只有 pristine（用户没手动动过视口）**才重新适配（SPEC-5.1）；
+ * wheel / 拖拽 / ± 缩放过则保持用户视口（SPEC-5.2，S-8）；防抖 200ms（SPEC-5.3）。
+ *
+ * 两处环境适配，都限定在本 describe 的局部钩子里（不污染其他用例）：
+ *  - happy-dom 的 `ResizeObserver` 是**空实现**（`observe()` 不做事、回调永不触发）⇒ 注入
+ *    **假观察器**（收集回调，由测试手动触发）；
+ *  - `getBoundingClientRect()` 恒为 0（量不到盒）⇒ 给图打桩 `getBoundingClientRect`：既让
+ *    `refit` 量到真盒（走 fitTransform 的真实分支），又当「重算了几次」的计数口（每次 `refit`
+ *    必调一次 `measure`，而 wheel 之外没有别的调用方）。
+ *
+ * ⚠ fake timers 只假 `setTimeout`/`clearTimeout`（防抖需要的那两个）：默认假全套会连
+ * `queueMicrotask`/`Date`/rAF 一起假掉，可能干扰 React `act` 的异步 flush——收窄到最小集合，
+ * 且 tick 后补一次 `act` 冲刷后续 effect。
+ */
+describe('v15 W-1 容器 resize 重 fit（SPEC-5.1–5.3）', () => {
+  interface RoRecord {
+    cb: () => void
+    targets: Element[]
+    disconnected: boolean
+  }
+  let ros: RoRecord[]
+
+  beforeEach(() => {
+    ros = []
+    class FakeResizeObserver {
+      private readonly record: RoRecord
+      constructor(cb: () => void) {
+        this.record = { cb, targets: [], disconnected: false }
+        ros.push(this.record)
+      }
+      observe(target: Element): void {
+        this.record.targets.push(target)
+      }
+      unobserve(): void {}
+      disconnect(): void {
+        this.record.disconnected = true
+      }
+    }
+    vi.stubGlobal('ResizeObserver', FakeResizeObserver)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  /** 当下那个观察器（组件在 vbKey 变化时会重建；测试总触发最新这一个）。 */
+  function latestRo(): RoRecord {
+    const last = ros[ros.length - 1]
+    if (last === undefined) throw new Error('组件没有创建 ResizeObserver')
+    return last
+  }
+
+  /** 给图打桩 `getBoundingClientRect`：返回可量的盒，并计数「打桩后量了几次」。 */
+  function stubSvgBox(size: { w: number; h: number }): { calls: () => number } {
+    const el = svg()
+    let n = 0
+    el.getBoundingClientRect = (): DOMRect => {
+      n += 1
+      return {
+        width: size.w,
+        height: size.h,
+        top: 0,
+        left: 0,
+        right: size.w,
+        bottom: size.h,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      } as DOMRect
+    }
+    return { calls: () => n }
+  }
+
+  async function fireResize(): Promise<void> {
+    await act(async () => {
+      latestRo().cb()
+    })
+  }
+
+  async function tick(ms: number): Promise<void> {
+    await act(async () => {
+      vi.advanceTimersByTime(ms)
+    })
+    await act(async () => {})
+  }
+
+  /**
+   * 受控 props 直渲 `CallChainGraph`（不经页面）。用途见 ⑤：只有这样更新**同一个实例**，
+   * 才走得进「内容切换重置 pristine」那条 layout effect。
+   */
+  async function renderGraph(result: GraphQueryResult): Promise<void> {
+    await act(async () => {
+      root.render(createElement(CallChainGraph, { result, onNodePick: () => {} }))
+    })
+    await act(async () => {})
+  }
+
+  /** relations 档的受控结果（`items` 个数决定 viewBox ⇒ 决定 vbKey）。 */
+  function relResult(items: ReturnType<typeof item>[]): GraphQueryResult {
+    return {
+      kind: 'relations',
+      dir: 'in',
+      value: { project: 'demo', node: 'pkg/a.ts#alpha', dir: 'in', total: items.length, limit: 200, items },
+    }
+  }
+
+  it('① 初始 pristine：RO 触发 → 200ms 后**恰好一次**重算 fit（窗口内多次触发合并为一次）', async () => {
+    await runRelations()
+    /* 观察的正是那张图。⚠ 用 `Array.includes` + `toBe` 而非 `toContain`：chai 深检 DOM 元素时
+       会顺着 happy-dom 节点上的 `__reactProps$…` 读到 React 元素的 props，而 `ref` 上挂着
+       React 的「ref is not a prop」告警 getter——那会凭空吐一条告警（不是组件的问题）。 */
+    expect(latestRo().targets.includes(svg())).toBe(true)
+    const measured = stubSvgBox({ w: 800, h: 600 })
+    expect(measured.calls()).toBe(0)
+
+    await fireResize()
+    await fireResize()
+    await fireResize()
+    await tick(REFIT_DEBOUNCE_MS - 1)
+    expect(measured.calls()).toBe(0) // 防抖窗口内还没重算
+    await tick(1)
+    expect(measured.calls()).toBe(1) // 三次触发合并成一次重算
+  })
+
+  it('② wheel 清 pristine：RO 触发也不动视口', async () => {
+    await runRelations()
+    const measured = stubSvgBox({ w: 800, h: 600 })
+    await fireWheel(-100, { x: 100, y: 100 })
+    expect(pct()).toBe('110%')
+    const before = layer()
+    const baseline = measured.calls() // wheel 自己也量了一次（指针锚换算）
+
+    await fireResize()
+    await tick(REFIT_DEBOUNCE_MS)
+    expect(measured.calls()).toBe(baseline)
+    expect(layer()).toBe(before)
+    expect(pct()).toBe('110%')
+  })
+
+  it('③a ± 按钮清 pristine：RO 触发也不动视口', async () => {
+    await runRelations()
+    const measured = stubSvgBox({ w: 800, h: 600 })
+    await click(buttonByText(t('graph.zoom.in')))
+    expect(pct()).toBe('110%')
+    const before = layer()
+    const baseline = measured.calls()
+
+    await fireResize()
+    await tick(REFIT_DEBOUNCE_MS)
+    expect(measured.calls()).toBe(baseline)
+    expect(layer()).toBe(before)
+  })
+
+  it('③b 拖拽清 pristine：RO 触发也不动视口', async () => {
+    await runRelations()
+    const measured = stubSvgBox({ w: 800, h: 600 })
+    await dragTo({ x: 10, y: 10 }, { x: 120, y: 60 })
+    expect(layer()).not.toBe('translate(0 0) scale(1)')
+    const before = layer()
+    const baseline = measured.calls()
+
+    await fireResize()
+    await tick(REFIT_DEBOUNCE_MS)
+    expect(measured.calls()).toBe(baseline)
+    expect(layer()).toBe(before)
+  })
+
+  it('④ 点「适应窗口」→ pristine 恢复：再 resize 会重算 fit', async () => {
+    await runRelations()
+    const measured = stubSvgBox({ w: 800, h: 600 })
+    await fireWheel(-100, { x: 0, y: 0 }) // 先手动缩放 ⇒ 清 pristine（否则这条测不到「恢复」）
+    expect(pct()).toBe('110%')
+    await click(buttonByText(t('graph.zoom.fit'))) // 复位 ⇒ 回到 pristine
+    expect(pct()).toBe('100%')
+    const baseline = measured.calls()
+
+    await fireResize()
+    await tick(REFIT_DEBOUNCE_MS)
+    expect(measured.calls()).toBe(baseline + 1)
+  })
+
+  it('⑤ 内容切换（同一实例上 vbKey 变）→ pristine 恢复：再 resize 会重算 fit', async () => {
+    /* 为什么以**受控 props 直渲**而不是走页面查询：页面的每次查询都会 `setResult(undefined)`
+       → 结果面板卸载重挂，图是**新实例**（实测 DOM 节点都换了）——那样只测到「新实例本来就
+       pristine」，测不到「同实例换内容时重置 pristine」这条 layout effect。 */
+    await renderGraph(relResult([item('n#a', 'alpha')]))
+    const measured = stubSvgBox({ w: 800, h: 600 })
+    const nodeBefore = svg()
+    await fireWheel(-100, { x: 0, y: 0 }) // 手动缩放 ⇒ 清 pristine
+    expect(pct()).toBe('110%')
+
+    // 对端 1 → 3 个 ⇒ viewBox 变（vbKey 变）；DOM 节点复用 = 同一实例（这条断言防「其实重挂了」）
+    await renderGraph(
+      relResult([item('n#a', 'alpha'), item('n#b', 'beta'), item('n#c', 'gamma')]),
+    )
+    expect(svg()).toBe(nodeBefore)
+    const baseline = measured.calls() // 内容切换的 refit 也量了一次（同实例的 layout effect 走的）
+
+    await fireResize()
+    await tick(REFIT_DEBOUNCE_MS)
+    expect(measured.calls()).toBe(baseline + 1)
   })
 })

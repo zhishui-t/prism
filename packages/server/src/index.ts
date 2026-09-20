@@ -381,6 +381,13 @@ export {
   type CreateTeamResult,
 } from './roles/index.js'
 
+// 外部技能删除（v15 B-4：HTTP `DELETE /api/skills/external/:name`、MCP `prism_skill_rm`、
+// CLI `prism skill rm` 三面共用同一域单点；写路径 skills_dir 必填）
+export {
+  deleteExternalSkillDefinition,
+  type SkillExternalDeleteOutcome,
+} from './roles/index.js'
+
 // 技能分类存储（v12 F4 双节形态：`<PRISM_HOME>/skill-categories.json`；三入口共用）
 export {
   SkillCategoryStore,

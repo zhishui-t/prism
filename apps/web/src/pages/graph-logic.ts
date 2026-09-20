@@ -330,6 +330,31 @@ export function transformAttr(t: ZoomTransform): string {
   return `translate(${round(t.tx)} ${round(t.ty)}) scale(${round(t.scale)})`
 }
 
+/* ===== 容器 resize 重 fit（v15 W-1 / SPEC-5.1–5.3） ===== */
+
+/**
+ * 容器尺寸变化后重算「适应窗口」的**防抖**时长（ms）。
+ *
+ * 拖窗口边缘会连发几十次 resize；防抖到 200ms 一次，重算与重渲染都只做一次
+ * （SPEC-5.3「防抖 200ms 一次重算」——该数值是验收契约，故与下面的决策函数一并下沉到
+ * 这里：组件只接线，自动化测试只打纯函数，happy-dom 量不到盒也不必碰 DOM）。
+ */
+export const REFIT_DEBOUNCE_MS = 200
+
+/**
+ * 容器 resize 后**是否**重算 fit（SPEC-5.1/5.2，S-8 裁决）。
+ *
+ * - `true`（pristine = 用户**从未**手动改变视口）⇒ 重新适配：初始态跟随容器尺寸；
+ * - `false`（wheel / 拖拽 / ± 缩放过）⇒ **不动视口**：用户手动定下的视口是对 resize 的
+ *   明确选择，自动拉回 fit 会把它抹掉（S-8「手动态不打扰」）。
+ *
+ * 判定只有这一条，故写成显式函数而不是组件里内联的 `if`：它是规格里要断言的那条规则
+ * （重置回 pristine 的入口——`refit` 与内容切换——留在组件的一侧）。
+ */
+export function shouldRefitOnResize(pristine: boolean): boolean {
+  return pristine
+}
+
 /* ===== 标签 ===== */
 
 /**

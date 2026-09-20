@@ -834,7 +834,11 @@ tr:last-child td { border-bottom: 0; }
 
 /* 源码视图：行号 + 横向滚动（B4：全局 —— Skills 详情的源码视图此前同样零样式） */
 .md-source-wrap { position: relative; }
-.md-source-bar { display: flex; align-items: center; gap: var(--s-2); margin-bottom: var(--s-2); }
+/* v15 W-1（R-6 / SPEC-6.1）：提示条随源码视图滚动固定在顶——`.book-content` 纵向滚动后
+   复制按钮与降级声明仍在视口内。背景取既有 `--paper`（正文区底色，唯一消费方 `.book-content`
+   就在它上面）——不透明才能盖住下方滚过的行；`z-index` 与侧栏 sticky 头同档（1），不过度。
+   注意 `overflow` 保持不声明：`.md-source` 才是横向滚动容器（F3：嵌套双滚动条红线）。 */
+.md-source-bar { display: flex; align-items: center; gap: var(--s-2); margin-bottom: var(--s-2); position: sticky; top: 0; background: var(--paper); z-index: 1; }
 .md-source { margin: 0; overflow-x: auto; background: var(--sheet-2); border: 1px solid var(--rule); border-radius: var(--r-1); padding: var(--s-2); font-family: var(--font-code); font-size: var(--fs-200); }
 .md-line { display: block; white-space: pre; }
 .md-lineno { display: inline-block; width: 4ch; margin-right: var(--s-2); color: var(--mute); text-align: right; user-select: none; }

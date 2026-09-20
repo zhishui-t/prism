@@ -14,6 +14,8 @@
  * `category`）→ **45**。
  * v12 F4（2026-09-17）：技能分类**清单**增删改（`prism_skill_category_add|rename|rm`，
  * 与 HTTP 三路由 / CLI `prism skill category add|rename|rm` 同名同位）→ **48**。
+ * v15 B-4（2026-09-18）：外部技能删除（`prism_skill_rm`，与 HTTP
+ * `DELETE /api/skills/external/:name` / CLI `prism skill rm` 同一域单点）→ **49**。
  *
  * 口径：从 Skill 正文（SKILL.md + references/*）提取全部 `prism_*` 工具名，
  * 与实际 `createMcpTools` 产出的工具集合比对（双向）。
@@ -47,9 +49,9 @@ function toolsMentionedIn(text: string): Set<string> {
 }
 
 describe('Skill 工具清单 vs 实际 MCP 工具（防漂移）', () => {
-  it('实际工具数 = 48', () => {
+  it('实际工具数 = 49', () => {
     const tools = createMcpTools({ home: 'X:/unused' })
-    expect(tools).toHaveLength(48)
+    expect(tools).toHaveLength(49)
   })
 
   it('Skill 提到的每个工具都真实存在（无幽灵工具）', () => {
@@ -74,13 +76,13 @@ describe('Skill 工具清单 vs 实际 MCP 工具（防漂移）', () => {
 
   it('声明的总数与表格分组一致', () => {
     const text = skillText()
-    expect(text).toContain('48 个 MCP 工具')
-    // 分组小计之和 = 48
+    expect(text).toContain('49 个 MCP 工具')
+    // 分组小计之和 = 49
     const groups = [...text.matchAll(/(知识库|代码图谱|架构图谱|角色团队)（(\d+)）/g)].map((m) =>
       Number(m[2]),
     )
     expect(groups.length).toBe(4)
-    expect(groups.reduce((a, b) => a + b, 0)).toBe(48)
+    expect(groups.reduce((a, b) => a + b, 0)).toBe(49)
   })
 
   /**

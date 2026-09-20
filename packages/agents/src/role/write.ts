@@ -146,13 +146,36 @@ export async function newRole(input: NewRoleInput): Promise<RoleWriteResult> {
 }
 
 /**
+ * 解析角色文件本体（双形态，**目录式优先**）：`<rolesDir>/<name>/AGENTS.md` → `<rolesDir>/<name>.md`。
+ * 两处都不存在 → `null`（不隐式新建）。
+ *
+ * 候选序对齐 `wiring.ts` 的 `loadRole`（`[<name>/AGENTS.md, <name>.md]`，S-1/S-2）：两形态共存
+ * （病理态）时**读到的文件与写的落点必须同一份**——否则 `edit` 会「读 A（目录式）写 B（扁平）」，
+ * 数据分裂且原文件纹丝不动。单点理由与 `resolveTeamFile` 同（P0-5：`editRole` 曾只认扁平形态，
+ * 目录式角色编辑直接 `role_not_found`）。注：`removeRole` 双形态**都删**（回收站整单元语义），
+ * 不取本函数的「单一落点」。
+ */
+export function resolveRoleFile(rolesDir: string, name: string): string | null {
+  const id = name.trim()
+  const dirForm = join(rolesDir, id, 'AGENTS.md')
+  if (existsSync(dirForm)) return dirForm
+  const flat = join(rolesDir, `${id}.md`)
+  if (existsSync(flat)) return flat
+  return null
+}
+
+/**
  * `role edit`：对既有角色打字段补丁（正文/未知键原样保留）。
  * 目标不存在 → `role_not_found`（本命令只改，不隐式新建）。
+ *
+ * 落点双形态（S-1/S-2）：**目录式 `<name>/AGENTS.md` 优先**，其次扁平 `<name>.md`——与
+ * `loadRole` 候选序同一单点（{@link resolveRoleFile}），读写同一文件。
  */
 export async function editRole(input: EditRoleInput): Promise<RoleWriteResult> {
-  const path = join(input.rolesDir, `${input.name.trim()}.md`)
-  if (!existsSync(path)) {
-    throw new RoleWriteError('role_not_found', `角色不存在，无法修改：${input.name}`, path)
+  const name = input.name.trim()
+  const path = resolveRoleFile(input.rolesDir, name)
+  if (path === null) {
+    throw new RoleWriteError('role_not_found', `角色不存在，无法修改：${name}`, join(input.rolesDir, `${name}.md`))
   }
   const raw = readFileSync(path, 'utf8')
   writeFile(path, patchRoleRaw(raw, input.patch))

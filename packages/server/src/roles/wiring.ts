@@ -26,6 +26,7 @@ import {
   parseRoleMarkdown,
   parseTeamMarkdown,
   resolveDirsFromHome,
+  resolveRoleFile,
   resolveTeamExtends,
   validateRole,
   validateTeam,
@@ -177,15 +178,19 @@ export async function loadRoles(rolesDir: string, opts: { knownSkills?: string[]
   }))
 }
 
-/** 加载单个角色：双形态探测 `<rolesDir>/<name>/AGENTS.md`（Prism 目录式）与 `<rolesDir>/<name>.md`（ZCode 扁平，装配语义简化后的默认 roles_dir 形态）；不存在 → null。 */
+/**
+ * 加载单个角色：双形态探测 `<rolesDir>/<name>/AGENTS.md`（Prism 目录式）与 `<rolesDir>/<name>.md`（ZCode 扁平，装配语义简化后的默认 roles_dir 形态）；不存在 → null。
+ *
+ * 落点判定复用 `@prism/agents` 的 `resolveRoleFile`（目录式优先，**同一单点**）——写侧
+ * `editRole` 用的也是它，故「读到的那份 = 将要写的那份」（S-1/S-2：修 A 写 B 的数据分裂防住）。
+ */
 export async function loadRole(
   rolesDir: string,
   name: string,
   opts: { knownSkills?: string[] } = {},
 ): Promise<RoleDefinition | null> {
-  const candidates = [join(rolesDir, name, 'AGENTS.md'), join(rolesDir, `${name}.md`)]
-  const file = candidates.find((c) => existsSync(c))
-  if (file === undefined) {
+  const file = resolveRoleFile(rolesDir, name)
+  if (file === null) {
     return null
   }
   const role = parseRoleMarkdown(await readFile(file, 'utf-8'), { sourcePath: file })

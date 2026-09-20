@@ -20,6 +20,21 @@ function isCjk(cp: number): boolean {
 const WORD_CHAR_RE = /[\p{L}\p{N}]/u
 
 /**
+ * 按**码点下标**区间 `[from, to)` 还原字符串。
+ *
+ * **不可**写成 `String.fromCodePoint(...cps.slice(from, to))`：展开成实参时
+ * 每个元素都要占一个栈槽，连段长度超过约 1.2e5 码点即 `RangeError: Maximum
+ * call stack size exceeded`（D-v15-2：~19.7 万字符的 deposit 直接失败，>256KB
+ * 的降级路径因此永远走不到）。逐点拼接再 `join('')` 结果**逐字节一致**
+ * （含扩展 B 区码点的代理对），且不占实参栈。
+ */
+function joinCodePoints(cps: readonly number[], from: number, to: number): string {
+  const chars = new Array<string>(to - from)
+  for (let k = from; k < to; k++) chars[k - from] = String.fromCodePoint(cps[k])
+  return chars.join('')
+}
+
+/**
  * bigram 分词。
  *
  * - CJK 连续段：二元滑窗（如「异常处理」→「异常 常处 处理」）；
@@ -40,7 +55,7 @@ export function bigram(input: string): string {
     if (isCjk(cps[i])) {
       let j = i
       while (j < cps.length && isCjk(cps[j])) j++
-      const run = String.fromCodePoint(...cps.slice(i, j))
+      const run = joinCodePoints(cps, i, j)
       if (run.length === 1) {
         tokens.push(run)
       } else {
@@ -54,7 +69,7 @@ export function bigram(input: string): string {
     // 非 CJK 段：聚成一段再按空白切词
     let j = i
     while (j < cps.length && !isCjk(cps[j])) j++
-    const run = String.fromCodePoint(...cps.slice(i, j))
+    const run = joinCodePoints(cps, i, j)
     for (const word of run.toLowerCase().split(/\s+/)) {
       if (word && WORD_CHAR_RE.test(word)) tokens.push(word)
     }

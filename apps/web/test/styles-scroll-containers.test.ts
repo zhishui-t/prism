@@ -141,6 +141,24 @@ describe('F3 技能页 / 团队页列表栏（主从网格的单列形态）', (
   })
 })
 
+describe('R-6 源码视图定位提示条 sticky（SPEC-6.1）', () => {
+  it('`.md-source-bar` 随纵向滚动固定：sticky + top:0 + 不透明既有底色 + 同档 z-index', () => {
+    const bar = body('.md-source-bar')
+    expect(bar).toContain('position: sticky')
+    expect(bar).toMatch(/top:\s*0/)
+    // 底色必须是不透明 token（不是新色值 / hex）——否则滚过的行会透出来
+    expect(bar).toContain('background: var(--')
+    expect(bar).not.toMatch(/#[0-9a-fA-F]{3,8}\b/)
+    // 与侧栏 sticky 头同档（不过度抬升）
+    expect(bar).toContain('z-index: 1')
+  })
+
+  it('sticky 落在提示条本身：横滚容器 `.md-source` 不跟着 sticky（嵌套双滚动条红线）', () => {
+    expect(body('.md-source-bar')).not.toContain('overflow')
+    expect(body('.md-source')).not.toMatch(/position:\s*sticky/)
+  })
+})
+
 describe('F3 无嵌套双滚动条（横滚容器只许滚 X 轴）', () => {
   const HSCROLL = ['.md-read .md-pre', '.md-read .md-table-wrap', '.md-source', '.flow-scroll', '.table-scroll']
 

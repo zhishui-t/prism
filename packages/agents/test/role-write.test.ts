@@ -13,6 +13,7 @@ import {
   newRole,
   patchRoleRaw,
   removeRole,
+  resolveRoleFile,
   RoleWriteError,
   ROLE_DESCRIPTION_PLACEHOLDER,
 } from '../src/role/write.js'
@@ -370,6 +371,34 @@ describe('editRole（外科式补丁：只动点名字段，正文不重排）',
       code: 'role_not_found',
     })
     expect(existsSync(join(rolesDir, 'nope.md'))).toBe(false)
+  })
+})
+
+describe('editRole 双形态（S-1/S-2：目录式优先，与 loadRole 同解析——读写同一文件）', () => {
+  it('resolveRoleFile：目录式优先 → 扁平 → null', () => {
+    const rolesDir = makeTmp()
+    expect(resolveRoleFile(rolesDir, 'demo')).toBeNull()
+
+    writeFileSync(join(rolesDir, 'demo.md'), ROLE_RAW)
+    expect(resolveRoleFile(rolesDir, 'demo')).toBe(join(rolesDir, 'demo.md'))
+
+    // 两形态共存（病理态）：目录式优先——与 loadRole 候选序一致
+    mkdirSync(join(rolesDir, 'demo'))
+    writeFileSync(join(rolesDir, 'demo', 'AGENTS.md'), ROLE_RAW)
+    expect(resolveRoleFile(rolesDir, 'demo')).toBe(join(rolesDir, 'demo', 'AGENTS.md'))
+  })
+
+  it('目录式角色：editRole 改写目录式那份（修前：只认扁平 → role_not_found）', async () => {
+    const rolesDir = makeTmp()
+    mkdirSync(join(rolesDir, 'dir-role'), { recursive: true })
+    const dirFile = join(rolesDir, 'dir-role', 'AGENTS.md')
+    writeFileSync(dirFile, ROLE_RAW.replaceAll('dev-1', 'dir-role'))
+
+    await editRole({ name: 'dir-role', rolesDir, patch: { description: '目录式改述' } })
+
+    expect(readFileSync(dirFile, 'utf8')).toContain('目录式改述')
+    // 不新建扁平文件、也不碰它（读 A 写 B 的数据分裂防住）
+    expect(existsSync(join(rolesDir, 'dir-role.md'))).toBe(false)
   })
 })
 

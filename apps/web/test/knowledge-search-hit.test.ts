@@ -223,6 +223,29 @@ describe('SearchHitRow · W-2 命中段列表', () => {
     expect(container.querySelector('.toc-hit-segs')).toBeNull()
   })
 
+  /**
+   * v15 W-1（R-6 / SPEC-6.2）：展开区 aria 齐全——`aria-expanded` 之外补 `aria-controls`
+   * 指向展开区 `<ul>` 的 id（`useId` 生成，故断言的是「按钮属性 === 那个 ul 的 id」而非某个写死值）。
+   * 收起时 `<ul>` 不在 DOM（v13 契约：收起不留新节点）⇒ 不给 `aria-controls`，避免悬空引用。
+   */
+  it('展开按钮 aria：收起 false 且无悬空 aria-controls；展开 true 且指向已渲染 ul 的 id', () => {
+    render(hit({ hits: HITS }))
+    const toggle = el<HTMLButtonElement>('.toc-hit-seg-toggle')
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(toggle.getAttribute('aria-controls')).toBeNull()
+
+    click(toggle)
+    const list = el<HTMLUListElement>('.toc-hit-segs')
+    expect(list.id).not.toBe('')
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(toggle.getAttribute('aria-controls')).toBe(list.id)
+
+    // 再收起：引用随之撤下（不留指向已消失节点的 id）
+    click(toggle)
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(toggle.getAttribute('aria-controls')).toBeNull()
+  })
+
   it('展开：逐段渲染 heading_path + excerpt，查询词切 run 包 `<mark>`（大小写不敏感）', () => {
     render(hit({ hits: HITS }), { query: 'WAITFOR' })
     click(el<HTMLButtonElement>('.toc-hit-seg-toggle'))
