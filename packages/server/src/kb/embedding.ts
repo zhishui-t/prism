@@ -25,9 +25,14 @@ import { repoRoot } from '@prism/core'
 import {
   EMBEDDING_MODELS,
   EMBEDDING_TIERS,
+  RERANK_MODELS,
+  RERANK_TIERS,
+  resolveRerankTier,
   resolveTier,
   type EmbeddingModelDef,
   type EmbeddingTier,
+  type RerankModelDef,
+  type RerankTier,
 } from './embedding-models.js'
 
 /** vendored 布局（scripts/setup-embedding.mjs 安装目标）。 */
@@ -42,13 +47,18 @@ const SERVER_LOG = join(RUNTIME_DIR, 'llama-server.log')
 /** 日志上限：超过就截断（只保留最近一次启动的记录，避免长期累积）。 */
 const SERVER_LOG_MAX = 2 * 1024 * 1024
 
-/** 追加一行启动记录（写不了就静默——日志失败不该影响检索）。 */
-function appendServerLog(message: string): void {
+/** 追加一行启动记录到指定日志（写不了就静默——日志失败不该影响检索）。 */
+function appendLogAt(logFile: string, message: string): void {
   try {
-    appendFileSync(SERVER_LOG, `[${new Date().toISOString()}] ${message}\n`, 'utf-8')
+    appendFileSync(logFile, `[${new Date().toISOString()}] ${message}\n`, 'utf-8')
   } catch {
     // 只读文件系统等场合忽略
   }
+}
+
+/** 追加一行启动记录（写不了就静默——日志失败不该影响检索）。 */
+function appendServerLog(message: string): void {
+  appendLogAt(SERVER_LOG, message)
 }
 
 /**
@@ -60,14 +70,14 @@ function appendServerLog(message: string): void {
  * 而失败那两次的子进程为何没起来，因输出被丢弃已无从复原）。
  * 落盘失败时退回 `'ignore'`。
  */
-function openServerLog(): { stdio: 'ignore' | ['ignore', number, number]; close: () => void } {
+function openLogAt(logFile: string): { stdio: 'ignore' | ['ignore', number, number]; close: () => void } {
   try {
     try {
-      if (statSync(SERVER_LOG).size > SERVER_LOG_MAX) writeFileSync(SERVER_LOG, '', 'utf-8')
+      if (statSync(logFile).size > SERVER_LOG_MAX) writeFileSync(logFile, '', 'utf-8')
     } catch {
       // 文件不存在等 → 不用截断
     }
-    const fd = openSync(SERVER_LOG, 'a')
+    const fd = openSync(logFile, 'a')
     return {
       stdio: ['ignore', fd, fd],
       close: () => {
@@ -81,6 +91,11 @@ function openServerLog(): { stdio: 'ignore' | ['ignore', number, number]; close:
   } catch {
     return { stdio: 'ignore', close: () => {} }
   }
+}
+
+/** embedding 实例的日志 stdio（rerank 第二实例复用 `openLogAt`，见文件末）。 */
+function openServerLog(): { stdio: 'ignore' | ['ignore', number, number]; close: () => void } {
+  return openLogAt(SERVER_LOG)
 }
 
 /**
@@ -323,9 +338,9 @@ interface ServerHandle {
   model: string
 }
 
-function readHandle(): ServerHandle | null {
+function readHandleAt(pidFile: string): ServerHandle | null {
   try {
-    const text = readFileSync(PID_FILE, 'utf-8').trim()
+    const text = readFileSync(pidFile, 'utf-8').trim()
     if (text === '') return null
     if (text.startsWith('{')) {
       const obj = JSON.parse(text) as { pid?: unknown; backend?: unknown; model?: unknown }
@@ -346,10 +361,14 @@ function readHandle(): ServerHandle | null {
   }
 }
 
-/** 停止常驻 server（PID 文件记录的进程）。返回是否有进程被停。 */
-export function stopEmbeddingServer(): boolean {
+function readHandle(): ServerHandle | null {
+  return readHandleAt(PID_FILE)
+}
+
+/** 停掉某个实例（PID 文件记录的进程）+ 清 PID/锁文件。返回是否有进程被停。 */
+function stopServerAt(pidFile: string, lockFile: string): boolean {
   let stopped = false
-  const handle = readHandle()
+  const handle = readHandleAt(pidFile)
   if (handle !== null) {
     try {
       process.kill(handle.pid)
@@ -359,12 +378,22 @@ export function stopEmbeddingServer(): boolean {
     }
   }
   try {
-    rmSync(PID_FILE, { force: true })
-    rmSync(LOCK_FILE, { force: true })
+    rmSync(pidFile, { force: true })
+    rmSync(lockFile, { force: true })
   } catch {
     // 忽略
   }
   return stopped
+}
+
+/**
+ * 停止常驻 embedding server（PID 文件记录的进程）。返回是否有进程被停。
+ *
+ * 只动 embedding 自己的 PID/锁——**不连坐 rerank 实例**（两者档位独立判定，
+ * SPEC-1.5）；要一起停由调用方分别调 `stopRerankServer()`。
+ */
+export function stopEmbeddingServer(): boolean {
+  return stopServerAt(PID_FILE, LOCK_FILE)
 }
 
 /** 端口健康检查（禁代理：127.0.0.1 不能走系统代理）。 */
@@ -480,16 +509,16 @@ const LOCK_FILE = join(RUNTIME_DIR, 'llama-server.lock')
  */
 const LOCK_STALE_MS = START_TIMEOUT_MS + 30_000
 
-function tryAcquireStartLock(): boolean {
+function tryAcquireLockAt(lockFile: string): boolean {
   try {
-    writeFileSync(LOCK_FILE, String(process.pid), { encoding: 'utf-8', flag: 'wx' })
+    writeFileSync(lockFile, String(process.pid), { encoding: 'utf-8', flag: 'wx' })
     return true
   } catch {
     // 已存在：若是陈旧锁（上次启动中途崩溃），接管
     try {
-      const age = Date.now() - statSync(LOCK_FILE).mtimeMs
+      const age = Date.now() - statSync(lockFile).mtimeMs
       if (age > LOCK_STALE_MS) {
-        writeFileSync(LOCK_FILE, String(process.pid), 'utf-8')
+        writeFileSync(lockFile, String(process.pid), 'utf-8')
         return true
       }
     } catch {
@@ -499,12 +528,20 @@ function tryAcquireStartLock(): boolean {
   }
 }
 
-function releaseStartLock(): void {
+function tryAcquireStartLock(): boolean {
+  return tryAcquireLockAt(LOCK_FILE)
+}
+
+function releaseLockAt(lockFile: string): void {
   try {
-    rmSync(LOCK_FILE, { force: true })
+    rmSync(lockFile, { force: true })
   } catch {
     // 忽略
   }
+}
+
+function releaseStartLock(): void {
+  releaseLockAt(LOCK_FILE)
 }
 
 export interface EmbedText {
@@ -614,4 +651,374 @@ export function blobToVector(blob: Buffer | Uint8Array): Float32Array {
   const copy = new Float32Array(blob.byteLength / 4)
   new Uint8Array(copy.buffer).set(blob)
   return copy
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Rerank 第二实例（v14 §1.1 / SPEC-1.1–1.7；M1 实例架构 / M2 档位超时 / S6 取材）
+//
+// 为什么要**第二个进程**（M1，vendored @91f6a6cf3 证伪「同进程加载」）：
+//   ① llama-server 经 `-m` 只装一个 GGUF，embedding 与 reranker 是两个不同文件；
+//   ② `--rerank` 会把实例池化全局改成 RANK（`common/arg.cpp:3471-3476`：
+//      `params.embedding = true; params.pooling_type = LLAMA_POOLING_TYPE_RANK`），
+//      同实例下 `/embedding` 吐的是一维 rerank 分而非语义向量——现有 dim 校验必败。
+//      故 rerank argv **只带 `--rerank`**，不带 `--embedding`、不带 `--pooling`。
+//   ③ `/rerank` 自身要求 `embedding && pooling == RANK`（`server-context.cpp:5149`）——
+//      由 `--rerank` 自行满足，无需也不可显式再传。
+//
+// 生命周期整套镜像 embedding（独立端口 / PID / 启动锁 / 日志落盘 / 健康检查），
+// 但**档位独立判定**：embedding 换档或停服都不连坐 rerank（SPEC-1.5）。
+// ════════════════════════════════════════════════════════════════════════════
+
+/** rerank 第二实例端口（可被 PRISM_RERANK_PORT 覆盖；与 embedding 8191 隔开）。 */
+export const RERANK_PORT = Number(process.env['PRISM_RERANK_PORT'] ?? 8192)
+const RERANK_BASE = `http://127.0.0.1:${RERANK_PORT}`
+
+/** rerank 实例的独立落点（PID / 锁 / 日志）——与 embedding 三件套互不覆盖。 */
+const RERANK_PID_FILE = join(RUNTIME_DIR, 'llama-rerank-server.pid')
+const RERANK_LOCK_FILE = join(RUNTIME_DIR, 'llama-rerank-server.lock')
+const RERANK_LOG = join(RUNTIME_DIR, 'llama-rerank-server.log')
+
+function rerankModelPathOf(def: RerankModelDef): string {
+  return join(MODELS_DIR, def.file)
+}
+
+/**
+ * rerank 实例的三个落点（PID / 启动锁 / 日志）——**诊断与测试用**：三者与 embedding 的
+ * 同名文件互不覆盖（`llama-rerank-server.*` vs `llama-server.*`），这是「两实例互不影响」
+ * 的物理前提。
+ */
+export function rerankPaths(): { pid: string; lock: string; log: string } {
+  return { pid: RERANK_PID_FILE, lock: RERANK_LOCK_FILE, log: RERANK_LOG }
+}
+
+/** 显式覆盖的 rerank 档位（env > setter；null = 未指定，走自动）。 */
+let overrideRerankTier: RerankTier | null | undefined
+
+/** 由组合根（读 prism.yaml 的 rerank_model 后）设置；传 undefined/null 清除覆盖。 */
+export function setRerankTier(tier: string | undefined): void {
+  overrideRerankTier = tier === undefined ? null : resolveRerankTier(tier)
+}
+
+/** env 指定的 rerank 档位（优先于 setter）。 */
+function envRerankTier(): RerankTier | null {
+  return resolveRerankTier(process.env['PRISM_RERANK_MODEL'])
+}
+
+/**
+ * 自动选 rerank 档：**复用 `preferredBackend()`（其唯一真相源是 `accelBackend()`）**，
+ * 不新写平台判断（AGENTS.md §3.4）。逐档回退到「已安装的」模型，避免「选了档却没下模型」
+ * 直接不可用——与 embedding 的 `autoTier()` 同一手法。
+ */
+function autoRerankTier(): RerankTier {
+  const order: RerankTier[] = preferredBackend() === 'gpu' ? ['gpu', 'cpu'] : ['cpu', 'gpu']
+  for (const tier of order) {
+    if (existsSync(rerankModelPathOf(RERANK_MODELS[tier]))) return tier
+  }
+  return order[0]!
+}
+
+/** 当前生效 rerank 档位：env > 显式 setter > 自动。 */
+export function activeRerankTier(): RerankTier {
+  return envRerankTier() ?? overrideRerankTier ?? autoRerankTier()
+}
+
+/** 当前生效 rerank 模型定义。 */
+export function activeRerankModel(): RerankModelDef {
+  return RERANK_MODELS[activeRerankTier()]
+}
+
+/**
+ * rerank 全局降级开关：`PRISM_RERANK=off` 强制不发请求。
+ * 与 `PRISM_EMBEDDING=off` 同形（确定性测试与排障对照；**不**与 embedding 开关联动）。
+ */
+function rerankDisabled(): boolean {
+  const v = process.env['PRISM_RERANK']
+  return v === 'off' || v === '0' || v === 'false'
+}
+
+/**
+ * rerank 独立门控（SPEC-1.5 / M1）：**二进制 + rerank 档模型**。
+ *
+ * 不复用 `embeddingInstalled()`——它只查 embedding 三档模型，对 rerank 模型一无所知；
+ * 反过来 embedding 未装也不该挡住 rerank（两实例互不影响）。
+ */
+export function rerankInstalled(): boolean {
+  if (rerankDisabled()) return false
+  if (gpuServerExe() === null && !existsSync(CPU_SERVER_EXE)) return false
+  return RERANK_TIERS.some((tier) => existsSync(rerankModelPathOf(RERANK_MODELS[tier])))
+}
+
+/**
+ * rerank 实例的 llama-server argv（**纯函数**，供结构断言——M1 的三条约束都在这里）：
+ * `--rerank` 存在、**无** `--embedding`、**无** `--pooling`、`-c ≥ 1024`。
+ */
+export function buildRerankServerArgv(input: {
+  modelPath: string
+  ctx: number
+  gpu: boolean
+  port?: number
+}): string[] {
+  return [
+    '-m', input.modelPath,
+    '--rerank',
+    '--host', '127.0.0.1',
+    '--port', String(input.port ?? RERANK_PORT),
+    '-c', String(input.ctx),
+    '-b', String(input.ctx),
+    '--ubatch-size', String(input.ctx),
+    // GPU（Vulkan/Metal/CUDA）后端全部层卸载；CPU 档不带 -ngl
+    ...(input.gpu ? ['-ngl', '99'] : []),
+  ]
+}
+
+/**
+ * rerank 实例的执行设备判定（**纯函数**——波次 3 检视批队长裁决②的测试缝，与
+ * `resolveAccelBackend` 同一手法：把决策从环境里取出来做纯函数，逐分支可测）。
+ *
+ * 显式 cpu 档 → 恒 CPU（argv 不带 `-ngl 99`，「档位名」与「执行设备」不再脱节——
+ * 此前 cpu 档在 GPU 机器上仍被卸载进显存）；gpu 档跟随探测后端（CPU 机器选 gpu 档
+ * 自然回落 CPU 执行，`serverExeFor` 兜底不变）。
+ */
+export function resolveRerankBackend(tier: RerankTier, preferred: EmbeddingBackend): EmbeddingBackend {
+  return tier === 'cpu' ? 'cpu' : preferred
+}
+
+/** rerank 端点健康检查（禁代理：127.0.0.1 不能走系统代理）。 */
+async function isRerankAlive(): Promise<boolean> {
+  try {
+    const res = await activeRerankFetch()(`${RERANK_BASE}/health`, { signal: AbortSignal.timeout(3000) })
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
+/**
+ * rerank 端点是否在运行（**只探不发**——不会拉起子进程）。
+ * 给 `prism doctor` / `prism embedding status` 报「端点状态」用：doctor 若按 embedding 的
+ * 手法真发一次请求，会在装了 rerank 档的机器上**为自检拉起 438MB 的第二个实例**，
+ * 代价与收益不成比例（检索是启动时机的真相）。
+ */
+export function rerankServerAlive(): Promise<boolean> {
+  return isRerankAlive()
+}
+
+async function waitRerankAlive(timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (await isRerankAlive()) return true
+    await new Promise((r) => setTimeout(r, 800))
+  }
+  return false
+}
+
+let startingRerank: Promise<boolean> | undefined
+
+/**
+ * 确保 rerank 实例已就绪运行；失败（含未安装）返回 false。
+ * 启动锁与 embedding 同一手法（跨进程串行化：抢到锁的进程负责 spawn，其余等健康检查）。
+ */
+export function ensureRerankServer(): Promise<boolean> {
+  if (startingRerank === undefined) {
+    startingRerank = (async () => {
+      // 设备跟随档位（v14 检视批队长裁决②）：显式选 cpu 档 → 纯 CPU（不带 -ngl 99），
+      // 「档位名」与「执行设备」不再脱节（此前 cpu 档在 GPU 机器上仍被 -ngl 99 卸载进
+      // 显存）；gpu 档仍跟随探测后端（CPU 机器上选 gpu 档自然回落 CPU 执行）。
+      // 判定抽成纯函数 `resolveRerankBackend`（逐分支可测，见 kb-rerank.test.ts）。
+      const tier = activeRerankTier()
+      const backend = resolveRerankBackend(tier, preferredBackend())
+      const def = activeRerankModel()
+      if (await isRerankAlive()) {
+        // 后端或模型变了 → 只重启 rerank 自己（不碰 embedding）
+        const handle = readHandleAt(RERANK_PID_FILE)
+        const sameBackend = handle !== null && handle.backend === backend
+        const sameModel = handle !== null && handle.model === def.id
+        if (handle !== null && (!sameBackend || !sameModel)) {
+          stopRerankServer()
+          await new Promise((r) => setTimeout(r, 1000))
+        } else {
+          return true
+        }
+      }
+      if (!rerankInstalled() || !existsSync(rerankModelPathOf(def))) return false
+      const acquired = tryAcquireLockAt(RERANK_LOCK_FILE)
+      if (!acquired) {
+        const ok = await waitRerankAlive(START_TIMEOUT_MS)
+        if (!ok) startingRerank = undefined
+        return ok
+      }
+      try {
+        if (await isRerankAlive()) return true
+        const argv = buildRerankServerArgv({
+          modelPath: rerankModelPathOf(def),
+          ctx: def.ctx,
+          gpu: backend === 'gpu',
+        })
+        const log = openLogAt(RERANK_LOG)
+        const child = spawn(serverExeFor(backend), argv, {
+          detached: true,
+          stdio: log.stdio,
+          windowsHide: true,
+        })
+        log.close()
+        child.unref()
+        try {
+          writeFileSync(RERANK_PID_FILE, JSON.stringify({ pid: child.pid, backend, model: def.id }), 'utf-8')
+        } catch {
+          // PID 记录失败不影响运行
+        }
+        appendLogAt(RERANK_LOG, `spawn pid=${child.pid} backend=${backend} model=${def.id}（rerank 第二实例）\n  argv: ${argv.join(' ')}`)
+        const ok = await waitRerankAlive(START_TIMEOUT_MS)
+        if (!ok) {
+          appendLogAt(RERANK_LOG, `启动失败：${START_TIMEOUT_MS}ms 内 /health 未就绪（详见本文件上部子进程输出）`)
+          startingRerank = undefined // 允许下次重试
+        }
+        return ok
+      } finally {
+        releaseLockAt(RERANK_LOCK_FILE)
+      }
+    })()
+  }
+  return startingRerank
+}
+
+/**
+ * 停止 rerank 实例（只动 rerank 自己的 PID/锁——不连坐 embedding，SPEC-1.5）。
+ */
+export function stopRerankServer(): boolean {
+  return stopServerAt(RERANK_PID_FILE, RERANK_LOCK_FILE)
+}
+
+// ── /rerank 调用层 ──────────────────────────────────────────────────────────
+
+/**
+ * 可注入的 fetch（**测试四态**用：注入后不碰真实端点、不起子进程）。
+ * 生产缺省走全局 fetch。
+ */
+export type RerankFetch = (input: string, init?: RequestInit) => Promise<Response>
+
+let rerankFetch: RerankFetch | undefined
+
+/** 注入/清除 rerank 的 fetch（传 null 恢复全局 fetch）。 */
+export function setRerankFetch(impl: RerankFetch | null): void {
+  rerankFetch = impl ?? undefined
+}
+
+function activeRerankFetch(): RerankFetch {
+  return rerankFetch ?? ((input, init) => fetch(input, init))
+}
+
+export type RerankCallResult =
+  | { ok: true; scores: number[] }
+  | { ok: false; reason: 'timeout' | 'http' | 'parse' | 'network' }
+
+/**
+ * 解析 `/rerank` 响应（vendored `server-common.cpp:1451 format_response_rerank` 实查）。
+ *
+ * Jina 形态：`{model, object, usage, results: [{index, relevance_score}]}`；
+ * TEI 形态（请求体带 `texts`）：直接是 `[{index, score}]` 数组——这里两种都认。
+ *
+ * ⚠ **返回的 results 已按 score 降序排好**（源码里 `std::sort` + `resize(top_n)`），
+ * 所以**必须按 `index` 回填**，绝不能按数组位置对应入参顺序——这是最容易写错的一处。
+ * 长度/密度不符（缺 index、重复 index、非有限数）→ 返回 null，由调用方静默回落 RRF。
+ */
+export function parseRerankScores(data: unknown): number[] | null {
+  const rawResults = Array.isArray(data)
+    ? data
+    : typeof data === 'object' && data !== null && Array.isArray((data as { results?: unknown }).results)
+      ? ((data as { results: unknown[] }).results)
+      : null
+  if (rawResults === null || rawResults.length === 0) return null
+  const byIndex = new Map<number, number>()
+  for (const item of rawResults) {
+    if (typeof item !== 'object' || item === null) return null
+    const rec = item as { index?: unknown; relevance_score?: unknown; score?: unknown }
+    const index = typeof rec.index === 'number' && Number.isInteger(rec.index) && rec.index >= 0 ? rec.index : null
+    const score = typeof rec.relevance_score === 'number' ? rec.relevance_score : rec.score
+    if (index === null || typeof score !== 'number' || !Number.isFinite(score)) return null
+    byIndex.set(index, score)
+  }
+  if (byIndex.size !== rawResults.length) return null
+  const scores: number[] = []
+  for (let i = 0; i < rawResults.length; i++) {
+    const score = byIndex.get(i)
+    if (score === undefined) return null
+    scores.push(score)
+  }
+  return scores
+}
+
+/**
+ * **纯调用层**：POST `/rerank`（`{query, documents}` 数组，一次请求），不判门控、不拉服务。
+ *
+ * 超时随档走（M2）：`AbortSignal.timeout(timeoutMs)`；超时/网络/HTTP/解析失败统一
+ * 归类为 `{ok:false, reason}`——调用方静默回落，不抛。
+ */
+export async function callRerank(
+  query: string,
+  docs: readonly string[],
+  timeoutMs: number,
+): Promise<RerankCallResult> {
+  if (docs.length === 0) return { ok: true, scores: [] }
+  try {
+    const res = await activeRerankFetch()(`${RERANK_BASE}/rerank`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ query, documents: docs }),
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+    if (!res.ok) {
+      // 响应体可能很大（服务端错误 JSON），只留 200 字进日志
+      const message = await res.text().catch(() => '')
+      appendLogAt(RERANK_LOG, `HTTP ${res.status}：${message.slice(0, 200)}`)
+      return { ok: false, reason: 'http' }
+    }
+    const scores = parseRerankScores((await res.json()) as unknown)
+    return scores === null ? { ok: false, reason: 'parse' } : { ok: true, scores }
+  } catch (error) {
+    const name = error instanceof Error ? error.name : ''
+    return { ok: false, reason: /timeout|abort/i.test(name) ? 'timeout' : 'network' }
+  }
+}
+
+/**
+ * 按档位预算裁剪候选文档（SPEC-1.2/1.7：`24×512tok` / `10×256tok`）。
+ *
+ * 客户端不引分词器，故 token 预算按「CJK 1 字符 ≈ 1 token」**保守**折算成字符数
+ * （`RerankModelDef.maxDocChars`）——宁可少喂一点，也不要超 ctx 让服务端报错。
+ * 纯函数：入参顺序与长度不变，只截字符。
+ */
+export function boundRerankDocs(docs: readonly string[], maxChars: number): string[] {
+  return docs.map((doc) => (doc.length > maxChars ? doc.slice(0, maxChars) : doc))
+}
+
+/**
+ * 门控 + 调用 + 降级（knowledge 侧注入的就是它）。
+ *
+ * 返回 `number[]`（**按入参 docs 顺序**，长度 === docs.length）或 `null`；
+ * 未装/未就绪/失败/超时一律 `null` → knowledge 侧维持 RRF 序**零痕迹**（SPEC-1.4）。
+ * 实际耗时进日志（SPEC-1.4「耗时进日志」）。
+ */
+export async function rerankText(query: string, docs: readonly string[]): Promise<number[] | null> {
+  if (docs.length === 0) return []
+  if (!rerankInstalled()) return null
+  if (!(await ensureRerankServer())) return null
+  const def = activeRerankModel()
+  const bounded = boundRerankDocs(docs, def.maxDocChars)
+  const started = Date.now()
+  const result = await callRerank(query, bounded, def.timeoutMs)
+  const elapsed = Date.now() - started
+  if (!result.ok) {
+    appendLogAt(
+      RERANK_LOG,
+      `rerank 降级（${result.reason}）：${elapsed}ms 内未获结果（档位 ${def.tier} / 超时 ${def.timeoutMs}ms）→ 维持 RRF 序`,
+    )
+    return null
+  }
+  if (result.scores.length !== docs.length) {
+    appendLogAt(RERANK_LOG, `rerank 降级（parse）：返回 ${result.scores.length} 个分 ≠ 候选 ${docs.length} → 维持 RRF 序`)
+    return null
+  }
+  appendLogAt(RERANK_LOG, `rerank 完成：${docs.length} 候选 / ${elapsed}ms（档位 ${def.tier}）`)
+  return result.scores
 }

@@ -45,3 +45,8 @@ Thumbs.db
 
 # WorkBuddy 会话与项目记忆（日志/长期笔记，本地 agent 状态，不入库）
 .workbuddy/
+
+# OCR 模型（PP-OCRv5 server 三件套约 180MB，由 scripts/setup-ocr.mjs 下载；
+# 工具源码与 fixtures 在 3rd/ocr/ 进仓，模型与 pip 依赖不进仓）
+3rd/ocr/models/
+3rd/ocr/__pycache__/

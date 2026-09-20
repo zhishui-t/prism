@@ -52,6 +52,8 @@ export async function runServe(ctx: CommandContext, _args: string[], values: Arg
       // （定时器由 createApp 挂在 server 生命周期上：unref + close 清除）。
       // 纯 CLI 部署没有常驻进程，靠 `prism trash purge` 手动兜底（I-4）。
       trashSweep: true,
+      // v14 检视批队长裁决①：常驻 serve 启动即异步预热两实例（首查不付 llama-server 冷启动）
+      warmupModels: true,
     })
     ctx.stdout(`Prism serve 监听 http://${app.host}:${app.port}（home=${app.home}）`)
     ctx.stdout('按 Ctrl+C 停止；要后台常驻（重启后靠宿主/计划任务拉起）改用：prism serve --ensure')

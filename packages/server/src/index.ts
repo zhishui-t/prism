@@ -57,7 +57,19 @@ export {
   // v13 §1.1：CLI 的 `kb reindex --chunks` 需与服务**同一份** chunkOptions（单点解析）
   resolveKbConfigForHome,
   CHUNK_MIN_CHARS,
+  // v14 §1.1：rerank 扁平键（`rerank_enabled` / `rerank_model`）解析与注入单点
+  makeRerankFn,
+  parseRerankEnabled,
+  resolveRerankConfigForHome,
+  resolveRerankWiringConfig,
+  // v14 §2：图谱融合扁平键（`graph_fusion` / `graph_fusion_decay`）解析与注入单点
+  parseGraphFusion,
+  parseGraphFusionDecay,
+  resolveGraphFusionConfigForHome,
+  type GraphFusionWiringConfig,
   type KbWiringConfig,
+  type RerankWiringConfig,
+  type RerankWiringInput,
 } from './kb/wiring.js'
 // 落库入口（F-E2：MCP/HTTP/CLI 共用同一团队沉淀策略；CLI `prism kb deposit --team` 用）
 export {
@@ -90,16 +102,39 @@ export {
   preferredBackend,
   setEmbeddingTier,
   stopEmbeddingServer,
+  // v14 §1.1/§1.2：rerank 第二实例（独立端口/PID/锁/日志/健康检查 + /rerank 调用）
+  RERANK_PORT,
+  activeRerankModel,
+  activeRerankTier,
+  boundRerankDocs,
+  buildRerankServerArgv,
+  callRerank,
+  ensureRerankServer,
+  parseRerankScores,
+  rerankInstalled,
+  rerankPaths,
+  rerankServerAlive,
+  rerankText,
+  setRerankFetch,
+  setRerankTier,
+  stopRerankServer,
   type AccelBackend,
   type EmbedText,
   type EmbeddingBackend,
+  type RerankCallResult,
+  type RerankFetch,
 } from './kb/embedding.js'
 export {
   EMBEDDING_MODELS,
   EMBEDDING_TIERS,
+  RERANK_MODELS,
+  RERANK_TIERS,
+  resolveRerankTier,
   resolveTier,
   type EmbeddingModelDef,
   type EmbeddingTier,
+  type RerankModelDef,
+  type RerankTier,
 } from './kb/embedding-models.js'
 export { ScanHistory, type ScanRecord } from './kb/scan-history.js'
 export {
@@ -122,6 +157,7 @@ export {
   DEFAULT_IGNORE_DIRS,
   DOC_ONLY_EXTENSIONS,
   GATE_SKIP_REASONS,
+  OCR_SCAN_EXTENSIONS,
   SKIP_REASONS,
   WEB_EXTENSIONS,
   extractTitle,

@@ -127,6 +127,14 @@ describe('CLI 命令（注入真实知识服务 / 假 graphify）', () => {
     expect(code).toBe(0)
     expect(output).toContain('ok  node_version')
     expect(output).toContain('ok  graphify')
+    // v14 §1.1/SPEC-1.6：doctor 必须**分列** embedding 与 rerank 两行端点
+    expect(output).toMatch(/ (ok|FAIL) +embedding +—/)
+    expect(output).toMatch(/ (ok|FAIL) +rerank +—/)
+    // v14 SPEC-4.2：第三行 ocr——判据由 knowledge 侧给（onnx 件数 + pip 依赖），
+    // 故断言「行在 + 两个分量都可判」，不断言本机装没装（那是环境事实）
+    expect(output).toMatch(/ (ok|FAIL) +ocr +—/)
+    expect(output).toMatch(/模型 \d+\/3 件/)
+    expect(output).toMatch(/3rd[\\/]ocr[\\/]models/)
     expect(output).toContain('全部通过')
   })
 

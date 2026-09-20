@@ -13,14 +13,19 @@
  * 属于**扫描范围**问题。可用 `respectGitignore: false` 关掉。
  *
  * 扫描流程：
- *   遍历目录 → 过滤扩展名（`DOC_ONLY_EXTENSIONS` ∪ `include_ext`）/ 文件名级跳过表 /
- *   硬编码忽略目录 / `.gitignore` 忽略 → 逐个转 Markdown（非 anydoc 扩展直读纯文本）→
- *   算源哈希 → kb.index()（created/updated/unchanged）。
+ *   遍历目录 → 过滤扩展名（`DOC_ONLY_EXTENSIONS` ∪ `include_ext` ∪ **OCR 就绪时的
+ *   图片派生集**）/ 文件名级跳过表 / 硬编码忽略目录 / `.gitignore` 忽略 →
+ *   **按 id 查已有条目、源哈希相同即短路（M3，不转换）** → 逐个转 Markdown
+ *   （纯文本直读 / anydoc / OCR）→ 少文本守卫（OCR 正文 < 50 有效字符即跳过）→
+ *   kb.index()（created/updated）。
  *
  * 扫描范围（design-v8 §4）：
  * - **默认只扫文档**：`DOC_ONLY_EXTENSIONS` = anydoc 支持集 − {html, htm}——
  *   html/h5 默认不扫（用户点名「h5 默认不扫」的落点）；源码/构建脚本/配置默认跳过，
  *   由 `includeExt` 显式纳入。
+ * - **图片（v14 B-4 / S2）**：**条件派生集**——只有 OCR 就绪（`ocrAvailable()`）时
+ *   才把 png/jpg/jpeg/webp 并入生效扩展集（**不改 `DOC_ONLY_EXTENSIONS` 常量**）。
+ *   OCR 未就绪的机器上图片仍旧「扩展不在扫描集」（未装行为零变化）。
  * - **跳过要给账**：每个没纳入的文件按原因计入 `ScanReport.by_skip_reason`，
  *   使 `--dry-run` 能分列「纳入 / 跳过」。
  */
@@ -29,7 +34,17 @@ import { createHash } from 'node:crypto'
 import { readFile, readdir, stat } from 'node:fs/promises'
 import { basename, extname, join, relative, sep } from 'node:path'
 
-import { SUPPORTED_EXTENSIONS, extensionOf, isSupported, type KnowledgeService } from '@prism/knowledge'
+import {
+  MIN_OCR_VALID_CHARS,
+  OCR_IMAGE_EXTENSIONS,
+  SUPPORTED_EXTENSIONS,
+  countValidChars,
+  extensionOf,
+  isSupported,
+  ocrAvailable,
+  stripOcrArtifacts,
+  type KnowledgeService,
+} from '@prism/knowledge'
 
 import { createGitignoreMatcher, type GitignoreMatcher } from './gitignore.js'
 
@@ -71,6 +86,15 @@ export const WEB_EXTENSIONS = ['.html', '.htm'] as const
 export const DOC_ONLY_EXTENSIONS: readonly string[] = (SUPPORTED_EXTENSIONS as readonly string[]).filter(
   (ext) => !(WEB_EXTENSIONS as readonly string[]).includes(ext),
 )
+
+/**
+ * **OCR 就绪时**并入扫描范围的图片扩展（v14 B-4 / SPEC-3.3「条件派生集」）。
+ *
+ * 名单来自 `@prism/knowledge` 的 `OCR_IMAGE_EXTENSIONS`（单一真相源：转换层按同一份
+ * 名单决定路由）——不在这里另抄一份。`DOC_ONLY_EXTENSIONS` 是常量，**刻意不动**：
+ * 未装 OCR 的机器上图片依旧不进候选。
+ */
+export const OCR_SCAN_EXTENSIONS: readonly string[] = OCR_IMAGE_EXTENSIONS
 
 /**
  * 文件名级跳过表之一：**精确文件名**（design-v8 §4）。
@@ -172,6 +196,8 @@ export const SKIP_REASONS = {
   convertFailed: 'convert_failed',
   /** 图片型扫描 PDF（anydoc 的能力边界，不是 bug） */
   needsOcr: 'needs_ocr',
+  /** OCR 出来的正文有效字符不足（< 50，疑似空白/无文字——v14 S3） */
+  noTextDetected: 'no_text_detected',
   /** 索引写入失败 */
   indexFailed: 'index_failed',
 } as const
@@ -223,6 +249,10 @@ export interface ScanOptions {
    * 入参不挑写法（`['H', '.c', ' cpp ']` 都认），内部经 {@link normalizeExtensions}
    * 归一化后**追加**到默认集 {@link DOC_ONLY_EXTENSIONS} 上（默认集始终生效）。
    * 纳入的非 anydoc 支持扩展走**纯文本直读**（见 `scanProject`）。
+   *
+   * 图片（png/jpg/jpeg/webp）另有**条件派生**：OCR 就绪时自动并入
+   * （{@link OCR_SCAN_EXTENSIONS}）；显式纳入的图片在 OCR 就绪时与派生集行为一致
+   * （都走 OCR），未就绪时与从前一致（解码跳过 + 原因）。
    */
   includeExt?: string[]
   /**
@@ -277,7 +307,7 @@ export interface ScanReport {
    * - **候选之外被门挡掉的**——扩展不在默认集/`include_ext`（`ext_not_included`，含 html/htm）
    *   或命中文件名级跳过表（`build_file`）；
    * - **候选之内处理失败的**——`too_large`/`read_failed`/`decode_failed`/`convert_failed`/
-   *   `needs_ocr`/`index_failed`（这些**同时**计入 `skipped`，见下）。
+   *   `needs_ocr`/`no_text_detected`/`index_failed`（这些**同时**计入 `skipped`，见下）。
    *
    * **对账恒等式**（MINOR 订正，2026-09-16）：
    * ```
@@ -362,11 +392,23 @@ export function idFromRel(rel: string): string {
 
 /**
  * dry-run 包装：`index()` 只查不写——已存在且源哈希相同 → unchanged；
- * 否则报告 created/updated 但不落库。转换仍真实执行（验证 anydoc 能否处理）。
+ * 否则报告 created/updated 但不落库。转换仍真实执行（验证 anydoc/OCR 能否处理）。
+ *
+ * ⚠ **v14 B-4 / M3 的语义变化（声明）**：扫描现在**在转换前**按 id + source_hash 短路，
+ * 所以**未变的** OCR 文件（图片 / 扫描 PDF）在 dry-run 下也**不再执行转换验证**——
+ * 「dry-run 会真跑一遍转换」这条旧承诺只对「新文件 / 已变更文件」成立。理由：OCR 是
+ * 秒级/页的重活，每次 dry-run 都全量重跑不可接受；而未变文件的转换结果本来就与索引里
+ * 的一致，验证它没有信息量。
  */
 export function makeDryRunKb(real: KnowledgeService): KnowledgeService {
   // 用 Object.create 保留原型方法（class 实例的方法不在自有属性上，展开会丢）
   const wrapper = Object.create(real) as KnowledgeService
+  /**
+   * M3（v14 B-4）：转换前的短路要**读已有条目**（`get`）。真服务的 `get` 内部会调私有
+   * 方法（`#toEntry`），而私有方法不能用「非实例接收者」调用——`Object.create` 出来的
+   * 包装对象会抛「Receiver must be an instance of class」。故显式转发到真服务。
+   */
+  wrapper.get = (id, version) => real.get(id, version)
   wrapper.index = async (input) => {
     const existing = await real.get(input.id)
     if (existing !== null) {
@@ -438,11 +480,22 @@ export async function scanProject(kb: KnowledgeService, options: ScanOptions): P
     report.by_skip_reason[reason] = (report.by_skip_reason[reason] ?? 0) + 1
   }
 
-  /** 生效的扩展集 = 默认文档集 + `include_ext` 显式纳入（归一化后）。 */
+  /**
+   * OCR 是否就绪（v14 B-4）：决定图片是否进扫描范围、以及转换层是否走 OCR。
+   *
+   * **同一份判据两处消费**（派生白名单 + `toMarkdown` 内部路由）——都读
+   * `@prism/knowledge` 的 `ocrAvailable()`（结果缓存），不会出现「白名单开了但
+   * 转换层没开」的半开状态。测试经 `setOcrHooks` 注入，不依赖本机模型。
+   */
+  const ocrReady = await ocrAvailable()
+
+  /** 生效的扩展集 = 默认文档集 + `include_ext` 显式纳入（归一化后）+ OCR 就绪时的图片派生集。 */
   const includeExts = new Set<string>([
     ...DOC_ONLY_EXTENSIONS,
     ...normalizeExtensions(options.includeExt ?? []),
   ])
+  // S2：**条件派生**（不改 DOC_ONLY_EXTENSIONS 常量）——OCR 未就绪时不进候选，行为零变化
+  if (ocrReady) for (const ext of OCR_SCAN_EXTENSIONS) includeExts.add(ext)
 
   const candidates: string[] = []
   const unreadable: string[] = []
@@ -566,29 +619,84 @@ export async function scanProject(kb: KnowledgeService, options: ScanOptions): P
     }
 
     const sourceHash = createHash('sha256').update(bytes).digest('hex')
+    const module = options.module !== undefined && options.module !== '' ? options.module : moduleFromRel(rel)
     /**
-     * 正文来源分两支（design-v8 §4）：
+     * M3（v14 B-4 / SPEC-3.5）：**转换前**短路——按 id 查已有条目，源哈希（原始字节
+     * sha256）相同即 `unchanged`，**根本不转换**。
+     *
+     * 旧实现是「先转换后去重」（转换完把正文交给 `kb.index()`，由它判 unchanged）——
+     * 对 anydoc 成立（毫秒级），对 **OCR 不成立**（秒级/页）：每次重扫都全量重跑一遍
+     * 识别不可接受。判据用**原始字节**的 sha256，与 `kb.index()` 记的 `source_hash`
+     * 同一口径（R7：文件是真相，OCR 文本只是它的派生）。
+     */
+    const id = idFromRel(rel)
+    const existing = await kb.get(id)
+    if (existing !== null && existing.source_hash === sourceHash) {
+      report.unchanged++
+      report.files.push({ rel, abs, source_hash: sourceHash, status: 'unchanged', module, bytes: info.size })
+      continue
+    }
+
+    /**
+     * 正文来源分三支（design-v8 §4 / v14 B-4 §3.2）：
      * - **anydoc 支持集内**（默认集内的文件都在内）→ 既有 `toMarkdown` 管线；
+     * - **图片且 OCR 就绪**（派生集 ∨ `include_ext` 纳入）→ 同一 `toMarkdown`
+     *   （转换层按扩展名路由到 OCR）；
      * - **`include_ext` 纳入的集外扩展**（h/cpp 等）→ **纯文本直读**。
      *   不能落到 `toMarkdown`：它对这类扩展报 `unsupported` → 一律 skipped，
      *   参数就形同虚设。
      */
     let markdown: string
-    if (isSupported(abs)) {
+    const ocrImage =
+      ocrReady && (OCR_SCAN_EXTENSIONS as readonly string[]).includes(extensionOf(abs))
+    if (isSupported(abs) || ocrImage) {
       const { toMarkdown } = await import('@prism/knowledge')
       const converted = await toMarkdown(bytes, abs)
       if (converted.status !== 'text' && converted.status !== 'converted') {
         report.skipped++
         bumpSkip(converted.status === 'needs_ocr' ? SKIP_REASONS.needsOcr : SKIP_REASONS.convertFailed)
+        /**
+         * D-v14-tester-1：转换层给的 `reason` 是**回落文案**（SPEC-3.2 逐字契约），
+         * 「装了 OCR 但 runner 坏了」与「没装 OCR」据此同貌。runner 失败时另挂的
+         * `ocr_failure` 在这里**后缀**进跳过文案——只动 `ScannedFile.reason`（人读），
+         * 不动 `by_skip_reason` 的键（对账恒等式与计数零影响）；未就绪路径没有该字段，
+         * 文案逐字不变。
+         */
         report.files.push({
           rel,
           abs,
           source_hash: sourceHash,
           status: 'skipped',
-          reason: converted.reason ?? converted.status,
+          reason: `${converted.reason ?? converted.status}${
+            converted.ocr_failure === undefined ? '' : `（OCR 调用失败：${converted.ocr_failure}）`
+          }`,
           bytes: info.size,
         })
         continue
+      }
+      /**
+       * S3 少文本守卫（SPEC-3.4）：**只卡 OCR 出来的正文**（图片与整本 PDF 同口径），
+       * 普通 anydoc 转换与文本直读不设阈值——拿 OCR 的阈值去卡正常文档会误杀。
+       *
+       * 计数前先剥掉 OCR 管道自加的段落标记（页头行 `## 第 N 页` + 空白页占位符
+       * `（未检出文本）`，波次 3 / A.1）——否则全空白多页 PDF 会靠「页数 × 每页约 8 个字」
+       * 堆过阈值。
+       */
+      if (converted.ocr === true) {
+        const valid = countValidChars(stripOcrArtifacts(converted.markdown))
+        if (valid < MIN_OCR_VALID_CHARS) {
+          report.skipped++
+          bumpSkip(SKIP_REASONS.noTextDetected)
+          report.files.push({
+            rel,
+            abs,
+            source_hash: sourceHash,
+            status: 'skipped',
+            reason: `OCR 有效字符不足（${valid} < ${MIN_OCR_VALID_CHARS}）——疑似空白页/无文字`,
+            bytes: info.size,
+          })
+          continue
+        }
       }
       markdown = converted.markdown
     } else {
@@ -625,10 +733,9 @@ export async function scanProject(kb: KnowledgeService, options: ScanOptions): P
     }
 
     const title = extractTitle(markdown, basename(rel, extname(rel)))
-    const module = options.module !== undefined && options.module !== '' ? options.module : moduleFromRel(rel)
     try {
       const result = await kb.index({
-        id: idFromRel(rel),
+        id,
         title,
         type: 'doc',
         layer: layer as 'global' | 'project' | 'role',

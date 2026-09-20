@@ -147,7 +147,20 @@ async function main() {
   const projectDir = join(workRoot, 'proj')
   // 主流程关闭向量（PRISM_EMBEDDING=off）：向量召回会扩大命中面，破坏精确计数断言。
   // 确定性优先——混合检索单独在 ===== 17 段按真实模型验证（装了才跑）。
-  const env = { PRISM_HOME: home, PRISM_HARNESS_ROOT: harnessRoot, PRISM_EMBEDDING: 'off' }
+  // 同理关闭 OCR（PRISM_OCR=off）：装了 OCR 模型的机器上 `kb sync` 会把 image.png
+  // 也纳入候选（discovered 3→4），断言就随环境漂移——CLI 是子进程，够不到进程内的
+  // setOcrHooks，只能走 env 门（与既有 scan 测试的 setOcrHooks(false) 同口径）。
+  // 再同理关闭 rerank（PRISM_RERANK=off，波次 3 追加）：rerank 只重排头部、不动命中集，
+  // 但装了 rerank 档模型时每次检索要多起一个 438MB 的第二实例（首请求冷启动 > 3s 必落
+  // 超时降级），e2e 的耗时与结果就随「装没装模型」漂移；rerank 的真机链路已由
+  // 波次 3 的真机冒烟覆盖（见 .agent-team/v14-backend-report.md）。
+  const env = {
+    PRISM_HOME: home,
+    PRISM_HARNESS_ROOT: harnessRoot,
+    PRISM_EMBEDDING: 'off',
+    PRISM_OCR: 'off',
+    PRISM_RERANK: 'off',
+  }
 
   let server
   // F-T1：MCP 工具集会惰性打开知识库 SQLite，需在清理临时目录前显式释放。

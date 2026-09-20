@@ -1,8 +1,9 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { PrismKnowledgeService } from '../src/service.js'
+import { setOcrHooks } from '../src/convert.js'
 import { extractTitle, idFromRel, moduleFromRel } from '../../server/src/kb/scan.js'
 import { makeTempDir } from '../../server/test/helpers.js'
 
@@ -16,6 +17,18 @@ async function makeProject(files: Record<string, string>): Promise<string> {
   }
   return root
 }
+
+/**
+ * 本文件的多条用例含 `image.png` 且断言「图片不进候选」——那是**OCR 未就绪**时的
+ * 行为。OCR 就绪会把它并进条件派生白名单（`scan-ocr.test.ts` 专测），结果会随
+ * 「本机装没装 OCR 模型」漂移。故这里显式关掉 OCR（R5 / 确定性）。
+ */
+beforeEach(() => {
+  setOcrHooks({ available: () => false, run: async () => ({ ok: false, reason: 'disabled for this suite' }) })
+})
+afterEach(() => {
+  setOcrHooks(null)
+})
 
 function makeKb(home: string): PrismKnowledgeService {
   return new PrismKnowledgeService({ home })

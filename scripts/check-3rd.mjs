@@ -11,6 +11,7 @@
  *   1. archify  —— `3rd/archify` 的 CLI 可执行（Node 自包含，免构建）
  *   2. graphify —— `3rd/graphify` 的 Python 包可导入 + 运行依赖齐备
  *   3. anydoc   —— 平台预编译二进制是否就位（`scripts/setup-anydoc.mjs --check`）
+ *   4. ocr      —— Python 依赖 + PP-OCRv5 三件套模型 + `--fake` 自测（`scripts/setup-ocr.mjs --check`）
  *
  * 退出码：全过 0；任意一项失败 1。
  */
@@ -92,10 +93,22 @@ function checkAnydoc() {
   report('anydoc', ok, ok ? '平台预编译二进制就位' : summary(output))
 }
 
+function checkOcr() {
+  const { ok, output } = run(process.execPath, [join('scripts', 'setup-ocr.mjs'), '--check'])
+  report(
+    'ocr',
+    ok,
+    ok
+      ? 'Python 依赖+模型就绪（PP-OCRv5 server）'
+      : `${summary(output)}——先跑 pnpm run 3rd:setup`,
+  )
+}
+
 process.stdout.write(`3rd 自检（${process.platform}/${process.arch}，Python: ${PYTHON}）\n`)
 checkArchify()
 checkGraphify()
 checkAnydoc()
+checkOcr()
 
 const failed = results.filter((r) => !r.ok)
 process.stdout.write(`\n${results.length - failed.length}/${results.length} 项通过\n`)

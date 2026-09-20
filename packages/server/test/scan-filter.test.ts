@@ -12,8 +12,8 @@
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
-import { PrismKnowledgeService, extensionOf } from '@prism/knowledge'
-import { describe, expect, it } from 'vitest'
+import { PrismKnowledgeService, extensionOf, setOcrHooks } from '@prism/knowledge'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { createMcpTools } from '../src/mcp/server.js'
 import {
@@ -38,6 +38,18 @@ async function makeProject(files: Record<string, string>): Promise<string> {
   }
   return root
 }
+
+/**
+ * 本文件断言的是**扩展门与跳过表**，与 OCR 无关；但 OCR 就绪会改变图片的落点
+ * （`scan-ocr.test.ts` 里的条件派生白名单），结果随「本机装没装 OCR 模型」漂移。
+ * 故这里显式**关掉 OCR**，让本文件的结论与环境无关（R5 / 确定性）。
+ */
+beforeEach(() => {
+  setOcrHooks({ available: () => false, run: async () => ({ ok: false, reason: 'disabled for this suite' }) })
+})
+afterEach(() => {
+  setOcrHooks(null)
+})
 
 /** 扫一次临时项目（内存桩知识服务；项目根/家目录都是 mkdtemp，不碰真实宿主目录）。 */
 function scan(root: string, extra: Partial<ScanOptions> = {}): Promise<ScanReport> {

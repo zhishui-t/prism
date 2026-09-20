@@ -20,16 +20,24 @@ import {
   EMBEDDING_MODELS,
   EMBEDDING_TIERS,
   EMBEDDING_PORT,
+  RERANK_MODELS,
+  RERANK_PORT,
+  RERANK_TIERS,
   activeModel,
+  activeRerankModel,
   activeTier,
   embedText,
   embeddingInstalled,
   ensureEmbeddingServer,
   gpuBackendLabel,
   preferredBackend,
+  rerankInstalled,
+  rerankServerAlive,
   resolveKbConfigForHome,
+  resolveRerankConfigForHome,
   resolveTier,
   stopEmbeddingServer,
+  stopRerankServer,
 } from '@prism/server'
 
 import type { ArgValues, CommandContext } from '../argv.js'
@@ -68,9 +76,15 @@ export async function runEmbedding(ctx: CommandContext, args: string[], _values:
   }
 }
 
-/** 列出三档模型与当前生效项。 */
+/**
+ * 列出三档 embedding 模型 + 两档 rerank 模型与当前生效项。
+ *
+ * rerank 是**第二实例**（v14 §1.1，独立端口/模型/门控）——同一张表里并列展示，
+ * 但「已装」判定与默认开关各自独立。
+ */
 function models(ctx: CommandContext): number {
   const current = activeTier()
+  const rerankCurrent = activeRerankModel()
   const backend = preferredBackend()
   const rows = EMBEDDING_TIERS.map((tier) => {
     const m = EMBEDDING_MODELS[tier]
@@ -84,7 +98,22 @@ function models(ctx: CommandContext): number {
       current: tier === current,
     }
   })
-  if (ctx.json) ctx.stdout(JSON.stringify({ ok: true, value: { backend, current, models: rows } }))
+  const rerankRows = RERANK_TIERS.map((tier) => {
+    const m = RERANK_MODELS[tier]
+    return {
+      tier,
+      id: m.id,
+      label: m.label,
+      file: m.file,
+      candidates: m.candidates,
+      timeoutMs: m.timeoutMs,
+      defaultEnabled: m.enabledByDefault,
+      installed: existsSync(join(modelDir(), m.file)),
+      current: tier === rerankCurrent.tier,
+    }
+  })
+  if (ctx.json)
+    ctx.stdout(JSON.stringify({ ok: true, value: { backend, current, models: rows, rerank: { current: rerankCurrent.tier, models: rerankRows } } }))
   else {
     ctx.stdout(`后端: ${backend === 'gpu' ? `GPU（${gpuBackendLabel() ?? '加速'}）` : 'CPU'}    当前档位: ${current}（${EMBEDDING_MODELS[current].label}）`)
     for (const r of rows) {
@@ -92,10 +121,17 @@ function models(ctx: CommandContext): number {
       const state = r.installed ? '' : '  [未安装]'
       ctx.stdout(`${mark} ${r.tier.padEnd(8)} ${String(r.dim).padStart(4)}维  ${r.label}${state}`)
     }
+    ctx.stdout(`精排（第二实例，端口 ${RERANK_PORT}）当前档位: ${rerankCurrent.tier}（默认${rerankCurrent.enabledByDefault ? '开' : '关'}）`)
+    for (const r of rerankRows) {
+      const mark = r.current ? '▶' : ' '
+      const state = r.installed ? '' : '  [未安装]'
+      ctx.stdout(`${mark} ${r.tier.padEnd(8)} 候选${String(r.candidates).padStart(3)}  超时${String(r.timeoutMs).padStart(5)}ms  默认${r.defaultEnabled ? '开' : '关'}  ${r.label}${state}`)
+    }
     ctx.stdout('')
-    ctx.stdout('装某档模型: prism embedding install --tier <small|default|large>')
+    ctx.stdout('装某档模型: prism embedding install --tier <small|default|large>（rerank 档模型随算力自动下载）')
     ctx.stdout('切换档位:   prism embedding use <small|default|large>（写入 prism.yaml）')
     ctx.stdout('临时覆盖:   环境变量 PRISM_EMBEDDING_MODEL=<档位>')
+    ctx.stdout('精排开关:   prism.yaml rerank_enabled: auto|on|off（rerank_model: gpu|cpu 选档）')
     ctx.stdout('换档后:     prism embedding reindex（旧模型向量自动失效、按新模型重算）')
   }
   return 0
@@ -152,6 +188,11 @@ async function status(ctx: CommandContext): Promise<number> {
     }
   }
   const def = activeModel()
+  // rerank 是第二实例（v14 §1.1）：档位/端口/门控独立；未装时不探端点（不拉起实例）
+  const rerankDef = activeRerankModel()
+  const rerankCfg = resolveRerankConfigForHome(ctx.home)
+  const rerankReady = rerankInstalled()
+  const rerankAlive = rerankReady ? await rerankServerAlive() : false
   const payload = {
     installed,
     alive,
@@ -161,6 +202,16 @@ async function status(ctx: CommandContext): Promise<number> {
     port: EMBEDDING_PORT,
     dim: def.dim,
     ...(probe !== undefined ? { probe } : {}),
+    rerank: {
+      installed: rerankReady,
+      enabled: rerankCfg.enabled,
+      alive: rerankAlive,
+      tier: rerankDef.tier,
+      model: rerankDef.id,
+      port: RERANK_PORT,
+      candidates: rerankCfg.candidates,
+      timeoutMs: rerankCfg.timeoutMs,
+    },
   }
   if (ctx.json) ctx.stdout(JSON.stringify({ ok: true, value: payload }))
   else {
@@ -168,6 +219,14 @@ async function status(ctx: CommandContext): Promise<number> {
     ctx.stdout(`档位: ${def.tier}（${def.label}，${def.dim} 维）`)
     ctx.stdout(`后端: ${backend === 'gpu' ? 'GPU（Vulkan）' : 'CPU'}${backend === 'cpu' ? '——慢约 170 倍，建议 prism embedding install --gpu' : ''}`)
     ctx.stdout(`服务: ${alive ? `运行中（127.0.0.1:${EMBEDDING_PORT}，${probe ?? ''}）` : '未运行'}`)
+    const rerankState = !rerankReady
+      ? '未安装'
+      : !rerankCfg.enabled
+        ? '已装未启用（rerank_enabled: on 可开）'
+        : rerankAlive
+          ? '启用（端点运行中）'
+          : '启用（端点未运行，检索时按需拉起）'
+    ctx.stdout(`精排: ${rerankState}（档位 ${rerankDef.tier}／${rerankDef.label}，127.0.0.1:${RERANK_PORT}）`)
     ctx.stdout(`可用档位: ${EMBEDDING_TIERS.join(' / ')}（prism embedding models 查看）`)
   }
   return 0
@@ -207,10 +266,19 @@ async function start(ctx: CommandContext): Promise<number> {
   return ok ? 0 : 1
 }
 
+/**
+ * `prism embedding stop`：**两个实例都停**（用户意图是「停掉本地常驻服务」）。
+ * 反向不成立：`ensureEmbeddingServer` 换档只重启 embedding 自己，
+ * `stopEmbeddingServer()` 也不连坐 rerank（SPEC-1.5 两实例互不影响）。
+ */
 async function stop(ctx: CommandContext): Promise<number> {
   const stopped = stopEmbeddingServer()
-  if (ctx.json) ctx.stdout(JSON.stringify({ ok: true, value: { stopped } }))
-  else ctx.stdout(stopped ? 'embedding 服务已停止' : '没有在运行的 embedding 服务')
+  const rerankStopped = stopRerankServer()
+  if (ctx.json) ctx.stdout(JSON.stringify({ ok: true, value: { stopped, rerankStopped } }))
+  else {
+    ctx.stdout(stopped ? 'embedding 服务已停止' : '没有在运行的 embedding 服务')
+    ctx.stdout(rerankStopped ? 'rerank 服务已停止' : '没有在运行的 rerank 服务')
+  }
   return 0
 }
 

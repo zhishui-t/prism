@@ -25,6 +25,7 @@
  *   ├── 3rd/archify/                        # 子模块源码（自包含 CLI，免构建）
  *   ├── 3rd/graphify/                       # 子模块源码（Python，免构建）
  *   ├── 3rd/anydoc/                         # 子模块源码（含 JS 包装层）
+ *   ├── 3rd/ocr/                            # ★ OCR 工具源码 + fixtures（Python 工具 + Node 壳）
  *   ├── 3rd/anydoc-runtime/                 # ★ 原生绑定 + JS 包装层（本平台）
  *   ├── 3rd/llama-runtime/bin/              # ★ llama-server（本机 CPU / 平台预编译）
  *   ├── 3rd/llama-runtime/bin-vulkan/       # ★ Vulkan 加速后端（Windows / Linux）
@@ -41,11 +42,14 @@
  *   向量检索与文档转换——这正是「有的环境访问不了 git 就装不上」的根治；
  * - **默认只带最小向量模型**（`bge-small-zh` 26MB，CPU 默认档）→ 解压即开箱可用语义检索；
  *   大档模型（bge-m3 / Qwen3-Embedding，各 600MB+）走 `--models all` 或目标机按需下载；
- * - **排除项**（有依据，见下方 RUNTIME_DIRS / THIRD_PARTY_SLIM 注释）：
+ * - **排除项**（有依据，见下方 RUNTIME_DIRS / THIRD_PARTY_SLIM / ALWAYS_SKIPPED 注释）：
  *   `3rd/llama.cpp` 源码 173MB（只有「源码编译」路径需要）、
  *   `3rd/llama-runtime/build` 编译中间产物 95MB、非本平台运行时、
  *   以及 3rd 各子模块里与运行无关的 docs / examples / tests（约 46MB，全仓零引用）；
  *   `--full-3rd` 可保留 3rd 子模块的全部内容（llama.cpp 源码与运行时档位不受影响）。
+ * - **无条件排除**（ALWAYS_SKIPPED，`--full-3rd` 也**不得**吞进来）：
+ *   `3rd/ocr/models/`（OCR 模型 ~180MB，setup-ocr 按需下载）与 `3rd/ocr/__pycache__/`
+ *   ——与 llama-runtime 模型同为「下载产物不随包」的哲学，防 setup 过的机器把 200MB 打进包。
  * - graphify 的 Python 依赖（tree-sitter / networkx / numpy / rapidfuzz）**不随包**——
  *   Python 环境无法可靠内嵌，目标机需联网 `pip install`（离线场景见 README 的说明）。
  */
@@ -87,6 +91,14 @@ const THIRD_PARTY_SLIM = [
   '3rd/graphify/worked', // 4.3MB 上游跑过的样本语料
   '3rd/graphify/tests', // 4.4MB
 ]
+
+/**
+ * **无条件**排除项（与 `--full-3rd` 无关）——下载/缓存产物，绝不该进包。
+ * 依据同 llama-runtime 模型的「不随包」哲学：模型由 `scripts/setup-ocr.mjs` 在目标机按需
+ * 联网下载（约 180MB），随包会让「setup 过的开发机」把 200MB 打进发行包。
+ * ⚠ 别把这些并进 THIRD_PARTY_SLIM——那套是给子模块瘦身用的，`--full-3rd` 会整体放行。
+ */
+const ALWAYS_SKIPPED = ['3rd/ocr/models', '3rd/ocr/__pycache__']
 
 function log(msg) {
   process.stdout.write(`[package] ${msg}\n`)
@@ -220,6 +232,8 @@ function parseArgs(argv) {
 
 /** 某个绝对路径相对仓库根是否落在排除清单里。 */
 function isSkipped(rel, full3rd) {
+  // 无条件排除（下载产物）——先判，且与 full3rd 无关。
+  if (ALWAYS_SKIPPED.some((skip) => rel === skip || rel.startsWith(`${skip}/`))) return true
   const lists = full3rd ? RUNTIME_DIRS : [...RUNTIME_DIRS, ...THIRD_PARTY_SLIM]
   return lists.some((skip) => rel === skip || rel.startsWith(`${skip}/`))
 }
@@ -375,9 +389,10 @@ async function main() {
   log(`  ★ anydoc-runtime ${mb(await sizeOf(join(stageDir, '3rd', 'anydoc-runtime')))}`)
 
   // 7c) 三方件安装脚本（`prism embedding install` / anydoc 重装 / 换平台；小文件，随包发）
-  //     setup-embedding 依赖 archive.mjs（解压 llama.cpp 预编译包）+ python.mjs（Windows 解压 zipfile 用）
+  //     setup-embedding 依赖 archive.mjs（解压 llama.cpp 预编译包）+ python.mjs（Windows 解压 zipfile 用）；
+  //     setup-ocr 依赖 python.mjs，解压环境可联网补装 OCR 模型（~180MB，不随包）与 pip 依赖（SPEC-3.10）。
   await mkdir(join(stageDir, 'scripts'), { recursive: true })
-  for (const script of ['setup-embedding.mjs', 'setup-anydoc.mjs', 'archive.mjs', 'python.mjs']) {
+  for (const script of ['setup-embedding.mjs', 'setup-anydoc.mjs', 'setup-ocr.mjs', 'archive.mjs', 'python.mjs']) {
     const src = join(ROOT, 'scripts', script)
     if (existsSync(src)) await cp(src, join(stageDir, 'scripts', script))
   }

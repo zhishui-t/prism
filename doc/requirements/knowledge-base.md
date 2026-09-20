@@ -442,7 +442,8 @@ uploaded → converting → converted → previewing → active
 
 - 引擎：`@firecrawl/anydoc`（MIT，零依赖，已实测）。
 - 支持：doc/docx/pdf/ppt/xlsx/epub/csv/rtf/odt → GFM Markdown。
-- **边界**：图片型扫描 PDF 返回 `unsupported`，需外部 OCR（可选增强）。
+- **边界（v14 起内置 OCR 管道，可选安装）**：图片型扫描 PDF / 图片文件走 `3rd/ocr`（pypdfium2 300dpi 栅格化 + RapidOCR PP-OCRv5 server 三件套，本地判别模型零 LLM）→ 转文本入库；**未安装时维持原行为**（返回 `unsupported` / `needs_ocr` 并报告原因），已装时扫描 PDF / 图片转文本入库。装法 `pnpm run 3rd:setup`（模型 ~180MB 按需下载，模型目录不进发行包）。**R7 不破**：源文件不改，OCR 产物只是入库文本。
+- **D-v14-1（记债，S9）**：OCR **只取文字块**——图表只提取文字标签（视觉语义不做）、扫描表格**不还原结构**（文本块入库）、**版面分析不做**、**公式识别不做**（三项属「与 WeKnora 对比的剩余差距」，按需走 PP-Structure 同族路线补）；**文档内嵌图片**（docx 插图 / PDF 图区域）本轮不做。
 
 ### 6.5 富化 ⚠ 已改为宿主直付（2026-09-10：工作队列移除）
 

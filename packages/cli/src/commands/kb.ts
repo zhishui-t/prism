@@ -787,6 +787,7 @@ const SKIP_REASON_LABELS: Record<string, string> = {
   [SKIP_REASONS.decodeFailed]: '文本解码失败',
   [SKIP_REASONS.convertFailed]: '转换失败',
   [SKIP_REASONS.needsOcr]: '需 OCR',
+  [SKIP_REASONS.noTextDetected]: 'OCR 无有效文本',
   [SKIP_REASONS.indexFailed]: '索引失败',
 }
 
@@ -906,7 +907,7 @@ async function kbSync(ctx: CommandContext, args: string[], values: ArgValues): P
    * 「未纳入 / 处理失败」两行分列（design-v8 §4：dry-run 的对账物）。
    *
    * MAJ-2（2026-09-16）：候选内失败（too_large/read_failed/decode_failed/convert_failed/
-   * needs_ocr/index_failed）**同时**计入 `skipped` 与 `by_skip_reason`——旧写法把「未纳入」
+   * needs_ocr/no_text_detected/index_failed）**同时**计入 `skipped` 与 `by_skip_reason`——旧写法把「未纳入」
    * 写成全量 `by_skip_reason`，「发现」行又用 `discovered`（也含它们）→ 同一批文件算两遍
    * （4 文件项目实测打出「发现 2 + 未纳入 3」）。拆开后人读口径与报告恒等式一致：
    *   `纳入 + 处理失败 + 未纳入（= 门挡两类）= 审视全量`。

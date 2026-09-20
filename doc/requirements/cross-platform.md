@@ -54,7 +54,9 @@
 | `packages/server/src/graph/archify.ts` | 前缀包含判断的分隔符方向 | `isWindows` |
 | `packages/server/src/http/routes/studio.ts` → `isInside()` | 路径前缀比对（含大小写归一） | `process.platform` |
 | `packages/cli/src/commands/init-cli.ts` → `resolveGlobalBin()` | **npm/prism 可执行体命名**与 npm 全局 bin 布局（init 的 CLI 全局注册用；Windows 的 `.cmd` 还决定是否走 `shell: true`） | `process.platform`：Windows → bin 目录 = `<prefix>`、可执行体 `prism.cmd`/`npm.cmd`、`shell: true`；POSIX → `<prefix>/bin`、`prism`/`npm`、`shell: false` |
-| `scripts/python.mjs` → `resolvePython()` | npm scripts 的解释器解析 | **与 graphify.ts 刻意镜像**（scripts/ 不进发行包，TS 侧无法导入；改一处必须同步另一处） |
+| `scripts/python.mjs` → `resolvePython()` | npm scripts 的解释器解析（**规范源**） | 与 `graphify.ts`、`3rd/ocr/ocr_tool.mjs` **三处刻意镜像**（scripts/ 不进发行包，TS 侧无法导入；改一处必须同步**另两处**，`test/python-mirror-contract.test.ts` 锁定） |
+| `3rd/ocr/ocr_tool.mjs` → `resolvePython()` | OCR 工具（pypdfium2 栅格化 + rapidocr 识别）的解释器解析 | 三处镜像的一员，与 `scripts/python.mjs` / `graphify.ts` 同判据（改一处必须同步**另两处**，`test/python-mirror-contract.test.ts` 锁定） |
+| `scripts/setup-ocr.mjs` | OCR 三方件轮子覆盖与模型路径 | onnxruntime（win x64/arm64、macOS x64/universal2 官方轮子）与 pypdfium2（win x64、macOS **13+** x64/arm64）均 pip 官方轮子**无编译**，**macOS 版本下限 13+**；模型落 `3rd/ocr/models/`（setup-ocr 下载，gitignore + **不进发行包**） |
 | `scripts/archive.mjs` → `extractArchive()` | 归档解压 + 摊平 + POSIX 可执行位 | 扩展名分流 + `IS_WINDOWS` |
 | `scripts/setup-embedding.mjs` → `PREBUILT` | 预编译包资产名 | 平台 + `arch` |
 | `scripts/setup-anydoc.mjs` → `detectTarget()` | 平台 → 原生 `.node` 资产 | 平台 + `arch` + musl 判定 |
@@ -72,8 +74,10 @@ PRISM_PYTHON=/usr/local/bin/python3.11 prism graph build <proj>
 排查顺序：**先看实际选中了哪个解释器**——`pnpm 3rd:check` 第一行就会打印
 （`3rd 自检（darwin/x64，Python: python3）`），比对着日志猜要快。
 
-判据实现：`resolvePythonCommand()`（TS 侧）与 `scripts/python.mjs`（npm scripts 侧），
-解析顺序 `PRISM_PYTHON` > 平台惯例名，且 POSIX 上用 `X_OK` 探存在性（无执行位的同名文件不算命中）。
+判据实现：**三处刻意镜像**——`resolvePythonCommand()`（TS 侧）、`scripts/python.mjs`
+（npm scripts 侧）、`3rd/ocr/ocr_tool.mjs`（OCR 工具侧）；解析顺序 `PRISM_PYTHON` > 平台惯例名，
+且 POSIX 上用 `X_OK` 探存在性（无执行位的同名文件不算命中）。改一处必须同步**另两处**，
+`test/python-mirror-contract.test.ts` 锁定三处同构。
 
 ---
 

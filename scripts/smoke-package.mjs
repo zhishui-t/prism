@@ -19,7 +19,8 @@
  *   4. `kb convert`（anydoc 真实转换，**免安装**）
  *   5. `graph build`（vendored graphify 真实建图）
  *   6. embedding **免安装**起服务（隔离端口，断言档位维度与后端）
- *   7. 结构断言：3rd 在根、运行时齐备、llama.cpp 源码未随包、无 .git 残留
+ *   7. 结构断言：3rd 在根、运行时齐备、llama.cpp 源码未随包、无 .git 残留、
+ *      OCR 工具与 fixtures 随包，而 **OCR 模型 / pip 依赖不入包**
  *
  * 选项：--skip-build（复用现有 dist）、--keep（保留临时目录便于排查）
  */
@@ -232,6 +233,42 @@ async function main() {
     //     错误落点不存在），路由级 200 断言待 server 能力具备后补。
     check('7.8 vendored assets 在发行根', existsSync(join(dist, 'assets', 'vis-network.min.js')))
     check('7.9 node_modules/ 下无 assets（写死相对层级的错误落点）', !existsSync(join(dist, 'node_modules', 'assets')))
+
+    // 7.10 OCR 工具与 fixtures 必须随包（解压环境可直接调 `node 3rd/ocr/ocr_tool.mjs`）
+    const ocrRoot = join(dist, '3rd', 'ocr')
+    const ocrPayload = [
+      'ocr_tool.mjs',
+      'ocr_main.py',
+      'requirements.txt',
+      join('fixtures', 'fixture-1-zh.png'),
+      join('fixtures', 'expected.json'),
+    ]
+    const ocrMissing = ocrPayload.filter((rel) => !existsSync(join(ocrRoot, rel)))
+    check(
+      '7.10 OCR 工具与 fixtures 随包',
+      ocrMissing.length === 0,
+      ocrMissing.length === 0 ? ocrPayload.join(' / ') : `缺：${ocrMissing.join(' / ')}`,
+    )
+
+    // 7.11 OCR 模型**不**随包（~180MB 下载产物）——目标机 `node scripts/setup-ocr.mjs` 联网补装
+    check(
+      '7.11 OCR 模型不随包（目标机 setup-ocr 联网补装）',
+      !existsSync(join(ocrRoot, 'models')),
+      existsSync(join(ocrRoot, 'models')) ? '3rd/ocr/models 竟在包内' : '3rd/ocr/models 不存在',
+    )
+
+    // 7.12 setup-ocr.mjs 随包（解压环境补装入口；它 import ./python.mjs，后者亦已随包）
+    check('7.12 scripts/setup-ocr.mjs 随包', existsSync(join(dist, 'scripts', 'setup-ocr.mjs')), 'scripts/setup-ocr.mjs')
+
+    // 7.13 pip 依赖不随包：只在 3rd/ocr 子树里查（别全树扫，控体积）——无 site-packages 目录、无 *.whl
+    const pipResidue =
+      (await findInTree(ocrRoot, (entry) => entry.isDirectory() && entry.name === 'site-packages')) ??
+      (await findInTree(ocrRoot, (entry) => entry.isFile() && entry.name.endsWith('.whl')))
+    check(
+      '7.13 OCR pip 依赖不随包（无 site-packages / *.whl）',
+      pipResidue === null,
+      pipResidue ?? '3rd/ocr 下无 site-packages / *.whl',
+    )
   } catch (error) {
     // 前置步骤失败（如打包失败）→ 直接中止后续，但**仍要出汇总**（不抛裸异常）
     process.stdout.write(`\n中止: ${error instanceof Error ? error.message : String(error)}\n`)
@@ -246,6 +283,23 @@ async function main() {
   process.stdout.write(`\nPACKAGE SMOKE: ${pass}/${pass + fail} passed\n`)
   if (failures.length > 0) process.stdout.write(`失败项: ${failures.join(', ')}\n`)
   process.exitCode = fail === 0 ? 0 : 1
+}
+
+/** 在给定子树里递归查第一个命中谓词的条目（用于「不该存在的东西」结构断言）。 */
+async function findInTree(root, match) {
+  if (!existsSync(root)) return null
+  const walk = async (dir) => {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const p = join(dir, entry.name)
+      if (match(entry, p)) return p
+      if (entry.isDirectory()) {
+        const hit = await walk(p)
+        if (hit !== null) return hit
+      }
+    }
+    return null
+  }
+  return await walk(root)
 }
 
 /** 在解压树里找 .git（文件或目录）；只扫 3rd（其余目录是构建产物，不该有）。 */

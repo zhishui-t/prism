@@ -4,9 +4,20 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { openPersistence, prismPaths } from '@prism/core'
+// OCR 就绪判据的**实现**在 knowledge（doctor 侧只读它的导出，不另立一套口径）
+import {
+  OCR_MODEL_COUNT,
+  ocrDepsReady,
+  ocrModelCount,
+  ocrModelsDir,
+  ocrModelsReady,
+  parseOcrOff,
+} from '@prism/knowledge'
 import {
   EMBEDDING_PORT,
+  RERANK_PORT,
   activeModel,
+  activeRerankModel,
   cpuBackendHint,
   embedText,
   embeddingInstalled,
@@ -16,7 +27,10 @@ import {
   listHarnesses,
   preferredBackend,
   probeConverter,
+  rerankInstalled,
+  rerankServerAlive,
   resolveGraphifyCommand,
+  resolveRerankConfigForHome,
   runGraphify,
   vendoredGraphifyVersion,
 } from '@prism/server'
@@ -124,6 +138,54 @@ export async function runDoctor(ctx: CommandContext, _args: string[], values: Ar
         ? `就绪（档位 ${def.tier}／${def.label}，${def.dim} 维，${backendLabel}，127.0.0.1:${EMBEDDING_PORT}）`
         : `已安装但服务不可用：${probe.error ?? '未知'}（prism embedding start）`,
     })
+  }
+
+  // 6b) 精排 rerank（v14 §1.1/§1.2、SPEC-1.5/1.6）：**与 embedding 分列的独立端点行**
+  // 与 embedding 行的手法是「分列两端点」而非「同一行两状态」——两实例端口/PID/模型/
+  // 门控全独立（M1）。这里**只探不发**（`rerankServerAlive`）：自检不该为报状态拉起
+  // 438MB 的第二个实例，端点未运行是常态（检索按需拉起）。
+  {
+    const rerankModel = activeRerankModel()
+    const cfg = resolveRerankConfigForHome(home)
+    const installed = rerankInstalled()
+    const alive = installed ? await rerankServerAlive() : false
+    const endpoint = `127.0.0.1:${RERANK_PORT}`
+    const spec = `档位 ${rerankModel.tier}／${rerankModel.label}，候选 ${cfg.candidates}×${cfg.maxDocChars} 字符，超时 ${cfg.timeoutMs}ms`
+    let detail: string
+    if (!installed) {
+      detail = `未安装（可选；装后检索可走 RRF+精排，默认按档位）：prism embedding install`
+    } else if (!cfg.enabled) {
+      detail = `已安装但未启用（${spec}，${endpoint}${alive ? '，端点运行中' : ''}）：prism.yaml 写 rerank_enabled: on 可显式开启`
+    } else {
+      detail = `${alive ? '就绪' : '已启用（端点未运行，检索时按需拉起）'}（${spec}，${endpoint}）`
+    }
+    checks.push({ name: 'rerank', ok: true, detail })
+  }
+
+  // 6c) OCR（v14 B-4 / SPEC-4.2）：与上面两行同哲学的**第三行**——可选增强，恒 ok。
+  // 恒 ok 的理由与 rerank 同：OCR 没有守护进程可探，「装了但 runner 坏」只有真跑转换
+  // 才知道（探不出来就不该让 doctor 变红，否则等于把本机装没装模型变成环境敏感项）；
+  // 缺失/半装的实况写进 detail 供人判。判据即 `ocrAvailable()` 的两个分量：
+  // models 目录 onnx 件数 + pip 依赖可导入；env 门（PRISM_OCR=off）优先于探测。
+  {
+    const modelsDir = ocrModelsDir()
+    const off = parseOcrOff(process.env['PRISM_OCR'])
+    const count = ocrModelCount(modelsDir)
+    const modelsReady = ocrModelsReady(modelsDir)
+    // 模型没到位就不去 spawn Python 探依赖：没东西可跑，省一次最长 20s 的子进程
+    const depsReady = !off && modelsReady ? await ocrDepsReady() : false
+    const spec = `模型 ${count}/${OCR_MODEL_COUNT} 件，${modelsDir}`
+    let detail: string
+    if (off) {
+      detail = `已关闭（PRISM_OCR=off；按未装 OCR 走，图片/扫描 PDF 回落旧文案，${spec}）`
+    } else if (!modelsReady) {
+      detail = `未安装（可选；装后图片与扫描 PDF 走 OCR，${spec}）：node scripts/setup-ocr.mjs`
+    } else if (!depsReady) {
+      detail = `模型就绪但 pip 依赖不可导入（OCR 不会启用，${spec}）：node scripts/setup-ocr.mjs`
+    } else {
+      detail = `就绪（模型 ${count}/${OCR_MODEL_COUNT} 件，pip 依赖可导入，${modelsDir}）`
+    }
+    checks.push({ name: 'ocr', ok: true, detail })
   }
 
   // 7) harness 适配器插件（<PRISM_HOME>/harnesses/ 自动注册；有失败项才告警）

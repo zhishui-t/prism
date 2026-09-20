@@ -302,7 +302,12 @@ export interface SearchQuery {
   /**
    * 默认 `false`：开启才做 `overrides` 降权 + 返回 `overridden_by`（F-A3；
    * 保证既有行为不变）。
-   * 队长裁决 A3：边表邻近度（`graph_distance`）本轮**不做**，已移出契约。
+   *
+   * **supersession（v14 §2）**：旧裁决 A3「边表邻近度（`graph_distance`）不做」
+   * **已被推翻**——本轮以「引用扩展」落地（`graph_fusion` 扁平键，见
+   * `KnowledgeServiceOptions.graphFusion`），收进四路 RRF 之后的候选扩展步；
+   * `graph_boost` 仍是独立的 overrides 降权开关（全序：RRF → 扩展 → rerank →
+   * overrides 最后，S4）。
    */
   graph_boost?: boolean
   /** 代码符号/文件路径（F-B2 命中加权用）。 */
@@ -642,4 +647,35 @@ export interface KnowledgeServiceOptions {
    * → 模块常量 `VECTOR_RELATIVE`）。
    */
   chunkVectorRelative?: number
+  /**
+   * 精排（rerank，v14 §1.2 / SPEC-1.1）：`(query, docs) => number[] | null`——
+   * 与 `embed` 同一注入模式（knowledge 包不依赖 server；llama-server 的 `/rerank`
+   * 调用在 server 侧 `kb/embedding.ts`）。
+   *
+   * - 返回的分数**按入参 docs 顺序**一一对应；`null`（未装/失败/超时）→ 静默维持
+   *   RRF 序**零痕迹**（SPEC-1.4：与未注入逐字节一致）；
+   * - 注入与否由 server 侧按「档位默认 + `rerank_enabled` 覆盖 + 已装」解析后决定
+   *   （SPEC-1.3/1.5：不注入即不发请求）。
+   */
+  rerank?: (query: string, docs: string[]) => Promise<number[] | null>
+  /**
+   * 精排候选数上限 top-N（档定 24/10，SPEC-1.7：只精排已召回候选，不新增扫描面）。
+   * 缺省 `DEFAULT_RERANK_CANDIDATES`（24）——server 装配恒显式传入档位值，此处仅兜底。
+   */
+  rerankCandidates?: number
+  /**
+   * 图谱融合（引用扩展，v14 §2 / SPEC-2.1–2.6）：由注入侧按扁平键 `graph_fusion`
+   * （**默认 on**）解析后传入；`false` → **零扩展**，检索结果与改动前逐字节一致
+   * （SPEC-2.3）。缺省 `true`（键缺失即开）。
+   *
+   * 与 `graph_boost`（overrides 降权）**互不隶属**：本开关只管 RRF 之后的
+   * `references` 边扩展，`graph_boost` 只管末尾的 `overrides` 降权（S4 全序）。
+   */
+  graphFusion?: boolean
+  /**
+   * 引用扩展的**每跳衰减系数**（扁平键 `graph_fusion_decay`，缺省 `GRAPH_FUSION_DECAY`
+   * = 0.5）：被达条目分 = 种子分 × `decay`^跳数（1 跳 ×0.5、2 跳 ×0.25）。
+   * 非法值（非有限数 / ≤0 / >1）由注入侧告警并回落默认；service 侧再兜一层默认。
+   */
+  graphFusionDecay?: number
 }

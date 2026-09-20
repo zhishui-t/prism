@@ -27,6 +27,8 @@ async function main(): Promise<void> {
     port,
     host,
     ...(harnessRoot !== undefined ? { harnessRoot } : {}),
+    // v14 检视批队长裁决①：后台常驻同样启动即预热两模型实例（与前台 serve 同口径）
+    warmupModels: true,
   })
   process.stdout.write(`prism serve (background) 监听 http://${app.host}:${app.port}（home=${app.home}）\n`)
 

@@ -506,3 +506,36 @@ export async function putFile(path: string, content: string): Promise<string> {
   await writeFile(path, content, 'utf-8')
   return path
 }
+
+/**
+ * 最小**图片型** PDF（v14 B-4 的 fixture 构造器）：单页、只放一个 image XObject、
+ * 无任何文本操作符——anydoc 稳定报 `page 1 of 1 needs OCR`，正是 OCR 管道要接手的那类输入。
+ * 纯字节手写（不依赖任何外部库/网络），两个测域（`packages/knowledge/test/convert.test.ts`
+ * 与 `packages/server/test/scan-ocr.test.ts`）共用一份，避免各写一份漂移。
+ */
+export function imageOnlyPdf(): Uint8Array {
+  const rgb = Buffer.from([255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0])
+  const offsets: number[] = []
+  let out = '%PDF-1.4\n'
+  const push = (body: string): void => {
+    offsets.push(out.length)
+    out += `${offsets.length} 0 obj\n${body}\nendobj\n`
+  }
+  push('<< /Type /Catalog /Pages 2 0 R >>')
+  push('<< /Type /Pages /Kids [3 0 R] /Count 1 >>')
+  push(
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 50] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>',
+  )
+  offsets.push(out.length)
+  out +=
+    `${offsets.length} 0 obj\n<< /Type /XObject /Subtype /Image /Width 2 /Height 2 ` +
+    `/ColorSpace /DeviceRGB /BitsPerComponent 8 /Length ${rgb.length} >>\nstream\n` +
+    `${rgb.toString('latin1')}\nendstream\nendobj\n`
+  const content = 'q 100 0 0 50 0 0 cm /Im0 Do Q'
+  push(`<< /Length ${content.length} >>\nstream\n${content}\nendstream`)
+  const xrefAt = out.length
+  out += `xref\n0 ${offsets.length + 1}\n0000000000 65535 f \n`
+  for (const off of offsets) out += `${String(off).padStart(10, '0')} 00000 n \n`
+  out += `trailer\n<< /Size ${offsets.length + 1} /Root 1 0 R >>\nstartxref\n${xrefAt}\n%%EOF\n`
+  return new Uint8Array(Buffer.from(out, 'latin1'))
+}

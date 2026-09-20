@@ -136,8 +136,15 @@ HTTP 等价面：`GET /api/kb/context-pack?role=&task=&budget_tokens=&layers=&bo
 只用于包内排序，不可当绝对相关度存起来比较。
 
 `graph_hits` 是**命中的 `symbols` 子串**（判定基 = 条目 `title` + `excerpt`，大小写敏感），
-不是图谱节点。**边表邻近度（`graph_distance`）本轮未实现**（队长裁决 A3，记技术债，
-见 `knowledge-base.md` §图谱联动的未实现承诺）。
+不是图谱节点。
+
+> **supersession（v14 起）**：旧裁决 A3「不做边表邻近度」**已被推翻**——引用扩展**已实现**
+> （supersession 记录见 `.agent-team/software-design-v14.md` §2）：检索在 RRF 融合序**之后**
+> 沿 `knowledge_edges` 的 `references` 边做 1–2 跳扩展，扩展候选取原分 × `0.5^跳数`（`0.5^hops`）
+> 衰减后并入去重取最高，配置键 `graph_fusion`（`on`/`off`，默认 `on`）+
+> `graph_fusion_decay`（默认 `0.5`）。
+> **但 `inject` 包面未变**：扩展候选是**以分数衰减并入**的，**不新增 `graph_distance` 字段**——
+> 变的是它背后的检索实现，不是包结构（「包内没有距离字段」这半句仍成立）。
 
 ### 4.4 宿主如何注入
 

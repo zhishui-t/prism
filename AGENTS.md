@@ -82,9 +82,10 @@ interface HarnessAdapter { defaultRoot, agent, dispatch, model, skill, instructi
 
 平台差异是**点状**的，只有 4 类：**路径分隔符 / 可执行体命名 / Python 解释器名 / 加速后端**。
 这 4 类各自有唯一的判定位置（该文 §3「唯一真相源」），其余代码**不得出现平台判断**——
-出现即意味着该处漏了抽象。改这几处时注意：`scripts/python.mjs` 与
-`packages/server/src/graph/graphify.ts` 的解释器解析是**刻意镜像**（scripts/ 不进发行包，
-TS 侧无法导入），改一处必须同步另一处。
+出现即意味着该处漏了抽象。改这几处时注意：`scripts/python.mjs`、
+`packages/server/src/graph/graphify.ts` 与 `3rd/ocr/ocr_tool.mjs` 的解释器解析是**刻意镜像**
+（scripts/ 不进发行包，TS 侧无法导入），改一处必须同步**另两处**；
+`test/python-mirror-contract.test.ts` 锁定三处同构。
 
 ⚠ **「平台」≠「能力」**：平台只决定**去哪找**，能不能用要看**装了什么**。典型反例是
 加速后端——macOS 官方预编译包 arm64 带 Metal、**x64（Intel）不带**（上游 `-DGGML_METAL=OFF`），
@@ -150,7 +151,8 @@ pnpm test:package  # 6. 发行冒烟（打包→解压→在解压环境验证�
 | **凭记忆猜符号/路径/flag/env** | 设计或代码引用了不存在的类型名、状态名、文件名、CLI flag、env（本轮设计稿一轮被抓 6 处） | 动手前先 grep/`fast_locate` 核对存在性；设计评审把「引用不存在的名字」列为专项检查项 |
 | **SQL `LIMIT` 截断向量召回** | 库一大，插入靠后的相关条目永远召不回 | 向量相关性算完余弦才知道，SQL 层不能按 rowid 截断（需全扫） |
 | **写死相对层级解析三方件路径**（已修复，`packages/core/test/repo-root.test.ts` 锁定） | 开发态全绿、**发行版全废**：打包物化后 `node_modules/@prism/<pkg>/` 比 `packages/<pkg>/` 多一层，`../../../../3rd` 落到 `node_modules/3rd` | 一律用 `core.repoRoot(import.meta.url)` **向上查找**发行根；改路径/打包后必跑 `pnpm test:package` |
-| **跨平台写死单边**（2026-09-12 macOS 实测抓到 5 处） | Windows 全绿、macOS 全废（或反之），且有的**不报错只静默降级**（向量检索回落 BM25） | 平台差异只在统一位置判定，见 `doc/requirements/cross-platform.md` §3「唯一真相源」：路径分隔符（`resolveManifestPath`）、Python 解释器名（`resolvePythonCommand`）、llama.cpp 二进制名（`SERVER_BIN`）、加速后端（`accelBackend()`）。**新代码不得就地再判一次平台** |
+| **OCR 模型换了配置没跟着换**（rapidocr cls 预处理形状按 `ocr_version` 查表且默认 v4） | v5 server cls 权重输入 `[3,80,160]`，默认按 v4 喂 `[3,48,192]` → `ONNXRuntimeError INVALID_ARGUMENT`；只钉 `model_path` 不够（det/rec 默认甚至指 PP-OCRv6） | 显式路径之外显式钉 `Cls.ocr_version=OCRVersion.PPOCRV5`（**枚举参数**，传字符串被 TypeError 拒）；见 `3rd/ocr/README.md` 与 `ocr_main.py` |
+| **跨平台写死单边**（2026-09-12 macOS 实测抓到 5 处） | Windows 全绿、macOS 全废（或反之），且有的**不报错只静默降级**（向量检索回落 BM25） | 平台差异只在统一位置判定，见 `doc/requirements/cross-platform.md` §3「唯一真相源」：路径分隔符（`resolveManifestPath`）、Python 解释器名（`scripts/python.mjs` / `graphify.ts` / `3rd/ocr/ocr_tool.mjs` 三处镜像）、llama.cpp 二进制名（`SERVER_BIN`）、加速后端（`accelBackend()`）。**新代码不得就地再判一次平台** |
 | **把「平台」当成「能力」**（Metal 判定，2026-09-12） | `platform==='darwin'` ⇒ Metal 的写法在 Intel Mac 上假阳性：`doctor` 谎报 Metal、`autoTier()` 切到 609MB 的 `large` **在纯 CPU 上跑**、多传无意义的 `-ngl 99`。上游 `release.yml` 里 macOS **arm64 开 Metal、x64 显式 `-DGGML_METAL=OFF`**，而**硬件**照样报 `Metal Support: Metal 3` | 判据取「**实际装了什么**」而非平台/硬件：看包内有无 `libggml-metal*.dylib`（`accelBackend()`），并抽成纯函数 `resolveAccelBackend()` 以便逐分支测试。`PRISM_EMBEDDING_BACKEND` 可显式覆盖 |
 | **上游归档带顶层目录** | 解压出 `<dest>/<包名>/llama-server`，运行时按 `<dest>/llama-server` 找 → 「装了却检测不到」，只在 `doctor` 里以「未安装」出现 | 一律走 `scripts/archive.mjs` 的 `extractArchive()`（解压到暂存目录 → 递归定位 → 摊平 + 补 POSIX 可执行位） |
 | **解压丢软链**（2026-09-12） | 只拷 `entry.isFile()` 会把软链静默丢弃（软链既非 file 也非 dir）。macOS 预编译包的 **dylib 版本链**（16 条 `libX.dylib → libX.0.dylib → libX.0.N.dylib`）全丢 → `dyld: Library not loaded: @rpath/libllama-common.0.dylib` + `Abort trap: 6`。**Windows 的 zip 没有软链，故只在 macOS/Linux 暴露** | 软链单独重建（`readlink` + `symlink`，无权限时退化解引用拷贝）；`packages/server/test/archive-extract.test.ts` 锁定 |
@@ -171,6 +173,7 @@ pnpm test:package  # 6. 发行冒烟（打包→解压→在解压环境验证�
 | CLI 命令 | `packages/cli/src/commands/` |
 | 控制台页面 | `apps/web/src/pages/` |
 | 三方件（submodule）/ 向量化 / 文档转换 | `3rd/`（见 `3rd/README.md`）；embedding: `packages/server/src/kb/embedding.ts`；anydoc: `packages/knowledge/src/convert.ts` |
+| OCR 工具（pypdfium2 栅格化 + rapidocr 识别） | `3rd/ocr/`（安装/模型下载：`scripts/setup-ocr.mjs`） |
 
 ---
 

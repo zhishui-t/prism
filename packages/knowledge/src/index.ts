@@ -75,22 +75,41 @@ export {
   type IndexedChunk,
 } from './index-db.js'
 
-// 文档格式分流与转换（A2）：文本直读、二进制走 anydoc
+// 文档格式分流与转换（A2）：文本直读、二进制走 anydoc、图片/扫描 PDF 走 OCR（B-4）
 export {
   CONVERTIBLE_EXTENSIONS,
+  MIN_OCR_VALID_CHARS,
+  OCR_IMAGE_EXTENSIONS,
+  OCR_MODEL_COUNT,
+  OCR_RUN_TIMEOUT_MS,
   SUPPORTED_EXTENSIONS,
   TEXT_EXTENSIONS,
+  countValidChars,
   extensionOf,
   isSupported,
+  ocrAvailable,
+  ocrDepsReady,
+  ocrModelCount,
+  ocrModelsDir,
+  ocrModelsReady,
+  ocrToolDir,
+  parseOcrOff,
   probeConverter,
+  runOcrTool,
+  setOcrHooks,
+  stripOcrArtifacts,
   toMarkdown,
   type ConvertResult,
   type ConvertStatus,
+  type OcrHooks,
+  type OcrRunResult,
+  type OcrRunner,
 } from './convert.js'
 
 export {
   PrismKnowledgeService,
   createKnowledgeService,
+  GRAPH_FUSION_DECAY,
 } from './service.js'
 
 // 知识图谱 → Graphify 导出（D9：借 Graphify 渲染/Obsidian，Prism 零 LLM 抽边）

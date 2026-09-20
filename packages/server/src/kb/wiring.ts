@@ -1,10 +1,25 @@
-import { createKnowledgeService, defaultMaxChars, DEFAULT_VECTOR_SCAN_CAP } from '@prism/knowledge'
+import {
+  createKnowledgeService,
+  defaultMaxChars,
+  DEFAULT_VECTOR_SCAN_CAP,
+  GRAPH_FUSION_DECAY,
+} from '@prism/knowledge'
 import type { ChunkOptions } from '@prism/knowledge'
 import { PrismError, prismPaths } from '@prism/core'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { activeModel, embedText, embeddingInstalled, setEmbeddingTier } from './embedding.js'
+import {
+  activeModel,
+  activeRerankTier,
+  embedText,
+  embeddingInstalled,
+  rerankInstalled,
+  rerankText,
+  setEmbeddingTier,
+  setRerankTier,
+} from './embedding.js'
+import { RERANK_MODELS, resolveRerankTier, type RerankTier } from './embedding-models.js'
 import type { KnowledgeService } from './port.js'
 
 /** 读 `<PRISM_HOME>/prism.yaml` 某个键的值（支持 `key: value` 简单行；无则 undefined）。 */
@@ -28,12 +43,14 @@ export function prismConfigValue(home: string | undefined, key: string): string 
 }
 
 /**
- * 应用 `<PRISM_HOME>/prism.yaml` 的 embedding 档位配置（`embedding_model`）。
+ * 应用 `<PRISM_HOME>/prism.yaml` 的档位配置（`embedding_model` / `rerank_model`）。
  * **组合根与 CLI 都要调**——否则 `prism embedding use <tier>` 写了配置、
  * 但 `status`/`reindex` 等命令不读，会报错误的生效档位。
  */
 export function applyEmbeddingConfig(home?: string): void {
   setEmbeddingTier(prismConfigValue(home, 'embedding_model'))
+  // v14 §1.1：rerank 档位独立配置面（同一扁平键解析手法，互不影响）
+  setRerankTier(prismConfigValue(home, 'rerank_model'))
 }
 
 // ── v13 §1.1：段切分与段向量上限的配置贯通（扁平键）────────────────────────────
@@ -148,6 +165,148 @@ export function resolveKbConfigForHome(home?: string): KbWiringConfig {
   })
 }
 
+// ── v14 §1.1/§1.2：rerank 扁平键（`rerank_enabled` / `rerank_model`）────────────
+
+/** rerank 装配输入（纯函数；档位与「已装」由调用方注入，便于逐分支测试）。 */
+export interface RerankWiringInput {
+  /** prism.yaml `rerank_enabled` 原始值（undefined = 未配置 → `auto`） */
+  enabled?: string | undefined
+  /** prism.yaml `rerank_model` 原始值（档位名或模型 id；undefined = 按算力自动） */
+  model?: string | undefined
+  /** 自动档位（`activeRerankTier()`：有加速后端 → gpu，否则 cpu） */
+  autoTier?: RerankTier
+  /** 门控（`rerankInstalled()`：二进制 + rerank 档模型） */
+  installed?: boolean
+  /** 违规回落告警收集器 */
+  warnings?: string[]
+}
+
+/** rerank 装配结论（`enabled=false` → 不注入，检索侧不发请求）。 */
+export interface RerankWiringConfig {
+  enabled: boolean
+  tier: RerankTier
+  /** 精排候选数 top-N（SPEC-1.7） */
+  candidates: number
+  /** 单次请求超时（M2 档位超时，进日志/doctor） */
+  timeoutMs: number
+  /** 文档字符预算（注入侧裁剪，见 `makeRerankFn`） */
+  maxDocChars: number
+  warnings: string[]
+}
+
+/**
+ * 解析 `rerank_enabled`（SPEC-1.3）：
+ * - 未配置 / 空串 / `auto` → **档位默认**（GPU 开、CPU 关）；
+ * - 显式 `on`（亦认 `true`/`1`）/ `off`（亦认 `false`/`0`）→ **优先于档位默认**；
+ * - 其它值 → 告警并回落档位默认（不静默吞掉拼错的键）。
+ */
+export function parseRerankEnabled(raw: string | undefined, fallback: boolean, warnings: string[] = []): boolean {
+  if (raw === undefined) return fallback
+  const v = raw.trim().toLowerCase()
+  if (v === '' || v === 'auto') return fallback
+  if (v === 'on' || v === 'true' || v === '1') return true
+  if (v === 'off' || v === 'false' || v === '0') return false
+  warnings.push(`rerank_enabled 值非法（${raw.trim()}），已按档位默认回落为 ${fallback ? 'on' : 'off'}（可用 auto/on/off）`)
+  return fallback
+}
+
+/**
+ * 由扁平配置值解析出 rerank 装配结论（**纯函数**：不读文件、不碰进程，逐分档可测）。
+ *
+ * `enabled` 是两步与：`(档位默认 ⊕ 显式覆盖) && 已装`——SPEC-1.5「`rerankInstalled()`
+ * =false 或 `rerank_enabled` 短路时**不发请求**」在这里落成「干脆不注入」。
+ */
+export function resolveRerankWiringConfig(input: RerankWiringInput = {}): RerankWiringConfig {
+  const warnings = input.warnings ?? []
+  const autoTier = input.autoTier ?? 'cpu'
+  const wantTier = resolveRerankTier(input.model)
+  if (input.model !== undefined && input.model.trim() !== '' && wantTier === null) {
+    warnings.push(`rerank_model 值未知（${input.model.trim()}），已回落自动档位 ${autoTier}（可用 gpu/cpu 或模型 id）`)
+  }
+  const tier = wantTier ?? autoTier
+  const def = RERANK_MODELS[tier]
+  const want = parseRerankEnabled(input.enabled, def.enabledByDefault, warnings)
+  return {
+    enabled: want && (input.installed ?? false),
+    tier,
+    candidates: def.candidates,
+    timeoutMs: def.timeoutMs,
+    maxDocChars: def.maxDocChars,
+    warnings,
+  }
+}
+
+/** 组合根与 CLI 共用的单点：读 prism.yaml + 当前算力/安装状态 → rerank 装配结论。 */
+export function resolveRerankConfigForHome(home?: string): RerankWiringConfig {
+  return resolveRerankWiringConfig({
+    enabled: prismConfigValue(home, 'rerank_enabled'),
+    model: prismConfigValue(home, 'rerank_model'),
+    autoTier: activeRerankTier(),
+    installed: rerankInstalled(),
+  })
+}
+
+/**
+ * 注入 knowledge 的精排函数（组合根单点）。
+ *
+ * 档位解析、文档预算裁剪（`maxDocChars`，SPEC-1.2/1.7）、超时（M2）与降级全部在
+ * `rerankText` 内按**调用时**的生效档位处理——换档不必重建服务实例。
+ */
+export function makeRerankFn(): (query: string, docs: string[]) => Promise<number[] | null> {
+  return (query, docs) => rerankText(query, docs)
+}
+
+// ── v14 §2：图谱融合扁平键（`graph_fusion` / `graph_fusion_decay`）──────────────
+
+/** 图谱融合装配结论（`enabled=false` → knowledge 侧零扩展，SPEC-2.3）。 */
+export interface GraphFusionWiringConfig {
+  /** 是否做引用扩展（缺省 on） */
+  enabled: boolean
+  /** 每跳衰减系数（缺省 0.5；∉(0,1] 非法 → 回落并告警） */
+  decay: number
+  warnings: string[]
+}
+
+/**
+ * 解析 `graph_fusion`（SPEC-2.3）：未配置 / 空串 / `on`（亦认 `true`/`1`）→ 开；
+ * `off`（亦认 `false`/`0`）→ 关；其它值 → 告警并回落 **on**（默认开，不静默吞拼错的键）。
+ */
+export function parseGraphFusion(raw: string | undefined, warnings: string[] = []): boolean {
+  if (raw === undefined) return true
+  const v = raw.trim().toLowerCase()
+  if (v === '' || v === 'on' || v === 'true' || v === '1') return true
+  if (v === 'off' || v === 'false' || v === '0') return false
+  warnings.push(`graph_fusion 值非法（${raw.trim()}），已按默认回落为 on（可用 on/off）`)
+  return true
+}
+
+/**
+ * 解析 `graph_fusion_decay`（SPEC-2.1/2.2）：未配置 / 空串 → `GRAPH_FUSION_DECAY`（0.5）；
+ * 非法（非有限数 / ≤0 / >1）→ 告警并回落默认（系数 >1 会让扩展分反超种子，
+ * 与「扩展候选不顶掉原 top」冲突，故上界锁 1）。
+ */
+export function parseGraphFusionDecay(raw: string | undefined, warnings: string[] = []): number {
+  if (raw === undefined) return GRAPH_FUSION_DECAY
+  const text = raw.trim()
+  if (text === '') return GRAPH_FUSION_DECAY
+  const value = Number(text)
+  if (!Number.isFinite(value) || value <= 0 || value > 1) {
+    warnings.push(`graph_fusion_decay=${text} 非法（须 (0, 1]），已回落为 ${GRAPH_FUSION_DECAY}`)
+    return GRAPH_FUSION_DECAY
+  }
+  return value
+}
+
+/** 组合根与 CLI 共用的单点：读 prism.yaml 的两个扁平键 → 图谱融合装配结论。 */
+export function resolveGraphFusionConfigForHome(home?: string): GraphFusionWiringConfig {
+  const warnings: string[] = []
+  return {
+    enabled: parseGraphFusion(prismConfigValue(home, 'graph_fusion'), warnings),
+    decay: parseGraphFusionDecay(prismConfigValue(home, 'graph_fusion_decay'), warnings),
+    warnings,
+  }
+}
+
 /**
  * 组合根：装载真实知识服务（@prism/knowledge）。
  * 每次调用返回独立实例；HTTP server 与 MCP stdio 进程经 SQLite WAL 并存（design.md §3.5）。
@@ -164,7 +323,7 @@ export function resolveKbConfigForHome(home?: string): KbWiringConfig {
 export async function loadKnowledgeService(home?: string): Promise<KnowledgeService> {
   try {
     // 应用 prism.yaml 的 embedding_model（env PRISM_EMBEDDING_MODEL 优先级更高，在
-    // embedding.ts 的 activeTier 里处理）
+    // embedding.ts 的 activeTier 里处理）；rerank_model 同法
     applyEmbeddingConfig(home)
     const embed: (text: string) => Promise<Float32Array | null> = async (text) => {
       const r = await embedText(text)
@@ -173,12 +332,23 @@ export async function loadKnowledgeService(home?: string): Promise<KnowledgeServ
     const config = resolveKbConfigForHome(home)
     const model = activeModel()
     for (const warning of config.warnings) console.warn(`[prism] ${warning}`)
+    // v14 §1.2：rerank 只在「档位默认/显式覆盖 同意开 且 已装」时注入——不注入即不发请求
+    // （SPEC-1.5）。候选数恒传入（档定 24/10，SPEC-1.7）。
+    const rerank = resolveRerankConfigForHome(home)
+    for (const warning of rerank.warnings) console.warn(`[prism] ${warning}`)
+    // v14 §2：图谱融合（引用扩展）开关与系数——默认 on / 0.5，off 时 knowledge 侧零扩展
+    const fusion = resolveGraphFusionConfigForHome(home)
+    for (const warning of fusion.warnings) console.warn(`[prism] ${warning}`)
     return createKnowledgeService({
       home,
       embed,
       embeddingModel: model.id,
       chunkOptions: config.chunkOptions,
       vectorScanCap: config.vectorScanCap,
+      rerankCandidates: rerank.candidates,
+      ...(rerank.enabled ? { rerank: makeRerankFn() } : {}),
+      graphFusion: fusion.enabled,
+      graphFusionDecay: fusion.decay,
     })
   } catch (error) {
     throw new PrismError(

@@ -19,6 +19,7 @@ import { trashStoreFor } from './trash.js'
 import { BuildJobManager } from './graph/jobs.js'
 import { ProjectRegistry, inspectGraphStatus } from './graph/registry.js'
 import type { KbFactory, KnowledgeService } from './kb/port.js'
+import { ensureEmbeddingServer, ensureRerankServer } from './kb/embedding.js'
 import { loadKnowledgeService } from './kb/wiring.js'
 
 export interface AppOptions {
@@ -48,6 +49,17 @@ export interface AppOptions {
    * 只有常驻的 `prism serve` 打开它；纯 CLI 部署靠 `prism trash purge` 手动兜底（I-4）。
    */
   trashSweep?: boolean
+  /**
+   * **启动时异步预热本地模型实例**（v14 检视批队长裁决①）：`true` 时 listen 后
+   * fire-and-forget 拉起 embedding 与 rerank 两个 llama-server——常驻 serve 的
+   * **首查不再付冷启动**（实测 GPU 档冷启 9.7s > rerank timeoutMs 3s，不预热则
+   * 「冷启后第一次检索」必静默降级 RRF）。
+   *
+   * 默认 **`false`**——测试与一次性调用不得凭空 spawn 438MB 的真实推理进程；
+   * 只有真正的 serve 入口（前台 `prism serve` 与 `--ensure` 的 background.ts）打开。
+   * 预热内部自判安装/开关（`PRISM_EMBEDDING|PRISM_RERANK=off` → 零成本短路）。
+   */
+  warmupModels?: boolean
 }
 
 /** 回收站定时清除周期（每小时；与 `prism serve` 同生共死）。 */
@@ -286,6 +298,12 @@ export async function startServer(options: AppOptions = {}): Promise<AppHandle> 
   })
   const address = server.address()
   const actualPort = typeof address === 'object' && address !== null ? address.port : port
+  // 模型预热（v14 检视批队长裁决①，见 AppOptions.warmupModels）：不 await——预热失败
+  // 不影响服务可用（检索路径自会按需重试并降级），两实例互不阻塞。
+  if (options.warmupModels === true) {
+    void ensureEmbeddingServer().catch(() => undefined)
+    void ensureRerankServer().catch(() => undefined)
+  }
   return {
     home,
     port: actualPort,

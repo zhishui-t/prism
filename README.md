@@ -24,6 +24,7 @@ AI 编码团队跑起来后，会反复遇到四个问题：
 - **不侵入宿主调度**——宿主（ZCode 等）有自己的子 agent 管理，Prism 不碰；
 - **不调 LLM**——需要 LLM 的活（摘要/分类/实体抽取/图表 IR）由**宿主产出结果后调 `prism_kb_enrich` 直接回写**（无队列、无轮询）；
 - **向量化自理**——embedding 用 Prism **内置模型**（BGE-M3 / Qwen3，按算力自动分档），不依赖宿主；
+- **OCR 内置**——扫描版 PDF / 图片转文本（PP-OCRv5 server + RapidOCR，**本地判别模型零 LLM**），模型按需安装；
 - **不做审核**——宿主说落库就落库，Prism 只记录、可视化、审计；
 - **绝不把全图/全库塞进上下文**——检索返回子集，尊重预算。
 
@@ -48,7 +49,7 @@ git clone --recurse-submodules https://github.com/zhishui-t/prism.git
 cd prism
 pnpm install
 pnpm run 3rd:build     # 安装 graphify 的 Python 依赖（archify 免构建）
-pnpm run 3rd:setup     # 下 anydoc 平台二进制 + llama.cpp 编译/模型（可选，按需）
+pnpm run 3rd:setup     # 下 anydoc 平台二进制 + llama.cpp 编译/模型 + OCR 模型（可选，按需）
 
 # 已 clone 过、但没带 --recurse-submodules：
 pnpm run 3rd:init      # = git submodule update --init --recursive
@@ -135,7 +136,7 @@ pnpm run deploy
 `3rd/anydoc-runtime/`、宿主适配器示例，以及 `PRISM-MANIFEST.json`（版本/平台/运行时清单）
 与 `SHA256SUMS`（校验和）。
 
-**不随包、需目标机自理的两项**：
+**不随包、需目标机自理的三项**：
 
 - **大档向量模型**（`bge-m3` / `Qwen3-Embedding`，各 600MB+）：默认只带最小档
   `bge-small-zh-v1.5`（26MB，512 维，CPU）。要更大档位跑
@@ -143,6 +144,9 @@ pnpm run deploy
 - **graphify 的 Python 依赖**（`tree-sitter` 系列 + `networkx` / `numpy` / `rapidfuzz`）：
   Python 环境无法可靠内嵌，目标机需 `pnpm run 3rd:build`（即 `python -m pip install`）。
   **未装时只有代码图谱降级，知识库检索与文档转换照常可用。**
+- **OCR 模型**（PP-OCRv5 server 三件套，约 180MB）与 OCR 的 pip 依赖：不随包。目标机按需
+  `node scripts/setup-ocr.mjs`（`pnpm run 3rd:setup` 已含此步）联网补装。
+  **未装时扫描版 PDF / 图片维持原 `unsupported` 行为**，其余能力不受影响。
 
 为控制体积，打包排除了 `3rd/llama.cpp` 源码（173MB，只有「源码编译」路径需要）与
 `3rd/llama-runtime/build` 编译中间产物（95MB），以及 3rd 子模块里与运行无关的
@@ -166,7 +170,8 @@ prism/
 │   ├── archify/       # v2.16.0（自包含 Node CLI，免构建）
 │   ├── graphify/      # v0.9.57（Python，免构建）
 │   ├── llama.cpp/     # b10883（C++，本地编译 → 3rd/llama-runtime/）
-│   └── anydoc/        # v0.2.4（Rust/napi，平台预编译 → 3rd/anydoc-runtime/）
+│   ├── anydoc/        # v0.2.4（Rust/napi，平台预编译 → 3rd/anydoc-runtime/）
+│   └── ocr/           # Prism 自有（非 submodule）：OCR 工具（PP-OCRv5 server + RapidOCR）
 ├── doc/requirements/  # 需求与设计文档（16 篇，含决策记录）
 └── test/              # 端到端测试
 ```
@@ -396,7 +401,7 @@ pnpm lint          # ESLint
 pnpm build         # 构建全部包 + web
 pnpm run 3rd:init  # 初始化子模块（首次）
 pnpm run 3rd:build # 安装 graphify Python 依赖
-pnpm run 3rd:setup # 下 anydoc + 编译 llama.cpp（可选）
+pnpm run 3rd:setup # 下 anydoc + 编译 llama.cpp + OCR 模型（可选）
 pnpm run package   # 打包 tarball
 ```
 

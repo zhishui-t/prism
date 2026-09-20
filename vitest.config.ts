@@ -20,7 +20,8 @@ export default defineConfig({
     },
   },
   test: {
-    include: ['packages/*/test/**/*.test.ts', 'apps/web/test/**/*.test.ts'],
+    // 根目录单测（镜像契约等；test/ 下的跨包/工具链约束测试，不属于任何单个 workspace 包）
+    include: ['packages/*/test/**/*.test.ts', 'apps/web/test/**/*.test.ts', 'test/**/*.test.ts'],
     environment: 'node',
     testTimeout: 20_000,
     // 单测跑「主流程」口径：关掉向量（与 .agent-team/test-plan-v4.md、test/run-e2e.mjs 一致）。

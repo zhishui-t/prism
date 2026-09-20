@@ -1,0 +1,35 @@
+{
+  "note": "由 gen_fixtures.py 生成；供后续少文本守卫与 OCR 自测断言使用。",
+  "valid_char_rule": "CJK 计 1 + [A-Za-z0-9] 计 1；空白/标点计 0",
+  "fixtures": [
+    {
+      "file": "fixture-1-zh.png",
+      "substrings": [
+        "Prism",
+        "知识库",
+        "知识检索与图谱融合",
+        "2026-0920",
+        "Markdown"
+      ],
+      "valid_chars": 53
+    },
+    {
+      "file": "fixture-2-en.png",
+      "substrings": [
+        "RapidOCR",
+        "pypdfium2",
+        "onnxruntime",
+        "300 DPI"
+      ],
+      "valid_chars": 78
+    },
+    {
+      "file": "fixture-3-tiny.png",
+      "substrings": [
+        "小样张",
+        "PRISM"
+      ],
+      "valid_chars": 8
+    }
+  ]
+}

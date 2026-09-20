@@ -127,6 +127,22 @@ const INDEXED_SOURCE_PAYLOAD = { kind: 'import' } as const
 const EDGE_RELATIONS: readonly EdgeRelation[] = ['references', 'overrides', 'supersedes', 'related']
 
 /**
+ * 引用扩展的**种子数**（v14 §2：融合序前 N 条沿 `references` 边扩展）。
+ * 与精排候选数（24/10）无关——扩展只看「融合头部」这几条。
+ */
+const REF_EXPAND_SEEDS = 5
+
+/** 引用扩展的**最大跳数**（1–2 跳；2 跳后不再继续，SPEC-2.2）。 */
+const REF_EXPAND_HOPS = 2
+
+/**
+ * 每跳衰减系数**兜底**（v14 §2 / SPEC-2.1–2.2）：被达条目分 = 种子分 × `decay`^跳数。
+ * 单一真相源在注入侧（扁平键 `graph_fusion_decay` 的解析默认）——这里 `??` 兜住
+ * 「直接 new 服务」的场合，与注入侧默认同值（`server` 装配恒显式传入）。
+ */
+export const GRAPH_FUSION_DECAY = 0.5
+
+/**
  * 正文双链抽取：`[[ID]]` 或 `[[ID|显示文本]]`（中括号内不含换行/中括号）。
  * 去重后按出现顺序返回。确定性抽取，零 LLM（EXTRACTED）。
  */
@@ -367,6 +383,14 @@ export class PrismKnowledgeService implements KnowledgeService {
   /** 段粒度余弦阈值（缺省沿用条目路生效值——**不盲调**，E-4 冻结）。 */
   readonly #chunkVectorFloor: KnowledgeServiceOptions['chunkVectorFloor']
   readonly #chunkVectorRelative: KnowledgeServiceOptions['chunkVectorRelative']
+  /** 头部精排注入（v14 §1.2；未注入 = 不发请求，与既有一致）。 */
+  readonly #rerank: KnowledgeServiceOptions['rerank']
+  /** 精排候选数 top-N（档定 24/10；缺省 `DEFAULT_RERANK_CANDIDATES`）。 */
+  readonly #rerankCandidates: KnowledgeServiceOptions['rerankCandidates']
+  /** 图谱融合引用扩展开关（v14 §2；缺省开，SPEC-2.3 显式 off 才关闭）。 */
+  readonly #graphFusion: KnowledgeServiceOptions['graphFusion']
+  /** 引用扩展每跳衰减系数（缺省 `GRAPH_FUSION_DECAY`）。 */
+  readonly #graphFusionDecay: KnowledgeServiceOptions['graphFusionDecay']
 
   constructor(options: KnowledgeServiceOptions = {}) {
     this.home = options.home ?? prismPaths().home
@@ -385,6 +409,10 @@ export class PrismKnowledgeService implements KnowledgeService {
     this.#vectorScanCap = options.vectorScanCap
     this.#chunkVectorFloor = options.chunkVectorFloor
     this.#chunkVectorRelative = options.chunkVectorRelative
+    this.#rerank = options.rerank
+    this.#rerankCandidates = options.rerankCandidates
+    this.#graphFusion = options.graphFusion
+    this.#graphFusionDecay = options.graphFusionDecay
     ensureKbFts(this.persistence.knowledge)
     ensureKbChunks(this.persistence.knowledge)
   }
@@ -2065,7 +2093,18 @@ export class PrismKnowledgeService implements KnowledgeService {
     )
     if (fused.size === 0) return { results: [], ...degraded }
 
-    const ranked = [...fused.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit)
+    // ⑤ 引用扩展（v14 §2 / SPEC-2.1–2.6，全序见 S4）：融合序 top-5 沿 `knowledge_edges`
+    //    的 `references` 边 1–2 跳并入候选（分 = 种子分 × decay^跳数，多路到达取最高）。
+    //    融合序按 rowid、边表按 id 字符串 → 被达条目先 **id→rowid 归位**（S5 注记）再并入；
+    //    无扩展（开关 off / 无边 / 全不可见）时 `fused` 原样 → 与改动前逐字节一致。
+    let fusedSorted = [...fused.entries()].sort((a, b) => b[1] - a[1])
+    const extra = this.#expandReferences(raw, fusedSorted.slice(0, REF_EXPAND_SEEDS), fused, ctx)
+    if (extra.size > 0) {
+      for (const [rowid, score] of extra) fused.set(rowid, score)
+      fusedSorted = [...fused.entries()].sort((a, b) => b[1] - a[1])
+    }
+
+    const ranked = fusedSorted.slice(0, limit)
     const ids = ranked.map(([rowid]) => rowid)
     const rows = raw
       .prepare(`SELECT ${ENTRY_COLUMNS} FROM knowledge_entries WHERE rowid IN (${ids.map(() => '?').join(', ')})`)
@@ -2081,6 +2120,8 @@ export class PrismKnowledgeService implements KnowledgeService {
     const { byEntry, truncated } = groupChunkHits(chunkScores, [...chunkBm25, ...chunkVec], CHUNK_HITS_PER_ENTRY)
 
     const results: SearchResult[] = []
+    /** `results[i]` 对应的条目 rowid（取段取材要用它查 `byEntry`——不靠下标对齐猜）。 */
+    const resultRowids: number[] = []
     for (const [rowid, score] of ranked) {
       const row = byRowid.get(rowid)
       if (row === undefined) continue
@@ -2098,12 +2139,160 @@ export class PrismKnowledgeService implements KnowledgeService {
         )
       }
       results.push(result)
+      resultRowids.push(rowid)
     }
+
+    await this.#rerankHead(resultRowids, results, byEntry, query.q)
 
     return {
       results: this.#applyOverridesBoost(results, query.graph_boost),
       ...degraded,
       ...(truncated ? { hits_truncated: true } : {}),
+    }
+  }
+
+  /**
+   * 引用扩展（v14 §2 / SPEC-2.1–2.5）。**全序**（S4）：RRF 融合 → **本步** → 精排 →
+   * overrides 降权最后。
+   *
+   * - 种子 = 融合序前 `REF_EXPAND_SEEDS` 条；沿 `knowledge_edges` 的 **`references`**
+   *   边**正向**（`from_id` = 引用方 → `to_id` = 被引方，恰为引用方向——S5）1–2 跳 BFS；
+   *   被达条目分 = **种子分 × `decay`^跳数**（1 跳 ×0.5、2 跳 ×0.25），同一条目多路
+   *   到达取**最高**（SPEC-2.2）。
+   * - **单向正跳（S5）**：只按 `from_id` 查——`knowledge_edges` 主键是
+   *   `(from_id, to_id, relation)`，`from_id` 前缀即索引；`to_id` 反向边（「谁引用了本条」）
+   *   本轮**不做**（无索引，且属邻近度扩展的非本轮范围）。
+   * - **归位（B-2 注记）**：融合序按 `rowid`、边表按 `id` 字符串——被达 `to_id` 必须经
+   *   `knowledge_entries` 查回 `rowid`，且**过与主查询同一份 `clauses`**（软删 / 层 /
+   *   visibility 不可见的不进——SPEC-2.5）；`existing`（已在融合候选中）**不重复并**。
+   * - 开关 off / 无种子 / 无边 / 全部不可见 → **空 Map**（调用方零改动，SPEC-2.3/2.4）。
+   *
+   * 遍历**不逐跳过滤**：中间条目不可见只意味着它自己不进候选，不阻断「A→B→C」这条
+   * 引用链的走通；过滤只作用在最终候选上（与 SPEC-2.5「候选过同 clauses」一致）。
+   */
+  #expandReferences(
+    raw: DatabaseSync,
+    seeds: ReadonlyArray<readonly [number, number]>,
+    existing: ReadonlyMap<number, number>,
+    ctx: SearchContext,
+  ): Map<number, number> {
+    const out = new Map<number, number>()
+    if (this.#graphFusion === false || seeds.length === 0) return out
+    const rawDecay = this.#graphFusionDecay
+    const decay =
+      rawDecay !== undefined && Number.isFinite(rawDecay) && rawDecay > 0 && rawDecay <= 1
+        ? rawDecay
+        : GRAPH_FUSION_DECAY
+
+    // 种子 rowid → id（边表按 id 键）
+    const seedRowids = seeds.map(([rowid]) => rowid)
+    const seedRows = raw
+      .prepare(
+        `SELECT rowid, id FROM knowledge_entries WHERE rowid IN (${seedRowids.map(() => '?').join(', ')})`,
+      )
+      .all(...seedRowids) as unknown as Array<{ rowid: number; id: string }>
+    const seedIdByRowid = new Map(seedRows.map((r) => [r.rowid, r.id]))
+
+    // BFS：`best` = 被达 id → 最高分（跳数越少分越高，多路取最高）
+    const best = new Map<string, number>()
+    let frontier = new Map<string, number>()
+    for (const [rowid, score] of seeds) {
+      const id = seedIdByRowid.get(rowid)
+      if (id !== undefined) frontier.set(id, score)
+    }
+    for (let hop = 1; hop <= REF_EXPAND_HOPS && frontier.size > 0; hop++) {
+      const edges = referencesFrom(raw, [...frontier.keys()])
+      const next = new Map<string, number>()
+      for (const { from_id, to_id } of edges) {
+        const base = frontier.get(from_id)
+        if (base === undefined) continue
+        const score = base * decay
+        const prev = best.get(to_id)
+        if (prev === undefined || score > prev) best.set(to_id, score)
+        const nx = next.get(to_id)
+        if (nx === undefined || score > nx) next.set(to_id, score)
+      }
+      frontier = next
+    }
+    if (best.size === 0) return out
+
+    // id → rowid 归位 + 同一份 clauses 过滤（SPEC-2.5）
+    const ids = [...best.keys()]
+    const rows = raw
+      .prepare(
+        `SELECT e.rowid AS rowid, e.id AS id FROM knowledge_entries e
+         WHERE e.id IN (${ids.map(() => '?').join(', ')})
+           ${ctx.clauses.length > 0 ? `AND ${ctx.clauses.join(' AND ')}` : ''}`,
+      )
+      .all(...ids, ...ctx.params) as unknown as Array<{ rowid: number; id: string }>
+    // 按 rowid 升序并入 → 同分并列时的相对序确定（不依赖 SQLite 的 IN 返回顺序）
+    rows.sort((a, b) => a.rowid - b.rowid)
+    for (const row of rows) {
+      if (existing.has(row.rowid)) continue // 已在融合候选中 → 不重复并
+      out.set(row.rowid, best.get(row.id)!)
+    }
+    return out
+  }
+
+  /**
+   * 头部精排（v14 §1.2 / SPEC-1.1、S6/M4；**全序**见 B-2：RRF → 引用扩展 → rerank →
+   * overrides）。
+   *
+   * 位置：四路 RRF 已出序、引用扩展已并入（B-2）、`results` 已建好（`hits` 已挂）、
+   * overrides 之前。
+   * `rowids[i]` 与 `results[i]` 一一对应（调用点在同一个循环里并列 push）。
+   *
+   * 取材（S6）：每条目用**其最高分命中段 chunk 全文**（`groupChunkHits` 的 `hit.text`，
+   * 段分降序列表的第 0 条）——不是给人看的 `excerpt`；**hits 被 `CHUNK_HITS_PER_ENTRY`
+   * 截断的条目同样按已有的最高段取材**（截断只影响回传的 hits 条数，取最高段这件事
+   * 不受影响）；完全没有段级命中的条目才回落条目摘要。（文档长度预算在注入侧按模型档
+   * 裁剪——knowledge 侧不引分词器，R4 预算口径。）
+   *
+   * 重赋分（M4）：交叉编码器分（logit 域，可正可负）与尾部 RRF 分（~0.0x 域）**不可比**，
+   * 故只把**原头部的 RRF 分值域按新序重新指派**（降序一一对应），尾部序与分不动——这样
+   * 响应内 `score` 随 rank 单调不增，宿主/MCP 按分重排也不会悄悄撤销精排。
+   *
+   * 降级（SPEC-1.4）：未注入 / 抛错 / 超时（由注入方归零为 null）/ 长度或数值不符 →
+   * **原样返回**，既不换序也不换分——与未注入逐字节一致。
+   */
+  async #rerankHead(
+    rowids: readonly number[],
+    results: SearchResult[],
+    byEntry: ReadonlyMap<number, ChunkHit[]>,
+    query: string,
+  ): Promise<void> {
+    const rerank = this.#rerank
+    if (rerank === undefined || results.length < 2) return
+    const headCount = Math.min(this.#rerankCandidates ?? DEFAULT_RERANK_CANDIDATES, results.length)
+    if (headCount < 2) return
+
+    const docs: string[] = []
+    for (let i = 0; i < headCount; i++) {
+      const rowid = rowids[i]
+      const chunkHits = rowid === undefined ? undefined : byEntry.get(rowid)
+      const best = chunkHits !== undefined && chunkHits.length > 0 ? chunkHits[0]!.text : undefined
+      docs.push(best ?? results[i]!.excerpt)
+    }
+
+    let scores: number[] | null
+    try {
+      scores = await rerank(query, docs)
+    } catch {
+      return // 注入方抛错（如超时未被归零）→ 静默维持 RRF 序
+    }
+    if (scores === null || scores.length !== headCount || scores.some((s) => !Number.isFinite(s))) return
+
+    // 原头部分值域（调用点的融合序已按 RRF 降序；仍显式排序，以免将来调用点变动
+    // 悄悄让重赋分产生非单调序列）
+    const headScores = results.slice(0, headCount).map((r) => r.score)
+    headScores.sort((a, b) => b - a)
+    const head = results.slice(0, headCount)
+    // 稳定排序（Array#sort 稳定）：同分保持原相对序，避免无意义的抖动
+    const order = head.map((_, i) => i).sort((a, b) => scores![b]! - scores![a]!)
+    for (let rank = 0; rank < headCount; rank++) {
+      const entry = head[order[rank]!]!
+      entry.score = headScores[rank]!
+      results[rank] = entry
     }
   }
 
@@ -2259,8 +2448,12 @@ export class PrismKnowledgeService implements KnowledgeService {
    * 对**被覆盖**的条目在同相关性下**降权**（`score × 0.5`）并返回
    * `overridden_by: <覆盖者 id>@v<版次>`；**不删除、不过滤**（预算友好 + 可解释）。
    *
-   * 未传 `graph_boost`（缺省）→ **原样返回同一数组**，与改动前逐字节一致
-   * （保护既有检索行为；裁决 A3 明确不做边表邻近度）。
+   * 未传 `graph_boost`（缺省）→ **原样返回同一数组**，与改动前逐字节一致。
+   *
+   * **supersession（v14 §2）**：旧裁决 A3「**不做边表邻近度**」**已被推翻**——本轮以
+   * 引用扩展（`references` 边 1–2 跳衰减）落地，见 `#expandReferences`。**全序（S4）**：
+   * RRF 融合 → 引用扩展 → 精排 → **本方法最后**（overrides 降权必须压在精排之后，
+   * 否则精排按新序重赋的单调分会把先做的 ×0.5 盖掉——旧注释曾把 A3 当禁区，已失效）。
    */
   #applyOverridesBoost(results: SearchResult[], graphBoost?: boolean): SearchResult[] {
     if (graphBoost !== true || results.length === 0) return results
@@ -3477,6 +3670,13 @@ function countRows(raw: DatabaseSync, table: 'kb_chunks' | 'kb_chunk_vectors'): 
   return Number(row.n)
 }
 
+/**
+ * 精排候选数兜底（v14 SPEC-1.7：档定 24/10）。**server 装配恒显式传入档位值**
+ * （`RERANK_MODELS[tier].candidates`，那里是唯一真相源）；这里只兜住「注入方忘了传」
+ * 的场合，值是 GPU 档的 24。
+ */
+const DEFAULT_RERANK_CANDIDATES = 24
+
 /** 每条目的最高段分（段路两路共用的聚合依据——M-3「entry 排名依据 = 其最高段分」）。 */
 function bestChunkScoreByEntry(hits: readonly ChunkHit[]): Map<number, number> {
   const best = new Map<number, number>()
@@ -3493,6 +3693,26 @@ function entryRankFromChunkHits(hits: readonly ChunkHit[], limit: number): numbe
     .sort((a, b) => b[1] - a[1])
     .slice(0, limit)
     .map(([rowid]) => rowid)
+}
+
+/**
+ * 沿 `references` 边**正向**批量取一跳（v14 §2 / SPEC-2.1；S5 的单向正跳锁）。
+ *
+ * 只按 `from_id` 过滤——`knowledge_edges` 主键 `(from_id, to_id, relation)` 的前缀即索引；
+ * 反向（按 `to_id` 找引用者）本轮**不做**，故不上 `to_id` 谓词（那会退化成全表扫）。
+ * 边的方向语义：`from` 引用了 `to`（写入点 `#writeEdges`，来源 = 正文双链 `[[id]]`）。
+ */
+function referencesFrom(
+  raw: DatabaseSync,
+  fromIds: readonly string[],
+): Array<{ from_id: string; to_id: string }> {
+  if (fromIds.length === 0) return []
+  return raw
+    .prepare(
+      `SELECT from_id, to_id FROM knowledge_edges
+       WHERE relation = 'references' AND from_id IN (${fromIds.map(() => '?').join(', ')})`,
+    )
+    .all(...fromIds) as unknown as Array<{ from_id: string; to_id: string }>
 }
 
 /**

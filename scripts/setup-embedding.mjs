@@ -34,6 +34,8 @@
  * 选项：
  *   --check        只检查是否就绪（退出码 0/1）
  *   --tier <名>    只装指定档模型（small|default|large）
+ *   --rerank-tier <名>  只装指定 rerank 档模型（gpu|cpu）
+ *   --no-rerank    跳过 rerank 档模型（只装 embedding 侧）
  *   --bin-only     只装二进制，跳过模型
  *   --model-only   只装模型，跳过二进制
  *   --prebuilt     强制用官方预编译包（不编译）
@@ -45,9 +47,11 @@
  * 产物（均 gitignored，不进仓库）：
  *   3rd/llama-runtime/bin/llama-server[.exe]          主二进制（Windows=CPU / macOS arm64=Metal / macOS x64=CPU）
  *   3rd/llama-runtime/bin-vulkan/llama-server[.exe]   GPU（Vulkan 预编译，Windows/Linux）
- *   3rd/llama-runtime/models/<档位模型>.gguf
+ *   3rd/llama-runtime/models/<档位模型>.gguf            embedding 三档
+ *   3rd/llama-runtime/models/<rerank 档模型>.gguf       rerank 两档（**第二实例**，v14 §1.1）
  *
- * 验证：prism doctor 会检查 embedding 可用性；检索自动走 BM25+向量混合。
+ * 验证：prism doctor 会检查 embedding / rerank 两端点可用性；检索自动走 BM25+向量混合，
+ *       rerank 按档位开关（GPU 档默认开、CPU 档默认关）参与头部精排。
  */
 import { createWriteStream } from 'node:fs'
 import { chmod, copyFile, mkdir, readdir, rename, rm, stat, access, constants } from 'node:fs/promises'
@@ -142,6 +146,42 @@ const TIERS = {
 }
 const TIER_NAMES = Object.keys(TIERS)
 
+/**
+ * rerank 档位表（**必须与 packages/server/src/kb/embedding-models.ts 的 `RERANK_MODELS`
+ * 一致**；`packages/server/test/embedding-models.test.ts` 做一致性校验防漂移）。
+ *
+ * rerank 是**第二个 llama-server 实例**（v14 §1.1 / M1）：单实例只装一个 GGUF，且
+ * `--rerank` 会把实例池化全局改成 RANK，同实例下 `/embedding` 语义即废——故两模型各自装、
+ * 各自起进程（独立端口 8191/8192）。
+ *
+ * 不带 `bytes`：两个 rerank 仓库的文件页只给四舍五入的体积（438MB / 395MB），
+ * 写死一个不精确的期望值会让 `download()` **硬失败/反复重下**（它按 `received !== expected`
+ * 判失败）——宁可不要这道大小校验，也不要一个会误伤的常量。
+ */
+const RERANK = {
+  gpu: {
+    file: 'bge-reranker-v2-m3-Q4_K_M.gguf',
+    repo: 'gpustack/bge-reranker-v2-m3-GGUF',
+  },
+  cpu: {
+    // 波次 3 真机裁决（S7）：原候选 Qwen3-Reranker-0.6B 判别分无效（因果 LM 无分类头，
+    // llama.cpp `--rerank` 的 RANK 池化不适用）→ 按裁决换 bge-reranker-base（交叉编码器，
+    // 实测 5 组相关/无关对全部方向正确）。本表与 TS 表必须同改。
+    file: 'bge-reranker-base-q4_k_m.gguf',
+    repo: 'sabafallah/bge-reranker-base-Q4_K_M-GGUF',
+  },
+}
+const RERANK_NAMES = Object.keys(RERANK)
+
+/** rerank 模型下载源（与 embedding 同镜像优先策略）。 */
+function rerankModelUrls(tier) {
+  const { file, repo } = RERANK[tier]
+  return [
+    `https://hf-mirror.com/${repo}/resolve/main/${file}`,
+    `https://huggingface.co/${repo}/resolve/main/${file}`,
+  ]
+}
+
 /** 模型下载源（国内镜像优先；huggingface.co 直连常被阻断）。 */
 function modelUrls(tier) {
   const { file, repo } = TIERS[tier]
@@ -199,6 +239,8 @@ function argValue(flag) {
   return i >= 0 && i + 1 < args.length ? args[i + 1] : undefined
 }
 const REQUESTED_TIER = argValue('--tier')
+const REQUESTED_RERANK_TIER = argValue('--rerank-tier')
+const NO_RERANK = args.includes('--no-rerank')
 
 /** 要安装的档位集合：显式 --tier 则只装它；否则按算力（有卡装 large+small，无卡只装 small）。 */
 function tiersToInstall() {
@@ -211,6 +253,21 @@ function tiersToInstall() {
   // 有显卡：强档 + 轻量档兜底（万一显卡不可用仍能跑）；
   // 无显卡：只装轻量档——bge-m3(default) 在 CPU 上慢到不可用，装了也是浪费 600MB。
   return FORCE_GPU || detectGpu() !== null ? ['large', 'small'] : ['small']
+}
+
+/**
+ * 要安装的 rerank 档集合（v14 §1.1）：显式 `--rerank-tier` > `--no-rerank` 跳过 >
+ * 按算力——有卡装 gpu 档 + cpu 档兜底（与 embedding 的 large+small 同思路），无卡只装 cpu 档。
+ */
+function rerankTiersToInstall() {
+  if (NO_RERANK) return []
+  if (REQUESTED_RERANK_TIER !== undefined) {
+    if (!RERANK_NAMES.includes(REQUESTED_RERANK_TIER)) {
+      throw new Error(`未知 rerank 档位: ${REQUESTED_RERANK_TIER}（可用: ${RERANK_NAMES.join(' / ')}）`)
+    }
+    return [REQUESTED_RERANK_TIER]
+  }
+  return FORCE_GPU || detectGpu() !== null ? ['gpu', 'cpu'] : ['cpu']
 }
 const NO_GPU = args.includes('--no-gpu')
 
@@ -528,12 +585,16 @@ async function main() {
   const binReady = await exists(serverExe)
   const gpuReady = await exists(gpuServerExe)
   const tierState = TIER_NAMES.map((t) => ({ tier: t, ready: existsSync(join(MODEL_DIR, TIERS[t].file)) }))
+  const rerankState = RERANK_NAMES.map((t) => ({ tier: t, ready: existsSync(join(MODEL_DIR, RERANK[t].file)) }))
   const anyModelReady = tierState.some((t) => t.ready)
 
   if (CHECK_ONLY) {
     log(`二进制(CPU):  ${binReady ? '就绪' : '缺失'} → ${serverExe}`)
     log(`二进制(GPU):  ${gpuReady ? '就绪' : '缺失'} → ${gpuServerExe}`)
     for (const t of tierState) log(`模型(${t.tier.padEnd(7)}): ${t.ready ? '就绪' : '缺失'} → ${TIERS[t.tier].file}`)
+    for (const t of rerankState)
+      log(`模型(rerank-${t.tier.padEnd(3)}): ${t.ready ? '就绪' : '缺失'} → ${RERANK[t.tier].file}`)
+    // rerank 是可选增强（其缺失不影响嵌入侧就绪判定）；这里只报告状态
     process.exitCode = (binReady || gpuReady) && anyModelReady ? 0 : 1
     return
   }
@@ -571,9 +632,33 @@ async function main() {
         await downloadAny(modelUrls(tier), dest, bytes)
         log(`模型安装完成（${tier}）`)
       }
+
+      // rerank 档模型（v14 §1.1，第二实例）：可选增强——下载失败只告警，
+      // 不让它把嵌入侧已装好的环境判成失败（rerank 未装时检索静默维持 RRF 序）。
+      const wantRerank = rerankTiersToInstall()
+      if (wantRerank.length === 0) {
+        log('跳过 rerank 档模型（--no-rerank）')
+      } else {
+        log(`rerank 档位: ${wantRerank.join(', ')}`)
+        for (const tier of wantRerank) {
+          const { file } = RERANK[tier]
+          const dest = join(MODEL_DIR, file)
+          if (existsSync(dest) && !FORCE) {
+            log(`rerank 模型已存在，跳过（${tier}）: ${file}`)
+            continue
+          }
+          try {
+            await downloadAny(rerankModelUrls(tier), dest)
+            log(`rerank 模型安装完成（${tier}）`)
+          } catch (error) {
+            log(`rerank 模型安装失败（不影响 embedding，可稍后重试）：${error instanceof Error ? error.message : String(error)}`)
+          }
+        }
+      }
     }
     log('\n全部就绪。可用 prism doctor 检查；检索将自动使用向量混合排序。')
     log('档位查看: prism embedding models；切换: prism embedding use <small|default|large>')
+    log('rerank: GPU 档默认开（rerank_enabled: auto），CPU 档默认关；开关写 prism.yaml')
   } catch (error) {
     process.stderr.write(`[embedding-setup] 失败: ${error instanceof Error ? error.message : String(error)}\n`)
     process.exitCode = 1
