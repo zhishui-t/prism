@@ -122,7 +122,15 @@ export function extractOverlaySkills(body: string): string[] {
     .filter((s) => s !== '')
 }
 
-/** 从正文「知识绑定」节回收知识绑定（`- layers: a, b` / `- books: x`；无节/无层返回 undefined）。 */
+/**
+ * 从正文「知识绑定」节回收知识绑定（`- layers: a, b` / `- books: x`）。
+ *
+ * 「无绑定」= `undefined` **仅当两维皆空**——layers 为空数组但写了 books 时**仍算有绑定**
+ * （v16 B-2 / R-2）：`- books:` 行是用户显式写下的意图，不能因为同节没写 layers 就连同
+ * 整个绑定一起丢掉（修前 `layers.length > 0 ? … : undefined` 正是如此，导致读回丢 books、
+ * 后续 `role edit` 的读-改-写把 books 真删）。`books` 键**缺省即不写**（空数组不落键），
+ * 与 `KnowledgeBinding` 的「省略 books = 该层全部」语义及既有 `toEqual` 断言一致。
+ */
 export function extractOverlayKnowledge(body: string): KnowledgeBinding | undefined {
   const section = extractSection(body, ['## 知识绑定'])
   if (section === '') return undefined
@@ -148,7 +156,9 @@ export function extractOverlayKnowledge(body: string): KnowledgeBinding | undefi
       }
     }
   }
-  return layers.length > 0 ? (books.length > 0 ? { layers, books } : { layers }) : undefined
+  // 两维皆空才是「无绑定」（layers 空不再吞掉 books）
+  if (layers.length === 0 && books.length === 0) return undefined
+  return books.length > 0 ? { layers, books } : { layers }
 }
 
 function parseKnowledge(value: FrontmatterValue | undefined): KnowledgeBinding {

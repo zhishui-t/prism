@@ -26,6 +26,7 @@ export {
   type EnsureServeResult,
   type StopServeResult,
   type ServeLauncher,
+  type ServeLaunchHandle,
 } from './serve-control.js'
 
 // 信封与错误码（跨流契约 design.md §4）

@@ -13,7 +13,16 @@
  *    通道，任何输出污染都会破坏协议。
  */
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  appendFileSync,
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { createConnection } from 'node:net'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -54,8 +63,24 @@ export function serveLogPath(home: string, port: number): string {
   return join(home, 'state', `serve-${port}.log`)
 }
 
-/** 监听器：返回 pid 即可（测试可注入替身，不必真起进程）。 */
-export type ServeLauncher = (argv: string[]) => { pid?: number }
+/**
+ * 启动句柄：launcher 返回的**共享可变对象**（测试可注入替身，不必真起进程）。
+ *
+ * 为什么不是「返回 pid」：spawn 的失败是**异步** emit 的——`spawn()` 同步返回时 `pid`
+ * 还是 `undefined`，`error`（ENOENT）要到下一 tick 才到、`exit`（早夭）同理。所以
+ * 「启动失败」只能由 launcher 的事件处理器**原地写**进这个共享句柄，`ensureServe`
+ * 在轮询里读它；同步返回值拿不到失败。
+ */
+export interface ServeLaunchHandle {
+  pid?: number
+  /** 启动失败（spawn error / 早夭 exit≠0）；由 launcher 的事件处理器原地写入 */
+  failure?: Error
+  /** 结束启动观测窗口：收口 launcher 打开的日志 fd（由 `ensureServe` 结束时统一调用一次） */
+  dispose?: () => void
+}
+
+/** 监听器：返回**共享句柄**（测试可注入替身，不必真起进程）。 */
+export type ServeLauncher = (argv: string[]) => ServeLaunchHandle
 
 export interface EnsureServeOptions {
   home: string
@@ -129,17 +154,88 @@ export async function probeServe(host: string, port: number, timeoutMs = 1500): 
   }
 }
 
-function defaultLaunch(home: string, port: number): ServeLauncher {
+/**
+ * 启动期失败的**兜底记账**：追加一行 `[prism-launch-error] <message>` 到
+ * `serve-<port>.log`（与子进程 stderr 同一个文件，用户看日志时线索在一处）。
+ *
+ * 为什么另开 fd、不复用 spawn 传给子进程的那个：那个 fd 要活到运行期（由 `ensureServe`
+ * 统一关）；在事件处理器里顺手关掉它，会让**后续**事件写已关的 fd 抛 EBADF。
+ * 记账是尽力而为——失败通道（`handle.failure`）才是结论，写不进去也不掩盖根因。
+ */
+function appendLaunchError(logPath: string, message: string): void {
+  try {
+    const fd = openSync(logPath, 'a')
+    try {
+      appendFileSync(fd, `[prism-launch-error] ${message}\n`)
+    } finally {
+      closeSync(fd)
+    }
+  } catch {
+    /* 记账失败不致命：错误本身已进 failure 通道 */
+  }
+}
+
+/**
+ * 生产用启动器：`detached` 真起后台进程，stdout/stderr 落到 `serve-<port>.log`。
+ *
+ * `command` 可注入**只为测试**（真 spawn 一个必败命令来验 error 路径）；生产调用一律
+ * 用缺省的 `process.execPath`，行为与注入前逐字节一致。
+ */
+export function defaultLaunch(home: string, port: number, command: string = process.execPath): ServeLauncher {
   return (argv) => {
-    const logFd = openSync(serveLogPath(home, port), 'a')
-    const child = spawn(process.execPath, argv, {
+    const logPath = serveLogPath(home, port)
+    const handle: ServeLaunchHandle = {}
+
+    let logFd: number
+    try {
+      logFd = openSync(logPath, 'a')
+    } catch (error) {
+      // 日志都打不开 = 同步可判的启动失败，不必再 spawn
+      handle.failure = error instanceof Error ? error : new Error(String(error))
+      return handle
+    }
+
+    // 「启动观测窗口」：窗口内（= 还没拿到结论）的 error/exit 才算**启动**失败。
+    // 窗口由 ensureServe 收口（成功 / 失败 / 超时都会调 dispose）——此后进程退出是
+    // **运行期**的事（`prism serve --stop` 在 Windows 上就是非零退出码），不记启动账。
+    let observing = true
+    handle.dispose = () => {
+      observing = false
+      try {
+        closeSync(logFd)
+      } catch {
+        /* 已关 / 无效 fd 不致命 */
+      }
+    }
+
+    const recordFailure = (message: string): void => {
+      if (!observing) return
+      // 先到先记：ENOENT 只有 error、早夭只有 exit，但两者都可能到（Node 不保证互斥）——
+      // 首条定 failure 通道，记账也只记首条：同一次失败恰一行，SPEC-1.2/1.3 的行数断言平台无关。
+      if (handle.failure !== undefined) return
+      handle.failure = new Error(message)
+      appendLaunchError(logPath, message)
+    }
+
+    const child = spawn(command, argv, {
       detached: true,
       stdio: ['ignore', logFd, logFd],
       windowsHide: true,
       env: { ...process.env, PRISM_HOME: home },
     })
+    // 事件选择：`error` + `exit`，**不挂 `close`**——ENOENT 只发 error+close（没有 exit），
+    // 挂 close 会把同一次失败记两遍。
+    child.on('error', (error) => {
+      recordFailure(`spawn 失败：${error.message}`)
+    })
+    child.on('exit', (code, signal) => {
+      // code=0 = 正常退出；code=null = 被信号终止——都不是「启动失败」
+      if (code === null || code === 0) return
+      recordFailure(`进程提前退出：code=${String(code)} signal=${signal ?? '-'}`)
+    })
     child.unref()
-    return child.pid === undefined ? {} : { pid: child.pid }
+    if (child.pid !== undefined) handle.pid = child.pid
+    return handle
   }
 }
 
@@ -175,26 +271,43 @@ export async function ensureServe(options: EnsureServeOptions): Promise<EnsureSe
 
   mkdirSync(dirname(serveStatePath(home, port)), { recursive: true })
   const launch = options.launch ?? defaultLaunch(home, port)
-  const { pid } = launch(backgroundServeArgv(home, host, port, options.extraArgs ?? []))
+  // ⚠ 保留**整句柄**、不要解构 `{ pid }`：解构会丢掉 failure 通道——失败是事件处理器
+  // 异步写进句柄的，只有句柄本身在轮询里可见。
+  const handle = launch(backgroundServeArgv(home, host, port, options.extraArgs ?? []))
+  const pid = handle.pid
 
   const deadline = Date.now() + waitMs
-  while (Date.now() < deadline) {
-    await delay(200)
-    if ((await probeServe(host, port, 800)).alive) {
-      const record: ServeRecord = {
-        ...(pid !== undefined ? { pid } : {}),
-        host,
-        port,
-        startedAt: new Date().toISOString(),
+  try {
+    while (Date.now() < deadline) {
+      await delay(200)
+      // **快失败**：launcher 的 error/exit 处理器已把原因写进句柄 → 立刻抛，不干等 waitMs。
+      // 判据钉死为「failure 已置」而非「pid 为空」——后者会被「日志还没落盘」这类时序骗到。
+      if (handle.failure !== undefined) {
+        throw new Error(
+          `后台控制台启动失败（spawn_failed）：${handle.failure.message}\n` +
+            `  看日志：${logPath}\n  前台排查：prism serve --port ${port}`,
+        )
       }
-      writeFileSync(serveStatePath(home, port), `${JSON.stringify(record, null, 2)}\n`, 'utf8')
-      return { alreadyRunning: false, started: true, ...(pid !== undefined ? { pid } : {}), url, logPath }
+      if ((await probeServe(host, port, 800)).alive) {
+        const record: ServeRecord = {
+          ...(pid !== undefined ? { pid } : {}),
+          host,
+          port,
+          startedAt: new Date().toISOString(),
+        }
+        writeFileSync(serveStatePath(home, port), `${JSON.stringify(record, null, 2)}\n`, 'utf8')
+        return { alreadyRunning: false, started: true, ...(pid !== undefined ? { pid } : {}), url, logPath }
+      }
     }
-  }
 
-  throw new Error(
-    `后台控制台在 ${waitMs}ms 内未就绪（启动可能失败）。\n  看日志：${logPath}\n  前台排查：prism serve --port ${port}`,
-  )
+    throw new Error(
+      `后台控制台在 ${waitMs}ms 内未就绪（启动可能失败）。\n  看日志：${logPath}\n  前台排查：prism serve --port ${port}`,
+    )
+  } finally {
+    // fd 生命周期收口：launcher 打开的日志 fd 不在 spawn 后即关（子进程要一直写它），
+    // 由这里统一关闭——成功 / 失败 / 超时三条路径都会走到。
+    handle.dispose?.()
+  }
 }
 
 /**

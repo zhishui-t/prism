@@ -53,6 +53,9 @@ export function kbRoutes(
     // B3：visibility 过滤（opt-in，不传即不过滤）
     const visibilities = parseLayers(ctx.query.get('visibilities'))
     const limit = parseLimit(ctx.query.get('limit'), SEARCH_LIMIT_MAX)
+    // v16 B-3（R-3）：`hybrid` 显式覆盖混合检索开关（`false` = 强制纯关键词，跳过向量路）。
+    // 非法的取值直接 400（SPEC-3.3），不做静默压值。
+    const hybrid = parseStrictBool(ctx.query.get('hybrid'), 'hybrid')
     const query: SearchQuery = {
       q,
       layers: layers ?? undefined,
@@ -61,6 +64,9 @@ export function kbRoutes(
       module: ctx.query.get('module') ?? undefined,
       limit: limit ?? undefined,
       all_versions: parseBool(ctx.query.get('all_versions')),
+      // v16 B-3（R-3）：`hybrid` 走**严格**小助手（只认 0|1|true|false），与 `all_versions`
+      // 的宽松 `parseBool` 刻意分开——两者语义不同，见 parseStrictBool 注释。
+      ...(hybrid !== undefined ? { hybrid } : {}),
       ...(visibilities !== null ? { visibilities } : {}),
     }
     // v13 §5 契约链：`searchWithMeta` 是**可选**实现（内存桩可不提供）——有则用之，
@@ -512,6 +518,22 @@ function parseBool(raw: string | null): boolean | undefined {
     return undefined
   }
   return raw === 'true' || raw === '1'
+}
+
+/**
+ * **严格**布尔查询参数（v16 B-3 / R-3）：只认 `0 | 1 | true | false` 四个字面值；
+ * 其余（**含空串** `?hybrid=`）一律 `bad_request`。缺省（参数不存在）→ `undefined`。
+ *
+ * 为什么另开一个而不复用 {@link parseBool}：`parseBool` 的语义是「非 `true`/`1` 即 `false`」——
+ * 非法值被**静默压成 false**，供 `all_versions` 这类「宽松开关」使用（改它会波及那一面的既有
+ * 行为）。`hybrid` 要的是**拒绝**非法输入（SPEC-3.3：`?hybrid=maybe` / `?hybrid=` → 400），
+ * 两者语义不同故不合并。刻意**不 trim**：`hybrid= true` 不属于那四个字面值。
+ */
+function parseStrictBool(raw: string | null, name: string): boolean | undefined {
+  if (raw === null) return undefined
+  if (raw === 'true' || raw === '1') return true
+  if (raw === 'false' || raw === '0') return false
+  throw new PrismError('bad_request', `${name} 只接受 0|1|true|false，收到：${raw}`)
 }
 
 /** 查询参数 → 数字；缺省/非有限值 → undefined（保持「非法即忽略」的既有行为）。 */

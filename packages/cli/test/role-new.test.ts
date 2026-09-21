@@ -353,10 +353,10 @@ describe('prism role edit | rm（v6 增删改对齐）', () => {
   })
 
   // v15 tester 补测（B-1② 角落的**写侧**钉子）：`--layers ""` 在 overlay 形态下落盘必须保留
-  // books 行（S-3 口径 a：只清点名的 layers 维度）。解析侧（`extractOverlayKnowledge` 对
-  // books-only 小节整体返回 undefined → 后续 edit 真删 books）是**预存在缺陷**，已记
-  // D-v15-tester-1 待队长裁决——修法（放行 books-only 小节）落地后本用例**保持绿**，
-  // 它钉的只是写侧契约，不锁缺陷行为。
+  // books 行（S-3 口径 a：只清点名的 layers 维度）。该用例只钉**写侧**契约，不锁缺陷行为。
+  // 同源的解析侧缺陷（`extractOverlayKnowledge` 原对 books-only 小节整体返回 undefined，
+  // 导致读回丢 books、后续 edit 真删）已由 v16 B-2 / R-2 修复并显性化——
+  // 读侧与端到端闭环的钉子见 `@prism/agents` 的 role-overlay-knowledge.test.ts 与本文件 SPEC-2.3。
   it('SPEC-1.4a 角落（B-1② 写侧）：--layers "" 落盘保留 books 行、layers 行被清除', async () => {
     expect(await runCommand(ctx, ['role', 'new', 'dev-x', '--layers', 'global', '--books', 'a,b'])).toBe(0)
     const path = join(home, 'roles', 'dev-x.md')
@@ -367,6 +367,40 @@ describe('prism role edit | rm（v6 增删改对齐）', () => {
     const content = await readFile(path, 'utf-8')
     expect(content).toContain('- books: a, b') // 写侧保值（缺陷不在这一半）
     expect(content).not.toContain('- layers:') // 点名维度被清
+  })
+
+  // SPEC-2.3（v16 B-2 / R-2）：端到端闭环锁死「books-only overlay 读回不丢 + 后续 edit 不真删 books」。
+  // 修前 `extractOverlayKnowledge` 把 layers 为空的小节整体判成「无绑定」→ loadRole 回落到导入
+  // 默认两层（books 消失）→ mergeKnowledge 读到 base.books=undefined → 再点名 layers 时把 books 真删。
+  it('SPEC-2.3 往返闭环：--layers "" 后读回 books 在，再 edit 既不丢也不被真删', async () => {
+    const rolesDir = join(home, 'roles')
+    expect(await runCommand(ctx, ['role', 'new', 'dev-x', '--layers', 'global', '--books', 'a,b'])).toBe(0)
+    const path = join(rolesDir, 'dev-x.md')
+
+    // ① 清 layers：写侧保留 books 行
+    lines = []
+    expect(await runCommand(ctx, ['role', 'edit', 'dev-x', '--layers', ''])).toBe(0)
+    expect(await readFile(path, 'utf-8')).toContain('- books: a, b')
+
+    // ② 读回（loadRole = 目录式优先的同一单点）：books 必须还在，且不得回落默认层 ← 修前红
+    expect((await loadRole(rolesDir, 'dev-x'))?.knowledge).toEqual({ layers: [], books: ['a', 'b'] })
+    expect(parseRoleMarkdown(await readFile(path, 'utf-8')).knowledge).toEqual({ layers: [], books: ['a', 'b'] })
+
+    // ③ 再改 description：books 仍不丢
+    lines = []
+    expect(await runCommand(ctx, ['role', 'edit', 'dev-x', '--description', '新述'])).toBe(0)
+    const afterDescription = parseRoleMarkdown(await readFile(path, 'utf-8'))
+    expect(afterDescription.description).toBe('新述')
+    expect(afterDescription.knowledge).toEqual({ layers: [], books: ['a', 'b'] })
+    expect(await readFile(path, 'utf-8')).toContain('- books: a, b')
+
+    // ④ 关键补锁：**再次点名 layers**（走 mergeKnowledge 的读-改-写）——这正是修前 books 被真删的路径
+    lines = []
+    expect(await runCommand(ctx, ['role', 'edit', 'dev-x', '--layers', 'global'])).toBe(0)
+    const finalContent = await readFile(path, 'utf-8')
+    expect(finalContent).toContain('- layers: global')
+    expect(finalContent).toContain('- books: a, b')
+    expect(parseRoleMarkdown(finalContent).knowledge).toEqual({ layers: ['global'], books: ['a', 'b'] })
   })
 
   it('SPEC-1.1/S-2 目录式角色：edit 改写 loadRole 实际读到的那个文件（读写同解析）', async () => {

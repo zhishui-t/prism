@@ -223,8 +223,11 @@ async function main(): Promise<void> {
 //    子进程报告 signal=SIGTERM，但**信号处理器不执行、`exit` 不触发**。故 Windows 后台
 //    常驻被 `--stop` 停掉时不会有退出记录；「正常退出」一行只在硬杀之外出现
 //    （POSIX 信号 / 前台 Ctrl+C）。
-// 2. parent 侧 spawn 失败静默：serve-control 的 `defaultLaunch` 未挂 `child.on('error')`，
-//    spawn 失败后 parent 会干等 30s 才报「未就绪」。留账 **D-v15-1**，本轮不动。
+// 2. ~~parent 侧 spawn 失败静默~~（**已修复，v16 B-1 / R-1**）：serve-control 的
+//    `defaultLaunch` 现挂 `error`+`exit`（不挂 `close`，避免 ENOENT 双记账），把失败原地写进
+//    共享句柄，并追加一行 `[prism-launch-error] <原因>` 到 `serve-<port>.log`（本模块
+//    stderr 的去处，线索集中一处）；`ensureServe` 在轮询里 poll 该句柄，置位即抛
+//    `spawn_failed`，不再干等 30s。
 // ————————————————————————————————————————————————————————————————
 
 // 直接以本文件为入口运行时才启动服务（`node dist/background.js …`）。

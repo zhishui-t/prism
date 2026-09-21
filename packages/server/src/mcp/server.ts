@@ -783,7 +783,8 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
         '长文档按标题分段索引，命中的结果额外带段级定位 `hits`（{seq, heading_path, excerpt, score}，' +
         '缺省不下发），据此可指出命中落在文档哪一节；响应级 `chunk_scan_degraded` 表示段向量扫描被护栏降级、' +
         '`hits_truncated` 表示段列表被预算截断、`embedding_degraded`（三判据同真：装配了向量能力 ∧ ' +
-        '查询未显式关混合 ∧ 查询向量算不出）表示向量检索降级、已回落纯关键词检索（结果照常，仅诊断）。',
+        '查询未显式关混合 ∧ 查询向量算不出）表示向量检索降级、已回落纯关键词检索（结果照常，仅诊断）。' +
+        '可传 `hybrid=false` 强制纯关键词检索（跳过向量路，此时不计 `embedding_degraded`）。',
       inputSchema: {
         type: 'object',
         properties: {
@@ -794,6 +795,12 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
           module: { type: 'string' },
           limit: { type: 'integer', minimum: 1, maximum: 1000 },
           all_versions: { type: 'boolean' },
+          hybrid: {
+            type: 'boolean',
+            description:
+              '显式覆盖混合检索开关：false = 强制纯关键词检索（跳过向量路；此时不计 embedding_degraded）。' +
+              '缺省由服务端决定（默认启用混合）。',
+          },
           visibilities: {
             type: 'array',
             items: { enum: ['global', 'project', 'role'] },
@@ -815,6 +822,10 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
           module: asString(args.module),
           limit: typeof args.limit === 'number' ? args.limit : undefined,
           all_versions: typeof args.all_versions === 'boolean' ? args.all_versions : undefined,
+          // v16 B-3（R-3）：与 HTTP 面同参数；**MCP 面维持既有宽松口径**——非布尔值静默忽略
+          // （不报错），严格拒绝只在 HTTP 查询串侧（SPEC-3.3）。
+          // 用条件展开：缺省/非法时**不落键**（与 HTTP 面同口径，避免 undefined 混进查询对象）。
+          ...(typeof args.hybrid === 'boolean' ? { hybrid: args.hybrid } : {}),
           ...(Array.isArray(args.visibilities)
             ? { visibilities: args.visibilities as SearchQuery['visibilities'] }
             : {}),

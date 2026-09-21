@@ -194,7 +194,7 @@ prism
 
 | 工具 | 作用 |
 | :--- | :--- |
-| `prism_kb_search` | 检索（层/书/模块/可见性过滤，默认最新版次） |
+| `prism_kb_search` | 检索（层/书/模块/可见性过滤，默认最新版次；HTTP/MCP 可传 `hybrid=false` 强制纯关键词检索、跳过向量路，此时不计 `embedding_degraded`；HTTP 侧该参数**严格**只认 `0/1/true/false`，其余 400） |
 | `prism_kb_get` | 取单条（可指定版次；返回 `deposited_by` / `provenance`） |
 | `prism_kb_deposit` | 落库（宿主说落就落；可带团队沉淀策略） |
 | `prism_kb_convert` | 文档转 Markdown（**不落库**，零 LLM/零网络） |

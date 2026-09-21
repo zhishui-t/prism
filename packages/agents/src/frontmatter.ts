@@ -56,6 +56,27 @@ export function stripPrismMarkerTail(body: string): string {
   return body.replace(MARKER_TAIL_RE, '').trimEnd()
 }
 
+/**
+ * **循环**剥掉文本尾部的全部 Prism marker（旧版本累积的重复 marker 一并收敛），并收敛尾部空白。
+ *
+ * 与 {@link stripPrismMarkerTail}（只剥一枚）的差别就是「循环」：写盘的两个**正文入口**
+ * （`splitFrontmatter` 的 body 与 `patch.body`）各调一次，保证 overlay 注入永远发生在
+ * **无 marker 正文**上，末尾再 append 一枚 fresh marker —— 产出恒为「幂等单 marker」。
+ * 否则旧 marker 会被新注入的小节埋进正文中段，尾部正则从此够不着（每次 PATCH 净 +1）。
+ *
+ * 边界（R7）：只覆盖**尾部**。「像 marker 但后面还有正文」的行不属于尾部，一字不动；
+ * 历史文件里被埋进中段的残留无法在纯文本层安全回收（需结构化解析正文定位归属小节，
+ * 会牵动 patch 的正文保真）——但它自此**稳定 +1 不再增长**。
+ */
+export function stripAllMarkerTails(body: string): string {
+  let out = body
+  for (;;) {
+    const next = out.replace(MARKER_TAIL_RE, '')
+    if (next === out) return out.trimEnd()
+    out = next
+  }
+}
+
 /** 拆开 `---\n...\n---` 头与正文；无 frontmatter 时 data 为 null。 */
 export function splitFrontmatter(raw: string): { data: FrontmatterData | null; body: string } {
   const normalized = raw.replace(/\r\n/g, '\n')
