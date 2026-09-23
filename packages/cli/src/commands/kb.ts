@@ -7,6 +7,7 @@ import {
   convertFileToMarkdown,
   writeEnrichment,
   embedText,
+  embedBatchText,
   embeddingInstalled,
   ENTRY_TYPES,
   ProjectRegistry,
@@ -17,6 +18,8 @@ import {
   exportKnowledgeGraph,
   makeDryRunKb,
   resolveKbConfigForHome,
+  resolveEmbedBatchForHome,
+  resolveOcrWiringConfigForHome,
   scanProject,
   GATE_SKIP_REASONS,
   SKIP_REASONS,
@@ -485,8 +488,12 @@ async function kbConvert(ctx: CommandContext, args: string[], values: ArgValues)
     ctx.stderr('用法: prism kb convert <file> [--out <path>] [--max-chars N]')
     return 1
   }
+  // v17 M-2：与同文件 `kbImport`（scanProject 路）同口径——注入 OCR 表格/版面 wiring 结论，
+  // 否则 convert 恒走 layout+table 增强，`ocr_table`/`ocr_layout`/`PRISM_OCR=off` 在此路失效。
+  const ocrEnabled = resolveOcrWiringConfigForHome(ctx.home)
   const result = await convertFileToMarkdown(resolve(file), {
     ...(values['max-chars'] !== undefined ? { maxChars: Number(values['max-chars']) } : {}),
+    ocr: ocrEnabled.ocr,
   })
   if (values.out !== undefined) {
     await writeFile(resolve(String(values.out)), result.markdown, 'utf-8')
@@ -855,6 +862,8 @@ async function kbSync(ctx: CommandContext, args: string[], values: ArgValues): P
           .map((e) => e.trim())
           .filter((e) => e !== '')
       : undefined
+  const ocrEnabled = resolveOcrWiringConfigForHome(ctx.home)
+  for (const warning of ocrEnabled.warnings) ctx.stderr(`警告: ${warning}`)
   const report = await scanProject(
     dryRun ? makeDryRunKb(realKb) : realKb,
     {
@@ -865,6 +874,9 @@ async function kbSync(ctx: CommandContext, args: string[], values: ArgValues): P
       ...(values.module !== undefined ? { module: String(values.module) } : {}),
       ...(ignoreDirs !== undefined ? { ignoreDirs } : {}),
       ...(includeExt !== undefined ? { includeExt } : {}),
+      // v17 §A-0：OCR 表格/版面增强（prism.yaml 的 ocr_table/ocr_layout，缺省开；
+      // 模型未装 → enabled=false → 传 {table:false,layout:false} 回到旧输出）
+      ocr: ocrEnabled.ocr,
     },
   )
 
@@ -1160,11 +1172,18 @@ async function kbReindexChunks(ctx: CommandContext, values: ArgValues): Promise<
             return r.ok && r.vector !== undefined ? r.vector : null
           }
         : undefined
+    // v17 §B-5：批口（扁平键 `embed_batch`）——一次算一篇 entry 的全部缺段。
+    const embedBatch =
+      installed
+        ? async (texts: string[]): Promise<(Float32Array | null)[]> =>
+            embedBatchText(texts, resolveEmbedBatchForHome(ctx.home))
+        : undefined
     const report = await backfillChunks({
       knowledge: persistence.knowledge,
       chunkOptions: config.chunkOptions,
       ...(book !== undefined ? { book } : {}),
       ...(embed !== undefined ? { embed, model: activeModel().id } : {}),
+      ...(embedBatch !== undefined ? { embedBatch } : {}),
     })
     if (ctx.json) {
       ctx.stdout(JSON.stringify({ ok: true, value: report }))

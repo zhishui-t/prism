@@ -660,6 +660,16 @@ export interface SequenceIrOptions {
   maxMessages?: number
   /** 显式指定根文件（仓库相对路径）；省略则取调用图度数最高者 */
   rootFile?: string
+  /**
+   * v17 C-9：**按符号链构造**（相邻对消息），替代 `rootFile` 的调用图 BFS 口径。
+   *
+   * 元素是**图谱节点 id**（`GET /api/graph/path` 响应里 `chain[].id`）。给出非空数组时：
+   * 参与者 = 这些符号本身，消息 = 链上**相邻对** `(i → i+1)`——**只取链内边**，链外的
+   * calls 边一律不进图（C9.1「防链外边混入」）。**不传 / 传空数组 = 现行为逐字节不变**。
+   *
+   * @throws Error 任一 id 不在图内 / 参与者不足 2 个（schema 硬要求）。
+   */
+  symbols?: readonly string[]
 }
 
 /** 文件路径 → 显示名（basename，去掉扩展名）。 */
@@ -675,6 +685,11 @@ function baseName(file: string): string {
  *   伪造一条「看起来像」的时序图会误导读者。调用方应提示先建图或换图类型。
  */
 export function buildSequenceIr(graph: CodeGraph, options: SequenceIrOptions): SequenceIr {
+  const symbols = (options.symbols ?? []).filter((id) => typeof id === 'string' && id !== '')
+  if (symbols.length > 0) {
+    return buildSymbolChainIr(graph, options, symbols)
+  }
+
   const { nodes, edges } = normalizeGraph(graph)
   const fileById = new Map<string, string>()
   const labelById = new Map<string, string>()
@@ -744,32 +759,161 @@ export function buildSequenceIr(graph: CodeGraph, options: SequenceIrOptions): S
   }
 
   const participantSet = new Set(participants)
-  const used = new Set<string>()
-  const idOf = new Map<string, string>()
   const regionOfFile = makeRegionOf([...fileById.values()])
-  const participantIr: SequenceIrParticipant[] = participants.map((file) => {
-    const id = allocateId(baseName(file), used, 'p')
-    idOf.set(file, id)
-    const region = regionOfFile(file)
+  const indexOfFile = new Map(participants.map((file, index) => [file, index]))
+  const inSet = calls.filter((call) => participantSet.has(call.from) && participantSet.has(call.to))
+
+  return assembleSequenceIr(
+    {
+      title: options.title,
+      subtitle:
+        `代码图谱派生（Graphify ${nodes.length} 节点）｜ 根 = 调用图度数最高的文件；` +
+        `参与者 = 文件，消息 = 跨文件 calls 边（BFS 顺序，最多 ${maxMessages} 条）`,
+    },
+    participants.map((file) => {
+      const region = regionOfFile(file)
+      return { idSeed: baseName(file), label: baseName(file), region, sublabel: region }
+    }),
+    inSet.slice(0, maxMessages).map((call) => ({
+      from: indexOfFile.get(call.from)!,
+      to: indexOfFile.get(call.to)!,
+      label: call.label,
+    })),
+  )
+}
+
+/**
+ * 符号链 → `sequence` IR（v17 C-9，`SequenceIrOptions.symbols` 的口径）。
+ *
+ * 与 `rootFile` 口径的三点差别：
+ * 1. 参与者 = **给定符号本身**（不再按文件 BFS 扩邻域），第二行标出该符号所在文件；
+ * 2. 消息 = 链上**相邻对** `(symbols[i] → symbols[i+1])` 的**直接有向边**——链外的
+ *    calls 边一律不进图（C9.1「防链外边混入」就是这条）；
+ * 3. 落地不了的相邻对（两点之间没有该方向的边，或该边**既无 file 也无 line**——即
+ *    `/api/graph/path` 的 chain 里 `ambiguous` 那一跳的形态）→ **跳过该条消息**，
+ *    跳过条数写进 `meta.subtitle`（沿用 architecture 生成器「N 条因无法避让被略去」的
+ *    标注惯例：导出侧只标注，不画一条位置不明的消息）。
+ *
+ * 实测口径（本仓 graph.json 7103 边 / 1964 calls）：边的端点是 `source`/`target`，
+ * 调用点信息在 `source_file` + `source_location`（形如 `"L52"`）——**不**读 graphify
+ * CLI 内部才用的 `_src`/`_tgt` 标记（那些只出现在被规范化过的历史产物里，本仓实测 0 条）。
+ */
+function buildSymbolChainIr(
+  graph: CodeGraph,
+  options: SequenceIrOptions,
+  symbols: readonly string[],
+): SequenceIr {
+  const { nodes, edges } = normalizeGraph(graph)
+  const byId = new Map(nodes.map((node) => [node.id, node]))
+  const missing = symbols.filter((id) => !byId.has(id))
+  if (missing.length > 0) {
+    throw new Error(`符号链里有图谱中不存在的节点 id: ${missing.join(', ')}`)
+  }
+
+  const chain = symbols.slice(0, options.maxParticipants ?? 7)
+  if (chain.length < 2) {
+    throw new Error('符号链至少需要 2 个参与者才能生成时序图（schema 要求）')
+  }
+  const maxMessages = options.maxMessages ?? 14
+
+  // 直接边索引（有向：source → target，与 chain 的 BFS 方向同口径）。同方向的多条平行边
+  // （calls + imports_from …）取**首条**：这一跳只关心「边在不在」（文案取被调用符号名，
+  // 不取关系名），故择一无信息损失。
+  const edgeOf = new Map<string, Record<string, unknown>>()
+  for (const edge of edges) {
+    const key = `${edge.source}\u0000${edge.target}`
+    if (!edgeOf.has(key)) edgeOf.set(key, edge as unknown as Record<string, unknown>)
+  }
+
+  const labelOf = (id: string): string => {
+    const label = byId.get(id)?.label
+    return typeof label === 'string' && label.trim() !== '' ? label.trim() : id
+  }
+  const files = chain.flatMap((id) => {
+    const file = fileOf(byId.get(id))
+    return file === null ? [] : [file]
+  })
+  const regionOfFile = makeRegionOf(files)
+
+  const messages: Array<{ from: number; to: number; label: string }> = []
+  let skipped = 0
+  for (let index = 0; index + 1 < chain.length; index += 1) {
+    if (messages.length >= maxMessages) break
+    const from = chain[index]!
+    const to = chain[index + 1]!
+    const edge = edgeOf.get(`${from}\u0000${to}`)
+    const file = asPlainText(edge?.['source_file'])
+    const line = asPlainText(edge?.['source_location'])
+    if (edge === undefined || (file === '' && line === '')) {
+      skipped += 1
+      continue
+    }
+    messages.push({ from: index, to: index + 1, label: labelOf(to) })
+  }
+
+  return assembleSequenceIr(
+    {
+      title: options.title,
+      subtitle:
+        `代码图谱派生（Graphify ${nodes.length} 节点）｜ 符号链导出（${chain.length} 参与者 / ` +
+        `${messages.length} 条相邻对消息）；参与者 = 符号，消息 = 链上相邻对（i → i+1，只取链内边）` +
+        (skipped > 0 ? `；${skipped} 跳因无该方向的边或边无 file:line 被略去` : ''),
+    },
+    chain.map((id) => {
+      const file = fileOf(byId.get(id))
+      return {
+        idSeed: labelOf(id),
+        label: labelOf(id),
+        region: file === null ? '' : regionOfFile(file),
+        ...(file !== null ? { sublabel: file } : {}),
+      }
+    }),
+    messages,
+  )
+}
+
+/** 取字符串字段（非字符串/缺失 → 空串）——**不猜**：只认已有形态。 */
+function asPlainText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+/**
+ * 时序图**装配**（file 口径与符号链口径共用）。
+ *
+ * 两边只有三处不同：参与者显示名/子标签的来源、消息的构造方式、`meta.subtitle` 文案；
+ * 参与者 id 分配、消息 id/y/variant、viewBox 自算这些**渲染器硬约束**必须完全一致，
+ * 所以只此一处实现（改上游 archify 的几何常量时不会漏改一半）。
+ */
+function assembleSequenceIr(
+  meta: { title: string; subtitle: string },
+  participants: ReadonlyArray<{ idSeed: string; label: string; region: string; sublabel?: string }>,
+  messages: ReadonlyArray<{ from: number; to: number; label: string }>,
+): SequenceIr {
+  const used = new Set<string>()
+  const idOf = new Map<number, string>()
+  const participantIr: SequenceIrParticipant[] = participants.map((participant, index) => {
+    const id = allocateId(participant.idSeed, used, 'p')
+    idOf.set(index, id)
     return {
       id,
-      type: inferComponentType(region),
-      label: fitMiddle(baseName(file), SEQ_TEXT.label),
-      sublabel: fitUnits(region, SEQ_TEXT.sublabel),
+      type: inferComponentType(participant.region),
+      label: fitMiddle(participant.label, SEQ_TEXT.label),
+      ...(participant.sublabel !== undefined
+        ? { sublabel: fitUnits(participant.sublabel, SEQ_TEXT.sublabel) }
+        : {}),
     }
   })
 
-  const inSet = calls.filter((call) => participantSet.has(call.from) && participantSet.has(call.to))
-  const messages: SequenceIrMessage[] = inSet.slice(0, maxMessages).map((call, index) => ({
+  const messageIr: SequenceIrMessage[] = messages.map((message, index) => ({
     id: `m${index + 1}`,
-    from: idOf.get(call.from)!,
-    to: idOf.get(call.to)!,
+    from: idOf.get(message.from)!,
+    to: idOf.get(message.to)!,
     // 与 archify 示例同口径：首条 185，步长 43
     y: 185 + index * 43,
-    label: fitUnits(call.label, SEQ_TEXT.message),
+    label: fitUnits(message.label, SEQ_TEXT.message),
     variant: index === 0 ? 'emphasis' : 'default',
   }))
-  for (const message of messages) assertArchifyId(message.id)
+  for (const message of messageIr) assertArchifyId(message.id)
 
   // viewBox 自算：渲染器的两条硬边界——
   // - 宽度：`leftX + colGap*(n-1) + participantW/2 <= viewBox[0] - 40`（默认 920 只够 7 个参与者）
@@ -777,21 +921,15 @@ export function buildSequenceIr(graph: CodeGraph, options: SequenceIrOptions): S
   // 参与者多 / 消息多时不抬高就会被判 `sits outside the readable timeline`。
   const seqViewBox: [number, number] = [
     Math.max(920, Math.ceil(62 + 108 * (participantIr.length - 1) + 43 + 40)),
-    Math.max(760, messages.length === 0 ? 0 : Math.ceil(185 + (messages.length - 1) * 43 + 90)),
+    Math.max(760, messageIr.length === 0 ? 0 : Math.ceil(185 + (messageIr.length - 1) * 43 + 90)),
   ]
 
   return {
     schema_version: 1,
     diagram_type: 'sequence',
-    meta: {
-      title: options.title,
-      subtitle:
-        `代码图谱派生（Graphify ${nodes.length} 节点）｜ 根 = 调用图度数最高的文件；` +
-        `参与者 = 文件，消息 = 跨文件 calls 边（BFS 顺序，最多 ${maxMessages} 条）`,
-      viewBox: seqViewBox,
-    },
+    meta: { title: meta.title, subtitle: meta.subtitle, viewBox: seqViewBox },
     participants: participantIr,
-    messages,
+    messages: messageIr,
   }
 }
 

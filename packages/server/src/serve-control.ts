@@ -199,13 +199,20 @@ export function defaultLaunch(home: string, port: number, command: string = proc
     // 窗口由 ensureServe 收口（成功 / 失败 / 超时都会调 dispose）——此后进程退出是
     // **运行期**的事（`prism serve --stop` 在 Windows 上就是非零退出码），不记启动账。
     let observing = true
-    handle.dispose = () => {
-      observing = false
+    // fd 收口单点：dispose（正常收口）与 spawn 同步抛（异常收口）共用，幂等——重复调用不炸 EBADF。
+    let logClosed = false
+    const closeLog = (): void => {
+      if (logClosed) return
+      logClosed = true
       try {
         closeSync(logFd)
       } catch {
         /* 已关 / 无效 fd 不致命 */
       }
+    }
+    handle.dispose = () => {
+      observing = false
+      closeLog()
     }
 
     const recordFailure = (message: string): void => {
@@ -217,12 +224,22 @@ export function defaultLaunch(home: string, port: number, command: string = proc
       appendLaunchError(logPath, message)
     }
 
-    const child = spawn(command, argv, {
-      detached: true,
-      stdio: ['ignore', logFd, logFd],
-      windowsHide: true,
-      env: { ...process.env, PRISM_HOME: home },
-    })
+    let child: ReturnType<typeof spawn>
+    try {
+      child = spawn(command, argv, {
+        detached: true,
+        stdio: ['ignore', logFd, logFd],
+        windowsHide: true,
+        env: { ...process.env, PRISM_HOME: home },
+      })
+    } catch (error) {
+      // spawn 同步抛（argv/options 由本模块自产，生产不可达；测试用空 command 命中）——
+      // 与 openSync 失败同口径：收口日志 fd（否则泄漏）并走 failure 通道，而不是让异常逃出
+      // launcher（逃出会绕过 ensureServe 的 dispose，且报错文案不含日志路径）。
+      closeLog()
+      recordFailure(`spawn 同步失败：${error instanceof Error ? error.message : String(error)}`)
+      return handle
+    }
     // 事件选择：`error` + `exit`，**不挂 `close`**——ENOENT 只发 error+close（没有 exit），
     // 挂 close 会把同一次失败记两遍。
     child.on('error', (error) => {

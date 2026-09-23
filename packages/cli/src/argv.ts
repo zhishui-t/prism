@@ -214,6 +214,11 @@ const CLI_OPTIONS = {
   /** `graph merge --out-dir <目录>`（多项目合并产物目录；缺省 <PRISM_HOME>/graphify-merged/） */
   'out-dir': { type: 'string' },
   top: { type: 'string' },
+  /**
+   * `arch from-graph sequence <project> --symbols <id,id,...>`：链上**节点 id** 数组
+   * （取自 `prism graph path` 的 `chain[].id`）——按相邻对出消息（v17 C-9）。
+   */
+  symbols: { type: 'string' },
   format: { type: 'string' },
   'dry-run': { type: 'boolean' },
   'ignore-dirs': { type: 'string' },
@@ -336,6 +341,8 @@ export type ArgValues = {
   /** `team activate --build-project <项目名>`（F-C3：显式建图；缺省绝不建图） */
   'build-project'?: string
   top?: string
+  /** `arch from-graph sequence --symbols <id,id,...>`（链上节点 id，逗号分隔；v17 C-9） */
+  symbols?: string
   format?: string
   'dry-run'?: boolean
   'ignore-dirs'?: string

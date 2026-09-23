@@ -1,9 +1,10 @@
 {
-  "note": "由 gen_fixtures.py 生成；供后续少文本守卫与 OCR 自测断言使用。",
+  "note": "由 gen_fixtures.py 生成；供少文本守卫、OCR 自测与 v17 版面/表格断言使用。",
   "valid_char_rule": "CJK 计 1 + [A-Za-z0-9] 计 1；空白/标点计 0",
   "fixtures": [
     {
       "file": "fixture-1-zh.png",
+      "kind": "lines",
       "substrings": [
         "Prism",
         "知识库",
@@ -15,6 +16,7 @@
     },
     {
       "file": "fixture-2-en.png",
+      "kind": "lines",
       "substrings": [
         "RapidOCR",
         "pypdfium2",
@@ -25,11 +27,53 @@
     },
     {
       "file": "fixture-3-tiny.png",
+      "kind": "lines",
       "substrings": [
         "小样张",
         "PRISM"
       ],
       "valid_chars": 8
+    },
+    {
+      "file": "fixture-4-table.png",
+      "kind": "table",
+      "substrings": [
+        "产品报价单",
+        "型号",
+        "价格",
+        "库存",
+        "A100",
+        "1999"
+      ],
+      "valid_chars": 55
+    },
+    {
+      "file": "fixture-5-two-col.png",
+      "kind": "two-col",
+      "substrings": [
+        "双栏文档标题",
+        "左栏",
+        "右栏"
+      ],
+      "valid_chars": 228
+    },
+    {
+      "file": "fixture-6-single-col.png",
+      "kind": "single-col",
+      "substrings": [
+        "单栏文档示例标题",
+        "正文内容示例文字"
+      ],
+      "valid_chars": 143
+    },
+    {
+      "file": "fixture-7-formula.png",
+      "kind": "formula",
+      "substrings": [
+        "公式识别样张",
+        "独立公式块"
+      ],
+      "valid_chars": 53
     }
   ]
 }

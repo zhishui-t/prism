@@ -1,11 +1,13 @@
-import { mkdtempSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-import { afterAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, describe, expect, it } from 'vitest'
 
 import { isPrismError } from '@prism/core'
 
+import { setOcrHooks, toMarkdown } from '../src/convert.js'
 import { PrismKnowledgeService } from '../src/service.js'
 
 let home: string | undefined
@@ -163,6 +165,67 @@ describe('过滤与结果形态', () => {
       await svc.search({ q: '' })
     } catch (error) {
       expect(isPrismError(error)).toBe(true)
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// v17 A3.1 / A4.2：占位与内嵌图 OCR 文本**进 FTS**（口径声明——无需特殊代码路径）
+// ---------------------------------------------------------------------------
+
+afterEach(() => {
+  setOcrHooks(null)
+})
+
+describe('v17 公式占位与内嵌图文本可检索（A3.1 / A4.2）', () => {
+  it('`[公式]` 与 `> [图片 N]` 是正文文本：搜「公式」「图片」均命中', async () => {
+    const svc = new PrismKnowledgeService({ home: mkdtempSync(join(tmpdir(), 'prism-kb-v17-')) })
+    try {
+      await svc.deposit({
+        id: 'PLACEHOLDER-1',
+        title: '公式与内嵌图文档',
+        type: 'doc',
+        layer: 'global',
+        book: 'v17-docs',
+        content: '推导过程如下。\n\n[公式]\n\n> [图片 1] 这段是内嵌截图里的说明文字。\n',
+      })
+      // 占位符本身是内容：「公式在此」可检索（SPEC-A3.1 口径声明）
+      expect((await svc.search({ q: '公式' })).some((r) => r.id === 'PLACEHOLDER-1')).toBe(true)
+      // 引用块标记可检索（SPEC-A4.2）
+      expect((await svc.search({ q: '图片' })).some((r) => r.id === 'PLACEHOLDER-1')).toBe(true)
+    } finally {
+      svc.close()
+    }
+  })
+
+  it('docx 内嵌图 OCR 文本落库后可检索（A4.1 → A4.2 端到端）', async (ctx) => {
+    const path = fileURLToPath(new URL('../../../3rd/ocr/fixtures/embed-image.docx', import.meta.url))
+    if (!existsSync(path)) return ctx.skip() // 生成脚本：python 3rd/ocr/gen_docx_fixtures.py
+
+    setOcrHooks({
+      available: () => true,
+      run: async () => ({ ok: true, markdown: '## 第 1 页\n\n截图里的关键结论' }),
+    })
+    const converted = await toMarkdown(new Uint8Array(readFileSync(path)), '报告.docx')
+    setOcrHooks(null)
+    expect(converted.status).toBe('converted')
+    expect(converted.markdown).toContain('> [图片 1] 截图里的关键结论')
+
+    const svc = new PrismKnowledgeService({ home: mkdtempSync(join(tmpdir(), 'prism-kb-v17-')) })
+    try {
+      await svc.deposit({
+        id: 'EMBED-1',
+        title: '内嵌图文档',
+        type: 'doc',
+        layer: 'global',
+        book: 'v17-docs',
+        content: converted.markdown,
+      })
+      // OCR 出来的图内文字与正常文本同口径，可检索
+      expect((await svc.search({ q: '截图' })).some((r) => r.id === 'EMBED-1')).toBe(true)
+      expect((await svc.search({ q: '图片' })).some((r) => r.id === 'EMBED-1')).toBe(true)
+    } finally {
+      svc.close()
     }
   })
 })

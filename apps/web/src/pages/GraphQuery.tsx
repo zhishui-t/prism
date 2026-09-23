@@ -46,7 +46,7 @@ import {
 } from '../api.ts'
 import { useT, type DictKey } from '../i18n.ts'
 import { CallChainGraph, SequenceExport } from './CallChainGraph.tsx'
-import { formatLocation, sequenceAddress } from './graph-logic.ts'
+import { formatLocation, sequenceTarget } from './graph-logic.ts'
 
 /* 方向字形（纯装饰，集中定义避免散落在模板串里被当成内容读）：
    `←` = 入边（对端 → 当前节点，即「谁调用它」）；`→` = 出边（当前节点 → 对端）。 */
@@ -463,8 +463,9 @@ export function GraphResultPanel({ q }: { q: GraphQueryController }) {
           {t('common.close')}
         </button>
       </div>
-      {/* 导出寻址 id 从当前结果里取（唯一取处）；拿不到就禁用并说明原因，不拿 label 顶替 */}
-      <SequenceExport project={q.project} address={sequenceAddress(result)} />
+      {/* 导出寻址载荷从当前结果里取（唯一取处）：relations → 单点 id；path → 链上 id 数组；
+          拿不到就禁用并说明原因，不拿 label 顶替。v17 W-9① */}
+      <SequenceExport project={q.project} target={sequenceTarget(result)} />
       <div className="query-result graph-rel-list">{body}</div>
     </div>
   )
@@ -553,9 +554,9 @@ function PathBody({ value }: { value: GraphPath }) {
   return (
     <div className="mono graph-chain">
       {value.chain.map((hop, index) => (
-        <span key={`${hop}|${index}`}>
+        <span key={`${hop.id}|${index}`}>
           {index > 0 ? ` ${ARROW_OUT} ` : ''}
-          {hop}
+          {hop.label}
         </span>
       ))}
     </div>

@@ -3,6 +3,8 @@ import {
   defaultMaxChars,
   DEFAULT_VECTOR_SCAN_CAP,
   GRAPH_FUSION_DECAY,
+  ocrLayoutModelReady,
+  ocrTableModelReady,
 } from '@prism/knowledge'
 import type { ChunkOptions } from '@prism/knowledge'
 import { PrismError, prismPaths } from '@prism/core'
@@ -12,6 +14,8 @@ import { join } from 'node:path'
 import {
   activeModel,
   activeRerankTier,
+  DEFAULT_EMBED_BATCH,
+  embedBatchText,
   embedText,
   embeddingInstalled,
   rerankInstalled,
@@ -165,6 +169,39 @@ export function resolveKbConfigForHome(home?: string): KbWiringConfig {
   })
 }
 
+// ── v17 §B-5：embed 批量化扁平键（`embed_batch`）────────────────────────────────
+
+/**
+ * `embed_batch` 缺省（v17 §B-5，缺省 **8**）。
+ * **单一真相源在 `kb/embedding.ts`**（`DEFAULT_EMBED_BATCH`）——此处 re-export 而非重定义，
+ * 避免两处默认值漂移（同 `DEFAULT_VECTOR_SCAN_CAP` 手法）。
+ */
+export { DEFAULT_EMBED_BATCH }
+
+/**
+ * 解析 `embed_batch`（**纯函数**，范本 `resolveChunkMaxChars`）：未配置 / 空串 → 缺省
+ * `DEFAULT_EMBED_BATCH`；非法（非数字 / ≤0）→ **告警**并回落缺省；合法 → 向下取整。
+ *
+ * 依据（`v17-recon-embed.md` §4①）：批大小 4–8 最优——批 4（1.18×）稳定快于批 16（1.12×），
+ * 主表与冷语料对照组两次复现，故缺省取 8 而非 SPEC 旧值 16（队长口径覆盖 spec B5.1）。
+ */
+export function resolveEmbedBatch(raw: string | undefined, warnings: string[] = []): number {
+  if (raw === undefined) return DEFAULT_EMBED_BATCH
+  const text = raw.trim()
+  if (text === '') return DEFAULT_EMBED_BATCH
+  const value = Number(text)
+  if (!Number.isFinite(value) || value <= 0) {
+    warnings.push(`embed_batch 值非法（${text}），已按默认 ${DEFAULT_EMBED_BATCH} 回落`)
+    return DEFAULT_EMBED_BATCH
+  }
+  return Math.floor(value)
+}
+
+/** 组合根与 CLI 共用的单点：读 prism.yaml 的扁平键 `embed_batch` → 批大小。 */
+export function resolveEmbedBatchForHome(home?: string, warnings: string[] = []): number {
+  return resolveEmbedBatch(prismConfigValue(home, 'embed_batch'), warnings)
+}
+
 // ── v14 §1.1/§1.2：rerank 扁平键（`rerank_enabled` / `rerank_model`）────────────
 
 /** rerank 装配输入（纯函数；档位与「已装」由调用方注入，便于逐分支测试）。 */
@@ -243,6 +280,81 @@ export function resolveRerankConfigForHome(home?: string): RerankWiringConfig {
     model: prismConfigValue(home, 'rerank_model'),
     autoTier: activeRerankTier(),
     installed: rerankInstalled(),
+  })
+}
+
+// ── v17 §A-0：OCR 表格/版面扁平键（`ocr_table` / `ocr_layout`）─────────────────
+
+/** OCR 增强装配输入（纯函数；模型在位与否由调用方注入，便于逐分支测试）。 */
+export interface OcrWiringInput {
+  /** prism.yaml `ocr_table` 原始值（undefined = 未配置 → 开） */
+  table?: string | undefined
+  /** prism.yaml `ocr_layout` 原始值（undefined = 未配置 → 开） */
+  layout?: string | undefined
+  /** 表格模型是否在位（`ocrTableModelReady()`） */
+  tableModelReady?: boolean
+  /** 版面模型是否在位（`ocrLayoutModelReady()`） */
+  layoutModelReady?: boolean
+  /** 违规回落告警收集器 */
+  warnings?: string[]
+}
+
+/** OCR 增强装配结论（`ocr` 直接喂给 `ScanOptions.ocr` / `toMarkdown` 的 `ocr` 选项）。 */
+export interface OcrWiringConfig {
+  /** 两项都开（= `enabled`）→ 透传 `--table --layout`；否则两项都 false → 回到旧输出 */
+  ocr: { table: boolean; layout: boolean }
+  /**
+   * 增强总开关：**配置两项都开** 且 **两件模型都在位**。
+   *
+   * 为什么是「都」而非各自独立：表格消费 layout 判出的 table 区域（design §A-1），
+   * 且 spec A1.2 明确「`ocr_table=false` 或模型未装 → 回到**无 table/layout 的旧输出**」
+   * ——若只关 table 而仍跑 layout，单栏/多栏的阅读顺序会被重排，就不再是旧输出了。
+   */
+  enabled: boolean
+  warnings: string[]
+}
+
+/**
+ * 解析 `ocr_table` / `ocr_layout`（SPEC-A1.2/A2.3；范本 `parseRerankEnabled`）：
+ * - 未配置 / 空串 → 缺省 **开**（`fallback`）；
+ * - 显式 `on`（亦认 `true`/`1`）/ `off`（亦认 `false`/`0`）→ 优先；
+ * - 其它值 → 告警并回落缺省（不静默吞掉拼错的键）。
+ */
+export function parseOcrFlag(
+  raw: string | undefined,
+  fallback: boolean,
+  key: string = 'ocr_flag',
+  warnings: string[] = [],
+): boolean {
+  if (raw === undefined) return fallback
+  const v = raw.trim().toLowerCase()
+  if (v === '' || v === 'on' || v === 'true' || v === '1') return true
+  if (v === 'off' || v === 'false' || v === '0') return false
+  warnings.push(`${key} 值非法（${raw.trim()}），已按默认回落为 ${fallback ? 'on' : 'off'}（可用 on/off）`)
+  return fallback
+}
+
+/**
+ * 由扁平配置值 + 模型在位状态解析出 OCR 增强装配结论（**纯函数**：不读文件、不碰进程）。
+ *
+ * `enabled = ocr_table && ocr_layout && 两件模型都在位`（见 {@link OcrWiringConfig.enabled}）。
+ */
+export function resolveOcrWiringConfig(input: OcrWiringInput = {}): OcrWiringConfig {
+  const warnings = input.warnings ?? []
+  const wantTable = parseOcrFlag(input.table, true, 'ocr_table', warnings)
+  const wantLayout = parseOcrFlag(input.layout, true, 'ocr_layout', warnings)
+  const ready = (input.tableModelReady ?? false) && (input.layoutModelReady ?? false)
+  const enabled = wantTable && wantLayout && ready
+  return { ocr: { table: enabled, layout: enabled }, enabled, warnings }
+}
+
+/** 组合根与 CLI 共用的单点：读 prism.yaml 两个扁平键 + 模型在位状态 → OCR 增强结论。 */
+export function resolveOcrWiringConfigForHome(home?: string): OcrWiringConfig {
+  return resolveOcrWiringConfig({
+    table: prismConfigValue(home, 'ocr_table'),
+    layout: prismConfigValue(home, 'ocr_layout'),
+    tableModelReady: ocrTableModelReady(),
+    layoutModelReady: ocrLayoutModelReady(),
   })
 }
 
@@ -332,6 +444,11 @@ export async function loadKnowledgeService(home?: string): Promise<KnowledgeServ
     const config = resolveKbConfigForHome(home)
     const model = activeModel()
     for (const warning of config.warnings) console.warn(`[prism] ${warning}`)
+    // v17 §B-5：批口（扁平键 `embed_batch`，缺省 8）。与 `embed` 同口径——**无条件注入**，
+    // 未装/未就绪时 `embedBatchText` 恒返回全 null（knowledge 侧跳过，纯 BM25 降级）。
+    const batchWarnings: string[] = []
+    const embedBatchSize = resolveEmbedBatchForHome(home, batchWarnings)
+    for (const warning of batchWarnings) console.warn(`[prism] ${warning}`)
     // v14 §1.2：rerank 只在「档位默认/显式覆盖 同意开 且 已装」时注入——不注入即不发请求
     // （SPEC-1.5）。候选数恒传入（档定 24/10，SPEC-1.7）。
     const rerank = resolveRerankConfigForHome(home)
@@ -342,6 +459,7 @@ export async function loadKnowledgeService(home?: string): Promise<KnowledgeServ
     return createKnowledgeService({
       home,
       embed,
+      embedBatch: (texts) => embedBatchText(texts, embedBatchSize),
       embeddingModel: model.id,
       // v15 §2 / SPEC-2.1①：装配侧**能力标志**——只在「已装且未禁用」时置。
       // `embeddingInstalled()` 已把 `PRISM_EMBEDDING=off` 折成 false，故未装 / off 均不置。

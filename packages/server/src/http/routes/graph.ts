@@ -9,13 +9,13 @@ import {
   formatCommand,
   resolveGraphifyCommand,
   runGraphify,
-  graphPath as queryGraphPath,
+  graphPathChain as queryGraphPathChain,
   graphExplain as queryGraphExplain,
   graphAffected as queryGraphAffected,
   graphGodNodes as queryGraphGodNodes,
   graphSummary as queryGraphSummary,
   graphRelations as queryGraphRelations,
-  readCodeGraphCached,
+  readCodeGraphCachedVersioned,
   DEFAULT_GRAPH_RELATION_LIMIT,
   graphExport as runGraphExport,
   GRAPHIFY_EXPORT_FORMATS,
@@ -26,9 +26,11 @@ import { inspectGraphStatus, ProjectRegistry, type ProjectInfo } from '../../gra
 import {
   ROLLUP_LEVELS,
   buildRollup,
+  decodeRollupCursor,
   decodeRollupParent,
   isRollupLevel,
   normalizeRollupGraph,
+  type RollupLevel,
 } from '../../graph/rollup.js'
 import type { RouteContext } from '../router.js'
 
@@ -182,6 +184,17 @@ export function graphRoutes(deps: GraphDeps): {
     return ok({ project: project.project, output: result.stdout.trim(), command: formatCommandDisplay(args) })
   }
 
+  /**
+   * 最短路径（v17 C-8 改造）：`GET /api/graph/path?project=&from=&to=`。
+   *
+   * **不再起 graphify 子进程**：`from`/`to` 既可是节点 id 也可是符号名，服务端直读
+   * `<root>/graphify-out/graph.json`（带 mtime+size 失效键的进程内缓存）→ 有向 BFS 自求
+   * 路径 → 每跳从**边数据**取调用点 file:line。响应增 `chain: [{id,label,file,line,
+   * ambiguous?}]`（多义跳 file:line 空 + `ambiguous:true`，前端灰显）；`raw`/`hops`/`found`
+   * 三个既有字段**保留**（`raw` 语义变为「服务端渲染的链路文本」，不再是子进程原文）。
+   *
+   * 无解 / 端点不存在 / 起终点同节点 → `found:false`（是「没路径」，不是服务端故障）。
+   */
   const path = async (ctx: RouteContext): Promise<Envelope> => {
     const from = ctx.query.get('from')?.trim() ?? ''
     const to = ctx.query.get('to')?.trim() ?? ''
@@ -190,7 +203,7 @@ export function graphRoutes(deps: GraphDeps): {
     }
     const project = await requireProject(ctx)
     await ensureGraph(project)
-    const result = await queryGraphPath(project.root, from, to, queryOpts(project, deps))
+    const result = await queryGraphPathChain(project.root, from, to)
     return ok({ project: project.project, ...result })
   }
 
@@ -293,37 +306,64 @@ export function graphRoutes(deps: GraphDeps): {
   }
 
   /**
-   * 分层聚合·逐级探索（v10 F9）：
-   * `GET /api/graph/rollup?project=&level=community|dir|file|symbol&parent=<合成 id?>`。
+   * 分层聚合·逐级探索（v10 F9 → v17 B-7 真分页）：
+   * `GET /api/graph/rollup?project=&level=community|dir|file|symbol&parent=<合成 id?>`，
+   * 翻页用 `&cursor=<上页 next_cursor>`（**游标自包含**：给了 cursor 就忽略 `level`/`parent`）。
    *
    * 直读 `<root>/graphify-out/graph.json`（**带 mtime+size 失效键的进程内缓存**，只缓存
    * read+parse，不缓存聚合结果），内存分组，**不起 graphify 子进程**（同 relations/summary
    * 先例）。parent 编码与实体校验：形态错 → bad_request，实体不存在 → not_found。
    *
    * 响应**不加 `project` 字段**——形状按 F9 契约钉死为
-   * `{ level, parent, total, truncated, nodes, edges }`（前端按此写死解析）。
+   * `{ level, parent, total, truncated, nodes, edges, next_cursor? }`（前端按此写死解析）。
+   * `next_cursor` 只在「本页之后还有节点」时出现（超 500 条才可能），耗尽即无此键。
+   *
+   * **游标失效（409 `stale_cursor`）**：`next_cursor` 载荷内嵌图版本键（产物 `mtimeMs:size`）；
+   * 与当前图不符（= 翻页途中图被重建）→ 400 都不给，直接 409 要求消费方**回首页重查**
+   * （重建期翻页会重复/漏项，以此声明兜底）。载荷形态非法（非 base64url JSON / 版本不符）→ 400。
    *
    * 性能（红线 <200ms）：本仓实测 read+parse+分组 ≈24ms（3.66MB / 2340 节点 / 7103 边）；
    * 加缓存后只有首次付 read+parse。**测试不做硬时限断言**（CI 负载下抖，见「bare sleep
    * 测异步」同类教训），以实测为准。
    */
   const rollup = async (ctx: RouteContext): Promise<Envelope> => {
-    const levelRaw = ctx.query.get('level')?.trim() ?? ''
-    if (!isRollupLevel(levelRaw)) {
-      throw new PrismError(
-        'bad_request',
-        `level 必须为 ${ROLLUP_LEVELS.join('/')}: ${levelRaw === '' ? '(缺省)' : levelRaw}`,
-      )
+    const cursorRaw = ctx.query.get('cursor')?.trim() ?? ''
+    let level: RollupLevel
+    let parent: string | null
+    let offset = 0
+    let expectedVersion: string | undefined
+    if (cursorRaw !== '') {
+      // 游标自包含：解出的 level/parent/offset/版本键即为本次请求的全部定位信息。
+      // 载荷里的 `parent` 与响应同形（合成 id，如 `community:7` / `dir:src/sub`），
+      // 故仍走 `decodeRollupParent` 还原成 `buildRollup` 要的取值（并顺带校验形态）。
+      const cursor = decodeRollupCursor(cursorRaw)
+      level = cursor.level
+      parent = decodeRollupParent(cursor.level, cursor.parent)
+      offset = cursor.offset
+      expectedVersion = cursor.graph
+    } else {
+      const levelRaw = ctx.query.get('level')?.trim() ?? ''
+      if (!isRollupLevel(levelRaw)) {
+        throw new PrismError(
+          'bad_request',
+          `level 必须为 ${ROLLUP_LEVELS.join('/')}: ${levelRaw === '' ? '(缺省)' : levelRaw}`,
+        )
+      }
+      level = levelRaw
+      // 形态校验放读图之前（读一张几 MB 的图再报 400 是纯浪费）
+      const parentRaw = ctx.query.get('parent')?.trim() ?? ''
+      parent = decodeRollupParent(level, parentRaw === '' ? null : parentRaw)
     }
-    // 形态校验放读图之前（读一张几 MB 的图再报 400 是纯浪费）
-    const parentRaw = ctx.query.get('parent')?.trim() ?? ''
-    const parent = decodeRollupParent(levelRaw, parentRaw === '' ? null : parentRaw)
     const project = await requireProject(ctx)
     await ensureGraph(project)
     // 边读取取**非空侧**（派修 P2-4）：rollup 不自造 `links ?? edges` 口径，用与
     // `/api/graph/relations`（`readGraphEdges`）同口径的归一，避免「rollup 见 0 边」。
-    const graph = normalizeRollupGraph(await readCodeGraphCached(project.root))
-    return ok(buildRollup(graph, levelRaw, parent))
+    const { graph: raw, version } = await readCodeGraphCachedVersioned(project.root)
+    if (expectedVersion !== undefined && expectedVersion !== version) {
+      throw new PrismError('stale_cursor', '图谱已重建，翻页游标失效：请回首页重新查询')
+    }
+    const graph = normalizeRollupGraph(raw)
+    return ok(buildRollup(graph, level, parent, { offset, version }))
   }
 
   const status = async (ctx: RouteContext): Promise<Envelope> => {

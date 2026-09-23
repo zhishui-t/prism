@@ -12,7 +12,6 @@ import {
   graphAffected,
   graphExplain,
   graphGodNodes,
-  graphPath,
   graphQuery,
   graphSummary,
   resolveGraphifyCommand,
@@ -223,20 +222,6 @@ describe('图谱查询封装（假 CLI 注入，验证参数与结构化解析�
 
   it('defaultGraphPath 指向 graphify-out/graph.json', () => {
     expect(defaultGraphPath('K:/proj')).toBe(join('K:/proj', 'graphify-out', 'graph.json'))
-  })
-
-  it('path：解析 hops 与 chain；无路径 → found:false', async () => {
-    const cli = await fakeCli({
-      path: ['Shortest path (2 hops):', '  run() --calls [EXTRACTED]--> handler() --calls [EXTRACTED]--> validate()', ''].join(NL),
-    })
-    const result = await graphPath('K:/proj', 'run()', 'validate()', { env: { GRAPHIFY_BIN: cli } })
-    expect(result.found).toBe(true)
-    expect(result.hops).toBe(2)
-    expect(result.chain).toEqual(['run()', 'handler()', 'validate()'])
-
-    const none = await fakeCli({ path: "No node matching 'ghost' found." })
-    const missing = await graphPath('K:/proj', 'a', 'ghost', { env: { GRAPHIFY_BIN: none } })
-    expect(missing.found).toBe(false)
   })
 
   it('explain：解析字段与连接方向', async () => {

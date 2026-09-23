@@ -374,6 +374,10 @@ export class PrismKnowledgeService implements KnowledgeService {
   readonly #idFactory: () => string
   readonly #ownsPersistence: boolean
   readonly #embed: KnowledgeServiceOptions['embed']
+  /**
+   * 批量向量口（v17 §B-5，additive；未注入 → `#writeChunkVectors` 逐段走单口）。
+   */
+  readonly #embedBatch: KnowledgeServiceOptions['embedBatch']
   /** 当前 embedding 模型 id（分档）；检索只比同模型向量。未装配时为 undefined。 */
   readonly #embeddingModel: KnowledgeServiceOptions['embeddingModel']
   /**
@@ -409,6 +413,7 @@ export class PrismKnowledgeService implements KnowledgeService {
     this.#idFactory =
       options.idFactory ?? (() => `KB-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`)
     this.#embed = options.embed
+    this.#embedBatch = options.embedBatch
     this.#embeddingModel = options.embeddingModel
     this.#vectorCapable = options.vectorCapable
     this.#chunkOptions = options.chunkOptions ?? {}
@@ -1927,7 +1932,9 @@ export class PrismKnowledgeService implements KnowledgeService {
     if (match === '') {
       throw new PrismError('bad_request', '检索词无有效词元')
     }
-    const limit = Math.max(1, Math.floor(query.limit ?? 10))
+    // 上限 1000 与 HTTP/MCP 面（SEARCH_LIMIT_MAX / schema maximum）对齐：CLI 进程内直调
+    // 无钳制，超大 limit 会把段 BM25 补取的 `c.id IN (…)` 参数面顶穿 SQLite 变量上限。
+    const limit = Math.min(1000, Math.max(1, Math.floor(query.limit ?? 10)))
     // F-B3：候选池与融合参数化（缺省 = 既有模块常量，行为逐字节一致）。
     const hybridCandidates = positiveIntParam(
       query.hybrid_candidates,
@@ -2161,6 +2168,9 @@ export class PrismKnowledgeService implements KnowledgeService {
       [keyword, vector],
     )
     const { byEntry, truncated } = groupChunkHits(chunkScores, [...chunkBm25, ...chunkVec], CHUNK_HITS_PER_ENTRY)
+    // v17 §B-6：段 BM25 路只取窄列 → 在此**只对终排存活段**按主键补回 `text`/`heading_path`/`seq`
+    // （≤ limit×CHUNK_HITS_PER_ENTRY = 40 段）。必须在 `#rerankHead` 之前——它读 `chunkHits[0].text`。
+    this.#hydrateChunkHits(raw, byEntry, ranked.map(([rowid]) => rowid))
 
     const results: SearchResult[] = []
     /** `results[i]` 对应的条目 rowid（取段取材要用它查 `byEntry`——不靠下标对齐猜）。 */
@@ -2345,13 +2355,21 @@ export class PrismKnowledgeService implements KnowledgeService {
    *
    * **SQL 层不带 LIMIT**：段级命中必须先全量取出、在 JS 里按 entry 聚合，
    * 任何小 LIMIT 都会在聚合前截断掉同一条目的其他段（N-4：只修向量半边不够）。
+   *
+   * **只取窄列（v17 §B-6 / 侦察 §4.3）**：本路**不再取 `c.text` / `c.heading_path` /
+   * `c.seq`**——这三列对「段级序 + 条目聚合」毫无贡献，却是现状的绝对大头
+   * （侦察相②−相① = narrow 10.9 / medium 251.5 / broad 2897.6ms，占现状合计 45/71/83%）。
+   * 故返回的 `ChunkHit` 三字段是**占位**（`seq:0` / `headingPath:''` / `text:''`），
+   * **必须在消费前**经 `#hydrateChunkHits` 按主键补回——否则 hits 的 `heading_path` /
+   * `excerpt` 会空。计划里的「SQL 侧 `GROUP BY entry_id + MIN(bm25)` 聚合」被 SQLite 拒
+   * （`unable to use function bm25 in the requested context`），且可行形态（`MATERIALIZED`
+   * CTE）会丢段级序、补二扫后 broad 反而更慢——故落地为「相① SQL + 现有 JS 聚合」。
    */
   #chunkBm25Hits(raw: DatabaseSync, match: string, clauses: string[], params: string[]): ChunkHit[] {
     const where = clauses.length > 0 ? `AND ${clauses.join(' AND ')}` : ''
     const rows = raw
       .prepare(
-        `SELECT c.id AS chunk_id, e.rowid AS entry_rowid, c.seq AS seq,
-                c.heading_path AS heading_path, c.text AS text, bm25(kb_chunk_fts) AS rank
+        `SELECT c.id AS chunk_id, e.rowid AS entry_rowid, bm25(kb_chunk_fts) AS rank
          FROM kb_chunk_fts
          JOIN kb_chunks c ON c.id = kb_chunk_fts.rowid
          JOIN knowledge_entries e ON e.id = c.entry_id AND c.version = e.version
@@ -2361,19 +2379,70 @@ export class PrismKnowledgeService implements KnowledgeService {
       .all(match, ...params) as unknown as Array<{
       chunk_id: number
       entry_rowid: number
-      seq: number
-      heading_path: string
-      text: string
       rank: number
     }>
     return rows.map((r) => ({
       chunkId: r.chunk_id,
       entryRowid: r.entry_rowid,
-      seq: r.seq,
-      headingPath: r.heading_path,
-      text: r.text,
+      // 占位：终排存活段由 #hydrateChunkHits 按主键补回（见方法头注）
+      seq: 0,
+      headingPath: '',
+      text: '',
       score: -Number(r.rank),
     }))
+  }
+
+  /**
+   * 按主键补回段级明细（v17 §B-6 / 侦察 §5）。
+   *
+   * 只对**终排存活段**补取：`rowids` = 融合后进入结果的前 `limit` 条目的 rowid，每个
+   * 条目经 `groupChunkHits` 已截到 `CHUNK_HITS_PER_ENTRY`，故规模
+   * ≤ `limit × CHUNK_HITS_PER_ENTRY`（缺省 10×4 = 40 行）。按主键 `c.id IN (…)` 走
+   * `SEARCH c USING INTEGER PRIMARY KEY`，侦察实测 **0.30–0.64ms**（三档）。
+   *
+   * ⚠ **不得**改用「同一 FTS MATCH + `e.rowid IN (…)`」补取：`EXPLAIN` 仍是
+   * `SCAN kb_chunk_fts`（全扫），侦察 broad 实测 439ms——几乎白干（反面教材）。
+   *
+   * 原地改写 `byEntry` 里的 `ChunkHit`——它们由 `groupChunkHits` 新建（`{...source,score}`），
+   * 独占无别名，改动不泄漏到入参数组。
+   */
+  #hydrateChunkHits(
+    raw: DatabaseSync,
+    byEntry: Map<number, ChunkHit[]>,
+    rowids: readonly number[],
+  ): void {
+    const wanted = new Set<number>()
+    for (const rowid of rowids) {
+      const list = byEntry.get(rowid)
+      if (list === undefined) continue
+      for (const hit of list) wanted.add(hit.chunkId)
+    }
+    if (wanted.size === 0) return
+    const ids = [...wanted]
+    const rows = raw
+      .prepare(
+        `SELECT c.id AS chunk_id, c.seq AS seq, c.heading_path AS heading_path, c.text AS text
+         FROM kb_chunks c WHERE c.id IN (${ids.map(() => '?').join(', ')})`,
+      )
+      .all(...ids) as unknown as Array<{
+      chunk_id: number
+      seq: number
+      heading_path: string
+      text: string
+    }>
+    const detail = new Map(rows.map((r) => [r.chunk_id, r]))
+    for (const rowid of rowids) {
+      const list = byEntry.get(rowid)
+      if (list === undefined) continue
+      for (const hit of list) {
+        const d = detail.get(hit.chunkId)
+        if (d !== undefined) {
+          hit.seq = d.seq
+          hit.headingPath = d.heading_path
+          hit.text = d.text
+        }
+      }
+    }
   }
 
   /**
@@ -3302,22 +3371,42 @@ export class PrismKnowledgeService implements KnowledgeService {
   /**
    * 段向量写入（逐段 upsert）。未装配 embedding 或某段计算失败 → 跳过该段；
    * **不抛**（与整篇向量同口径：增强不阻断主流程，缺口可由 reindex 补——SPEC-2.3）。
+   *
+   * v17 §B-5：注入了 `embedBatch`（批口）→ 一次算**整批**（一篇 entry 的全部段为一批，
+   * 结果与入参等长同序，失败位 `null`）；否则逐段走 `embed` 单口——**未注入批口时这条
+   * 路径与改动前逐字节一致**（v13 零回归）。
    */
   async #writeChunkVectors(rows: ReadonlyArray<IndexedChunk>): Promise<void> {
     const embed = this.#embed
-    if (embed === undefined || rows.length === 0) return
+    const batch = this.#embedBatch
+    if (rows.length === 0) return
     const nowIso = this.#now().toISOString()
     const model = this.#embeddingModel ?? 'unknown'
-    for (const row of rows) {
-      let vec: Float32Array | null
+    let vectors: Array<Float32Array | null> | undefined
+    if (batch !== undefined) {
       try {
-        vec = await embed(row.embedText)
+        vectors = await batch(rows.map((row) => row.embedText))
       } catch {
-        continue
+        return // 整批异常：不写任何段向量（缺口由 reindex 补，同单口口径）
       }
-      if (vec === null || vec.length === 0) continue
-      const value = vec
-      const blob = vectorToBlob(value)
+      // 契约：结果与入参等长。不等长视为实现违约 → 整批放弃，绝不按下标错位写库
+      if (vectors.length !== rows.length) return
+    } else if (embed !== undefined) {
+      vectors = []
+      for (const row of rows) {
+        try {
+          vectors.push(await embed(row.embedText))
+        } catch {
+          vectors.push(null)
+        }
+      }
+    }
+    if (vectors === undefined) return
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i]
+      const vec = vectors[i]
+      if (row === undefined || vec === null || vec === undefined || vec.length === 0) continue
+      const blob = vectorToBlob(vec)
       await this.persistence.knowledge.run((raw) => {
         raw
           .prepare(
@@ -3325,7 +3414,7 @@ export class PrismKnowledgeService implements KnowledgeService {
              VALUES (?, ?, ?, ?, ?)
              ON CONFLICT(chunk_id) DO UPDATE SET dim = excluded.dim, vec = excluded.vec, model = excluded.model, updated_at = excluded.updated_at`,
           )
-          .run(row.id, value.length, blob, model, nowIso)
+          .run(row.id, vec.length, blob, model, nowIso)
       })
     }
   }

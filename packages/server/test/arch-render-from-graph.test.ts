@@ -12,6 +12,8 @@
  *   两个不同节点会撞成同名而互相覆盖，靠**原始 id 的短哈希**防撞；
  * - `meta.subtitle` 由生成器恒写「根 = 调用图度数最高的文件」，本分支显式指定 rootFile →
  *   渲染前覆写为实际根文件。
+ * - **v17 C-9.2**：响应 **additive** 回填 `subtitle`（= 实际渲染 IR 的 `meta.subtitle`，
+ *   经 `irSubtitle` 取；与 MCP `prism_arch_generate` 同一 reader）。既有键一个不动。
  *
  * 全部走临时目录（R5：绝不写真实宿主目录）。
  */
@@ -25,7 +27,12 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import { startServer, type AppHandle } from '../src/app.js'
 import { ProjectRegistry } from '../src/graph/registry.js'
-import { archRoutes } from '../src/http/routes/arch.js'
+import { irSubtitle } from '../src/graph/archify.js'
+import {
+  archRoutes,
+  SEQUENCE_NAME_MAX_LENGTH,
+  sequenceArtifactName,
+} from '../src/http/routes/arch.js'
 import type { RouteContext } from '../src/http/router.js'
 import { putFile } from './helpers.js'
 
@@ -87,6 +94,73 @@ function makeImportsOnlyGraph(): unknown {
   }
 }
 
+/**
+ * v17 C-9 `symbols` 的输入：6 跳（7 节点）符号链 `s0 → … → s6`（每跳带调用点 file:line），
+ * **外加一条 `s0 → s3` 的链外 calls 边**——若 IR 按 file 口径的 `inSet` 构，会多出第 7 条消息。
+ */
+function makeChainGraph(): unknown {
+  const nodes: Array<Record<string, unknown>> = []
+  for (let i = 0; i < 7; i += 1) {
+    nodes.push({
+      id: `s${i}`,
+      label: `step${i}`,
+      source_file: `proj/src/mod${i}/step${i}.ts`,
+      community: i,
+    })
+  }
+  const links: Array<Record<string, unknown>> = []
+  for (let i = 0; i + 1 < 7; i += 1) {
+    links.push({
+      source: `s${i}`,
+      target: `s${i + 1}`,
+      relation: 'calls',
+      source_file: `proj/src/mod${i}/step${i}.ts`,
+      source_location: `L${10 + i}`,
+    })
+  }
+  links.push({
+    source: 's0',
+    target: 's3',
+    relation: 'calls',
+    source_file: 'proj/src/mod0/step0.ts',
+    source_location: 'L99',
+  })
+  return { nodes, links }
+}
+
+/**
+ * v17 黑盒 major：`symbols` 模式下「整条链的 id 串」会直接进文件名。真实链上每个符号约
+ * 60–80 字符，7 个拼起来 ≈470 字符 → Windows 的完整路径推过 `MAX_PATH`(260) → 导出恒失败。
+ * 本图的节点 id 刻意造这么长，用来覆盖「必须截断」的那条路径。
+ */
+function makeLongSymbolId(index: number): string {
+  return `proj/src/mod${index}/very_long_module_name_${index}/handler_with_a_long_symbol_name_${index}_L${100 + index}`
+}
+
+function makeLongChainGraph(): unknown {
+  const nodes: Array<Record<string, unknown>> = []
+  for (let i = 0; i < 7; i += 1) {
+    nodes.push({
+      id: makeLongSymbolId(i),
+      // label 保持短：参与者标签参与布局，长的是 id（正是要触发截断的那一维）
+      label: `step${i}`,
+      source_file: `proj/src/mod${i}/step${i}.ts`,
+      community: i,
+    })
+  }
+  const links: Array<Record<string, unknown>> = []
+  for (let i = 0; i + 1 < 7; i += 1) {
+    links.push({
+      source: makeLongSymbolId(i),
+      target: makeLongSymbolId(i + 1),
+      relation: 'calls',
+      source_file: `proj/src/mod${i}/step${i}.ts`,
+      source_location: `L${10 + i}`,
+    })
+  }
+  return { nodes, links }
+}
+
 /** 建临时 home + 项目根（含 graph.json）并登记项目，返回项目根。 */
 async function makeProject(home: string, name: string, graph: unknown): Promise<string> {
   const root = await tempDir('prism-arch-fg-proj-')
@@ -107,8 +181,12 @@ interface RenderValue {
   type: string
   project: string
   node: string
+  /** 仅 `symbols` 模式出现（v17 C-9，additive） */
+  symbols?: string[]
   root: string
   root_file: string
+  /** v17 C-9.2（additive）：实际渲染 IR 的 `meta.subtitle`，与 MCP `prism_arch_generate` 同源 */
+  subtitle?: string
   name: string
   relative_path: string
   bytes: number
@@ -191,6 +269,129 @@ describe('v10 F5：POST /api/arch/render mode=from-graph（按节点 id 导出�
     expect(existsSync(join(root, '.prism', 'arch', 'sequence', first.value.name))).toBe(true)
     expect(existsSync(join(root, '.prism', 'arch', 'sequence', second.value.name))).toBe(true)
   }, 180_000)
+
+  /**
+   * v17 C-9（SPEC-C9.1）：`symbols` = 链上节点 id（`/api/graph/path` 的 `chain[].id`）→
+   * IR 按**相邻对**构。6 跳 = 7 参与者 + **6 条消息**；链外的 calls 边（fixture 里的
+   * `s0 → s3`）一条都不许进图。
+   */
+  it('v17 C-9 symbols：6 跳 → 7 参与者 + 6 条相邻对消息（链外边不进图）', async () => {
+    const home = await tempDir('prism-arch-fg-sym-')
+    const root = await makeProject(home, 'demo', makeChainGraph())
+    const routes = routesFor(home)
+    const symbols = ['s0', 's1', 's2', 's3', 's4', 's5', 's6']
+
+    const envelope = (await routes.render(
+      fakeCtx({ mode: 'from-graph', type: 'sequence', project: 'demo', symbols }),
+    )) as RenderEnvelope
+
+    expect(envelope.ok).toBe(true)
+    const value = envelope.value
+    // 链首回显进既有 `node` 字段；`symbols` 是 symbols 模式特有的 additive 回显
+    expect(value.node).toBe('s0')
+    expect(value.symbols).toEqual(symbols)
+    expect(value.root_file).toBe('proj/src/mod0/step0.ts')
+    expect(value.source).toBe('project')
+
+    const irPath = join(root, '.prism', 'arch', 'sequence', value.name).replace(/\.html$/i, '.ir.json')
+    const ir = JSON.parse(await readFile(irPath, 'utf-8')) as {
+      participants: Array<{ id: string; label: string }>
+      messages: Array<{ from: string; to: string }>
+      meta: { subtitle: string }
+    }
+    expect(ir.participants).toHaveLength(7)
+    expect(ir.participants.map((participant) => participant.label)).toEqual([
+      'step0', 'step1', 'step2', 'step3', 'step4', 'step5', 'step6',
+    ])
+    expect(ir.messages).toHaveLength(6)
+    for (let i = 0; i < 6; i += 1) {
+      expect(ir.messages[i]!.from).toBe(ir.participants[i]!.id)
+      expect(ir.messages[i]!.to).toBe(ir.participants[i + 1]!.id)
+    }
+    // 链外边 s0 → s3 不在消息里
+    expect(ir.messages.map((message) => `${message.from}>${message.to}`)).not.toContain(
+      `${ir.participants[0]!.id}>${ir.participants[3]!.id}`,
+    )
+    // subtitle 由生成器按符号链口径自陈（本分支不覆写），含「N 跳被略去」的标注位
+    expect(ir.meta.subtitle).toContain('符号链导出（7 参与者 / 6 条相邻对消息）')
+    // C-9.2：响应回填的 subtitle 与磁盘 IR **逐字一致**（同一 reader，不是各自拼一遍）
+    expect(value.subtitle).toBe(irSubtitle(ir))
+    expect(value.subtitle ?? '').toContain('符号链导出（7 参与者 / 6 条相邻对消息）')
+  }, 120_000)
+
+  /**
+   * v17 黑盒 major（Windows MAX_PATH）：7 个长符号（每个 id ≈78 字符）的链 → 产物名必须被
+   * **钳制**到安全长度，导出**成功**——修复前整串 id 直接进名（≈470 字符），完整路径推过
+   * 260 → 导出恒失败（`ENAMETOOLONG`/写不进）。本用例不依赖真跑 Windows，构造即覆盖。
+   */
+  it('v17 黑盒 major：7 个长符号链 → 产物名被钳制，导出成功且三件套可读', async () => {
+    const home = await tempDir('prism-arch-fg-long-')
+    const root = await makeProject(home, 'demo', makeLongChainGraph())
+    const routes = routesFor(home)
+    const symbols = Array.from({ length: 7 }, (_, i) => makeLongSymbolId(i))
+
+    const envelope = (await routes.render(
+      fakeCtx({ mode: 'from-graph', type: 'sequence', project: 'demo', symbols }),
+    )) as RenderEnvelope
+
+    expect(envelope.ok).toBe(true)
+    const value = envelope.value
+    // 名字总长 ≤ 安全上限；「段」≤ 80（`sequence-` 前缀 + 两段后缀之外全是段）
+    expect(value.name.length).toBeLessThanOrEqual(SEQUENCE_NAME_MAX_LENGTH)
+    expect(value.name).toMatch(/^sequence-[A-Za-z0-9_.-]{1,80}-\d{8}-\d{6}-[0-9a-f]{8}\.html$/)
+
+    // 产物 + IR + sidecar 三件套真落盘可读
+    const htmlPath = join(root, '.prism', 'arch', 'sequence', value.name)
+    expect(existsSync(htmlPath)).toBe(true)
+    const irPath = htmlPath.replace(/\.html$/i, '.ir.json')
+    const metaPath = htmlPath.replace(/\.html$/i, '.meta.json')
+    expect(existsSync(irPath)).toBe(true)
+    expect(existsSync(metaPath)).toBe(true)
+    expect(value.relative_path).toBe(`.prism/arch/sequence/${value.name}`)
+
+    const ir = JSON.parse(await readFile(irPath, 'utf-8')) as {
+      participants: Array<{ label: string }>
+      messages: Array<{ from: string; to: string }>
+    }
+    expect(ir.participants).toHaveLength(7)
+    expect(ir.messages).toHaveLength(6)
+    const meta = JSON.parse(await readFile(metaPath, 'utf-8')) as { name: string; ir_file: string }
+    expect(meta.name).toBe(value.name)
+    expect(meta.ir_file).toBe(`${value.name.replace(/\.html$/i, '')}.ir.json`)
+  }, 120_000)
+
+  it('v17 C-9：node 与 symbols 互斥 → bad_request（不静默择一）', async () => {
+    const home = await tempDir('prism-arch-fg-mutex-')
+    await makeProject(home, 'demo', makeChainGraph())
+    const routes = routesFor(home)
+
+    await expect(
+      routes.render(
+        fakeCtx({
+          mode: 'from-graph',
+          type: 'sequence',
+          project: 'demo',
+          node: 's0',
+          symbols: ['s0', 's1'],
+        }),
+      ),
+    ).rejects.toMatchObject({ code: 'bad_request', message: expect.stringContaining('互斥') })
+  })
+
+  it('v17 C-9：symbols 链首不在图内 → bad_request（提示用 chain[].id）', async () => {
+    const home = await tempDir('prism-arch-fg-sym-miss-')
+    await makeProject(home, 'demo', makeChainGraph())
+    const routes = routesFor(home)
+
+    await expect(
+      routes.render(
+        fakeCtx({ mode: 'from-graph', type: 'sequence', project: 'demo', symbols: ['ghost', 's1'] }),
+      ),
+    ).rejects.toMatchObject({
+      code: 'bad_request',
+      message: expect.stringContaining('图谱中没有节点 id: ghost'),
+    })
+  })
 
   it('节点 id 不存在 → bad_request（提示用 other，不要用符号名）', async () => {
     const home = await tempDir('prism-arch-fg-miss-')
@@ -323,6 +524,7 @@ describe('v10 F5：POST /api/arch/render mode=from-graph（按节点 id 导出�
         'root',
         'root_file',
         'source',
+        'subtitle',
         'type',
       ])
       expect(existsSync(join(root, '.prism', 'arch', 'sequence', ok1.value.name))).toBe(true)
@@ -342,4 +544,52 @@ describe('v10 F5：POST /api/arch/render mode=from-graph（按节点 id 导出�
       await app?.close()
     }
   }, 180_000)
+})
+
+/**
+ * v17 黑盒 major：产物名的**长度钳制**是纯函数行为，这里直接钉（无需真跑 Windows）。
+ * 三条不变式：① 长公共前缀的不同链截断后仍互异；② 短 id 走原路径、形态与既有断言一致；
+ * ③ CJK 长 id（消毒后成串 `_`）同样受钳制，且靠**原始 id** 的短哈希保区分。
+ */
+describe('sequenceArtifactName：长度钳制（v17 黑盒 major）', () => {
+  it('长公共前缀的两条不同链 → 段被截到 80，尾部短哈希兜底不撞名', () => {
+    // 200 字符的公共前缀 + 仅尾部不同的两条链（>80，必然走截断）；分隔符用 `>`（同 symbols
+    // 拼接口径，消毒后是 `_`，不会在段里引入 `-`，便于下面按 `-` 切段断言）
+    const common = 'proj/src/a/'.padEnd(200, 'x')
+    const chainA = `${common}>tailA`
+    const chainB = `${common}>tailB`
+
+    const nameA = sequenceArtifactName(chainA)
+    const nameB = sequenceArtifactName(chainB)
+
+    // 段形态：71 字符可见头 + `_` + 8 位截断哈希（共 80）
+    const segA = nameA.split('-')[1]!
+    expect(segA).toMatch(/^[A-Za-z0-9_.]{71}_[0-9a-f]{8}$/)
+    expect(segA).toHaveLength(80)
+    // 名字互异（截断后差异只剩尾部短哈希 —— 这正是它存在的理由）
+    expect(nameA).not.toBe(nameB)
+    // 两条名字仍共享很长的前缀（可见头相同）→ 证明差异确实来自截断后的兜底哈希
+    let shared = 0
+    while (shared < nameA.length && nameA[shared] === nameB[shared]) shared += 1
+    expect(shared).toBeGreaterThanOrEqual(9 + 71)
+    expect(nameA.length).toBeLessThanOrEqual(SEQUENCE_NAME_MAX_LENGTH)
+    expect(nameB.length).toBeLessThanOrEqual(SEQUENCE_NAME_MAX_LENGTH)
+  })
+
+  it('短 id 走原路径：形态与既有断言一致（钳制逻辑不碰它）', () => {
+    const name = sequenceArtifactName('entry')
+    // `expectedNamePattern` 带 `.html` 后缀（路由产物名），纯函数名不含它 → 补上再比
+    expect(`${name}.html`).toMatch(expectedNamePattern('entry'))
+    expect(name.startsWith('sequence-entry-')).toBe(true)
+    expect(name.length).toBeLessThanOrEqual(SEQUENCE_NAME_MAX_LENGTH)
+  })
+
+  it('CJK 长 id（消毒后成串 `_`）也受钳制，原始 id 的短哈希仍保区分', () => {
+    const a = sequenceArtifactName('中'.repeat(120))
+    const b = sequenceArtifactName(`${'中'.repeat(119)}文`)
+    expect(a.length).toBeLessThanOrEqual(SEQUENCE_NAME_MAX_LENGTH)
+    expect(b.length).toBeLessThanOrEqual(SEQUENCE_NAME_MAX_LENGTH)
+    // 消毒后两者同为全 `_` 串 → 靠**原始 id** 的结尾短哈希区分（既有语义，未被截断逻辑破坏）
+    expect(a).not.toBe(b)
+  })
 })

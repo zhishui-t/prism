@@ -8,14 +8,17 @@
  *  3b. 节点几何包围盒 → viewBox（v12 F1：单/多/负坐标/空输入，星形与纵向链都走它）；
  *  4. 标签截断（按**码点**切，代理对不成半个字符；不足长原样返回）；
  *  5. `affected` 分组（保序、同键相邻、空关系归一组）；
- *  6. 导出寻址（**只有** relations 的命中节点可寻址；多义 / path / affected 拿不到 id）；
+ *  6. 导出寻址（relations 的命中节点 → `{ node }`；path 的 `chain[].id` → `{ symbols }`；
+ *     多义 / affected / 空链拿不到 → `undefined`）；
  *  7. 导出错误 → 文案键（两类 bad_request 各自命中，其余返回 null 走原文透出）；
  *  8. `formatLocation`（自 `GraphQuery.tsx` 迁入的既有纯函数）；
  *  9. **v12 F1 缩放平移**：适应窗口（双向比取 min + 居中）、倍率 clamp 与百分比、
  *     指针锚缩放、平移、`<g transform>` 归一化（含「不叠加两次」的复合不变式）、
  *     第二行标注（阈值 / 不猜 / 不截断）；
  * 10. **v15 W-1 容器 resize 重 fit**：防抖时长常量（200）与 pristine 决策（true → 重算、
- *     false → 不动视口）——DOM 侧（ResizeObserver 接线）在 `graph-call-chain-zoom-dom.test.ts`。
+ *     false → 不动视口）——DOM 侧（ResizeObserver 接线）在 `graph-call-chain-zoom-dom.test.ts`；
+ * 11. **v17 W-8 段标注几何**：段中线 `chainEdgeMidY` 与 viewBox 外扩 `chainLabelBoxes`
+ *     （空串不占位；宽度按码点估算）。
  *
  * 环境：默认 node（不写环境 pragma，同 `graph-query-styles.test.ts` 的既有做法）——
  * `graph-logic.ts` 只 `import type` 别处的东西，运行时零依赖。
@@ -26,6 +29,7 @@ import { describe, expect, it } from 'vitest'
 import type { GraphAffected, GraphPath, GraphRelations } from '../src/api.ts'
 import {
   ANNOTATION_SCALE,
+  CHAIN_EDGE_LABEL_DX,
   CHAIN_MAX,
   CHAIN_NODE,
   CHAIN_VIEW_W,
@@ -39,6 +43,8 @@ import {
   annotationLine,
   annotationVisible,
   chainBoxes,
+  chainEdgeMidY,
+  chainLabelBoxes,
   chainShape,
   chainY,
   clampZoom,
@@ -53,6 +59,8 @@ import {
   segmentBetweenBoxes,
   sequenceAddress,
   sequenceExportErrorKey,
+  sequenceSymbols,
+  sequenceTarget,
   shouldRefitOnResize,
   transformAttr,
   userTransform,
@@ -68,7 +76,17 @@ function rel(node: string, extra: Partial<GraphRelations> = {}): GraphRelations 
   return { project: 'demo', node, dir: 'in', total: 0, limit: 200, items: [], ...extra }
 }
 
-const PATH: GraphPath = { project: 'demo', raw: '', hops: 1, chain: ['a', 'b'], found: true }
+/** v17 C-8：`chain` 是带 id / file / line 的结构（此处与真实响应同形；W-8 消费 file/line）。 */
+const PATH: GraphPath = {
+  project: 'demo',
+  raw: '',
+  hops: 1,
+  chain: [
+    { id: 'n0', label: 'a', file: 'src/a.ts', line: '10' },
+    { id: 'n1', label: 'b', file: '', line: '' },
+  ],
+  found: true,
+}
 const AFFECTED: GraphAffected = {
   project: 'demo',
   raw: '',
@@ -313,9 +331,93 @@ describe('F5 导出寻址：只有 relations 的**命中节点**给出 id', () =
     expect(sequenceAddress({ kind: 'relations', dir: 'out', value: rel('') })).toBeUndefined()
   })
 
-  it('path / affected → undefined（两种响应里全是 label，没有可寻址的 id）', () => {
+  it('path / affected → undefined（`sequenceAddress` 只认 relations；path 走 `sequenceSymbols`）', () => {
     expect(sequenceAddress({ kind: 'path', value: PATH })).toBeUndefined()
     expect(sequenceAddress({ kind: 'affected', value: AFFECTED })).toBeUndefined()
+  })
+})
+
+describe('v17 W-9① 导出寻址载荷：relations → {node} / path → {symbols}', () => {
+  const pathWith = (chain: GraphPath['chain'], found = true): GraphPath => ({ ...PATH, chain, found })
+
+  it('relations 命中 → { node }（与 `sequenceAddress` 同源）', () => {
+    expect(sequenceTarget({ kind: 'relations', dir: 'in', value: rel('pkg/a.ts#alpha') })).toEqual({
+      node: 'pkg/a.ts#alpha',
+    })
+  })
+
+  it('relations 多义 → undefined（那时没有命中节点，不给 label 顶替）', () => {
+    const value = rel('dup', { candidates: [{ id: 'a#dup', label: 'dup' }] })
+    expect(sequenceTarget({ kind: 'relations', dir: 'in', value })).toBeUndefined()
+  })
+
+  it('path 找到路径 → { symbols } = 链上 id（服务端按相邻对取边成 IR）', () => {
+    expect(sequenceTarget({ kind: 'path', value: PATH })).toEqual({ symbols: ['n0', 'n1'] })
+  })
+
+  it('path 未找到 / id 不足两个 → undefined（没有相邻对可导）', () => {
+    expect(sequenceSymbols({ kind: 'path', value: pathWith(PATH.chain, false) })).toBeUndefined()
+    const single = [{ id: 'n0', label: 'only', file: '', line: '' }]
+    expect(sequenceSymbols({ kind: 'path', value: pathWith(single) })).toBeUndefined()
+    expect(sequenceTarget({ kind: 'path', value: pathWith(single) })).toBeUndefined()
+  })
+
+  it('path 里 id 为空串的跳**剔除**（服务端按 id 寻址，空串无意义）', () => {
+    const chain = [
+      { id: 'n0', label: 'a', file: 'f.ts', line: '1' },
+      { id: '', label: 'ghost', file: '', line: '' },
+      { id: 'n2', label: 'c', file: '', line: '' },
+    ]
+    expect(sequenceSymbols({ kind: 'path', value: pathWith(chain) })).toEqual(['n0', 'n2'])
+  })
+
+  it('path 的**多义跳不剔**：`ambiguous` 是入参符号多义，其 id 是真实节点 id（服务端照取边）', () => {
+    const chain = [
+      { id: 'n0', label: 'a', file: '', line: '', ambiguous: true },
+      { id: 'n1', label: 'b', file: '', line: '' },
+    ]
+    expect(sequenceSymbols({ kind: 'path', value: pathWith(chain) })).toEqual(['n0', 'n1'])
+  })
+
+  it('affected → undefined（响应只有 label）', () => {
+    expect(sequenceTarget({ kind: 'affected', value: AFFECTED })).toBeUndefined()
+  })
+})
+
+describe('v17 W-8 段标注几何（file:line 画在哪 / 占多少 viewBox）', () => {
+  it('段中线 = 相邻两个节点中心的中点（自上而下）', () => {
+    expect(chainEdgeMidY(0)).toBe((chainY(0) + chainY(1)) / 2)
+    expect(chainEdgeMidY(2)).toBe((chainY(2) + chainY(3)) / 2)
+    expect(chainEdgeMidY(1)).toBeGreaterThan(chainEdgeMidY(0))
+  })
+
+  it('chainLabelBoxes：空串 / undefined 不占位；非空贴竖线右侧、以段中线为中心、宽度随码点线性', () => {
+    expect(chainLabelBoxes([])).toEqual([])
+    expect(chainLabelBoxes([undefined, ''])).toEqual([])
+
+    const short = chainLabelBoxes(['ab'])[0]!
+    const long = chainLabelBoxes(['abcd'])[0]!
+    expect(short.x).toBe(CHAIN_VIEW_W / 2 + CHAIN_EDGE_LABEL_DX)
+    expect(short.x + short.w / 2).toBeGreaterThan(CHAIN_VIEW_W / 2) // 完全在竖线右侧
+    expect(short.y + short.h / 2).toBe(chainEdgeMidY(0))
+    expect(long.w).toBe(short.w * 2)
+    // 按**码点**估宽（同 clipLabel 口径：代理对算一个字符）
+    expect(chainLabelBoxes(['😀😀'])[0]!.w).toBe(short.w)
+  })
+
+  it('并入 viewBox：全空标注 = 纯节点盒（既有断言不受扰）；有长标注则右边缘外扩', () => {
+    const nodes = chainBoxes(3)
+    const bare = contentViewBox(nodes)
+    expect(viewBoxAttr(contentViewBox([...nodes, ...chainLabelBoxes(['', ''])]))).toBe(viewBoxAttr(bare))
+
+    const wide = contentViewBox([
+      ...nodes,
+      ...chainLabelBoxes(['', 'packages/agents/src/arch/graph-ir.ts:715']),
+    ])
+    expect(wide.w).toBeGreaterThan(bare.w)
+    // 标注在右侧、落在两节点之间的缝里 ⇒ 左 / 上边不动
+    expect(wide.x).toBe(bare.x)
+    expect(wide.y).toBe(bare.y)
   })
 })
 

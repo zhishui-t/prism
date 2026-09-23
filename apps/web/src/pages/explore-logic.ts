@@ -1,5 +1,5 @@
 /**
- * v10 F9ui 层级探索的**纯函数层**：路径语义、边强度归集、分页切片。
+ * v10 F9ui 层级探索的**纯函数层**：路径语义、边强度归集、分页切片与页累加。
  *
  * 分工与 `./graph-logic.ts` 同款：判据与几何在这里（node 环境可直测），
  * 组件（`./GraphExplore.tsx`）只负责取数与摆放。
@@ -15,13 +15,14 @@
  * 2. **`symbol` 不是网格层**：它是 `file` 的只读出口（列文件内符号后切到查询态），
  *    故不进面包屑（`GRID_LEVELS` 只有三层）。`drillTarget` 仍会给出 `symbol`——
  *    组件据此把「file 卡片」渲染成「查此节点」而不是「再下钻一层」。
- * 3. **服务端没有分页参数**（`graph-rollup.test.ts` 的「缺少 parent」一族里没有任何
- *    limit/offset），截断是 500 条硬上限 + `symbol_count` 降序。故 `truncated` 的余量
- *    **取不回来**：UI 如实呈现 `total` 与已返回条数，不假装「更多」能拉到剩下的
- *    （见 `GraphExplore.tsx` 的截断提示），长列表的「更多」只做**已取回数据**的客户端分页。
+ * 3. **服务端真分页（v17 B-7）**：单层超 500 条时响应带不透明 `next_cursor`，用
+ *    `?cursor=` 取次页（每页 500 条，跨页边在次页补齐）。图重建（游标内嵌的图版本键变）
+ *    → 409 `stale_cursor`，消费方须回第一页重查（`isStaleCursorError` 判这条）。
+ *    本文件只管**已取回数据**的渲染分页（`pageOf`）+ 页累加（`mergeRollupPage`）+
+ *    「还能不能更多」的判据（`moreAvailable`）；取数（发不发请求、带什么 cursor）归组件。
  */
 
-import type { RollupEdge, RollupLevel } from '../api.ts'
+import type { RollupEdge, RollupLevel, RollupResult } from '../api.ts'
 
 /** 网格层（面包屑与卡片网格只在这三层）。 */
 export const GRID_LEVELS: readonly RollupLevel[] = ['community', 'dir', 'file']
@@ -29,9 +30,10 @@ export const GRID_LEVELS: readonly RollupLevel[] = ['community', 'dir', 'file']
 /**
  * 客户端一屏的卡片数（点「更多」每次追加这么多）。
  *
- * 为什么要客户端分页：服务端一层最多回 500 条（`symbol_count` 降序），
+ * 为什么要客户端分页：服务端一层一页最多回 500 条（`symbol_count` 降序），
  * 本仓实测社区层可达数百——一次把 500 张卡片铺进 DOM 是没必要的重活。
- * 这只是**渲染**分页，不产生请求（口径见文件头注 3）。
+ * 这只是**渲染**分页：本地还有余量就不发请求，本地翻完了才（若服务端还有下一页）
+ * 用 `next_cursor` 去取（见 `moreAvailable`）。
  */
 export const EXPLORE_PAGE = 60
 
@@ -139,10 +141,50 @@ export function maxEdgeWeight(edges: readonly RollupEdge[]): number {
 /**
  * 客户端分页：取前 `shown` 条（负数/NaN 归零，超长按全长）。
  *
- * 只切**已取回**的数据，**不触发请求**——服务端没有分页参数，`truncated` 的余量
- * 取不回来（见文件头注口径 3）。
+ * 只切**已取回**的数据，本身**不触发请求**——要不要为「更多」去服务端取下一页，
+ * 由 `moreAvailable` 判、由组件发（`?cursor=`）。
  */
 export function pageOf<T>(items: readonly T[], shown: number): readonly T[] {
   const n = Number.isFinite(shown) ? Math.max(0, Math.floor(shown)) : 0
   return items.slice(0, n)
+}
+
+/**
+ * 把新一页**并进已取回的层**（v17 B-7）。
+ *
+ * 服务端保证各页节点**不重不漏**（整层排序后按 500 切片），故这里是直接拼接，不查重。
+ * `edges` 同理：每条跨组边只在其**较晚一端入页**的那一页出现一次，拼起来恰好是全量。
+ * 元信息（`level`/`parent`/`total`/`truncated`/`next_cursor`）一律以**新页**为准——
+ * 新页的 `next_cursor` 缺省即「没有下一页了」，正好覆盖旧游标。
+ */
+export function mergeRollupPage(prev: RollupResult, next: RollupResult): RollupResult {
+  return {
+    ...next,
+    nodes: [...prev.nodes, ...next.nodes],
+    edges: [...prev.edges, ...next.edges],
+  }
+}
+
+/**
+ * 点「更多」时该不该去服务端取下一页。
+ *
+ * - 本地还有没显示的（`shown < loaded`）→ 先翻本地的，不请求；
+ * - 本地翻完了、且服务端还有下一页（`nextCursor !== undefined`）→ 请求；
+ * - 都没有 → 「更多」该消失（`false`）。
+ *
+ * 即「more 按钮可见」的判据就是 `moreAvailable(...) === true`（`none` 只是它的反面）。
+ */
+export function moreAvailable(loaded: number, shown: number, nextCursor: string | undefined): boolean {
+  return shown < loaded || nextCursor !== undefined
+}
+
+/**
+ * 服务端 409 游标失效应答的判定（`api.ts` 把错误抛成 `` `${code}: ${message}` ``）。
+ *
+ * 图重建（产物 mtime/size 变）会让翻页游标作废——服务端回 `stale_cursor`。消费方**不能**
+ * 把它当普通错误报给用户：正确动作是**丢弃本层已取回的页、回第一页重查**（重建期翻页
+ * 会重复/漏项，只有重查才能收敛）。见 `GraphExplore.tsx` 的 `more`。
+ */
+export function isStaleCursorError(message: string): boolean {
+  return message.startsWith('stale_cursor:')
 }

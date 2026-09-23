@@ -128,7 +128,7 @@ prism serve --ensure               # 后台幂等起控制台（已在跑则复�
 | :--- | :--- |
 | 知识库（17） | \`prism_kb_search\` \`prism_kb_get\` \`prism_kb_deposit\` \`prism_kb_convert\` \`prism_kb_import\` \`prism_kb_enrich\` \`prism_kb_graph\` \`prism_kb_tree\` \`prism_kb_stats\` \`prism_kb_catalog\` \`prism_kb_path\` \`prism_kb_remove\` \`prism_kb_restore\` \`prism_kb_conflicts\` \`prism_kb_resolve_conflict\` \`prism_kb_versions\` \`prism_kb_book_structure\` |
 | 代码图谱（8） | \`prism_graph_query\` \`prism_graph_path\` \`prism_graph_explain\` \`prism_graph_affected\` \`prism_graph_god_nodes\` \`prism_graph_summary\` \`prism_graph_status\` \`prism_graph_merge\` |
-| 架构图谱（1） | \`prism_arch_generate\`（五类图统一入口：workflow 传 \`team\`，architecture/sequence/dataflow 传 \`project\`，lifecycle 无入参；可选 \`book\`/\`module\`/\`out\`） |
+| 架构图谱（1） | \`prism_arch_generate\`（五类图统一入口：workflow 传 \`team\`，architecture/sequence/dataflow 传 \`project\`，lifecycle 无入参；可选 \`book\`/\`module\`/\`out\`；sequence 可加 \`symbols\`（节点 id 数组，按相邻对出图）） |
 | 角色团队（23） | \`prism_role_list\` \`prism_role_get\` \`prism_role_new\` \`prism_role_edit\` \`prism_role_rm\` \`prism_role_render\` \`prism_team_list\` \`prism_team_get\` \`prism_team_new\` \`prism_team_edit\` \`prism_team_rm\` \`prism_team_render\` \`prism_team_activate\` \`prism_context_pack\` \`prism_skill_effective\` \`prism_skill_list\` \`prism_skill_install\` \`prism_skill_uninstall\` \`prism_skill_rm\` \`prism_skill_categorize\` \`prism_skill_category_add\` \`prism_skill_category_rename\` \`prism_skill_category_rm\` |
 
 > **导入三件套**：\`prism_kb_convert\`（文档→Markdown，本地 anydoc 转换）→ 你提炼 →
@@ -353,7 +353,7 @@ prism embedding reindex                    # 为已有条目补齐/重算向量�
 | 工具 | 用途 | 关键参数 |
 | :--- | :--- | :--- |
 | \`prism_graph_query\` | BFS 遍历找相关节点 | \`q\`、\`dfs\` |
-| \`prism_graph_path\` | 两节点最短路径 | \`from\` \`to\` |
+| \`prism_graph_path\` | 两节点最短路径（服务端读图 BFS；返回带 id 的链，id 可喂 sequence 的 \`symbols\`） | \`from\` \`to\` |
 | \`prism_graph_explain\` | 单节点及其邻居 | \`node\` |
 | \`prism_graph_affected\` | **变更影响面**（反向遍历） | \`node\` \`depth\`（默认 2） |
 | \`prism_graph_god_nodes\` | 枢纽节点排行 | \`top\` |
@@ -486,7 +486,7 @@ prism_kb_enrich { kind, payload, result, by? }
 | :--- | :--- | :--- | :--- |
 | \`workflow\` | 团队 DAG 工作流定义 | \`prism arch from-team <team_id>\` | 或 MCP \`prism_arch_generate {type:'workflow', team}\` |
 | \`architecture\` | 已注册项目的代码图谱（社区聚类 + 依赖边） | \`prism arch from-graph architecture <project>\` | 需先 \`prism graph build <project>\` |
-| \`sequence\` | 代码图谱的**跨文件 calls 边** | \`prism arch from-graph sequence <project>\` | 无跨文件 calls 边时**明确拒画** |
+| \`sequence\` | 代码图谱的**跨文件 calls 边** | \`prism arch from-graph sequence <project>\` | 无跨文件 calls 边时**明确拒画**；可加 \`--symbols <id,id,…>\` 按相邻对出链路图 |
 | \`lifecycle\` | Prism 任务状态机（14 态 **36 转移**） | \`prism arch from-state\` | 无入参，随时可跑 |
 | \`dataflow\` | 代码图谱**目录角色分层 + 跨层依赖边** | \`prism arch from-graph dataflow <project>\` | 口径是「依赖流向」不是数据读写（见下） |
 
@@ -514,6 +514,7 @@ prism arch types                              # 列出五类
 prism arch from-team core-dev                 # workflow：由团队定义派生
 prism arch from-graph architecture mini-snake # architecture：由代码图谱派生
 prism arch from-graph sequence mini-snake     # sequence
+prism arch from-graph sequence mini-snake --symbols n1,n2,n3   # sequence 指定链路：按相邻对出图（id 取自 graph path 的 chain[].id）
 prism arch from-graph dataflow mini-snake     # dataflow
 prism arch from-state                         # lifecycle：由任务状态机派生
 
@@ -536,6 +537,7 @@ prism arch render architecture ir.json        # 渲染一个现成 IR
 prism_arch_generate { type: 'workflow',     team: 'core-dev' }
 prism_arch_generate { type: 'architecture', project: 'mini-snake' }
 prism_arch_generate { type: 'sequence',     project: 'mini-snake' }
+prism_arch_generate { type: 'sequence',     project: 'mini-snake', symbols: ['n1','n2','n3'] }  # 指定链路（相邻对出图）
 prism_arch_generate { type: 'dataflow',     project: 'mini-snake' }
 prism_arch_generate { type: 'lifecycle' }
 \`\`\`
@@ -543,6 +545,7 @@ prism_arch_generate { type: 'lifecycle' }
 返回 \`{ type, html, ir, bytes, title, subtitle, source, project? }\`（含标题与图注；拒画时直接报错并说明理由）。\`workflow\` 要 \`team\`，
 \`architecture|sequence|dataflow\` 要 \`project\`（**必须已注册**），\`lifecycle\` 无入参。
 可选 \`book\`/\`module\` 写进产物 sidecar（归到知识库的书/模块下）；可选 \`out\` 覆盖产物路径。
+\`sequence\` 还可选 \`symbols\`（节点 **id** 数组，按**相邻对**出图：N 个 id → N 参与者 / N-1 条消息，只取相邻两点的边；与 \`node\` 互斥）。
 
 **产物落点（v9 F1）**：\`architecture|sequence|dataflow\` 三类**项目图**缺省落
 \`<projectRoot>/.prism/arch/<type>/\`（project 必须已注册；root 被删/被挪会报

@@ -33,11 +33,13 @@ import { setLang, t } from '../src/i18n.ts'
 import { CodeGraphPage } from '../src/pages/CodeGraph.tsx'
 import {
   CHAIN_NODE,
+  CHAIN_VIEW_W,
   EDGE_GAP,
   RADIAL_CENTER,
   RADIAL_MAX,
   RADIAL_PEER,
   chainBoxes,
+  chainEdgeMidY,
   chainY,
   contentViewBox,
   radialBoxes,
@@ -365,8 +367,32 @@ describe('F5 三档形状：relations → 中心-辐射', () => {
 })
 
 describe('F5 三档形状：path → 纵向链', () => {
+  /**
+   * v17 C-8：`chain` 从 label 串升级为 `{ id, label, file, line, ambiguous? }`。（W-8 的
+   * file:line 标注走 `runPathRaw`；本 helper 只给 label、file/line 留空——保住既有断言，
+   * 且不让 mock 编造 location。）
+   */
   async function runPath(chain: string[], found = true, hops: number | null = 2): Promise<void> {
-    payloads['/api/graph/path'] = ok({ project: 'demo', raw: '', hops, chain, found })
+    await runPathRaw(
+      chain.map((label, index) => ({ id: `n${index}`, label })),
+      found,
+      hops,
+    )
+  }
+
+  /** 直接铺完整 chain（W-8：验证每段 file:line 标注与多义跳灰显）。 */
+  async function runPathRaw(
+    chain: Array<{ id: string; label: string; file?: string; line?: string; ambiguous?: boolean }>,
+    found = true,
+    hops: number | null = 2,
+  ): Promise<void> {
+    payloads['/api/graph/path'] = ok({
+      project: 'demo',
+      raw: '',
+      hops,
+      chain: chain.map((hop) => ({ file: '', line: '', ...hop })),
+      found,
+    })
     await render()
     await click(modeChip(t('graph.mode.path')))
     const inputs = nodeInputs()
@@ -382,10 +408,12 @@ describe('F5 三档形状：path → 纵向链', () => {
     const box = svg()!
     expect(box.getAttribute('role')).toBe('img')
     expect(box.getAttribute('aria-label')).toBe(t('graph.viz.chainAria', { n: 3 }))
-    // v12 F1：纵向链同样有缩放层（内容全在它里面），链上节点只有一行（无 id / file:line）
+    // v12 F1：纵向链同样有缩放层（内容全在它里面）；链上节点仍是**一行**——`file:line`
+    // 不落在节点上，而是 W-8 的**段标注**（`.chain-edge-label`；本 mock 的 file/line 为空故无）
     expect(one('.chain-zoom-layer')?.getAttribute('transform')).toBe('translate(0 0) scale(1)')
     expect(all('.chain-node text tspan')).toHaveLength(0)
     expect(nodeTexts('.chain-node text')).toEqual(['a', 'mid', 'b'])
+    expect(all('.chain-edge-label')).toHaveLength(0)
     // 段数 = 节点数 − 1，且都朝下；端点退到节点框外（箭头不被框盖）
     const edges = all('.chain-edge')
     expect(edges).toHaveLength(2)
@@ -439,6 +467,60 @@ describe('F5 三档形状：path → 纵向链', () => {
     expect(heightOf(many)).toBeGreaterThan(heightOf(few))
     // 宽度只由节点框宽 + 两侧留白决定，与链长无关（横向居中）
     expect(many).toBe(viewBoxAttr(contentViewBox(chainBoxes(12))))
+  })
+
+  it('W-8：每段的调用点 file:line 画在段旁（取自**发出该跳**的边）；链尾无发出边 → 少一条', async () => {
+    // 首段刻意用**长**路径（比节点框 300px 还宽），才能验证 viewBox 为标注留白；
+    // 短标注伸不出节点框，留白与否看不出差别。
+    const long = 'packages/agents/src/arch/graph-ir.ts:715'
+    await runPathRaw([
+      { id: 'n0', label: 'a', file: 'packages/agents/src/arch/graph-ir.ts', line: '715' },
+      { id: 'n1', label: 'mid', file: 'src/mid.ts', line: '20' },
+      { id: 'n2', label: 'b' }, // 链尾：没有下一跳可标（file/line 双空）
+    ])
+
+    expect(shape()).toBe('chain')
+    // 3 个节点 → 2 段 → 2 条标注（链尾不产生标注）
+    const labels = all('.chain-edge-label')
+    expect(labels.map((n) => n.textContent)).toEqual([long, 'src/mid.ts:20'])
+    // 落在段中线上、竖线右侧（默认 `text-anchor: middle` 会压在线上）
+    expect(labels.map((n) => Number(n.getAttribute('y')))).toEqual([chainEdgeMidY(0), chainEdgeMidY(1)])
+    expect(labels.every((n) => Number(n.getAttribute('x')) > CHAIN_VIEW_W / 2)).toBe(true)
+    // viewBox 为标注预留右侧留白（否则长路径被 viewBox 裁掉）
+    const vb = svg()!.getAttribute('viewBox')!.split(' ').map(Number)
+    expect(vb[2]).toBeGreaterThan(contentViewBox(chainBoxes(3)).w)
+    // 不截断：可见文本就是全文（故不套 `<title>`）
+    expect(labels[0]!.querySelector('title')).toBeNull()
+    // 标注是**段**的，不是节点的：节点 `<text>` 仍只有一行
+    expect(all('.chain-node text tspan')).toHaveLength(0)
+    expect(nodeTexts('.chain-node text')).toEqual(['a', 'mid', 'b'])
+  })
+
+  it('W-8：file/line 为空的段不画标注（缺席即「不知道」，不编）', async () => {
+    await runPathRaw([
+      { id: 'n0', label: 'a', file: 'src/a.ts', line: '10' },
+      { id: 'n1', label: 'mid' },
+      { id: 'n2', label: 'b' },
+    ])
+    expect(all('.chain-edge-label').map((n) => n.textContent)).toEqual(['src/a.ts:10'])
+  })
+
+  it('W-8：`ambiguous` 跳灰显（`.chain-node.ambiguous`）并在 `<title>` 里自陈', async () => {
+    await runPathRaw([
+      { id: 'n0', label: 'dup', ambiguous: true }, // 多义跳：无 file/line
+      { id: 'n1', label: 'b', file: 'src/b.ts', line: '5' },
+      { id: 'n2', label: 'c' },
+    ])
+
+    const nodes = all('.chain-node')
+    expect(nodes).toHaveLength(3)
+    expect(nodes[0]!.getAttribute('class')).toContain('ambiguous')
+    expect(nodes[1]!.getAttribute('class')).not.toContain('ambiguous')
+    expect(nodes[2]!.getAttribute('class')).not.toContain('ambiguous')
+    expect(nodes[0]!.querySelector('title')?.textContent).toBe(`dup · ${t('graph.viz.ambiguous')}`)
+    expect(nodes[1]!.querySelector('title')?.textContent).toBe('b')
+    // 多义跳没有 file/line ⇒ 它发出的那段也没有标注
+    expect(all('.chain-edge-label').map((n) => n.textContent)).toEqual(['src/b.ts:5'])
   })
 })
 
@@ -623,8 +705,92 @@ describe('F5 导出时序图：按需触发 + 禁用至响应 + 新标签打开'
     expect(note).toContain('archify')
   })
 
-  it('path / affected 结果：没有可寻址 id → 按钮禁用，并在 `title` 里说明原因', async () => {
-    payloads['/api/graph/path'] = ok({ project: 'demo', raw: '', hops: 1, chain: ['a', 'b'], found: true })
+  it('C-9.2：响应带 subtitle → 口径位显示服务端真值（替代静态文案）', async () => {
+    await runRelations()
+    const real = '代码图谱派生（Graphify 6 节点）｜ 根 = proj/src/cli/entry.ts（由指定符号所在文件指定，非默认口径）'
+    payloads['/api/arch/render'] = ok({
+      preview: '/api/arch/preview/sequence/with-sub.html',
+      subtitle: real,
+    })
+
+    await click(exportButton())
+    await act(async () => {})
+
+    expect(opened).toEqual(['/api/arch/preview/sequence/with-sub.html'])
+    // 真值优先：不再显示静态的 `graph.seq.note`
+    expect(one('.graph-seq-bar .small')?.textContent).toBe(real)
+  })
+
+  it('C-9.2：响应缺 subtitle（旧服务端）→ 回落静态口径；重查后真值清掉', async () => {
+    await runRelations()
+    // ① 缺字段（向后兼容）：口径位保持既有静态文案
+    payloads['/api/arch/render'] = ok({ preview: '/api/arch/preview/sequence/legacy.html' })
+    await click(exportButton())
+    await act(async () => {})
+    expect(one('.graph-seq-bar .small')?.textContent).toBe(t('graph.seq.note'))
+
+    // ② 有字段：换成真值
+    payloads['/api/arch/render'] = ok({
+      preview: '/api/arch/preview/sequence/with-sub.html',
+      subtitle: '符号链导出（7 参与者 / 6 条相邻对消息）｜ 2 跳因无该方向的边或边无 file:line 被略去',
+    })
+    await click(exportButton())
+    await act(async () => {})
+    expect(one('.graph-seq-bar .small')?.textContent).toContain('符号链导出（7 参与者')
+
+    // ③ 重查新结果：上一条的真值不留在新结果下面（同 error 的清法）
+    await query('alpha')
+    expect(one('.graph-seq-bar .small')?.textContent).toBe(t('graph.seq.note'))
+  })
+
+  it('W-9①：path 结果 → 导出按钮**启用**；点击 POST 体带 `symbols`（链上 id，按相邻对）', async () => {
+    payloads['/api/graph/path'] = ok({
+      project: 'demo',
+      raw: '',
+      hops: 2,
+      chain: [
+        { id: 'n0', label: 'a', file: 'src/a.ts', line: '1' },
+        { id: 'n1', label: 'mid', file: 'src/m.ts', line: '2' },
+        { id: 'n2', label: 'b', file: '', line: '' },
+      ],
+      found: true,
+    })
+    await render()
+    await click(modeChip(t('graph.mode.path')))
+    const inputs = nodeInputs()
+    await fill(inputs[0]!, 'a')
+    await fill(inputs[1]!, 'b')
+    await click(submitQuery())
+
+    const button = exportButton()
+    expect(button.disabled).toBe(false)
+    expect(button.getAttribute('title')).toBeNull()
+    // 口径说明换成「链式」那一条（按相邻对取边，与单点扩邻域不是一回事）
+    expect(one('.graph-seq-bar .small')?.textContent).toBe(t('graph.seq.noteChain'))
+
+    payloads['/api/arch/render'] = ok({ preview: '/api/arch/preview/sequence/chain.html' })
+    await click(button)
+
+    const call = lastRequest('/api/arch/render')
+    expect(call, '路径导出没有打到 /api/arch/render').toBeDefined()
+    expect(call!.init?.method).toBe('POST')
+    expect(JSON.parse(String(call!.init?.body))).toEqual({
+      mode: 'from-graph',
+      type: 'sequence',
+      project: 'demo',
+      symbols: ['n0', 'n1', 'n2'],
+    })
+    expect(opened).toEqual(['/api/arch/preview/sequence/chain.html'])
+  })
+
+  it('W-9①：path 未找到路径 → 仍禁用（没有相邻对可导，不拿空链去打端点）', async () => {
+    payloads['/api/graph/path'] = ok({
+      project: 'demo',
+      raw: '',
+      hops: null,
+      chain: [],
+      found: false,
+    })
     await render()
     await click(modeChip(t('graph.mode.path')))
     const inputs = nodeInputs()
@@ -635,13 +801,16 @@ describe('F5 导出时序图：按需触发 + 禁用至响应 + 新标签打开'
     const button = exportButton()
     expect(button.disabled).toBe(true)
     expect(button.getAttribute('title')).toBe(t('graph.seq.noId'))
+  })
 
+  it('affected 结果：导出按钮仍**禁用**（响应只有 label，没有可寻址 id）', async () => {
     payloads['/api/graph/affected'] = ok({
       project: 'demo',
       raw: '',
       depth: 1,
       nodes: [{ label: 'victim', relation: 'calls', location: null }],
     })
+    await render()
     await click(modeChip(t('graph.mode.affected')))
     await query('alpha', '/api/graph/affected')
     expect(exportButton().disabled).toBe(true)

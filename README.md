@@ -266,7 +266,7 @@ prism arch validate architecture ir.json      # 校验一个现成 IR（schema +
 prism arch render architecture ir.json --out out.html
 ```
 
-MCP 等价：`prism_arch_generate { type, team?, project?, book?, module? }`（`workflow` 传 `team`，`architecture|sequence|dataflow` 传 `project`，`lifecycle` 无入参；可选 `book`/`module` 写进产物 sidecar）。
+MCP 等价：`prism_arch_generate { type, team?, project?, book?, module? }`（`workflow` 传 `team`，`architecture|sequence|dataflow` 传 `project`，`lifecycle` 无入参；可选 `book`/`module` 写进产物 sidecar）。**调用链导出（v17 C-9）**：`sequence` 还可传 `symbols: [id, id, …]`（节点 **id** 数组，取自 `prism graph path` 的 `chain[].id`）——按**相邻对**取边成图（N 个 id → N 参与者 / N-1 条消息），`node` 与 `symbols` 互斥。
 
 **产物归位（v9 F1）**：`architecture|sequence|dataflow` 三类项目图落 `<projectRoot>/.prism/arch/<type>/`（项目根经注册表解析——未注册拒绝；root 被删/被挪报 `project_root_missing` 且不重建目录）；`workflow|lifecycle` 落 `<PRISM_HOME>/archify/<type>/`；`--out`/`out` 完全接管落点。控制台列表 `GET /api/arch/diagrams` **双源**扫描两处（扫 `*.html` + sidecar 容错，缺 sidecar 的历史产物照常可见），条目带 `source`/`project` 并由服务端给出 `preview`/`ir` URL。`.prism` 已在知识库扫描忽略表，代码图谱侧由建图参数 `--exclude .prism` 挡住自污染。
 

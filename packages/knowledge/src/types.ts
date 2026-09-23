@@ -628,6 +628,16 @@ export interface KnowledgeServiceOptions {
    */
   embed?: (text: string) => Promise<Float32Array | null>
   /**
+   * 批量本地向量化（v17 §B-5，**additive**：与 `embed` 并存，单口**不动**——v13 零回归）。
+   *
+   * `(texts) => (Float32Array | null)[]`：结果**与入参等长且同序**，某段失败该位为 `null`。
+   * 由 server 装配注入（内部一次 `/embedding {input: string[]}`；整批失败 → 全部逐条重试一轮
+   * ——llama-server 整请求回错且错误体无段序号，见 `v17-recon-embed.md` §4④）。
+   *
+   * 未提供 → `#writeChunkVectors` 逐段走 `embed`（与改动前逐字节一致）。
+   */
+  embedBatch?: (texts: string[]) => Promise<(Float32Array | null)[]>
+  /**
    * 当前 embedding 模型 id（分档用；与 `embed` 配套注入）。
    * 写入 kb_vectors.model；检索**只比同模型向量**——不同模型（即便同维）向量空间
    * 不共通，换档后旧向量自动失效，由 reindex 重算。

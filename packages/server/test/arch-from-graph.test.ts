@@ -7,6 +7,7 @@
  * - 单测里那些「口径常量」是抄来的，抄错了只有真渲染器能发现；
  * - 真渲染器的判定又依赖几何，纯函数测试无法覆盖。
  */
+import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 
 import { afterAll, describe, expect, it } from 'vitest'
@@ -14,7 +15,7 @@ import { afterAll, describe, expect, it } from 'vitest'
 import { buildArchitectureIr, buildDataflowIr, buildSequenceIr, buildTaskLifecycleIr, type CodeGraph } from '@prism/agents'
 import { createMcpTools } from '../src/mcp/server.js'
 import { ProjectRegistry } from '../src/graph/registry.js'
-import { renderDiagram, validateDiagram } from '../src/graph/archify.js'
+import { irSubtitle, renderDiagram, validateDiagram } from '../src/graph/archify.js'
 import { makeTempDir, putFile } from './helpers.js'
 
 /**
@@ -127,8 +128,17 @@ describe('MCP：prism_arch_generate', () => {
     try {
       const tool = tools.find((item) => item.name === 'prism_arch_generate')!
       for (const type of ['architecture', 'sequence', 'dataflow'] as const) {
-        const result = (await tool.call({ type, project: 'demo' })) as { html: string; subtitle?: string }
+        const result = (await tool.call({ type, project: 'demo' })) as {
+          html: string
+          ir: string
+          subtitle?: string
+        }
         expect(result.html).toContain(`${type}`)
+        // C-9.2：MCP 的 subtitle 与**磁盘 IR** 的 `meta.subtitle` 同取处（irSubtitle）——
+        // HTTP from-graph 也走同一 reader，两面因此逐字一致（不平行拼两遍）
+        const irValue = JSON.parse(await readFile(result.ir, 'utf-8')) as unknown
+        expect(result.subtitle).toBe(irSubtitle(irValue))
+        expect(result.subtitle).toBeDefined()
       }
       // 只有 imports、没有 calls 的图谱 → sequence 必须报错而不是造图
       await putFile(

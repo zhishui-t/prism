@@ -8,17 +8,21 @@
  * - `affected`（改动影响谁）→ **分组列表**：该响应只有 `{label, relation, location}`，
  *   没有 id、没有图结构，画成图只会是装饰——故按 `relation` 分组列出，不硬画。
  *
- * 四条口径：
+ * 五条口径：
  * 1. **数据全部来自既有四模式响应**（组件零后端改动；形状适配只在本文件 + `graph-logic.ts`）；
  * 2. **可点的节点必须带 id**：只有 `relations` 的 `node` / `items[].other` 是 id（唯一寻址）。
- *    `path.chain` 与 `affected.nodes[].label` 只是 label——按 label 寻址会落到多义
- *    （本仓 2340 节点仅 2063 个唯一 label），故那些节点**只渲染、不可点**
- *    （与 `AffectedBody` 既有裁决同源），不假装能跳；
+ *    `path.chain` 自 v17 C-8 起每跳也带 `id`，但它**只作导出时序图的寻址**（`symbols`）；
+ *    链路图节点仍**不可点**（点它要跳 relations 查询，不在本轮范围）；`affected.nodes[].label`
+ *    只是 label（本仓 2340 节点仅 2063 个唯一 label），按 label 寻址会落到多义，
+ *    故**只渲染、不可点**（与 `AffectedBody` 既有裁决同源），不假装能跳；
  * 3. **零新增颜色 / 零 inline 样式**：方向色、节点底色、字族字号全部走 `styles.css` 的
  *    `.chain-*` 一族（值取既有 token）；几何（viewBox 坐标）由 `graph-logic.ts` 按数据算出；
  * 4. **图中不画半条链 / 不编方向**：链超过 `CHAIN_MAX` 跳时整图不画（截断的链看起来就是
  *    终点，是假信息），`affected` 无方向字段时按 `relation` 分组——两处的理由写在
  *    `graph-logic.ts` 的对应函数头注里。
+ * 5. **不猜（v17 W-8）**：`path.chain[].file/line` 取自**发出该跳**的边；链尾无发出边、
+ *    多义跳双空 → 该段的 `file:line` 标注缺席（不画）。多义跳（`ambiguous`）节点**灰显**
+ *    （复用 `button:disabled` 的 `opacity` 惯例，不引新颜色），并在 `<title>` 里自陈。
  *
  * 时序图导出（F5）：见本文件末尾的 `SequenceExport`。
  *
@@ -48,6 +52,7 @@ import {
 import { CountLine } from '../components/CountLine.tsx'
 import { useT } from '../i18n.ts'
 import {
+  CHAIN_EDGE_LABEL_DX,
   CHAIN_MAX,
   CHAIN_NODE,
   CHAIN_VIEW_W,
@@ -59,6 +64,8 @@ import {
   annotationLine,
   annotationVisible,
   chainBoxes,
+  chainEdgeMidY,
+  chainLabelBoxes,
   chainShape,
   chainY,
   clipLabel,
@@ -79,7 +86,7 @@ import {
   zoomPercent,
   zoomRatio,
 } from './graph-logic.ts'
-import type { Rect, Size, ZoomTransform } from './graph-logic.ts'
+import type { Rect, SequenceTarget, Size, ZoomTransform } from './graph-logic.ts'
 import type { GraphQueryResult } from './GraphQuery.tsx'
 
 /**
@@ -507,7 +514,10 @@ function ChainDiagram({ value }: { value: GraphPath }) {
   /* v12 F1：viewBox 随**节点几何包围盒**走（不再取固定的 `CHAIN_VIEW_W` × 手算高度）——
      链越长包围盒越高，宽容器下不再整图放大。 */
   const boxes = chainBoxes(drawable ? value.chain.length : 0)
-  const vb = contentViewBox(boxes)
+  /* v17 W-8：每段的调用点 = **发出该跳**的边（`hop.file/line`，链尾无发出边 → 双空）。
+     标注可能比节点框还长，故把它们的估算包围盒并进 viewBox（否则被裁，见 `chainLabelBoxes`）。 */
+  const edgeLabels = value.chain.slice(0, -1).map((hop) => formatLocation(hop.file, hop.line))
+  const vb = contentViewBox(drawable ? [...boxes, ...chainLabelBoxes(edgeLabels)] : boxes)
   // 检视 M-1：useZoom 须无条件调用（Rules of Hooks）——置于早退之前；空链由
   // contentViewBox 的退化盒 + fitTransform 的单位映射兜底，早退分支不渲染任何图形。
   const zoom = useZoom(vb)
@@ -550,7 +560,7 @@ function ChainDiagram({ value }: { value: GraphPath }) {
             )
             return (
               <line
-                key={`hop|${hop}|${index}`}
+                key={`hop|${hop.id}|${index}`}
                 className="chain-edge down"
                 x1={line.x1}
                 y1={line.y1}
@@ -561,17 +571,40 @@ function ChainDiagram({ value }: { value: GraphPath }) {
             )
           })}
 
-          {/* 链上节点**没有**第二行可画：`chain` 是 graphify 切出来的符号串，无 id、无 file:line
-              （SPEC-1.8「不猜」）——缩放只改比例，不凭空造标注 */}
+          {/* W-8（SPEC-C8.1）：每段的调用点 `file:line` 画在段右侧的缝里——取自**发出该跳**的边。
+              链尾无发出边、多义跳双双为空 → 该段不画（缺席即「不知道」，不编）。**不截断**
+              （R-1：放大后要看清 file:line），宽度由 `chainLabelBoxes` 给 viewBox 预留，
+              故不套 `<title>`（`textContent` 就是全文）。 */}
+          {value.chain.slice(0, -1).map((hop, index) => {
+            const at = edgeLabels[index]
+            if (at === undefined || at === '') return null
+            return (
+              <text
+                key={`at|${hop.id}|${index}`}
+                className="chain-edge-label"
+                x={cx + CHAIN_EDGE_LABEL_DX}
+                y={chainEdgeMidY(index)}
+              >
+                {at}
+              </text>
+            )
+          })}
+
           {value.chain.map((hop, index) => {
             const box = boxes[index]!
+            /* W-8：多义跳（服务端 `chain[].ambiguous`）= 图内没有唯一符号对应 → 灰显
+               （复用 `button:disabled` 的 opacity 惯例），`<title>` 里自陈，不假装可定位。 */
+            const ambiguous = hop.ambiguous === true
             return (
-              <g className="chain-node" key={`node|${hop}|${index}`}>
-                {/* 链上节点**不可点**：`chain` 是 graphify 输出切出来的符号串，没有 id（口径见头注 2） */}
-                <title>{hop}</title>
+              <g
+                className={ambiguous ? 'chain-node ambiguous' : 'chain-node'}
+                key={`node|${hop.id}|${index}`}
+              >
+                {/* 链上节点**不可点**：`chain` 的 `id` 仅供导出时序图（F5-2 禁 label 寻址） */}
+                <title>{ambiguous ? `${hop.label} · ${t('graph.viz.ambiguous')}` : hop.label}</title>
                 <rect x={box.x} y={box.y} width={box.w} height={box.h} rx="3" />
                 <text x={cx} y={chainY(index)}>
-                  {clipLabel(hop, 30)}
+                  {clipLabel(hop.label, 30)}
                 </text>
               </g>
             )
@@ -619,32 +652,46 @@ function AffectedGroups({ value }: { value: GraphAffected }) {
 /**
  * 「导出时序图」按钮：**按需触发 + 点击后禁用至响应**（archify 子进程渲染，秒级）。
  *
- * 成功 → `window.open(preview)` 新标签打开（`noopener`：新页拿不到本页的 `window.opener`）。
+ * 寻址载荷 `target` 由 `graph-logic.ts` 的 `sequenceTarget` 给出（唯一取处），两种形态：
+ * - `{ node }`（relations 结果）= 单节点 id → 按起点所在文件扩调用邻域；
+ * - `{ symbols }`（path 结果，v17 W-9①）= 链上 id 数组 → 服务端按**相邻对**取边成 IR。
+ * 两种都必须给**节点 id**（`address === undefined` 时按钮禁用并在 `title` 里说明原因——
+ * 不拿 label 顶替，那是 F5-2 明确禁止的「按名寻根」）。
+ *
+ * 成功 → `window.open(preview)` 新标签打开（`noopener`：新页拿不到本页的 `window.opener`），
+ * 并把响应里的 `subtitle`（v17 C-9.2 additive 回填，与 MCP `prism_arch_generate` 同源）
+ * 显示在口径位——**有真值用真值，缺省回落静态口径**（旧服务端不带该字段时逐字同旧）。
  * 失败 → 留在按钮下方（`.act-bar.err`）：`bad_request` 的两条「边」类抛错 + `project_root_missing`
  * 映成人话（见 `graph-logic.ts` 的 `sequenceExportErrorKey`），其余码**原文透出**（不吞错）。
- * 拿不到寻址 id（`address === undefined`）时按钮禁用并在 `title` 里说明原因——
- * 不拿 label 顶替（那是 F5-2 明确禁止的「按名寻根」）。
- *
- * 端点：`POST /api/arch/render` 的 `mode: 'from-graph'` 分支（常量与对账结论见
- * `api.ts` 的 `ARCH_RENDER_ENDPOINT`）。
  */
-export function SequenceExport({ project, address }: { project: string; address: string | undefined }) {
+export function SequenceExport({ project, target }: { project: string; target: SequenceTarget | undefined }) {
   const t = useT()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  /* 服务端自陈的图注（导出成功后带回）。空串 = 无真值 → 口径位回落静态文案。 */
+  const [subtitle, setSubtitle] = useState('')
 
-  // 换结果 / 换项目即清错误：上一条的报错画在新结果下面会误导
+  /* 换结果 / 换项目即清错误与上次的图注：上一条的报错 / 图注画在新结果下面会误导。
+     ⚠ 依赖必须是**字符串键**而不是 `target` 对象：对象每次渲染都是新的，会让本 effect
+     每次渲染都跑——那会在 `run` 里刚设上的 error 于下一次渲染被立刻清掉。 */
+  const targetKey =
+    target === undefined ? '' : 'node' in target ? `node|${target.node}` : `symbols|${target.symbols.join(',')}`
   useEffect(() => {
     setError('')
-  }, [address, project])
+    setSubtitle('')
+  }, [targetKey, project])
 
   const run = async (): Promise<void> => {
-    if (address === undefined || busy) return
+    if (target === undefined || busy) return
     setBusy(true)
     setError('')
     try {
-      const result = await api.archRenderFromGraph({ project, node: address })
+      const result = await api.archRenderFromGraph(
+        'node' in target ? { project, node: target.node } : { project, symbols: target.symbols },
+      )
       window.open(result.preview, '_blank', 'noopener')
+      // v17 C-9.2：响应带 subtitle 用真值；旧服务端缺该字段 → 空串，口径位仍走静态文案
+      setSubtitle(result.subtitle ?? '')
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       const key = sequenceExportErrorKey(msg)
@@ -654,7 +701,9 @@ export function SequenceExport({ project, address }: { project: string; address:
     }
   }
 
-  const noId = address === undefined
+  const noId = target === undefined
+  /* 口径说明随寻址形态分档：链式导出是「按相邻对取边」，与单点扩邻域不是一回事。 */
+  const chain = target !== undefined && 'symbols' in target
 
   return (
     <div className="graph-seq-bar">
@@ -668,7 +717,9 @@ export function SequenceExport({ project, address }: { project: string; address:
         >
           {busy ? t('graph.seq.busy') : t('graph.seq.action')}
         </button>
-        <span className="small muted">{t('graph.seq.note')}</span>
+        <span className="small muted">
+          {subtitle !== '' ? subtitle : chain ? t('graph.seq.noteChain') : t('graph.seq.note')}
+        </span>
       </div>
       {error !== '' && (
         <div className="act-bar err" role="alert">

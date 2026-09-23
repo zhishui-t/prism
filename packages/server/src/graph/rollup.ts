@@ -19,6 +19,10 @@
  *
  * 合成 id 编码：`community:<n>` / `dir:<path>`（正斜杠）/ `file:<path>`（正斜杠）。
  * 路径一律正斜杠（graph.json 的 `source_file` 实测即正斜杠；反斜杠在此归一）。
+ *
+ * v17 B-7：单层超 `ROLLUP_MAX_NODES` 时不再「一次截死」——改为**真分页**（每页 500 条，
+ * 响应带不透明的 `next_cursor`，客户端 `?cursor=` 取次页）。图重建（产物 `mtimeMs:size` 变）
+ * 会让旧游标失效，路由比对载荷内的版本键后回 409（见 `RollupCursor`）。
  */
 import { PrismError } from '@prism/core'
 import { normalizeGraph } from '@prism/agents'
@@ -33,8 +37,14 @@ export const ROLLUP_LEVELS: readonly RollupLevel[] = ['community', 'dir', 'file'
  *
  * 存在理由：社区数可达数千（本仓 2340 节点），一次全量吐给 SVG 会让前端卡死；
  * 截断在**每层每 parent**生效（深层目录整棵收进「更多」展开）。
+ *
+ * v17 B-7：本值同时是**一页的节点数**——超限的层改由 `next_cursor` 真分页
+ * （每页仍 500 条），`truncated` 仍是「本层总数 > 本值」的原义。
  */
 export const ROLLUP_MAX_NODES = 500
+
+/** `next_cursor` 载荷版本；格式演进时递增（不认识 → `bad_request`）。 */
+export const ROLLUP_CURSOR_VERSION = 1
 
 export interface RollupNode {
   id: string
@@ -61,6 +71,76 @@ export interface RollupResult {
   truncated: boolean
   nodes: RollupNode[]
   edges: RollupEdge[]
+  /**
+   * 下一页游标（v17 B-7）——**仅当本页之后还有节点时出现**（耗尽即无此键）。
+   *
+   * 不透明串（base64url 的 JSON 载荷，见 `decodeRollupCursor`）：客户端原样回传即可，
+   * 不要解析。载荷内嵌**图版本键**（图文件 `mtimeMs:size`）——图一重建，旧游标即失效，
+   * 服务端回 409 要求从头重查（翻页途中重建图会重复/漏项，靠这条声明兜底）。
+   */
+  next_cursor?: string
+}
+
+/**
+ * `next_cursor` 的**明文载荷**（`decodeRollupCursor` 的产物 / `encodeRollupCursor` 的入参）。
+ *
+ * `graph` = 图文件版本键 `mtimeMs:size`（与 `readCodeGraphCached` 的失效键同源）；
+ * 与当前图不符 → 路由抛 `stale_cursor`（409）。
+ */
+export interface RollupCursor {
+  v: typeof ROLLUP_CURSOR_VERSION
+  level: RollupLevel
+  /**
+   * 与**响应 `parent` 同形**（合成 id：`community:<n>` / `dir:<路径>` / `file:<路径>`；
+   * community 层为 `null`）——不是 `buildRollup` 收的**反解值**：路由拿到后仍需
+   * `decodeRollupParent` 还原。这样游标字段与响应字段可读性一致，且顺带复用形态校验。
+   */
+  parent: string | null
+  /** 下一页起点（= 已消费的节点数） */
+  offset: number
+  /** 图版本键 `mtimeMs:size` */
+  graph: string
+}
+
+/** 编码 `next_cursor`：UTF-8 JSON → base64url（URL 安全，`+/` 变 `-_`，无填充）。 */
+export function encodeRollupCursor(cursor: RollupCursor): string {
+  return Buffer.from(JSON.stringify(cursor), 'utf-8').toString('base64url')
+}
+
+/**
+ * 反解 `next_cursor`。**只校验形态**，不校验图版本（那需要读图，归路由）：
+ * 非法 base64url / 非 JSON / 版本或字段不符 → `bad_request`（400）。
+ *
+ * `Buffer.from(..., 'base64url')` 对非法字符是**静默丢弃**（不抛），故非法串最终一定
+ * 落在「JSON 解析失败」这一支；两处都收进同一个 `bad_request`。
+ */
+export function decodeRollupCursor(raw: string): RollupCursor {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(Buffer.from(raw, 'base64url').toString('utf-8'))
+  } catch {
+    throw new PrismError('bad_request', `cursor 不是合法的 base64url JSON 载荷: ${raw}`)
+  }
+  if (typeof parsed !== 'object' || parsed === null) {
+    throw new PrismError('bad_request', `cursor 载荷不是对象: ${raw}`)
+  }
+  const obj = parsed as Partial<Record<keyof RollupCursor, unknown>>
+  if (obj.v !== ROLLUP_CURSOR_VERSION) {
+    throw new PrismError('bad_request', `cursor 版本不支持: ${String(obj.v)}（期望 ${ROLLUP_CURSOR_VERSION}）`)
+  }
+  if (typeof obj.level !== 'string' || !isRollupLevel(obj.level)) {
+    throw new PrismError('bad_request', `cursor 的 level 非法: ${String(obj.level)}`)
+  }
+  if (obj.parent !== null && typeof obj.parent !== 'string') {
+    throw new PrismError('bad_request', 'cursor 的 parent 必须是字符串或 null')
+  }
+  if (typeof obj.offset !== 'number' || !Number.isInteger(obj.offset) || obj.offset < 0) {
+    throw new PrismError('bad_request', `cursor 的 offset 非法: ${String(obj.offset)}`)
+  }
+  if (typeof obj.graph !== 'string' || obj.graph === '') {
+    throw new PrismError('bad_request', 'cursor 缺少图版本键')
+  }
+  return { v: ROLLUP_CURSOR_VERSION, level: obj.level, parent: obj.parent, offset: obj.offset, graph: obj.graph }
 }
 
 /**
@@ -133,26 +213,44 @@ export function decodeRollupParent(level: RollupLevel, parent: string | null): s
 }
 
 /**
+ * 分页入参（v17 B-7）。
+ *
+ * - `offset`：本页起点（默认 0 = 首页）。由 `next_cursor` 载荷给出，客户端不直接传数字。
+ * - `version`：图版本键 `mtimeMs:size`。**给了才会生成 `next_cursor`**；不给即「不分页」
+ *   的行为（首页截断到 500 条、无游标）。版本键只被写进载荷——本函数仍是纯函数，
+ *   比对版本（→ 409）归路由。
+ */
+export interface RollupPaging {
+  offset?: number
+  version?: string
+}
+
+/**
  * 按层聚合并返回结果（parent 为 `decodeRollupParent` 的返回值）。
  *
  * @throws PrismError `bad_request` parent 形态与层不匹配；`not_found` parent 反解后图中无对应实体
  */
-export function buildRollup(graph: NormalizedGraph, level: RollupLevel, parent: string | null): RollupResult {
+export function buildRollup(
+  graph: NormalizedGraph,
+  level: RollupLevel,
+  parent: string | null,
+  paging: RollupPaging = {},
+): RollupResult {
   switch (level) {
     case 'community':
-      return communityLayer(graph)
+      return communityLayer(graph, paging)
     case 'dir':
-      return dirLayer(graph, requireValue(parent, level))
+      return dirLayer(graph, requireValue(parent, level), paging)
     case 'file':
-      return fileLayer(graph, requireValue(parent, level))
+      return fileLayer(graph, requireValue(parent, level), paging)
     case 'symbol':
-      return symbolLayer(graph, requireValue(parent, level))
+      return symbolLayer(graph, requireValue(parent, level), paging)
   }
 }
 
 // ===== 各层 =====
 
-function communityLayer(graph: NormalizedGraph): RollupResult {
+function communityLayer(graph: NormalizedGraph, paging: RollupPaging): RollupResult {
   const groups = new Map<string, { label: string; count: number }>()
   const groupOf = new Map<string, string>()
   for (const node of graph.nodes) {
@@ -176,10 +274,10 @@ function communityLayer(graph: NormalizedGraph): RollupResult {
     kind: 'community',
     symbol_count: group.count,
   }))
-  return finalize('community', null, nodes, crossGroupEdges(graph.edges, groupOf))
+  return finalize('community', null, nodes, crossGroupEdges(graph.edges, groupOf), paging)
 }
 
-function dirLayer(graph: NormalizedGraph, communityKey: string): RollupResult {
+function dirLayer(graph: NormalizedGraph, communityKey: string, paging: RollupPaging): RollupResult {
   const members = graph.nodes.filter((node) => communityOf(node) === communityKey)
   if (members.length === 0) {
     throw new PrismError('not_found', `图谱中没有 community:${communityKey} 对应的社区成员`)
@@ -206,10 +304,10 @@ function dirLayer(graph: NormalizedGraph, communityKey: string): RollupResult {
       ? {}
       : { community: communityRaw }),
   }))
-  return finalize('dir', parentId, nodes, crossGroupEdges(graph.edges, groupOf))
+  return finalize('dir', parentId, nodes, crossGroupEdges(graph.edges, groupOf), paging)
 }
 
-function fileLayer(graph: NormalizedGraph, dir: string): RollupResult {
+function fileLayer(graph: NormalizedGraph, dir: string, paging: RollupPaging): RollupResult {
   const members = graph.nodes.filter((node) => dirOf(node) === dir)
   if (members.length === 0) {
     throw new PrismError('not_found', `图谱中没有 dir:${dir} 对应的目录`)
@@ -230,14 +328,14 @@ function fileLayer(graph: NormalizedGraph, dir: string): RollupResult {
     kind: 'file',
     symbol_count: group.count,
   }))
-  return finalize('file', `dir:${dir}`, nodes, crossGroupEdges(graph.edges, groupOf))
+  return finalize('file', `dir:${dir}`, nodes, crossGroupEdges(graph.edges, groupOf), paging)
 }
 
 /**
  * symbol 层（只读出口）：`edges` 恒 `[]`——本层不再分组，调用关系由「对符号发四模式查询」回答。
  * `symbol_count` 恒 1（每行就是一个符号）。
  */
-function symbolLayer(graph: NormalizedGraph, file: string): RollupResult {
+function symbolLayer(graph: NormalizedGraph, file: string, paging: RollupPaging): RollupResult {
   const members = graph.nodes.filter((node) => fileKeyOf(node) === file)
   if (members.length === 0) {
     throw new PrismError('not_found', `图谱中没有 file:${file} 对应的文件`)
@@ -248,7 +346,7 @@ function symbolLayer(graph: NormalizedGraph, file: string): RollupResult {
     kind: 'symbol',
     symbol_count: 1,
   }))
-  return finalize('symbol', `file:${file}`, nodes, [])
+  return finalize('symbol', `file:${file}`, nodes, [], paging)
 }
 
 // ===== 分组 / 截断 / 边 =====
@@ -271,20 +369,44 @@ function crossGroupEdges(edges: readonly CodeGraphEdge[], groupOf: Map<string, s
   return [...weights.values()]
 }
 
-/** 截断 + 无悬挂边 + 稳定排序（`symbol_count` 降序，label 字典序次级）。 */
-function finalize(level: RollupLevel, parent: string | null, nodes: RollupNode[], edges: RollupEdge[]): RollupResult {
+/**
+ * 排序 + 分页切片 + 页内 edges + 游标生成。
+ *
+ * **排序是全层级的**（`symbol_count` 降序 → label 字典序），再按 `offset` 切一页——
+ * 于是「第 k 页」在任何时刻都是同一批节点，翻页不重不漏（前提是图没重建）。
+ *
+ * **页内 edges 口径**（v17 B-7 / SPEC-B7.4）：每条边**只在「较晚一端入页」的那一页出现一次**。
+ * 等价写法 = 「两端都已在累计可见集内，且至少一端在本页」：
+ * - 首页：累计集 = 本页 → 退化成「两端都在本页」（原 F9 口径，无悬挂边）；
+ * - 次页：新节点与**已翻页节点**之间的边在此补齐——跨页边不丢、也不重复（首页放不下就留给次页）。
+ *
+ * `next_cursor` 仅在「之后还有节点」且调用方给了 `version` 时出现（耗尽 / 未给版本即无此键）。
+ */
+function finalize(
+  level: RollupLevel,
+  parent: string | null,
+  nodes: RollupNode[],
+  edges: RollupEdge[],
+  paging: RollupPaging,
+): RollupResult {
   const total = nodes.length
   const truncated = total > ROLLUP_MAX_NODES
-  const kept = [...nodes].sort(compareRollupNodes).slice(0, ROLLUP_MAX_NODES)
-  const visible = new Set(kept.map((node) => node.id))
-  return {
-    level,
-    parent,
-    total,
-    truncated,
-    nodes: kept,
-    edges: edges.filter((edge) => visible.has(edge.from) && visible.has(edge.to)).sort(compareRollupEdges),
+  const sorted = [...nodes].sort(compareRollupNodes)
+  const offset = Math.max(0, Math.floor(paging.offset ?? 0))
+  const end = offset + ROLLUP_MAX_NODES
+  const kept = sorted.slice(offset, end)
+  // 累计可见集 = 首页..本页的全部节点；本页新增集 = kept
+  const cumulative = new Set(sorted.slice(0, end).map((node) => node.id))
+  const pageIds = new Set(kept.map((node) => node.id))
+  const pageEdges = edges
+    .filter((edge) => cumulative.has(edge.from) && cumulative.has(edge.to))
+    .filter((edge) => pageIds.has(edge.from) || pageIds.has(edge.to))
+    .sort(compareRollupEdges)
+  const result: RollupResult = { level, parent, total, truncated, nodes: kept, edges: pageEdges }
+  if (end < total && paging.version !== undefined) {
+    result.next_cursor = encodeRollupCursor({ v: ROLLUP_CURSOR_VERSION, level, parent, offset: end, graph: paging.version })
   }
+  return result
 }
 
 /** `symbol_count` 降序 → label 字典序（码元序，确定性；locale 相关排序不做）。 */

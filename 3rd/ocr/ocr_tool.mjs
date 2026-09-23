@@ -3,11 +3,16 @@
  * OCR 工具 Node 薄壳（ESM）：解析参数 → spawn Python 主体 `ocr_main.py`。
  *
  *   node 3rd/ocr/ocr_tool.mjs <input> [--models <dir>] [--json] [--fake]
+ *                             [--table|--no-table] [--layout|--no-layout]
  *
  * 产物口径：stdout 原样透传 Python 的 Markdown / JSON（stdio: 'inherit'），
  * 诊断走 stderr，退出码透传（process.exitCode = status）。`--models` 缺省取
  * **本文件同目录**的 `models/`——用 import.meta.url 定位，**不写死仓库相对层级**，
  * 这样 3rd/ocr 整体搬移（开发态 / node_modules 物化后多一层）仍成立。
+ *
+ * v17 B-A1：表格 / 版面两个开关**只做透传**（`--table/--no-table/--layout/--no-layout`），
+ * 缺省交给 Python（两者都开）；本薄壳不判断模型在不在——那是 ocr_main.py 的事
+ * （缺件即静默跳过，回到无 table/layout 的旧输出）。
  *
  * ⚠ 解释器解析**刻意镜像** `scripts/python.mjs` 与
  *   `packages/server/src/graph/graphify.ts`（M6 三件套）：
@@ -65,11 +70,14 @@ export function resolvePython(env = process.env) {
 // ---------------------------------------------------------------------------
 
 const USAGE = `用法: node 3rd/ocr/ocr_tool.mjs <input> [--models <dir>] [--json] [--fake]
+                                 [--table|--no-table] [--layout|--no-layout]
 
   <input>          待识别的图片或 PDF 路径
   --models <dir>   ONNX 模型目录（默认：本脚本同目录 models/）
   --json           以 JSON 输出（默认 Markdown）
   --fake           mock 推理层（不加载真实引擎/模型，供无依赖环境自测）
+  --table          / --no-table    启用/关闭表格还原（默认开；模型未装则静默跳过）
+  --layout         / --no-layout   启用/关闭版面分析（默认开；模型未装则静默跳过）
 `
 
 function printUsage(stream) {
@@ -77,11 +85,21 @@ function printUsage(stream) {
 }
 
 /**
- * 解析 argv（不含 node/脚本本身）。返回 { input, models, json, fake } 或
- * { help: true } 或 { error: <文案> }。
+ * 解析 argv（不含 node/脚本本身）。返回 { input, models, json, fake, table, layout }
+ * 或 { help: true } 或 { error: <文案> }。
+ *
+ * `table` / `layout` 缺省 `undefined`（**不透传 flag**，由 Python 决定默认开）；
+ * 显式 `--table`/`--no-table` 才置 true/false（v17 B-A1）。
  */
 function parseArgs(argv) {
-  const opts = { input: null, models: DEFAULT_MODELS_DIR, json: false, fake: false }
+  const opts = {
+    input: null,
+    models: DEFAULT_MODELS_DIR,
+    json: false,
+    fake: false,
+    table: undefined,
+    layout: undefined,
+  }
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i]
     if (arg === '--help' || arg === '-h') return { help: true }
@@ -89,6 +107,14 @@ function parseArgs(argv) {
       opts.json = true
     } else if (arg === '--fake') {
       opts.fake = true
+    } else if (arg === '--table') {
+      opts.table = true
+    } else if (arg === '--no-table') {
+      opts.table = false
+    } else if (arg === '--layout') {
+      opts.layout = true
+    } else if (arg === '--no-layout') {
+      opts.layout = false
     } else if (arg === '--models' || arg.startsWith('--models=')) {
       const value = arg === '--models' ? argv[(i += 1)] : arg.slice('--models='.length)
       if (value === undefined || value === '') return { error: '--models 需要一个目录参数' }
@@ -136,6 +162,11 @@ function main() {
   ]
   if (parsed.json) pyArgs.push('--json')
   if (parsed.fake) pyArgs.push('--fake')
+  // v17 B-A1：只透传显式给出的开关（undefined = 交给 Python 缺省）
+  if (parsed.table === true) pyArgs.push('--table')
+  if (parsed.table === false) pyArgs.push('--no-table')
+  if (parsed.layout === true) pyArgs.push('--layout')
+  if (parsed.layout === false) pyArgs.push('--no-layout')
 
   const result = spawnSync(python, pyArgs, {
     stdio: 'inherit',

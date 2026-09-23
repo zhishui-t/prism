@@ -8,9 +8,12 @@ import { openPersistence, prismPaths } from '@prism/core'
 import {
   OCR_MODEL_COUNT,
   ocrDepsReady,
+  ocrExtrasDepsReady,
+  ocrLayoutModelReady,
   ocrModelCount,
   ocrModelsDir,
   ocrModelsReady,
+  ocrTableModelReady,
   parseOcrOff,
 } from '@prism/knowledge'
 import {
@@ -174,16 +177,27 @@ export async function runDoctor(ctx: CommandContext, _args: string[], values: Ar
     const modelsReady = ocrModelsReady(modelsDir)
     // 模型没到位就不去 spawn Python 探依赖：没东西可跑，省一次最长 20s 的子进程
     const depsReady = !off && modelsReady ? await ocrDepsReady() : false
-    const spec = `模型 ${count}/${OCR_MODEL_COUNT} 件，${modelsDir}`
+    // v17 §A-0：表格/版面两件是**可选**增强（缺失只让 table/layout 回到旧输出）
+    const tableReady = ocrTableModelReady(modelsDir)
+    const layoutReady = ocrLayoutModelReady(modelsDir)
+    const extrasDeps = !off && tableReady && layoutReady ? await ocrExtrasDepsReady() : false
+    // 计数改成「总件数 + 核心必备」——加了可选两件后「N/3」会显示成「5/3」误导
+    const spec = `模型目录 ${count} 件，核心必备 ≥${OCR_MODEL_COUNT} 件`
+    const extras = `表格 ${tableReady ? '就绪' : '未装'}／版面 ${layoutReady ? '就绪' : '未装'}`
+    const extrasOk = tableReady && layoutReady && extrasDeps
+    const extrasNote = `增强 ${extras}；pip 可选件 ${extrasDeps ? '可导入' : '不可导入'}`
     let detail: string
     if (off) {
-      detail = `已关闭（PRISM_OCR=off；按未装 OCR 走，图片/扫描 PDF 回落旧文案，${spec}）`
+      detail = `已关闭（PRISM_OCR=off；按未装 OCR 走，图片/扫描 PDF 回落旧文案；${spec}；${modelsDir}）`
     } else if (!modelsReady) {
-      detail = `未安装（可选；装后图片与扫描 PDF 走 OCR，${spec}）：node scripts/setup-ocr.mjs`
+      detail = `未安装（可选；装后图片与扫描 PDF 走 OCR；${spec}；${modelsDir}）：node scripts/setup-ocr.mjs`
     } else if (!depsReady) {
-      detail = `模型就绪但 pip 依赖不可导入（OCR 不会启用，${spec}）：node scripts/setup-ocr.mjs`
+      detail = `模型就绪但 pip 依赖不可导入（OCR 不会启用；${spec}；${modelsDir}）：node scripts/setup-ocr.mjs`
     } else {
-      detail = `就绪（模型 ${count}/${OCR_MODEL_COUNT} 件，pip 依赖可导入，${modelsDir}）`
+      const hint = extrasOk
+        ? ''
+        : '——可选件缺失只影响表格/多栏还原，可跑 node scripts/setup-ocr.mjs 补齐'
+      detail = `就绪（${spec}；${extrasNote}；${modelsDir}）${hint}`
     }
     checks.push({ name: 'ocr', ok: true, detail })
   }

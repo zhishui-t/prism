@@ -1,3 +1,4 @@
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -7,15 +8,21 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import {
   CONVERTIBLE_EXTENSIONS,
+  EMBEDDED_IMAGE_MEDIA_TYPES,
   MIN_OCR_VALID_CHARS,
   OCR_IMAGE_EXTENSIONS,
+  OCR_LAYOUT_MODEL_FILE,
+  OCR_TABLE_MODEL_FILE,
   TEXT_EXTENSIONS,
+  buildOcrToolArgs,
   countValidChars,
   extensionOf,
   isSupported,
   ocrAvailable,
+  ocrLayoutModelReady,
   ocrModelCount,
   ocrModelsReady,
+  ocrTableModelReady,
   parseOcrOff,
   runOcrTool,
   setOcrHooks,
@@ -395,5 +402,195 @@ describe('toMarkdown：OCR 管道与逐字回落（SPEC-3.1/3.2/3.3）', () => {
     }
     expect(result.markdown).toContain('## 第 1 页')
     expect(result.markdown).toContain('PRISM')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// v17 B-A1：表格 / 版面增强的 flag 透传与开关（`buildOcrToolArgs` + `toMarkdown` 选项）
+// ---------------------------------------------------------------------------
+
+describe('OCR 表格/版面 flag（v17 B-A1）', () => {
+  it('buildOcrToolArgs：显式 true/false 才透传 flag，undefined 不带（交 Python 缺省）', () => {
+    const tool = buildOcrToolArgs('in.png')[0]
+    expect(tool.endsWith('ocr_tool.mjs')).toBe(true)
+
+    // undefined（缺省）→ 不带任何增强 flag
+    expect(buildOcrToolArgs('in.png')).toEqual([tool, 'in.png'])
+    // 显式关 → --no-table / --no-layout
+    expect(buildOcrToolArgs('in.png', { table: false, layout: false })).toEqual([
+      tool,
+      'in.png',
+      '--no-table',
+      '--no-layout',
+    ])
+    // 显式开 → --table / --layout
+    expect(buildOcrToolArgs('in.png', { table: true, layout: true })).toEqual([
+      tool,
+      'in.png',
+      '--table',
+      '--layout',
+    ])
+    // 混搭 + fake 一起
+    expect(buildOcrToolArgs('in.png', { fake: true, table: false, layout: true })).toEqual([
+      tool,
+      'in.png',
+      '--fake',
+      '--no-table',
+      '--layout',
+    ])
+  })
+
+  it('toMarkdown：ocr 选项透传到 runner（缺省都开；显式 false 才关）', async () => {
+    const seen: Array<{ input: string; table?: boolean; layout?: boolean } | undefined> = []
+    setOcrHooks({
+      available: () => true,
+      run: async (input, options) => {
+        seen.push({ input, ...options })
+        return { ok: true, markdown: '## 第 1 页\n\n正文' }
+      },
+    })
+
+    await toMarkdown(new Uint8Array([1]), 'a.png') // 缺省 → 两者都 true
+    await toMarkdown(new Uint8Array([1]), 'b.png', { ocr: { table: false, layout: false } })
+    await toMarkdown(new Uint8Array([1]), 'c.png', { ocr: { table: false } }) // layout 缺省 true
+
+    expect(seen).toEqual([
+      { input: 'a.png', table: true, layout: true },
+      { input: 'b.png', table: false, layout: false },
+      { input: 'c.png', table: false, layout: true },
+    ])
+  })
+
+  it('可选两件模型就绪判据：只看文件在不在（文件名镜像 setup-ocr/ocr_main）', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'prism-ocr-extra-'))
+    try {
+      expect(ocrTableModelReady(join(dir, 'nope'))).toBe(false)
+      expect(ocrLayoutModelReady(join(dir, 'nope'))).toBe(false)
+      await writeFile(join(dir, OCR_TABLE_MODEL_FILE), 'x')
+      expect(ocrTableModelReady(dir)).toBe(true)
+      expect(ocrLayoutModelReady(dir)).toBe(false)
+      await writeFile(join(dir, OCR_LAYOUT_MODEL_FILE), 'x')
+      expect(ocrLayoutModelReady(dir)).toBe(true)
+      // 核心三件套的「至少三件」判据**不**把这两件算进去（两件不构成 OCR 就绪）
+      expect(ocrModelsReady(dir)).toBe(false)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// v17 B-A4：内嵌图片（anydoc toDocument → assets → OCR → `> [图片 N]` 引用块）
+// ---------------------------------------------------------------------------
+
+const FIXTURES_DIR = fileURLToPath(new URL('../../../3rd/ocr/fixtures/', import.meta.url))
+
+/** 读 fixture 字节；不存在返回 null（生成脚本：python 3rd/ocr/gen_docx_fixtures.py）。 */
+function readFixture(name: string): Uint8Array | null {
+  const path = join(FIXTURES_DIR, name)
+  return existsSync(path) ? new Uint8Array(readFileSync(path)) : null
+}
+
+/** 临时素材目录（实现侧 mkdtemp 前缀）当前条目。 */
+function assetTempEntries(): string[] {
+  return readdirSync(tmpdir()).filter((name) => name.startsWith('prism-ocr-asset-'))
+}
+
+describe('内嵌图片 OCR（v17 B-A4）', () => {
+  it('mediaType 白名单 = png/jpeg/webp，jpeg 落 .jpg（与 OCR_IMAGE_EXTENSIONS 同口径）', () => {
+    expect(EMBEDDED_IMAGE_MEDIA_TYPES).toEqual({
+      'image/png': 'png',
+      'image/jpeg': 'jpg',
+      'image/webp': 'webp',
+    })
+    // 白名单外的 mediaType 一律不在表里（bmp/gif/svg/octet-stream…）
+    for (const outside of ['image/bmp', 'image/gif', 'image/tiff', 'application/octet-stream']) {
+      expect(EMBEDDED_IMAGE_MEDIA_TYPES[outside], outside).toBeUndefined()
+    }
+  })
+
+  it('docx 含图 + OCR 就绪 → alt 整行替换为 `> [图片 N] …`，fake 文本进正文（A4.1）', async (ctx) => {
+    const bytes = readFixture('embed-image.docx')
+    if (bytes === null) return ctx.skip()
+    const calls = useOcr(true, async () => ({
+      ok: true,
+      markdown: '## 第 1 页\n\n内嵌截图识别出的文字',
+    }))
+
+    const result = await toMarkdown(bytes, 'docs/报告.docx')
+
+    expect(result.status).toBe('converted')
+    // 图片的 alt 整行被引用块取代（原 alt 文本行不再单独出现）
+    expect(result.markdown).toContain('> [图片 1] 内嵌截图识别出的文字')
+    expect(result.markdown.split('\n')).not.toContain('内嵌文字截图说明')
+    // 前后正文段落位置不动
+    expect(result.markdown).toBe(
+      '图片上方的一段正文。\n\n> [图片 1] 内嵌截图识别出的文字\n\n图片下方的一段正文。\n',
+    )
+    // 走的是临时文件而不是 docx 本体（OCR 工具只认图片/PDF）
+    expect(calls.length).toBe(1)
+    expect(calls[0].endsWith('.png')).toBe(true)
+    expect(calls[0]).not.toBe('docs/报告.docx')
+    // 内嵌图 OCR 不冒充「正文来自 OCR」（不打 ocr 位，避免误触 SPEC-3.4 守卫）
+    expect(result.ocr).toBeUndefined()
+  })
+
+  it('白名单外 mediaType（image/bmp）→ 跳过，不调 OCR，输出逐字保持 anydoc 原样', async (ctx) => {
+    const bytes = readFixture('embed-nonwhitelist.docx')
+    if (bytes === null) return ctx.skip()
+    const calls = useOcr(true, async () => ({ ok: true, markdown: '不该被调用' }))
+
+    const result = await toMarkdown(bytes, 'docs/bmp.docx')
+
+    expect(result.status).toBe('converted')
+    expect(calls).toEqual([]) // 非白名单 → 整条 assets 路径不碰 OCR
+    expect(result.markdown).toBe('图片上方的一段正文。\n\n内嵌文字截图说明\n\n图片下方的一段正文。\n')
+  })
+
+  it('临时素材目录用后无残留（mkdtemp 必删，R5）', async (ctx) => {
+    const bytes = readFixture('embed-image.docx')
+    if (bytes === null) return ctx.skip()
+    useOcr(true, async () => ({ ok: true, markdown: '## 第 1 页\n\n截图文字' }))
+
+    const before = new Set(assetTempEntries())
+    await toMarkdown(bytes, 'docs/报告.docx')
+    const added = assetTempEntries().filter((name) => !before.has(name))
+    expect(added).toEqual([])
+  })
+
+  it('OCR 未就绪 → 内嵌图路径整条不走，输出与旧（anydoc 原样）逐字一致', async (ctx) => {
+    const bytes = readFixture('embed-image.docx')
+    if (bytes === null) return ctx.skip()
+    const calls = useOcr(false, async () => ({ ok: true, markdown: '不该被调用' }))
+
+    const result = await toMarkdown(bytes, 'docs/报告.docx')
+
+    expect(result.status).toBe('converted')
+    expect(calls).toEqual([])
+    expect(result.markdown).toBe('图片上方的一段正文。\n\n内嵌文字截图说明\n\n图片下方的一段正文。\n')
+  })
+
+  it('单图 OCR 失败 → 保留原 alt 行（整篇转换不失败）', async (ctx) => {
+    const bytes = readFixture('embed-image.docx')
+    if (bytes === null) return ctx.skip()
+    useOcr(true, async () => ({ ok: false, reason: '模型缺失' }))
+
+    const result = await toMarkdown(bytes, 'docs/报告.docx')
+
+    expect(result.status).toBe('converted')
+    expect(result.markdown).toBe('图片上方的一段正文。\n\n内嵌文字截图说明\n\n图片下方的一段正文。\n')
+  })
+
+  it('PDF 走不到 assets 路径（anydoc 对 PDF 无 toDocument，运行时守卫）', async () => {
+    const pdf = imageOnlyPdf()
+    const calls = useOcr(true, async () => ({ ok: true, markdown: '## 第 1 页\n\n扫描件正文' }))
+
+    const result = await toMarkdown(pdf, 'scan.pdf')
+
+    expect(result.status).toBe('converted')
+    expect(result.markdown).toBe('## 第 1 页\n\n扫描件正文')
+    // 只调了一次、且输入是 PDF 本体——没有临时图片文件被送去 OCR
+    expect(calls).toEqual(['scan.pdf'])
+    expect(calls.some((input) => input.endsWith('.png'))).toBe(false)
   })
 })

@@ -21,7 +21,7 @@
 
 | 原则 | 说明 |
 | :--- | :--- |
-| **能力用工具** | 不重造解析器。建图/查询/路径/解释全部调 `graphify` CLI |
+| **能力用工具** | 不重造解析器。建图/查询/解释调 `graphify` CLI；**最短路径是唯一例外**（v17 C-8）——服务端直读 `graph.json` 自求 BFS，见 §4 |
 | **显示用工具页面** | 不重画图谱。控制台 iframe 嵌 Graphify Studio |
 | **产物放项目根目录** | 图谱落 `<项目根>/graphify-out/`（Python 版 graphify 实测） |
 
@@ -84,7 +84,7 @@ Prism 把这些 Graphify 能力包成 MCP 工具：
 | Prism 工具 | 底层命令 | 用途 |
 | :--- | :--- | :--- |
 | `prism_graph_query` | `graphify query "<q>" --graph ...` | 自然语言/BFS 查询 |
-| `prism_graph_path` | `graphify path <a> <b>` | 两节点最短路径 |
+| `prism_graph_path` | **服务端读 `graph.json` + BFS**（v17 C-8；不再调 `graphify path`） | 两节点最短路径；响应含 `chain[{id,label,file,line,ambiguous?}]` |
 | `prism_graph_explain` | `graphify explain <node>` | 节点解释 |
 | `prism_graph_affected` | `graphify affected <node> --graph ...` | 变更影响面 |
 | `prism_graph_summary` | 读 `graph.json` 统计 | 节点/边/社区计数 |
@@ -92,6 +92,21 @@ Prism 把这些 Graphify 能力包成 MCP 工具：
 | `prism_graph_merge` | `graphify merge-graphs <g...> --out ...` | 多项目图谱合并（v5 F-C2；只读/生成型，**无 build 工具**） |
 
 **统一约束**：返回**子图/摘要**，不返回全图（避免爆上下文）。
+
+**v17 C-8：最短路径改由服务端自求（不再 spawn `graphify path`）**。动因：`graphify path` 只回**标签链**
+（`[a, mid, b]`），而节点唯一可寻址的键是 **id**（F5-2 冻结裁决：label 跨文件重名，本仓实测 2340 节点
+只有 2063 个唯一 label）。前端拿标签回查会选错节点，故把路径求解收进服务端：
+
+- 读 `<projectRoot>/graphify-out/graph.json`（**进程内缓存**，失效键 `path+mtime+size`，只缓存 read+parse），
+  建**有向**邻接（邻居按 id 排序去重，保证确定性），BFS 求最短路径；
+- 入参仍是 `from`/`to`（**标签或 id 都可**）：先按 **id 精确命中**，否则按 **norm_label 唯一命中**；
+  标签有歧义时取**图内节点顺序里第一个能落到 BFS 路径上的候选**（歧义端点该跳的 file/line 置空 + `ambiguous:true`，
+  前端置灰）；
+- 响应**新增** `chain: [{ id, label, file, line, ambiguous? }]`：每一跳的 `file`/`line` 取**发出该跳的 calls 边**
+  的 `source_file`/`source_location`（末端节点无发出边 → 两者为空），既有字段（`raw`/`hops`/`found`）**全部保留**；
+- `chain[].id` 可直接回喂 `prism_arch_generate.symbols`（见 `cli-mcp-surface.md §2.3` C-9）。
+- **去留**：子进程封装 `graphPath` 与其单测已**删除**——三面（HTTP/MCP/CLI）全部改走 BFS 后零消费方，
+  留着就是无测试覆盖的死契约面。
 
 ---
 

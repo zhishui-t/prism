@@ -12,6 +12,14 @@ import { toMarkdown, type ConvertResult } from '@prism/knowledge'
 export interface ConvertFileOptions {
   /** 返回正文上限（默认 20 万字符）；超出截断并标 truncated */
   maxChars?: number
+  /**
+   * OCR 表格/版面增强开关（v17 M-2；由 MCP/CLI 面注入 `resolveOcrWiringConfigForHome`
+   * 的结论，与 `scanProject` 的 `ScanOptions.ocr` **同形同义**）。
+   *
+   * `undefined` → 不传（`toMarkdown` 缺省两项都开）；显式 `{table:false,layout:false}`
+   * → 回到「无 table/layout 的旧输出」（SPEC-A1.2/A2.3）。
+   */
+  ocr?: { table: boolean; layout: boolean }
 }
 
 export interface ConvertFileResult extends ConvertResult {
@@ -37,7 +45,8 @@ export async function convertFileToMarkdown(
       reason: error instanceof Error ? error.message : String(error),
     })
   }
-  const result = await toMarkdown(bytes, path)
+  // v17 M-2：与 scan.ts 的 scan 路**逐字段同形**透传（undefined → 不传，回到缺省两者全开）
+  const result = await toMarkdown(bytes, path, options.ocr !== undefined ? { ocr: options.ocr } : {})
   const maxChars = options.maxChars ?? DEFAULT_MAX_CHARS
   if (result.markdown.length > maxChars) {
     return { ...result, path, markdown: result.markdown.slice(0, maxChars), truncated: true }

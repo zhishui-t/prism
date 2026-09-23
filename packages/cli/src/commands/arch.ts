@@ -65,8 +65,9 @@ export async function runArch(ctx: CommandContext, args: string[], values: ArgVa
             `                                          渲染为自包含 HTML；--book/--module 把产物归到书内\n` +
             `  from-team <team_id> [--out <html>] [--book <书>] [--module <模块>]\n` +
             `                                          由团队工作流生成工作流图（IR 是纯函数派生物）\n` +
-            `  from-graph <type> <project> [--out <html>] [--top <组件数>] [--limit <连接数>]\n` +
+            `  from-graph <type> <project> [--out <html>] [--top <组件数>] [--limit <连接数>] [--symbols <id,id,…>]\n` +
             `                                          由代码图谱生成 architecture|sequence|dataflow\n` +
+            `                                          （--symbols 仅 sequence：按链的相邻对出消息，id 取自 prism graph path 的 chain[].id）\n` +
             `                                          （缺省落 <projectRoot>/.prism/arch/<type>/，--out 完全接管）\n` +
             `  from-state [--out <html>] [--title <标题>]\n` +
             `                                          由 Prism 任务状态机生成生命周期图`,
@@ -347,6 +348,21 @@ async function archFromGraph(ctx: CommandContext, args: string[], values: ArgVal
   const top = values.top !== undefined ? Number(values.top) : undefined
   const limit = values.limit !== undefined ? Number(values.limit) : undefined
   const title = values.title !== undefined ? String(values.title) : `${project} · ${ARCHIFY_TYPE_LABELS[type]}`
+  /**
+   * v17 C-9：`--symbols <id,id,...>` = 链上**节点 id**（取自 `prism graph path --json` 的
+   * `chain[].id`）→ 时序图按**相邻对**构（只取链内边）。只对 `sequence` 有意义。
+   */
+  const symbols =
+    values.symbols !== undefined
+      ? String(values.symbols)
+          .split(',')
+          .map((item) => item.trim())
+          .filter((item) => item !== '')
+      : []
+  if (symbols.length > 0 && type !== 'sequence') {
+    ctx.stderr(`错误 [bad_request] --symbols 只对 sequence 有意义（收到 type=${type}）`)
+    return 1
+  }
 
   let ir: unknown
   try {
@@ -359,6 +375,7 @@ async function archFromGraph(ctx: CommandContext, args: string[], values: ArgVal
     } else if (type === 'sequence') {
       ir = buildSequenceIr(graph, {
         title,
+        ...(symbols.length > 0 ? { symbols } : {}),
         ...(top !== undefined ? { maxParticipants: top } : {}),
         ...(limit !== undefined ? { maxMessages: limit } : {}),
       })

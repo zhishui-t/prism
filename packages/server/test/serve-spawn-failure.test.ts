@@ -33,7 +33,10 @@ import {
   type ServeLaunchHandle,
 } from '../src/serve-control.js'
 
-// ⚠ 临时目录**不要**用 `prism-` 前缀：vitest 的 tmp 回收器会把 tmpdir 下的 `prism-*` 一并清掉。
+// 临时目录前缀说明（C-10⑤ 反注更正）：global-tmp-reaper（vitest globalSetup）在 setup 时给
+// `tmpdir()/prism-*` 拍**基线快照**，teardown 只删**本轮新增**的条目（已存在的绝不碰），且发生在
+// 全部测试跑完之后——**不会在跑测途中断掉本轮目录**。故 `prism-` 前缀其实可被自动回收，并无
+// 「被一并清掉」之虞；本文件仍用独立前缀（便于人工分辨）+ afterAll 自行清理。
 const cleanup: string[] = []
 
 async function tempHome(): Promise<string> {
@@ -343,5 +346,59 @@ describe('SPEC-1.2/1.3 补充：真 spawn 集成口（defaultLaunch 的句柄层
     await new Promise((resolve) => setTimeout(resolve, 1_200))
     expect(handle.failure).toBeUndefined()
     expect(launchErrorLines(home, port)).toHaveLength(0)
+  }, 20_000)
+})
+
+describe('C-10④⑨ defaultLaunch 句柄层边界：日志 fd 打不开 / spawn 同步抛', () => {
+  it('C-10④ 日志 fd 打不开（<home>/state 不存在）→ 同步判失败、不 spawn、无 fd 可收口', async () => {
+    const home = await tempHome() // 故意不建 state/ 子目录 → openSync ENOENT
+    const port = await freePort()
+
+    const handle = defaultLaunch(home, port)(backgroundServeArgv(home, '127.0.0.1', port))
+
+    expect(handle.failure).toBeInstanceOf(Error)
+    expect(handle.failure?.message).toContain('ENOENT')
+    expect(handle.pid).toBeUndefined() // 未走到 spawn
+    expect(handle.dispose).toBeUndefined() // 未打开 fd → 无收口函数
+  }, 20_000)
+
+  it('C-10⑨ spawn 同步抛（空 command）→ 收口日志 fd 并走 failure 通道（不外抛）', async () => {
+    const home = await tempHome()
+    const port = await freePort()
+    mkdirSync(join(home, 'state'), { recursive: true })
+
+    // 空 command → node spawn 同步抛（ERR_INVALID_ARG_VALUE，不产生子进程）；修前该异常会逃出
+    // launcher（跳过 ensureServe 的 dispose）→ 已 openSync 的日志 fd 泄漏。
+    const handle = defaultLaunch(home, port, '')(backgroundServeArgv(home, '127.0.0.1', port))
+
+    expect(handle.pid).toBeUndefined()
+    expect(handle.failure).toBeInstanceOf(Error)
+    expect(handle.failure?.message).toContain('spawn 同步失败')
+    expect(handle.failure?.message).toContain('cannot be empty')
+
+    // 记账走同一条 appendLaunchError：日志里恰一行，含原因
+    const lines = launchErrorLines(home, port)
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toContain('[prism-launch-error] spawn 同步失败')
+    expect(lines[0]).toContain('cannot be empty')
+
+    // fd 已收口：dispose 再调不抛（幂等，不会因二次 close 炸 EBADF）
+    expect(() => handle.dispose?.()).not.toThrow()
+  }, 20_000)
+
+  it('C-10⑨ 集成：ensureServe 经 defaultLaunch 命中同步抛 → 快抛 spawn_failed（带日志路径）', async () => {
+    const home = await tempHome()
+    const port = await freePort()
+    const startedAt = Date.now()
+
+    const error = await failureOf(
+      ensureServe({ home, host: '127.0.0.1', port, waitMs: 30_000, launch: defaultLaunch(home, port, '') }),
+    )
+
+    expect(error.message).toContain('spawn_failed')
+    expect(error.message).toContain('spawn 同步失败')
+    expect(error.message).toContain(serveLogPath(home, port)) // 报错要能指到日志
+    expect(existsSync(serveStatePath(home, port))).toBe(false) // 失败路径不留「已启动」记录
+    expect(Date.now() - startedAt).toBeLessThan(5_000)
   }, 20_000)
 })

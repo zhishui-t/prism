@@ -19,6 +19,7 @@ import { EMBEDDING_MODELS, EMBEDDING_TIERS, RERANK_MODELS } from '../src/kb/embe
 import type { EmbeddingTier } from '../src/kb/embedding-models.js'
 import {
   CHUNK_MIN_CHARS,
+  DEFAULT_EMBED_BATCH,
   DEFAULT_VECTOR_SCAN_CAP,
   loadKnowledgeService,
   parseGraphFusion,
@@ -26,6 +27,8 @@ import {
   parseRerankEnabled,
   prismConfigValue,
   resolveChunkMaxChars,
+  resolveEmbedBatch,
+  resolveEmbedBatchForHome,
   resolveGraphFusionConfigForHome,
   resolveKbWiringConfig,
   resolveRerankConfigForHome,
@@ -225,6 +228,38 @@ describe('rerank 扁平键（v14 §1.1；SPEC-1.2/1.3/1.5/1.7）', () => {
     expect(on.tier).toBe('cpu')
     // 未装 → false；装了才算真启用（本仓测试环境没下过 rerank 档模型）
     expect(on.enabled).toBe(rerankInstalled())
+  })
+})
+
+describe('embed_batch 扁平键（v17 §B-5，缺省 8）', () => {
+  it('缺省 / 空串 / 纯空白 → 8（不告警）', () => {
+    expect(DEFAULT_EMBED_BATCH).toBe(8)
+    for (const raw of [undefined, '', '   ']) {
+      const warnings: string[] = []
+      expect(resolveEmbedBatch(raw, warnings)).toBe(8)
+      expect(warnings).toEqual([])
+    }
+  })
+
+  it('合法值透传（小数向下取整）；1 合法（等于单口批）', () => {
+    expect(resolveEmbedBatch('3')).toBe(3)
+    expect(resolveEmbedBatch('16')).toBe(16)
+    expect(resolveEmbedBatch('8.9')).toBe(8)
+    expect(resolveEmbedBatch('1')).toBe(1)
+  })
+
+  it('非法（abc / 0 / -1）→ 告警 + 回落 8', () => {
+    const warnings: string[] = []
+    for (const raw of ['abc', '0', '-1']) expect(resolveEmbedBatch(raw, warnings)).toBe(8)
+    expect(warnings).toHaveLength(3)
+    for (const w of warnings) expect(w).toContain('embed_batch')
+  })
+
+  it('resolveEmbedBatchForHome：写键真被读到；缺文件恒 8', async () => {
+    const home = await makeTempDir('prism-kb-embed-batch-')
+    expect(resolveEmbedBatchForHome(home)).toBe(8)
+    await putFile(join(home, 'prism.yaml'), 'embed_batch: 4\n')
+    expect(resolveEmbedBatchForHome(home)).toBe(4)
   })
 })
 

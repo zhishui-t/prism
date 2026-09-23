@@ -264,6 +264,15 @@ export interface ScanOptions {
   maxFileBytes?: number
   /** 最多扫描文件数（护栏），默认 2000 */
   maxFiles?: number
+  /**
+   * **OCR 表格 / 版面增强开关**（v17 B-A1；缺省 `undefined` = 都开）。
+   *
+   * 由调用方（CLI `kb sync` / MCP `prism_kb_import`）经
+   * `resolveOcrWiringConfigForHome(home)` 解析后传入——`{ table:false, layout:false }`
+   * 即逐字节回到「无 table/layout 的旧输出」（SPEC-A1.2/A2.3）。本模块**不读配置**：
+   * 保持扫描器对文件系统/宿主零耦合，也让测试可用显式值（R5/确定性）。
+   */
+  ocr?: { table: boolean; layout: boolean }
 }
 
 export interface ScannedFile {
@@ -651,7 +660,12 @@ export async function scanProject(kb: KnowledgeService, options: ScanOptions): P
       ocrReady && (OCR_SCAN_EXTENSIONS as readonly string[]).includes(extensionOf(abs))
     if (isSupported(abs) || ocrImage) {
       const { toMarkdown } = await import('@prism/knowledge')
-      const converted = await toMarkdown(bytes, abs)
+      // v17 B-A1：把表格/版面开关透传给 OCR（undefined → toMarkdown 缺省两者都开）
+      const converted = await toMarkdown(
+        bytes,
+        abs,
+        options.ocr !== undefined ? { ocr: options.ocr } : {},
+      )
       if (converted.status !== 'text' && converted.status !== 'converted') {
         report.skipped++
         bumpSkip(converted.status === 'needs_ocr' ? SKIP_REASONS.needsOcr : SKIP_REASONS.convertFailed)

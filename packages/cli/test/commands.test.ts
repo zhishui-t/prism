@@ -132,8 +132,10 @@ describe('CLI 命令（注入真实知识服务 / 假 graphify）', () => {
     expect(output).toMatch(/ (ok|FAIL) +rerank +—/)
     // v14 SPEC-4.2：第三行 ocr——判据由 knowledge 侧给（onnx 件数 + pip 依赖），
     // 故断言「行在 + 两个分量都可判」，不断言本机装没装（那是环境事实）
+    // v17 §A-0：加了表格/版面两件可选模型后，「N/3」会显示成「5/3」误导 →
+    // 改成「模型目录 N 件（核心 …≥3）」，故这里只断「件数可读」+ 目录。
     expect(output).toMatch(/ (ok|FAIL) +ocr +—/)
-    expect(output).toMatch(/模型 \d+\/3 件/)
+    expect(output).toMatch(/模型目录 \d+ 件/)
     expect(output).toMatch(/3rd[\\/]ocr[\\/]models/)
     expect(output).toContain('全部通过')
   })

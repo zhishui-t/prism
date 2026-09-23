@@ -115,6 +115,13 @@ PRISM_PYTHON=/usr/local/bin/python3.11 prism graph build <proj>
 > 也就是说 Intel **硬件**支持 Metal（实测 `system_profiler` 报 `Metal Support: Metal 3`），
 > 但官方**预编译包**没编进去。Intel Mac 想要 Metal 只能 `pnpm run 3rd:setup -- --source`（源码编译时本脚本会传 `-DGGML_METAL=ON`）。
 
+> **真机验证状态（2026-09-23 注记）**：**Windows 已实测**——本机即 Windows，多轮开发与验证
+> （建图 / 向量检索 / OCR / `pnpm 3rd:check`）均在此跑通。**macOS 仅结构级**——平台判定
+> （`resolveAccelBackend()` / `SERVER_BIN` / `GPU_DIRS`）、路径解析（`resolveManifestPath`）、
+> Python 解释器三处镜像、软链重建（`copyLink`）都有单测或合成归档断言，但 **mac 真机端到端未跑**
+> （本机无 mac 环境）。**待用户在 mac 机执行 `pnpm 3rd:check` 补记**（自检首行打印 `darwin/<arch>`
+> 与选中的 Python 解释器，见 §3.1）。
+
 ---
 
 ## 6. 待确认项

@@ -306,6 +306,16 @@ const BASE = `http://127.0.0.1:${EMBEDDING_PORT}`
 const START_TIMEOUT_MS = 60_000
 
 /**
+ * 批大小缺省值（v17 §B-5，扁平键 `embed_batch`）。
+ *
+ * **为什么是 8 而非 SPEC 旧值 16**（`v17-recon-embed.md` §4①，队长口径覆盖 spec）：
+ * GPU 实测「批 4（1.18×）稳定快于批 16（1.12×）」，主表与冷语料对照组**两次复现**；
+ * 批 8 处于两者之间（1.14×）而单请求响应体更小。绝对差约 5%——是优化不是纠错，
+ * 故取 4–8 区间的 8 作缺省。**单一真相源在此**（wiring 侧 re-export，勿另立默认）。
+ */
+export const DEFAULT_EMBED_BATCH = 8
+
+/**
  * @deprecated 用 `activeModel().dim`（分档后维度随模型变）。保留仅为兼容旧引用。
  */
 export const EMBEDDING_DIM = EMBEDDING_MODELS.default.dim
@@ -551,12 +561,44 @@ export interface EmbedText {
 }
 
 /**
+ * 可注入的 fetch（**测试缝**，同 rerank 的 `setRerankFetch`）：注入后 `embedOnce` /
+ * `embedBatchOnce` 都不碰真实端点、不起子进程。生产缺省走全局 fetch。
+ */
+export type EmbeddingFetch = (input: string, init?: RequestInit) => Promise<Response>
+
+let embeddingFetch: EmbeddingFetch | undefined
+
+/** 注入/清除 embedding 的 fetch（传 null 恢复全局 fetch）。 */
+export function setEmbeddingFetch(impl: EmbeddingFetch | null): void {
+  embeddingFetch = impl ?? undefined
+}
+
+function activeEmbeddingFetch(): EmbeddingFetch {
+  return embeddingFetch ?? ((input, init) => fetch(input, init))
+}
+
+/**
+ * 「输入超上下文」类错误判据（`embedText` 自适应减半重试的开关）。
+ *
+ * 真实文案（B-R 实测 llama-server b10883，HTTP 400）：
+ * `{"error":{"message":"request (5768 tokens) exceeds the available context size (2048 tokens),
+ *  try increasing it","type":"exceed_context_size_error",...}}`。
+ *
+ * 早先判据是 `/too large|batch/i`——**不命中**该文案（B-R 实测 `false`），于是「逐次减半
+ * 重试」是死代码（潜伏缺陷：正常路径 1500 字 < ctx 触发不到，但超长段会直接 `ok:false`）。
+ * 这里补上真实形态；保留 `too large|batch` 兼容旧构建的其他文案。
+ */
+function isOverContextError(message: string): boolean {
+  return /too large|batch|exceeds the available context size|exceed_context_size/i.test(message)
+}
+
+/**
  * 发一次 /embedding；返回 200 的向量或错误信号。**维度由调用方校验**（随模型档位变）。
  */
 async function embedOnce(
   input: string,
 ): Promise<{ ok: true; vector: number[] } | { ok: false; status: number; message: string }> {
-  const res = await fetch(`${BASE}/embedding`, {
+  const res = await activeEmbeddingFetch()(`${BASE}/embedding`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ input }),
@@ -582,14 +624,154 @@ async function embedOnce(
 }
 
 /**
+ * 批请求客户端超时（v17 §B-5，B-R 回填公式）：
+ * `clamp(3000 + 800 × n, 5000, 120000)` ms。
+ *
+ * 依据（`v17-recon-embed.md` §4③）：单段最坏计算量 ~210 ms（1500 字 ≈ 1092 tok × 0.19 ms/tok），
+ * `800 ms/段` 是它的 ~3.8×（覆盖宿主负载/热降频/并发检索抢占）；`3000 ms` 基座覆盖冷启动
+ * 实测 1216 ms + 大响应体（批 16 ≈ 350 KB JSON）+ 队列余量。n=16 → 15.8 s（实测典型 1.84 s
+ * 的 8.6×）。**单口维持现状 120 s 不动**。
+ */
+export function batchTimeoutMs(n: number): number {
+  const size = Number.isFinite(n) && n > 0 ? Math.floor(n) : 1
+  return Math.min(120_000, Math.max(5_000, 3_000 + 800 * size))
+}
+
+/**
+ * 一次 `/embedding {input: string[]}`（批量形态实测：顶层数组、元素带 `index`、按序返回）。
+ * 返回**按 `index` 回填后与入参同序**的向量数组（未拿到向量的位为 `null`）；
+ * 整请求非 200 / 响应形态不符 → 返回 `null`（由调用方决定「全部逐条重试」）。
+ */
+async function embedBatchOnce(
+  inputs: readonly string[],
+  timeoutMs: number,
+): Promise<Array<number[] | null> | null> {
+  const res = await activeEmbeddingFetch()(`${BASE}/embedding`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ input: inputs }),
+    signal: AbortSignal.timeout(timeoutMs),
+  })
+  if (!res.ok) return null
+  const data = (await res.json()) as unknown
+  if (!Array.isArray(data)) return null
+  const out: Array<number[] | null> = inputs.map(() => null)
+  for (const el of data) {
+    if (typeof el !== 'object' || el === null) continue
+    const rec = el as { index?: unknown; embedding?: number[] | number[][] }
+    const index = typeof rec.index === 'number' && Number.isInteger(rec.index) ? rec.index : null
+    const e = rec.embedding
+    const vec = Array.isArray(e?.[0]) ? (e as number[][])[0] : (e as number[] | undefined)
+    if (index === null || index < 0 || index >= out.length || !Array.isArray(vec)) continue
+    out[index] = vec
+  }
+  return out
+}
+
+/**
+ * 单条嵌入的**核心**（守卫之后）：先按档位上限截断发一次，超 ctx 类错误则逐次减半重试，
+ * 最后校验维度。返回向量或错误串（`embedText` 与批口逐条回落共用，避免两处口径漂移）。
+ */
+async function embedSingleCore(
+  text: string,
+  def: EmbeddingModelDef,
+): Promise<{ ok: true; vector: Float32Array } | { ok: false; error: string }> {
+  let limit = Math.min(text.length, def.maxChars)
+  let lastError = 'unknown'
+  for (let attempt = 0; attempt < 5 && limit > 0; attempt++) {
+    const result = await embedOnce(text.slice(0, limit))
+    if (result.ok) {
+      if (result.vector.length !== def.dim) {
+        return { ok: false, error: `embedding 维度异常（${result.vector.length} ≠ ${def.dim}，档位 ${def.tier}）` }
+      }
+      return { ok: true, vector: Float32Array.from(result.vector) }
+    }
+    lastError = result.message || `HTTP ${result.status}`
+    // 只对「输入过大」类错误重试；其它错误（如 400 参数错）无意义
+    if (!isOverContextError(lastError)) break
+    limit = Math.floor(limit / 2)
+  }
+  return { ok: false, error: lastError }
+}
+
+/**
+ * **纯调用层**：批量嵌入（不判门控、不拉服务——范本 `callRerank`，测试缝在此）。
+ *
+ * 契约（v17 §B-5，队长口径）：
+ * - 按 `batchSize` 切批，每批一次 `/embedding input: string[]`；**结果与入参等长且同序**；
+ * - 任一整批失败（llama-server 任一段超 ctx → 整请求 400、错误体无段序号）→ **该批全部
+ *   逐条重试**（一轮，不递归；最坏 1+n 次请求——设计声明接受）；单条仍败 → 该位 `null`；
+ * - 逐条回落到 `embedSingleCore`（含截断/减半/维度校验），故超长段在单条路可自愈。
+ *
+ * `def` 缺省取 `activeModel()`（读 env/配置，不碰文件系统与网络）；测试可显式传入。
+ */
+export async function callEmbedBatch(
+  texts: readonly string[],
+  batchSize: number,
+  def: EmbeddingModelDef = activeModel(),
+): Promise<(Float32Array | null)[]> {
+  if (texts.length === 0) return []
+  const size = Number.isFinite(batchSize) && batchSize > 0 ? Math.floor(batchSize) : DEFAULT_EMBED_BATCH
+  const prepared = texts.map((text) => text.slice(0, def.maxChars))
+  const out: (Float32Array | null)[] = []
+  for (let i = 0; i < prepared.length; i += size) {
+    const batch = prepared.slice(i, i + size)
+    let batched: Array<number[] | null> | null
+    try {
+      batched = await embedBatchOnce(batch, batchTimeoutMs(batch.length))
+    } catch {
+      batched = null
+    }
+    if (batched !== null && batched.length === batch.length) {
+      for (const vec of batched) {
+        if (vec === null || vec.length !== def.dim) {
+          out.push(null)
+          continue
+        }
+        out.push(Float32Array.from(vec))
+      }
+      continue
+    }
+    // 整批失败 → 该批**全部逐条重试**（只一轮，不递归）
+    for (const text of batch) {
+      let vec: Float32Array | null = null
+      try {
+        const single = await embedSingleCore(text, def)
+        vec = single.ok ? single.vector : null
+      } catch {
+        vec = null
+      }
+      out.push(vec)
+    }
+  }
+  return out
+}
+
+/**
+ * 批量文本 → 向量数组（**门控 + 委托 `callEmbedBatch`**）。
+ *
+ * 未安装 / 服务未就绪 → 与单口同口径：**不抛**，全位 `null`（调用方跳过，纯 BM25 降级）。
+ * 超时按批大小派生（`batchTimeoutMs`）；批大小缺省 `DEFAULT_EMBED_BATCH`。
+ */
+export async function embedBatchText(
+  texts: readonly string[],
+  batchSize: number = DEFAULT_EMBED_BATCH,
+): Promise<(Float32Array | null)[]> {
+  if (texts.length === 0) return []
+  if (!embeddingInstalled()) return texts.map(() => null)
+  if (!(await ensureEmbeddingServer())) return texts.map(() => null)
+  return callEmbedBatch(texts, batchSize)
+}
+
+/**
  * 单条文本 → 向量。**未安装/启动失败返回 ok:false**（调用方降级，不抛）。
  *
  * 长度上限取自当前档位模型定义（`activeModel().maxChars`）：CPU 档小、GPU 档大，
  * 各按自己的算力取「够用且不拖垮推理槽」的值。
  *
- * 自适应长度：先按上限截断发一次；若服务端仍报「input too large」（batch 比预期小
- * 的构建、或 token 比预估更密），**逐次减半重试**，绝不因超长硬失败——宁可嵌入前半
- * 段文本，也不让整条知识缺向量。
+ * 自适应长度：先按上限截断发一次；若服务端仍报「输入超上下文」（`exceeds the available
+ * context size`——B-R 实测的真实文案，判据见 `isOverContextError`），**逐次减半重试**，
+ * 绝不因超长硬失败——宁可嵌入前半段文本，也不让整条知识缺向量。
  */
 export async function embedText(text: string): Promise<EmbedText> {
   if (!embeddingInstalled()) {
@@ -603,24 +785,9 @@ export async function embedText(text: string): Promise<EmbedText> {
       error: `embedding 服务未就绪（档位模型缺失，或 llama-server 未能启动；日志：${SERVER_LOG}）`,
     }
   }
-  const def = activeModel()
   try {
-    let limit = Math.min(text.length, def.maxChars)
-    let lastError = 'unknown'
-    for (let attempt = 0; attempt < 5 && limit > 0; attempt++) {
-      const result = await embedOnce(text.slice(0, limit))
-      if (result.ok) {
-        if (result.vector.length !== def.dim) {
-          return { ok: false, error: `embedding 维度异常（${result.vector.length} ≠ ${def.dim}，档位 ${def.tier}）` }
-        }
-        return { ok: true, vector: Float32Array.from(result.vector) }
-      }
-      lastError = result.message || `HTTP ${result.status}`
-      // 只对「输入过大」类错误重试；其它错误（如 400 参数错）无意义
-      if (!/too large|batch/i.test(lastError)) break
-      limit = Math.floor(limit / 2)
-    }
-    return { ok: false, error: lastError }
+    const result = await embedSingleCore(text, activeModel())
+    return result.ok ? { ok: true, vector: result.vector } : { ok: false, error: result.error }
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) }
   }

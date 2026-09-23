@@ -268,6 +268,141 @@ describe('arch/graph-ir：sequence', () => {
   })
 })
 
+// ===== sequence：符号链口径（v17 C-9） =====
+
+/**
+ * 6 跳（7 节点）符号链 `s0 → … → s6`，**外加一条 s0 → s3 的链外 calls 边**。
+ *
+ * 那条链外边是判定「IR 是否按**相邻对**构」的试纸：file 口径的 `inSet` 只要求两端在
+ * 参与者集合里（s0/s3 都在），会把它画成第 7 条消息；符号链口径必须**不画**。
+ */
+function makeChainGraph(): CodeGraph {
+  const nodes: Array<Record<string, unknown>> = []
+  for (let i = 0; i < 7; i += 1) {
+    nodes.push({
+      id: `s${i}`,
+      label: `step${i}`,
+      source_file: `proj/src/mod${i}/step${i}.ts`,
+      community: i,
+    })
+  }
+  const links: Array<Record<string, unknown>> = []
+  for (let i = 0; i + 1 < 7; i += 1) {
+    links.push({
+      source: `s${i}`,
+      target: `s${i + 1}`,
+      relation: 'calls',
+      source_file: `proj/src/mod${i}/step${i}.ts`,
+      source_location: `L${10 + i}`,
+    })
+  }
+  links.push({
+    source: 's0',
+    target: 's3',
+    relation: 'calls',
+    source_file: 'proj/src/mod0/step0.ts',
+    source_location: 'L99',
+  })
+  return { nodes: nodes as never, links: links as never }
+}
+
+/** 链上有两处落地不了的相邻对：`b → c` 无边；`c → d` 有边但**无 file/line**。 */
+function makeUnlandableChainGraph(): CodeGraph {
+  return {
+    nodes: [
+      { id: 'a', label: 'Alpha', source_file: 'proj/src/a/alpha.ts' },
+      { id: 'b', label: 'Bravo', source_file: 'proj/src/b/bravo.ts' },
+      { id: 'c', label: 'Charlie', source_file: 'proj/src/c/charlie.ts' },
+      { id: 'd', label: 'Delta', source_file: 'proj/src/d/delta.ts' },
+    ],
+    links: [
+      { source: 'a', target: 'b', relation: 'calls', source_file: 'proj/src/a/alpha.ts', source_location: 'L7' },
+      { source: 'c', target: 'd', relation: 'calls' },
+    ],
+  }
+}
+
+describe('arch/graph-ir：sequence 符号链口径（symbols）', () => {
+  const symbols = ['s0', 's1', 's2', 's3', 's4', 's5', 's6']
+  const ir = buildSequenceIr(makeChainGraph(), { title: '符号链', symbols })
+
+  it('C9.1：6 跳 → 7 参与者 + 6 条消息（链外的 s0→s3 不进图）', () => {
+    expect(ir.participants).toHaveLength(7)
+    expect(ir.messages).toHaveLength(6)
+    expect(ir.messages.map((message) => message.id)).toEqual(['m1', 'm2', 'm3', 'm4', 'm5', 'm6'])
+    // 相邻对逐条对上：participants[i] → participants[i+1]
+    for (let i = 0; i < 6; i += 1) {
+      expect(ir.messages[i]!.from).toBe(ir.participants[i]!.id)
+      expect(ir.messages[i]!.to).toBe(ir.participants[i + 1]!.id)
+    }
+    // 消息文案取被调用符号名
+    expect(ir.messages.map((message) => message.label)).toEqual([
+      'step1', 'step2', 'step3', 'step4', 'step5', 'step6',
+    ])
+    // 链外边 s0→s3 不在消息里（file 口径的 inSet 会把这条画进去）
+    const pairs = ir.messages.map((message) => `${message.from}>${message.to}`)
+    expect(pairs).not.toContain(`${ir.participants[0]!.id}>${ir.participants[3]!.id}`)
+  })
+
+  it('参与者是**符号**（第二行标出其所在文件）且文本受渲染器口径约束', () => {
+    expect(ir.participants.map((participant) => participant.label)).toEqual([
+      'step0', 'step1', 'step2', 'step3', 'step4', 'step5', 'step6',
+    ])
+    for (const [index, participant] of ir.participants.entries()) {
+      // 第二行 = 该符号所在文件（超 21 单位走中间截断，故只断言前缀）
+      expect(participant.sublabel).toContain(`proj/src/mod${index}`)
+      expect(textUnits(participant.label)).toBeLessThanOrEqual(13)
+      expect(textUnits(participant.sublabel!)).toBeLessThanOrEqual(21)
+    }
+    expect(ir.meta.subtitle).toContain('符号链导出（7 参与者 / 6 条相邻对消息）')
+    // 没有跳被略去时**不**写那句标注
+    expect(ir.meta.subtitle).not.toContain('被略去')
+  })
+
+  it('viewBox 自算不变（7 参与者 → 920×760 起）', () => {
+    expect(ir.meta.viewBox).toEqual([920, 760])
+    for (const message of ir.messages) {
+      expect(message.y).toBeGreaterThanOrEqual(160)
+      expect(message.y).toBeLessThanOrEqual(ir.meta.viewBox![1] - 83)
+    }
+  })
+
+  it('落地不了的相邻对 → 跳过该消息并在 subtitle 标注条数（导出侧标注惯例）', () => {
+    const chain = buildSequenceIr(makeUnlandableChainGraph(), {
+      title: '断链',
+      symbols: ['a', 'b', 'c', 'd'],
+    })
+    expect(chain.participants).toHaveLength(4)
+    expect(chain.messages).toHaveLength(1) // 只有 a→b 落地
+    expect(chain.messages[0]!.from).toBe(chain.participants[0]!.id)
+    expect(chain.messages[0]!.to).toBe(chain.participants[1]!.id)
+    expect(chain.meta.subtitle).toContain('2 跳因无该方向的边或边无 file:line 被略去')
+  })
+
+  it('`symbols: []` / 不传 = 现行为（回 file 口径，逐字节一致）', () => {
+    const legacy = buildSequenceIr(makeGraph(), { title: '合成时序' })
+    expect(JSON.stringify(buildSequenceIr(makeGraph(), { title: '合成时序', symbols: [] }))).toBe(
+      JSON.stringify(legacy),
+    )
+    expect(JSON.stringify(buildSequenceIr(makeGraph(), { title: '合成时序', symbols: undefined }))).toBe(
+      JSON.stringify(legacy),
+    )
+  })
+
+  it('数据不足时明确报错而不是造图：id 不在图内 / 参与者不足 2 个', () => {
+    expect(() =>
+      buildSequenceIr(makeChainGraph(), { title: 'x', symbols: ['s0', 'ghost'] }),
+    ).toThrow(/不存在/)
+    expect(() => buildSequenceIr(makeChainGraph(), { title: 'x', symbols: ['s0'] })).toThrow(/至少需要 2 个/)
+  })
+
+  it('同输入同字节（纯函数：sidecar 的 ir_hash 才有意义）', () => {
+    expect(JSON.stringify(buildSequenceIr(makeChainGraph(), { title: '符号链', symbols }))).toBe(
+      JSON.stringify(ir),
+    )
+  })
+})
+
 // ===== dataflow =====
 
 describe('arch/graph-ir：dataflow（依赖流向口径）', () => {

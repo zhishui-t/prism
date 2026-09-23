@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
 
+import { splitFrontmatter } from '../src/frontmatter.js'
 import {
   mapWorkflowColumns,
   parseTeamMarkdown,
@@ -266,7 +267,21 @@ describe('parseWorkflowSection：行级降级全函数不抛（R-v11-5/6）', ()
       'workflow_order_defaulted',
       'workflow_role_cell_invalid',
     ])
-    expect(result.issues.every((i) => typeof i.line === 'number')).toBe(true)
+    // C-10①：issue **行号直接断言**（按整份文件计；3=ragged 行、4=实例记号行——见 fixture）。
+    expect(result.issues.map((i) => i.line)).toEqual([17, 17, 18, 19])
+  })
+
+  it('C-10① 行号基准：整份 markdown 与「正文 + 显式 baseLine」两种入参 issue 行号逐条一致', () => {
+    const md = fixture('ragged-order.md')
+    const { body } = splitFrontmatter(md)
+    // body 首行 = 整份文件第 9 行 → baseLine = 8（同 locateBody 的内部推算）
+    const fromFull = parseWorkflowSection(md)
+    const fromBody = parseWorkflowSection(body, { baseLine: 8 })
+
+    const shape = (r: ReturnType<typeof parseWorkflowSection>): Array<[string, number]> =>
+      r.issues.map((i) => [i.code, i.line as number])
+    expect(shape(fromFull)).toEqual(shape(fromBody))
+    expect(fromFull.issues.map((i) => i.line)).toEqual([17, 17, 18, 19])
   })
 
   it('parseWorkflowTable 签名与返回值不变（body + baseLine → WorkflowStage[]）', () => {

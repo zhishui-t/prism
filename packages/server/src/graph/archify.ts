@@ -417,13 +417,28 @@ export function irHash(ir: unknown): string {
   return createHash('sha256').update(JSON.stringify(ir)).digest('hex').slice(0, 16)
 }
 
-/** 从 IR 里尽力取 `meta.title`（五类图都有该字段）。 */
-export function irTitle(ir: unknown): string | undefined {
+/** 从 IR 里尽力取 `meta.<key>` 的非空字符串（五类图都有 `meta`；缺省/非法 → undefined）。 */
+function irMetaString(ir: unknown, key: 'title' | 'subtitle'): string | undefined {
   if (typeof ir !== 'object' || ir === null) return undefined
   const meta = (ir as Record<string, unknown>)['meta']
   if (typeof meta !== 'object' || meta === null) return undefined
-  const title = (meta as Record<string, unknown>)['title']
-  return typeof title === 'string' && title.trim() !== '' ? title.trim() : undefined
+  const value = (meta as Record<string, unknown>)[key]
+  return typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined
+}
+
+/** 从 IR 里尽力取 `meta.title`（五类图都有该字段）。 */
+export function irTitle(ir: unknown): string | undefined {
+  return irMetaString(ir, 'title')
+}
+
+/**
+ * 从 IR 里尽力取 `meta.subtitle`（图注：真实计数 / 口径自陈）。
+ *
+ * **单一真相源**：MCP `prism_arch_generate` 与 HTTP `POST /api/arch/render`
+ * （`mode: 'from-graph'`）的下发都经此函数——两处各写一遍取值必然漂移（本仓 R6 教训）。
+ */
+export function irSubtitle(ir: unknown): string | undefined {
+  return irMetaString(ir, 'subtitle')
 }
 
 /** 写产物 sidecar 元数据（渲染后调用）。 */

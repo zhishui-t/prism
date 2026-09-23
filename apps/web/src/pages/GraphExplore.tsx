@@ -14,9 +14,10 @@
  * 3. **只有 file 卡片能「查此节点」**：`dir`/`community` 的 id 是合成 id
  *    （`dir:<路径>` / `community:<n>`），拿去四模式查询必然 404；`symbol` 层的 id 才是真实
  *    图谱节点 id。`onPickSymbol` 收到的是**真实 id**，切到查询态发四模式查询。
- * 4. **截断不假装能拉回**：服务端没有分页参数（500 条硬上限 + `symbol_count` 降序），
- *    `truncated` 的余量**取不回来**。故「更多」只做**已取回数据**的客户端分页，
- *    另出一条如实说明（`total` + 已返回条数）——不把「更多」画成能拉到全部。
+ * 4. **截断的真分页（v17 B-7）**：单层超 500 条时服务端给不透明 `next_cursor`，用
+ *    `?cursor=` 取次页；本文件把新页**并进已取回的层**（`mergeRollupPage`），跨页边随
+ *    次页补齐。图重建（游标内嵌的图版本键变）→ 服务端 409 `stale_cursor`：那时**丢弃本层
+ *    已取回的页、回第一页重查**（`more` 的 409 分支），绝不把它当普通错误报给用户。
  *
  * 零新增颜色 / 零 inline 样式：全部走 `styles.css` 的 `.explore-*` / `.crumb*` 一族
  * （复用 `.list-row` / `.tool-btn` / `.seg` / `.mono` / `.small` / `.muted` 既有件）。
@@ -35,7 +36,10 @@ import {
   currentCrumb,
   drillTarget,
   edgeTotals,
+  isStaleCursorError,
   maxEdgeWeight,
+  mergeRollupPage,
+  moreAvailable,
   pageOf,
   popTo,
   pushCrumb,
@@ -74,6 +78,8 @@ export interface ExploreController {
   error: string
   /** 已显示的卡片数（客户端分页；点「更多」每次 +`EXPLORE_PAGE`） */
   shown: number
+  /** 正在取下一页（「更多」期间禁用按钮，避免重复请求） */
+  moreBusy: boolean
   symbols: SymbolTarget | undefined
   symbolsResult: RollupResult | undefined
   symbolsLoading: boolean
@@ -104,6 +110,7 @@ export function useExplore(project: string, active: boolean): ExploreController 
   const [store, setStore] = useState<{ key: string; result: RollupResult }>()
   const [failed, setFailed] = useState<{ key: string; message: string }>()
   const [shownAt, setShownAt] = useState<{ key: string; n: number }>()
+  const [moreBusy, setMoreBusy] = useState(false)
   const [gridReload, setGridReload] = useState(0)
   const [symReload, setSymReload] = useState(0)
 
@@ -135,6 +142,8 @@ export function useExplore(project: string, active: boolean): ExploreController 
   // 两个列表共用一个 `shown` 槽（同时只有一个可见，键不同即各自从头开始）
   const activeKey = open !== undefined ? symbolKey : key
   const shown = shownAt?.key === activeKey ? shownAt.n : EXPLORE_PAGE
+  /** 当前可见的层（符号列表打开时是它，否则是网格层）——`more` 要据此取 `next_cursor`。 */
+  const activeLayer = open !== undefined ? symbolsResult : result
 
   useEffect(() => {
     if (!active) return
@@ -192,6 +201,53 @@ export function useExplore(project: string, active: boolean): ExploreController 
     setNav({ project, path: popTo(path, index) })
   }
 
+  /**
+   * 点「更多」（v17 B-7 真分页）：
+   * - 本地还有没显示的 → 纯切片（不发请求）；
+   * - 本地翻完了、服务端还有下一页 → 用 `next_cursor` 取次页并**并进本层**；
+   * - 收到 409 `stale_cursor`（翻页途中图被重建）→ **丢弃本层已取回的页、回第一页重查**，
+   *   不把它当普通错误报给用户（重建期翻页会重复/漏项，只有重查能收敛）。
+   */
+  const more = (): void => {
+    const layer = activeLayer
+    if (layer === undefined || moreBusy) return
+    const target = shown + EXPLORE_PAGE
+    if (target <= layer.nodes.length || layer.next_cursor === undefined) {
+      setShownAt({ key: activeKey, n: target })
+      return
+    }
+    const token = ++seq.current
+    setMoreBusy(true)
+    // 本层重取期间显示骨架而不是「正在报错」（同主取数 effect 的口径）
+    setFailed((f) => (f?.key === activeKey ? undefined : f))
+    void api.graphRollup({ project, cursor: layer.next_cursor }).then(
+      (page) => {
+        // 先解锁：即便这一笔已被更新的世界取代，也不该把「更多」按钮永久卡在禁用态
+        setMoreBusy(false)
+        if (token !== seq.current) return
+        const merged = mergeRollupPage(layer, page)
+        cache.current.set(activeKey, merged)
+        setStore({ key: activeKey, result: merged })
+        setShownAt({ key: activeKey, n: target })
+      },
+      (e: unknown) => {
+        setMoreBusy(false)
+        if (token !== seq.current) return
+        const message = e instanceof Error ? e.message : String(e)
+        if (isStaleCursorError(message)) {
+          // 图已重建：本层的页全部作废，清缓存 + 重置已显示数 → 回第一页重取
+          cache.current.delete(activeKey)
+          setStore(undefined)
+          setShownAt(undefined)
+          if (open !== undefined) setSymReload((n) => n + 1)
+          else setGridReload((n) => n + 1)
+          return
+        }
+        setFailed({ key: activeKey, message })
+      },
+    )
+  }
+
   return {
     level: here.level,
     crumbs: path,
@@ -200,6 +256,7 @@ export function useExplore(project: string, active: boolean): ExploreController 
     loading: active && result === undefined && error === '',
     error,
     shown,
+    moreBusy,
     symbols: open,
     symbolsResult,
     symbolsLoading: active && open !== undefined && symbolsResult === undefined && symbolsError === '',
@@ -207,7 +264,7 @@ export function useExplore(project: string, active: boolean): ExploreController 
     drill,
     closeSymbols: () => setSymbols(undefined),
     goTo,
-    more: () => setShownAt({ key: activeKey, n: shown + EXPLORE_PAGE }),
+    more,
     retry: () => {
       setFailed(undefined)
       if (open !== undefined) setSymReload((n) => n + 1)
@@ -308,7 +365,13 @@ function NodeGrid({ c }: { c: ExploreController }) {
           )
         })}
       </div>
-      <MoreRow c={c} returned={result.nodes.length} layerTotal={result.total} truncated={result.truncated} />
+      <MoreRow
+        c={c}
+        loaded={result.nodes.length}
+        layerTotal={result.total}
+        truncated={result.truncated}
+        nextCursor={result.next_cursor}
+      />
     </>
   )
 }
@@ -350,9 +413,10 @@ function SymbolList({ c, onPickSymbol }: { c: ExploreController; onPickSymbol: N
           {c.symbolsResult !== undefined && (
             <MoreRow
               c={c}
-              returned={c.symbolsResult.nodes.length}
+              loaded={c.symbolsResult.nodes.length}
               layerTotal={c.symbolsResult.total}
               truncated={c.symbolsResult.truncated}
+              nextCursor={c.symbolsResult.next_cursor}
             />
           )}
         </>
@@ -362,38 +426,41 @@ function SymbolList({ c, onPickSymbol }: { c: ExploreController; onPickSymbol: N
 }
 
 /**
- * 分页行 + 截断说明。
+ * 分页行 + 截断说明（v17 B-7）。
  *
- * 「更多」**只翻已取回的数据**（不请求）；`truncated` 是另一件事——服务端本层超 500 条，
- * 余量取不回来，故单出一条如实说明，不把「更多」画成能拉到全部。
+ * 「更多」现在**可能发请求**：本地还有没显示的（`shown < loaded`）就先切片；本地翻完了、
+ * 服务端还有下一页（`nextCursor`）才用游标取次页（判定在 `moreAvailable`）。两者都没有即
+ * 不渲染按钮。按钮在取页期间 `disabled`（`c.moreBusy`）。
  *
- * `returned`（服务端已返回条数）与 `layerTotal`（本层全量条数）在未截断时相等；
- * 两者分列是因为截断说明要同时说清「共多少」和「给了多少」。
+ * `loaded`（服务端已取回并被并进本层的条数）与 `layerTotal`（本层全量条数）在未截断时
+ * 相等；截断说明要同时说清「共多少」与「已加载多少」。
  */
 function MoreRow({
   c,
-  returned,
+  loaded,
   layerTotal,
   truncated,
+  nextCursor,
 }: {
   c: ExploreController
-  returned: number
+  loaded: number
   layerTotal: number
   truncated: boolean
+  nextCursor: string | undefined
 }) {
   const t = useT()
   return (
     <>
-      {returned > c.shown && (
+      {moreAvailable(loaded, c.shown, nextCursor) && (
         <div className="explore-more">
-          <button type="button" className="tool-btn" onClick={c.more}>
-            {t('graph.explore.more', { shown: c.shown, total: returned })}
+          <button type="button" className="tool-btn" onClick={c.more} disabled={c.moreBusy}>
+            {t('graph.explore.more', { shown: c.shown, total: layerTotal })}
           </button>
         </div>
       )}
       {truncated && (
         <div className="small muted explore-truncated">
-          {t('graph.explore.truncated', { total: layerTotal, returned })}
+          {t('graph.explore.truncated', { total: layerTotal, loaded })}
         </div>
       )}
     </>

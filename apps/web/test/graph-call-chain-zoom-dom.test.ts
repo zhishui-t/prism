@@ -156,9 +156,16 @@ async function query(node: string): Promise<void> {
   await click(await submitQuery())
 }
 
-/** 切到 path 模式并查一条链。 */
+/** 切到 path 模式并查一条链（v17 C-8：`chain` 是带 id 的结构；file/line 留空——
+ *  W-8 的段标注由 `graph-call-chain-dom.test.ts` 专测，这里只验缩放面）。 */
 async function runPath(chain: string[]): Promise<void> {
-  payloads['/api/graph/path'] = ok({ project: 'demo', raw: '', hops: chain.length - 1, chain, found: true })
+  payloads['/api/graph/path'] = ok({
+    project: 'demo',
+    raw: '',
+    hops: chain.length - 1,
+    chain: chain.map((label, index) => ({ id: `n${index}`, label, file: '', line: '' })),
+    found: true,
+  })
   await render()
   await click(modeChip(t('graph.mode.path')))
   const inputs = nodeInputs()
@@ -441,12 +448,14 @@ describe('v12 F1 第二行标注（SPEC-1.8 / R-1 闭合点）', () => {
     expect(one('.chain-node.center text')?.textContent).toBe('pkg/a.ts#alpha')
   })
 
-  it('path 链放大后仍无第二行：`chain` 只有符号名（无 id / 无定位）', async () => {
+  it('path 链放大后节点仍是一行：`file:line` 落在**段标注**上，不落在节点上（W-8 口径）', async () => {
     await runPath(['a', 'mid', 'b'])
     await wheelUp(5, { x: 0, y: 0 })
     expect(svg()).not.toBeNull()
     expect(all('.chain-node text')).toHaveLength(3)
     expect(all('.chain-node text tspan')).toHaveLength(0)
+    // 本 mock 的 file/line 为空 ⇒ 段标注缺席（W-8 的渲染专测在 graph-call-chain-dom.test.ts）
+    expect(all('.chain-edge-label')).toHaveLength(0)
   })
 })
 

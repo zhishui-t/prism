@@ -8,11 +8,11 @@
  * 三条口径写死在这里（改设计时同步改这里）：
  * - **几何是数据算出来的**（viewBox 坐标），不是样式：`styles.css` 只管颜色 / 字族 / 字号，
  *   SVG 里不写 inline style、不写 hex；
- * - **可寻址的只有 id**：`relations` 的 `node` / `items[].other` 是 id，`path.chain` 与
- *   `affected.nodes[].label` 是 label（本仓 2340 节点仅 2063 个唯一 label）——
- *   导出寻址与节点点击都只认 id；
+ * - **可寻址的只有 id**：`relations` 的 `node` / `items[].other` 与 `path.chain[].id`
+ *   （v17 C-8 起）是 id；`affected.nodes[].label` 只是 label（本仓 2340 节点仅 2063 个
+ *   唯一 label）——导出寻址与节点点击都只认 id；
  * - **不猜**：拿不到数据就不编（`affected` 无方向字段 → 按 `relation` 分组；
- *   `path` 无 file/line → 不画 location 标注）。见各函数头注。
+ *   `path.chain[].file/line` 为空（链尾 / 多义跳）→ 不画那段的位置标注）。见各函数头注。
  */
 
 import type { GraphAffected, GraphRelations } from '../api.ts'
@@ -82,6 +82,53 @@ export const CHAIN_MAX = 12
 /** 第 `index` 行的节点中心 y（自上而下）。 */
 export function chainY(index: number): number {
   return CHAIN_TOP + CHAIN_NODE.h / 2 + index * CHAIN_ROW_H
+}
+
+/**
+ * 纵向链第 `index` **段**（连接第 `index` 与 `index+1` 个节点）的中线 y。
+ *
+ * W-8（v17 C-8）：这一段的调用点标注（`file:line`，取自**发出该跳**的边）就落在段中点。
+ * 段本身只有 `CHAIN_ROW_H - CHAIN_NODE.h` 那么高（节点框之间的缝），故标注必须贴在缝里——
+ * 位置由数据算出（同本模块「几何是数据算出来的」口径），不在组件里手写偏移。
+ */
+export function chainEdgeMidY(index: number): number {
+  return (chainY(index) + chainY(index + 1)) / 2
+}
+
+/** 段标注（`file:line`）相对中线的横向偏移：贴着竖线**右侧**起排（竖线在 `x = cx`）。 */
+export const CHAIN_EDGE_LABEL_DX = 6
+
+/** 等宽字体在本图字号（`--fs-200` = 12px）下的**单字符宽估算**——只用于给 viewBox 留白。 */
+const CHAIN_CHAR_W = 7.2
+
+/** 标注行高的估算值（同上，只为留白）。 */
+const CHAIN_LABEL_H = 14
+
+/**
+ * 段标注（W-8 的 `file:line`）为 viewBox 追加的包围盒。
+ *
+ * 为什么需要：纵向链的 viewBox 只由**节点包围盒**算出（`contentViewBox(chainBoxes(n))`），
+ * 而标注画在节点框右侧、可能比节点框还长（`packages/agents/src/arch/graph-ir.ts:715`
+ * 有 41 字符 ≈ 295px）；不预留就被 viewBox 裁掉（SVG 默认裁到 viewBox，`.chain-graph`
+ * 没开 `overflow: visible`）。故把每条非空标注按**估算宽度**摊成一个矩形并入包围盒。
+ *
+ * 宽度是估算（真值由浏览器排字决定）——**只影响留白，不影响标注自身的绘制位置**：
+ * 多留一点只是右侧空一点，少留才会裁字，故 `CHAIN_CHAR_W` 取 12px 等宽字的上沿。
+ * 空串 / `undefined` 的段不占位（链尾与多义跳本就不画标注）。
+ */
+export function chainLabelBoxes(labels: readonly (string | undefined)[]): Rect[] {
+  const cx = CHAIN_VIEW_W / 2
+  const boxes: Rect[] = []
+  labels.forEach((label, index) => {
+    if (label === undefined || label === '') return
+    boxes.push({
+      x: cx + CHAIN_EDGE_LABEL_DX,
+      y: chainEdgeMidY(index) - CHAIN_LABEL_H / 2,
+      w: [...label].length * CHAIN_CHAR_W,
+      h: CHAIN_LABEL_H,
+    })
+  })
+  return boxes
 }
 
 /* ===== 节点几何包围盒 → viewBox（v12 F1） ===== */
@@ -433,15 +480,12 @@ export function groupAffected(nodes: GraphAffected['nodes']): AffectedGroup[] {
 /* ===== 时序图导出寻址 ===== */
 
 /**
- * 导出时序图的**寻址 id**。拿不到就返回 `undefined`（按钮随之禁用 + 说明），不拿 label 顶替。
+ * 导出时序图的**关系模式寻址 id**。拿不到就返回 `undefined`（不拿 label 顶替）。
  *
- * 依据（design-v10 F5-2）：寻址一律用**节点 id**——本仓 159/2063 个 label 跨多文件，
- * 按名寻根会**静默选错文件**。而四模式响应里只有 `relations` 带 id：
- * - `relations`：`node` 是命中节点 id（`graphify.ts` 的 `graphRelations` 里 `node: target.id`）
- *   → 可用；**多义**时 `node` 是查询原串（没有命中节点）→ 不可用；
- * - `path`：只有 `chain: string[]`（graphify 输出切出来的符号串，没有 id）→ 不可用；
- * - `affected`：只有 `label` → 不可用。
- * 两种不可用都是**数据缺口**，不是实现偷懒——故禁用而非「尽力猜一个」。
+ * 依据（design-v10 F5-2）：寻址一律用**节点 id**——本仓 2340 节点仅 2063 个唯一 label，
+ * 按名寻根会**静默选错文件**。`relations` 的 `node` 是命中节点 id
+ * （`graphify.ts` 的 `graphRelations` 里 `node: target.id`）→ 可用；**多义**时 `node` 是
+ * 查询原串（没有命中节点）→ 不可用。
  */
 export function sequenceAddress(result: GraphQueryResult): string | undefined {
   if (result.kind !== 'relations') return undefined
@@ -449,6 +493,50 @@ export function sequenceAddress(result: GraphQueryResult): string | undefined {
   if (value.candidates !== undefined && value.candidates.length > 0) return undefined
   const id = value.node.trim()
   return id === '' ? undefined : id
+}
+
+/**
+ * 导出时序图的**调用链寻址 id 数组**（W-9① / SPEC-C9.1）。
+ *
+ * 用 `chain[].id`（v17 C-8 起每跳都带）：服务端 `from-graph` 的 `symbols` 入参按**相邻对**
+ * 取边成 IR（N 个 id → N 参与者 / N-1 条消息），故只要 id 序列。
+ *
+ * 判据（拿不到就 `undefined`，按钮随之禁用 + 说明）：
+ * - 不是 path 结果 → `undefined`；
+ * - 没找到路径（`found=false`）→ `undefined`（没有链可导）；
+ * - id 为空串的跳**剔除**（服务端按 id 寻址，空串无意义）；
+ * - 剔完后 < 2 个 id → `undefined`（单点链没有相邻对，服务端也会拒）。
+ *
+ * **不在这里剔「多义跳」**：`ambiguous` 是**入参符号多义**（起/终点按名匹配到多个节点、
+ * 取了图内首个可落地解），链路图上那个跳的 `id` 是**真实节点 id**，服务端按 id 取边照样
+ * 拿得到（导出侧「哪几跳被略去」是服务端按边存否判的，前端不预判——见交付报告）。
+ */
+export function sequenceSymbols(result: GraphQueryResult): string[] | undefined {
+  if (result.kind !== 'path') return undefined
+  const value = result.value
+  if (!value.found) return undefined
+  const ids = value.chain.map((hop) => hop.id).filter((id) => id !== '')
+  return ids.length >= 2 ? ids : undefined
+}
+
+/**
+ * 导出时序图的**寻址载荷**（唯一取处；`GraphQuery.tsx` 只调它，不再分模式）。
+ *
+ * `relations` → `{ node }`（单点扩邻域）；`path` → `{ symbols }`（按链相邻对）；`affected`
+ * 与拿不到 id 的情形 → `undefined`（按钮禁用 + `graph.seq.noId` 说明）。
+ */
+export type SequenceTarget = { node: string } | { symbols: string[] }
+
+export function sequenceTarget(result: GraphQueryResult): SequenceTarget | undefined {
+  if (result.kind === 'relations') {
+    const node = sequenceAddress(result)
+    return node === undefined ? undefined : { node }
+  }
+  if (result.kind === 'path') {
+    const symbols = sequenceSymbols(result)
+    return symbols === undefined ? undefined : { symbols }
+  }
+  return undefined
 }
 
 /* ===== 导出错误 → 文案键 ===== */

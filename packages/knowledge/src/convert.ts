@@ -19,12 +19,22 @@
  *   `unsupported`（`不支持的扩展名: .png`）、扫描 PDF 仍旧报 `needs_ocr`
  *   （anydoc 的原话）——老机器行为零变化（SPEC-3.2）。
  *
+ * **内嵌图片（v17 B-A4）**：`toMarkdownBytes` 支持格式（**PDF 除外**——anydoc 对 PDF
+ * 无 `toDocument`）里的内嵌图片，经 `toDocument` 取 `assets[].data` → 临时文件 →
+ * 同一 OCR 管道 → OCR 文本以 `> [图片 N] …` 引用块**插回原 alt 位置**。OCR 未就绪 /
+ * 单图失败 → **原样保留**（整篇转换不失败）；非白名单 mediaType 跳过。
+ * ⚠ 实测：anydoc 的 Markdown 渲染器对**内嵌 asset 图**不写 `![alt](…)`，而是把 alt
+ *   当**纯文本**内联（`src/render/markdown/inline.rs` 的 `ImageSource::Asset` 分支，
+ *   alt 为空则什么都不输出）——故锚点只能是「alt 独占整行」。
+ *
  * 正文以外的两处配套在 server 侧（`packages/server/src/kb/scan.ts`）：图片并入扫描
  * 范围的条件派生集（S2）、OCR 正文的少文本守卫（S3）、转换前哈希短路（M3）。
  */
 
 import { spawnSync } from 'node:child_process'
 import { existsSync, readdirSync } from 'node:fs'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { join } from 'node:path'
 
@@ -36,9 +46,32 @@ export function anydocRuntimeDir(): string {
   return join(root, '3rd', 'anydoc-runtime')
 }
 
-/** anydoc 模块最小接口（只用 toMarkdownBytes）。 */
+/** anydoc 模块最小接口（toMarkdownBytes + 可选 toDocument，后者用于内嵌图片）。 */
 interface AnydocModule {
   toMarkdownBytes: (bytes: Uint8Array, format: string) => Promise<string>
+  /** 结构化文档模型（v17 B-A4：assets + 内嵌图 inline）。PDF 不支持（d.ts:120-125）。 */
+  toDocument?: (bytes: Uint8Array, format?: string | null) => Promise<AnydocDocument>
+}
+
+/** anydoc 文档模型的最小结构（只消费 blocks 里的 image inline 与 assets）。 */
+interface AnydocInline {
+  kind?: string
+  alt?: string
+  source?: { kind?: string; assetId?: number }
+  content?: AnydocInline[]
+}
+interface AnydocBlock {
+  content?: AnydocInline[]
+  blocks?: AnydocBlock[]
+}
+interface AnydocAsset {
+  id: number
+  mediaType: string
+  data?: Uint8Array
+}
+interface AnydocDocument {
+  blocks: AnydocBlock[]
+  assets: AnydocAsset[]
 }
 
 let cached: AnydocModule | null = null
@@ -206,6 +239,27 @@ export function ocrModelCount(modelsDir: string = ocrModelsDir()): number {
   }
 }
 
+/**
+ * 可选两件模型的文件名（v17 B-A1：表格结构 + 版面分析）。
+ *
+ * **镜像** `scripts/setup-ocr.mjs` 的 MODELS 表与 `3rd/ocr/ocr_main.py` 的
+ * `TABLE_MODEL_FILE` / `LAYOUT_MODEL_FILE`（跨语言无法共享常量，改动**三处同步**）。
+ * 这两件是**可选**的：缺任一件只让 table/layout 增强回到旧输出，不动 OCR 主路
+ * （故不并入 {@link ocrModelsReady} 的「至少三件」判据——见该函数说明）。
+ */
+export const OCR_TABLE_MODEL_FILE = 'slanet-plus.onnx'
+export const OCR_LAYOUT_MODEL_FILE = 'pp_doc_layoutv3.onnx'
+
+/** 表格模型文件是否在位（**不**校验 SHA256/可导入——那是 setup-ocr --check 与 Python 的活）。 */
+export function ocrTableModelReady(modelsDir: string = ocrModelsDir()): boolean {
+  return existsSync(join(modelsDir, OCR_TABLE_MODEL_FILE))
+}
+
+/** 版面模型文件是否在位（口径同 {@link ocrTableModelReady}）。 */
+export function ocrLayoutModelReady(modelsDir: string = ocrModelsDir()): boolean {
+  return existsSync(join(modelsDir, OCR_LAYOUT_MODEL_FILE))
+}
+
 /** 依赖探测超时（只看 `import` 能不能过，不该慢）。 */
 const OCR_DEPS_TIMEOUT_MS = 20_000
 
@@ -218,8 +272,39 @@ export const OCR_RUN_TIMEOUT_MS = 300_000
 /** OCR 调用结果：成功给 Markdown，失败给可读原因（回落文案由调用方决定）。 */
 export type OcrRunResult = { ok: true; markdown: string } | { ok: false; reason: string }
 
+/**
+ * OCR 调用选项。
+ *
+ * - `fake`：mock 推理层（测试用，不暴露成产品开关）；
+ * - `table` / `layout`（v17 B-A1）：表格还原 / 版面分析的开关。`undefined` = **不透传
+ *   flag**，由 `ocr_main.py` 决定（缺省两者都开）；显式 `false` → `--no-table` /
+ *   `--no-layout`（等价「回到无 table/layout 的旧输出」）。两件模型未装时 Python 侧
+ *   静默跳过，故透传 `true` 也不会炸。
+ */
+export interface OcrRunOptions {
+  fake?: boolean
+  table?: boolean
+  layout?: boolean
+}
+
 /** OCR runner 签名（`input` = 源文件**路径**：工具自己读盘，不经内存）。 */
-export type OcrRunner = (input: string, options?: { fake?: boolean }) => Promise<OcrRunResult>
+export type OcrRunner = (input: string, options?: OcrRunOptions) => Promise<OcrRunResult>
+
+/**
+ * 构造薄壳 `ocr_tool.mjs` 的 argv（**纯函数**，便于断言 flag 透传，不必真 spawn）。
+ *
+ * `table`/`layout` 只在**显式给出**时透传：`true` → `--table`/`--layout`，
+ * `false` → `--no-table`/`--no-layout`，`undefined` → 不带（Python 缺省开）。
+ */
+export function buildOcrToolArgs(input: string, options: OcrRunOptions = {}): string[] {
+  const args = [join(ocrToolDir(), 'ocr_tool.mjs'), input]
+  if (options.fake === true) args.push('--fake')
+  if (options.table === true) args.push('--table')
+  if (options.table === false) args.push('--no-table')
+  if (options.layout === true) args.push('--layout')
+  if (options.layout === false) args.push('--no-layout')
+  return args
+}
 
 /**
  * 默认 runner：spawn Node 薄壳 `3rd/ocr/ocr_tool.mjs`（薄壳再 spawn Python）。
@@ -228,13 +313,12 @@ export type OcrRunner = (input: string, options?: { fake?: boolean }) => Promise
  * （M6 镜像三件套之一），本包只认「Markdown / 失败原因」。`fake` 供无模型环境跑通
  * 结构（测试用，不暴露成产品开关）。
  */
-export async function runOcrTool(input: string, options: { fake?: boolean } = {}): Promise<OcrRunResult> {
+export async function runOcrTool(input: string, options: OcrRunOptions = {}): Promise<OcrRunResult> {
   const tool = join(ocrToolDir(), 'ocr_tool.mjs')
   if (!existsSync(tool)) {
     return { ok: false, reason: `OCR 工具缺失（${tool}）——跑 node scripts/setup-ocr.mjs` }
   }
-  const args = [tool, input]
-  if (options.fake === true) args.push('--fake')
+  const args = buildOcrToolArgs(input, options)
   const result = spawnSync(process.execPath, args, {
     encoding: 'utf-8',
     timeout: OCR_RUN_TIMEOUT_MS,
@@ -256,13 +340,18 @@ export async function runOcrTool(input: string, options: { fake?: boolean } = {}
   return { ok: true, markdown }
 }
 
+/** OCR 主路 pip 依赖模块（与 `scripts/setup-ocr.mjs` 的 CORE_DEPS 同口径）。 */
+const OCR_CORE_DEPS = ['rapidocr', 'onnxruntime', 'pypdfium2'] as const
+/** OCR 可选 pip 依赖模块（v17 B-A1：表格结构 + 版面分析）。 */
+const OCR_EXTRA_DEPS = ['rapid_table', 'rapid_layout'] as const
+
 /**
- * pip 依赖是否可导入（口径同 `scripts/setup-ocr.mjs --check` 的 pip 那一行）。
+ * 指定 pip 模块是否可导入（解释器**借用薄壳导出的 `resolvePython`**）。
  *
- * 解释器**借用薄壳导出的 `resolvePython`**，不在这里再写一份平台判断——R6/AGENTS
- * 「平台差异只在唯一判定位」的红线：多一处平台分支就是多一处漏抽象。
+ * 不在这里再写一份平台判断——R6/AGENTS「平台差异只在唯一判定位」的红线：
+ * 多一处平台分支就是多一处漏抽象。
  */
-export async function ocrDepsReady(): Promise<boolean> {
+async function pythonModulesReady(modules: readonly string[]): Promise<boolean> {
   try {
     const tool = join(ocrToolDir(), 'ocr_tool.mjs')
     if (!existsSync(tool)) return false
@@ -270,7 +359,7 @@ export async function ocrDepsReady(): Promise<boolean> {
       resolvePython?: (env?: NodeJS.ProcessEnv) => string
     }
     if (typeof mod.resolvePython !== 'function') return false
-    const probe = spawnSync(mod.resolvePython(), ['-c', 'import rapidocr, onnxruntime, pypdfium2'], {
+    const probe = spawnSync(mod.resolvePython(), ['-c', `import ${modules.join(', ')}`], {
       encoding: 'utf-8',
       timeout: OCR_DEPS_TIMEOUT_MS,
       windowsHide: true,
@@ -279,6 +368,23 @@ export async function ocrDepsReady(): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+/**
+ * pip 依赖是否可导入（口径同 `scripts/setup-ocr.mjs --check` 的 pip 那一行）。
+ */
+export async function ocrDepsReady(): Promise<boolean> {
+  return pythonModulesReady(OCR_CORE_DEPS)
+}
+
+/**
+ * **可选** pip 依赖（`rapid_table` / `rapid_layout`）是否可导入（v17 B-A1）。
+ *
+ * 与 {@link ocrDepsReady} 分开：可选件缺失只让 table/layout 增强不可用，
+ * **不影响** OCR 主路就绪判据（`prism doctor` 分列报告）。
+ */
+export async function ocrExtrasDepsReady(): Promise<boolean> {
+  return pythonModulesReady(OCR_EXTRA_DEPS)
 }
 
 /**
@@ -392,10 +498,10 @@ export async function ocrAvailable(): Promise<boolean> {
 }
 
 /** 调 runner（注入优先；runner 抛错也算失败——注入方失约不该炸掉整次扫描）。 */
-async function runOcr(input: string): Promise<OcrRunResult> {
+async function runOcr(input: string, options: OcrRunOptions): Promise<OcrRunResult> {
   const run = ocrHooks !== null ? ocrHooks.run : runOcrTool
   try {
-    return await run(input)
+    return await run(input, options)
   } catch (error) {
     return { ok: false, reason: error instanceof Error ? error.message : String(error) }
   }
@@ -411,12 +517,187 @@ type OcrAttempt =
   | { ok: true; markdown: string; elapsedMs: number }
   | { ok: false; failure?: string }
 
-async function tryOcr(path: string): Promise<OcrAttempt> {
+async function tryOcr(path: string, options: OcrRunOptions): Promise<OcrAttempt> {
   if (!(await ocrAvailable())) return { ok: false }
   const started = Date.now()
-  const result = await runOcr(path)
+  const result = await runOcr(path, options)
   if (!result.ok) return { ok: false, failure: result.reason }
   return { ok: true, markdown: result.markdown, elapsedMs: Date.now() - started }
+}
+
+// ---------------------------------------------------------------------------
+// 内嵌图片（v17 B-A4）：anydoc toDocument → assets → OCR → `> [图片 N]` 引用块
+// ---------------------------------------------------------------------------
+
+/**
+ * 内嵌图片可 OCR 的 mediaType 白名单 → 临时文件扩展名（v17 B-A4）。
+ *
+ * 与 {@link OCR_IMAGE_EXTENSIONS}（扫描范围白名单）**同口径**：png / jpeg / webp。
+ * `image/jpeg` 落 `.jpg`（OCR 工具按扩展名分流，`.jpeg` 也认，统一更省事）。
+ * 其余 mediaType（bmp/gif/svg/octet-stream…）**跳过**——不猜、不动原 alt 行。
+ */
+export const EMBEDDED_IMAGE_MEDIA_TYPES: Readonly<Record<string, string>> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/webp': 'webp',
+}
+
+/** 一张可处理的内嵌图片（白名单 mediaType + 有字节 + alt 非空）。 */
+interface EmbeddedImageRef {
+  /** 锚点：anydoc 把它当纯文本内联，Prism 按「alt 独占整行」定位。 */
+  alt: string
+  mediaType: string
+  data: Uint8Array
+  /** 文档内第几张图（1 起，**含被跳过的图**）——「图片 N」的编号口径。 */
+  ordinal: number
+}
+
+/** 按文档序收集 blocks 里的 image inline（含嵌套 content / 子 blocks）。 */
+function collectImageInlines(blocks: AnydocBlock[], out: AnydocInline[] = []): AnydocInline[] {
+  const walk = (inlines: AnydocInline[] | undefined): void => {
+    for (const inline of inlines ?? []) {
+      if (inline.kind === 'image') out.push(inline)
+      if (Array.isArray(inline.content)) walk(inline.content)
+    }
+  }
+  for (const block of blocks) {
+    walk(block.content)
+    if (Array.isArray(block.blocks)) collectImageInlines(block.blocks, out)
+  }
+  return out
+}
+
+/**
+ * 取文档里可处理的内嵌图片（文档序）。`toDocument` 不可用/解析失败 → 空数组
+ * （主路已经是 `toMarkdownBytes` 的 Markdown，内嵌图拿不到不该让整篇失败）。
+ */
+async function collectEmbeddedImages(
+  anydoc: AnydocModule,
+  bytes: Uint8Array,
+  format: string,
+): Promise<EmbeddedImageRef[]> {
+  if (typeof anydoc.toDocument !== 'function') return []
+  let document: AnydocDocument
+  try {
+    document = await anydoc.toDocument(bytes, format)
+  } catch {
+    return []
+  }
+  const assets = new Map<number, AnydocAsset>()
+  for (const asset of document.assets ?? []) assets.set(asset.id, asset)
+
+  const refs: EmbeddedImageRef[] = []
+  collectImageInlines(document.blocks ?? []).forEach((inline, index) => {
+    const ordinal = index + 1
+    if (inline.source?.kind !== 'asset') return
+    const assetId = inline.source.assetId
+    if (assetId === undefined) return
+    const asset = assets.get(assetId)
+    if (asset?.data === undefined) return
+    if (EMBEDDED_IMAGE_MEDIA_TYPES[asset.mediaType] === undefined) return // 白名单外 → 跳过
+    const alt = (inline.alt ?? '').trim()
+    if (alt === '') return // 无锚点（anydoc 也不输出任何东西）→ 跳过
+    refs.push({ alt, mediaType: asset.mediaType, data: asset.data, ordinal })
+  })
+  return refs
+}
+
+/** 找 alt **独占的整行**（未消费过的第一处）；找不到返回 -1。 */
+function findAltLine(lines: readonly string[], consumed: ReadonlySet<number>, alt: string): number {
+  for (let index = 0; index < lines.length; index += 1) {
+    if (consumed.has(index)) continue
+    if (lines[index].trim() === alt) return index
+  }
+  return -1
+}
+
+/** 把 OCR 文本包成 `> [图片 N] …` 引用块（首行带标记，其余行续引）。 */
+function referenceBlock(ordinal: number, text: string): string[] {
+  return text.split('\n').map((line, index) => {
+    const body = line.trim()
+    if (index === 0) return body === '' ? `> [图片 ${ordinal}]` : `> [图片 ${ordinal}] ${body}`
+    return body === '' ? '>' : `> ${body}`
+  })
+}
+
+/**
+ * 内嵌图片 → OCR → 引用块插回原 alt 位置（v17 B-A4）。
+ *
+ * 归一路径（任一不成立即**原样返回** `markdown`）：
+ *  - PDF（anydoc 无 `toDocument`，运行时按 format 守卫——不依赖它报错）；
+ *  - OCR 未就绪（`ocrAvailable()` 为假）→ 与 v14 的逐字节回落契约零冲突；
+ *  - 没有可处理的内嵌图（无资产 / 白名单外 / alt 为空）。
+ *
+ * 单图失败（runner 报错 / 无有效文本）→ 该图**保留原 alt 行**，其余照做；整篇不失败。
+ * 临时文件落 `os.tmpdir()` 的独立 `mkdtemp` 目录，`finally` 必删（R5）。
+ *
+ * 说明：图片 OCR 文本**进 FTS 与段向量**（它就是正文，随 Markdown 一起入库）；
+ * 但**不**给 `ConvertResult` 打 `ocr: true`——那一位的含义是「正文整体来自 OCR」，
+ * 会触发 server 侧 OCR 专属的少文本守卫（SPEC-3.4），而这里的正文主体仍来自 anydoc。
+ */
+async function embedImageText(
+  anydoc: AnydocModule,
+  bytes: Uint8Array,
+  format: string,
+  markdown: string,
+  runOptions: OcrRunOptions,
+): Promise<string> {
+  if (format === 'pdf') return markdown
+  if (typeof anydoc.toDocument !== 'function') return markdown
+  if (!(await ocrAvailable())) return markdown
+  const refs = await collectEmbeddedImages(anydoc, bytes, format)
+  if (refs.length === 0) return markdown
+
+  const lines = markdown.split('\n')
+  const consumed = new Set<number>()
+  const replacements = new Map<number, string[]>()
+  const dir = await mkdtemp(join(tmpdir(), 'prism-ocr-asset-'))
+  try {
+    for (const ref of refs) {
+      const index = findAltLine(lines, consumed, ref.alt)
+      if (index < 0) continue // 不是独占整行（行内小图）→ 不替换，免得吞掉同行的正文
+      const extension = EMBEDDED_IMAGE_MEDIA_TYPES[ref.mediaType]
+      const file = join(dir, `image-${ref.ordinal}.${extension}`)
+      await writeFile(file, ref.data)
+      const result = await runOcr(file, runOptions)
+      if (!result.ok) continue // 单图失败 → 保留原 alt 行
+      const text = stripOcrArtifacts(result.markdown).trim()
+      if (text === '') continue // 无有效文本（空白图/占位符）→ 保留原 alt 行
+      consumed.add(index)
+      replacements.set(index, referenceBlock(ref.ordinal, text))
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+  if (replacements.size === 0) return markdown
+
+  const out: string[] = []
+  lines.forEach((line, index) => {
+    const replacement = replacements.get(index)
+    if (replacement === undefined) out.push(line)
+    else out.push(...replacement)
+  })
+  return out.join('\n')
+}
+
+/**
+ * `toMarkdown` 的可选参数。
+ *
+ * `ocr` 是 v17 B-A1 的**表格 / 版面增强开关**：缺省两者都**开启**（与 `prism.yaml`
+ * 的 `ocr_table`/`ocr_layout` 缺省一致），模型未装时 Python 侧静默跳过（回到旧输出）。
+ * 扫描链路（`packages/server/src/kb/scan.ts`）按配置显式传入 `false` 即可逐字节回到
+ * 「无 table/layout 的旧输出」（SPEC-A1.2/A2.3）。
+ */
+export interface ToMarkdownOptions {
+  ocr?: { table?: boolean; layout?: boolean }
+}
+
+/** 把 `ToMarkdownOptions.ocr` 归一成 runner 选项（缺省都开）。 */
+function ocrRunOptions(options: ToMarkdownOptions): OcrRunOptions {
+  return {
+    table: options.ocr?.table ?? true,
+    layout: options.ocr?.layout ?? true,
+  }
 }
 
 /**
@@ -424,9 +705,15 @@ async function tryOcr(path: string): Promise<OcrAttempt> {
  *
  * @param bytes 文件内容
  * @param path 文件路径（推断扩展名 + **交给 OCR 工具读盘**）
+ * @param options OCR 增强开关（v17 B-A1；缺省两者都开，见 {@link ToMarkdownOptions}）
  */
-export async function toMarkdown(bytes: Uint8Array, path: string): Promise<ConvertResult> {
+export async function toMarkdown(
+  bytes: Uint8Array,
+  path: string,
+  options: ToMarkdownOptions = {},
+): Promise<ConvertResult> {
   const ext = extensionOf(path)
+  const runOptions = ocrRunOptions(options)
 
   // ① 纯文本类：直接解码，不经过 anydoc
   if ((TEXT_EXTENSIONS as readonly string[]).includes(ext)) {
@@ -435,7 +722,7 @@ export async function toMarkdown(bytes: Uint8Array, path: string): Promise<Conve
 
   // ② 图片：OCR 就绪则识别，否则与从前一样报 unsupported（SPEC-3.3 / 3.2）
   if ((OCR_IMAGE_EXTENSIONS as readonly string[]).includes(ext)) {
-    const ocr = await tryOcr(path)
+    const ocr = await tryOcr(path, runOptions)
     if (!ocr.ok) {
       // 文案逐字不变（SPEC-3.2）；runner 失败的原因**另挂**在 ocr_failure 上（D-v14-tester-1）
       const fallen: ConvertResult = {
@@ -460,13 +747,15 @@ export async function toMarkdown(bytes: Uint8Array, path: string): Promise<Conve
     const anydoc = await loadAnydoc()
     const format = ext.slice(1) // '.docx' → 'docx'
     const markdown = await anydoc.toMarkdownBytes(bytes, format)
-    return { status: 'converted', markdown, extension: ext, elapsed_ms: Date.now() - started }
+    // v17 B-A4：内嵌图片 OCR 后插回（PDF / OCR 未就绪 / 无可处理图 → 原样返回）
+    const withImages = await embedImageText(anydoc, bytes, format, markdown, runOptions)
+    return { status: 'converted', markdown: withImages, extension: ext, elapsed_ms: Date.now() - started }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     // anydoc 对图片型 PDF 抛 needsOcr（设计边界，不是错误）
     if (/needsOcr|needs ocr|OCR/i.test(message)) {
       // OCR 就绪 → 改走 OCR；不可用 / 调用失败 → **原样**回落 anydoc 的原话（SPEC-3.2）
-      const ocr = await tryOcr(path)
+      const ocr = await tryOcr(path, runOptions)
       if (!ocr.ok) {
         const fallen: ConvertResult = { status: 'needs_ocr', markdown: '', extension: ext, reason: message }
         if (ocr.failure !== undefined) fallen.ocr_failure = ocr.failure

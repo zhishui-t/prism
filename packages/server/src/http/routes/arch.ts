@@ -12,6 +12,7 @@ import {
   ARCHIFY_DIAGRAM_TYPES,
   ARCHIFY_TYPE_LABELS,
   artifactStat,
+  irSubtitle,
   irTitle,
   isInside,
   readArtifactMeta,
@@ -115,16 +116,51 @@ function localStamp(date: Date = new Date()): string {
 }
 
 /**
+ * 消毒 id 段（文件名里的「段」）的**长度上限**。
+ *
+ * v17 黑盒 major：`symbols` 模式下调用方给的是整条链的节点 id 串（`symbols.join('>')`），
+ * 7 个长符号拼起来 ≈470 字符；原样进文件名会让 Windows 的**完整路径**推过 `MAX_PATH`(260)
+ * ——目录深度（临时根 / `PRISM_HOME` / `.prism/arch/sequence/`）吃掉约 100+ 后，导出**恒失败**。
+ */
+const MAX_ID_SEGMENT = 80
+
+/** 截断后补在尾部的短哈希长度（与既有的 8 位短哈希同宽）。 */
+const TRUNCATE_HASH_LEN = 8
+
+/**
+ * 产物名（不含 `.html`）的长度安全上限。
+ *
+ * 段 ≤ {@link MAX_ID_SEGMENT} ⇒ 总名 = `sequence-`(9) + 段(≤80) + `-`(1) + `yyyyMMdd-HHmmss`(15)
+ * + `-`(1) + 短哈希(8) ≤ **114**（含 `.html` 为 119）；此上限是按 `MAX_PATH`(260) 减去
+ * 目录深度后的余量估计，给未来放宽段预算留余量。
+ */
+export const SEQUENCE_NAME_MAX_LENGTH = 180
+
+/**
  * `from-graph` 分支的产物名：`sequence-<消毒 id>-<yyyyMMdd-HHmmss>-<短哈希>`。
  *
  * **短哈希不是装饰**：节点 id 可以全是 CJK（`sanitizeArtifactName` 会把它们逐字换成 `_`），
  * 两个不同节点在同一秒内导出就会撞成同一个文件名而**静默互相覆盖**；哈希取的是**原始 id**，
  * 故消毒后同名的不同 id 仍然可区分。
+ *
+ * **长度钳制**（v17 黑盒 major）：消毒后的 id 段超过 {@link MAX_ID_SEGMENT} 时**截断**，
+ * 并在尾部补一段「被截断掉的完整消毒串」的短哈希——否则两个**长公共前缀**的不同链
+ * （`A…X` 与 `A…Y`，前缀 A… 相同、只有尾巴不同）截断后会撞成同名。注意结尾仍保留既有
+ * 那段**原始 id** 短哈希（两者取的对象不同：尾部哈希取消毒串、结尾哈希取原始串），
+ * 故「消毒后同形」与「截断后同前缀」两类撞名都被挡住。短 id（≤ 上限）走原路径，
+ * 命名形态**逐字节不变**。
  */
-function sequenceArtifactName(nodeId: string): string {
+export function sequenceArtifactName(nodeId: string): string {
   const safeId = sanitizeArtifactName(nodeId, 'node')
   const hash = createHash('sha256').update(nodeId).digest('hex').slice(0, 8)
-  return `sequence-${safeId}-${localStamp()}-${hash}`
+  const segment =
+    safeId.length <= MAX_ID_SEGMENT
+      ? safeId
+      : `${safeId.slice(0, MAX_ID_SEGMENT - TRUNCATE_HASH_LEN - 1)}_${createHash('sha256')
+          .update(safeId)
+          .digest('hex')
+          .slice(0, TRUNCATE_HASH_LEN)}`
+  return `sequence-${segment}-${localStamp()}-${hash}`
 }
 
 /**
@@ -134,7 +170,9 @@ function sequenceArtifactName(nodeId: string): string {
  * - POST /api/arch/validate           校验 IR（body: { type, ir }）
  * - POST /api/arch/render             渲染并落盘（body: { type, ir, name?, project?, book?, module? }）；
  *                                     `mode: 'from-graph'` 时**不收 ir**，由服务端读图谱自组 IR
- *                                     （F5：body: { mode, type:'sequence', project, node }）
+ *                                     （F5：body: { mode, type:'sequence', project, node }；
+ *                                     v17 C-9 增 **additive** 可选 `symbols?: string[]`——
+ *                                     `node` 与 `symbols` 互斥，后者按链的相邻对构 IR）
  * - POST /api/arch/from-team          由**团队工作流**生成并渲染（body: { team_id, name? }，F-C4）
  * - GET  /api/arch/preview/:type/:file  取渲染产物 HTML（iframe 预览；防穿越；可选 `?project=`）
  * - GET  /api/arch/ir/:type/:file       取产物 IR 源与 sidecar（同上）
@@ -342,6 +380,15 @@ export function archRoutes(deps: ArchDeps): {
    * 口径声明：产物语义是「**该符号所在文件**的跨文件调用邻域」（参与者 = 文件、消息 =
    * 跨文件 calls 边），**可能不含该符号本身**；IR `meta.subtitle` 由生成器恒写「根 = 调用图
    * 度数最高的文件」，本分支显式指定了 rootFile，故渲染前**覆写**为实际根文件。
+   *
+   * v17 C-9 `symbols`（additive，`node` 与其互斥）：调用方给的是 `GET /api/graph/path` 的
+   * `chain[].id`（**不是**符号名——本仓 2340 节点仅 2063 个唯一 label），IR 按**链的相邻对**构
+   * （6 跳 = 6 条消息，链外的 calls 边一律不进图）；此时参与者 = **符号**，subtitle 由生成器
+   * 自陈（含「N 跳因无边/无 file:line 被略去」的标注），本分支不覆写。
+   *
+   * v17 C-9.2（additive）：响应**回填 `subtitle`**——取实际渲染的 IR 的 `meta.subtitle`
+   * （`irSubtitle`，与 MCP `prism_arch_generate` 同一 reader），把服务端自陈的真实计数交给
+   * 前端呈现，替代那里的静态口径文案。既有键一个不动。
    */
   const renderFromGraph = async (
     body: Record<string, unknown>,
@@ -355,11 +402,34 @@ export function archRoutes(deps: ArchDeps): {
       throw new PrismError('bad_request', '缺少 project（已注册的项目名）')
     }
     const nodeId = typeof body['node'] === 'string' ? body['node'].trim() : ''
-    if (nodeId === '') {
-      throw new PrismError('bad_request', '缺少 node（图谱节点 id；四模式查询结果的 other）')
+    /**
+     * v17 C-9（additive，**不改 node 口径**）：`symbols?: string[]` = 链上**节点 id 数组**
+     * （`GET /api/graph/path` 的 `chain[].id`）。给了它 → IR 按**相邻对**构（逐相邻对取边出
+     * 消息，链外的 calls 边一律不进图）；不传 → 现行为逐字节不变。
+     */
+    const symbols = Array.isArray(body['symbols'])
+      ? body['symbols']
+          .filter((item): item is string => typeof item === 'string')
+          .map((item) => item.trim())
+          .filter((item) => item !== '')
+      : []
+    // 两者互斥：`node` 是「按起点**文件**扩调用邻域」，`symbols` 是「按给定链逐跳取边」——
+    // 同时给会得到一个谁也说不清口径的图；400 比静默择一清晰。
+    if (nodeId !== '' && symbols.length > 0) {
+      throw new PrismError(
+        'bad_request',
+        'node 与 symbols 互斥（node = 按起点所在文件的跨文件调用邻域；symbols = 按给定符号链逐跳取边，来自 /api/graph/path 的 chain[].id）',
+      )
+    }
+    if (nodeId === '' && symbols.length === 0) {
+      throw new PrismError(
+        'bad_request',
+        '缺少 node 或 symbols（node = 图谱节点 id；symbols = 链上节点 id 数组，取自 /api/graph/path 的 chain[].id）',
+      )
     }
 
-    const name = sequenceArtifactName(nodeId)
+    // 产物名取「寻址键」的短哈希：node 模式是节点 id，symbols 模式是整条链的 id 串
+    const name = sequenceArtifactName(nodeId !== '' ? nodeId : symbols.join('>'))
     // 落点解析**先于**读图谱：未注册 → not_found；已注册但 root 被删/被挪 → project_root_missing
     // （绝不 mkdir 复活，v9.1 B-1）。
     const placement = await resolveArchPlacement({ type, home: deps.home, name, project })
@@ -370,27 +440,39 @@ export function archRoutes(deps: ArchDeps): {
     // 每请求读一次 graph.json（与 MCP/CLI `from-graph` 同一读取器，无缓存层）
     const graph = await readCodeGraph(placement.root)
     const { nodes } = normalizeGraph(graph)
-    const hit = nodes.find((node) => node.id === nodeId)
+    const nodeById = new Map(nodes.map((node) => [node.id, node]))
+    /** 链首（node 模式 = 起点；symbols 模式 = `symbols[0]`）——标题、root_file 与响应回显都用它。 */
+    const headId = nodeId !== '' ? nodeId : symbols[0]!
+    const hit = nodeById.get(headId)
     if (hit === undefined) {
       throw new PrismError(
         'bad_request',
-        `图谱中没有节点 id: ${nodeId}（请用图谱查询结果里的 other 字段，不要用符号名）`,
-        { project: projectName, node: nodeId },
+        nodeId !== ''
+          ? `图谱中没有节点 id: ${nodeId}（请用图谱查询结果里的 other 字段，不要用符号名）`
+          : `图谱中没有节点 id: ${headId}（symbols 请用 /api/graph/path 的 chain[].id，不要用符号名）`,
+        { project: projectName, node: headId },
       )
     }
     const rawFile = typeof hit.source_file === 'string' ? hit.source_file.trim() : ''
-    if (rawFile === '') {
+    if (nodeId !== '' && rawFile === '') {
       throw new PrismError('bad_request', `节点 ${nodeId} 没有 source_file，无法定位根文件`, {
         project: projectName,
         node: nodeId,
       })
     }
+    // symbols 模式**不要求** source_file（链首文件只用于响应回显/定位提示，不参与构链）
     const rootFile = rawFile.replace(/\\/g, '/')
-    const label = typeof hit.label === 'string' && hit.label.trim() !== '' ? hit.label.trim() : nodeId
+    const label = typeof hit.label === 'string' && hit.label.trim() !== '' ? hit.label.trim() : headId
 
     let ir: ReturnType<typeof buildSequenceIr>
     try {
-      ir = buildSequenceIr(graph, { title: `${projectName} · ${label} 调用链`, rootFile })
+      ir =
+        symbols.length > 0
+          ? buildSequenceIr(graph, {
+              title: `${projectName} · ${label} 符号链`,
+              symbols,
+            })
+          : buildSequenceIr(graph, { title: `${projectName} · ${label} 调用链`, rootFile })
     } catch (error) {
       const raw = error instanceof Error ? error.message : String(error)
       // 两条生成器抛错都要落到**本入口真能执行**的出路（code-review-v10 §1 P2-2）：
@@ -406,20 +488,27 @@ export function archRoutes(deps: ArchDeps): {
           : raw
       throw new PrismError('bad_request', message, {
         project: projectName,
-        node: nodeId,
+        node: headId,
         root_file: rootFile,
       })
     }
-    // 覆写 subtitle：生成器恒写「根 = 调用图度数最高的文件」，本分支的根是显式指定的
-    const rendered = {
-      ...ir,
-      meta: {
-        ...ir.meta,
-        subtitle:
-          `代码图谱派生（Graphify ${nodes.length} 节点）｜ 根 = ${rootFile}` +
-          `（由指定符号所在文件指定，非默认口径）；参与者 = 文件，消息 = 跨文件 calls 边（BFS 顺序）`,
-      },
-    }
+    /**
+     * 覆写 subtitle：生成器在 **node 模式**下恒写「根 = 调用图度数最高的文件」，本分支显式
+     * 指定了 rootFile，故必须改成实际根文件。**symbols 模式不覆写**——生成器已按符号链口径
+     * 自陈（参与者 = 符号 / 消息 = 链上相邻对 / 略去条数），覆写反而是第二真相源。
+     */
+    const rendered =
+      symbols.length > 0
+        ? ir
+        : {
+            ...ir,
+            meta: {
+              ...ir.meta,
+              subtitle:
+                `代码图谱派生（Graphify ${nodes.length} 节点）｜ 根 = ${rootFile}` +
+                `（由指定符号所在文件指定，非默认口径）；参与者 = 文件，消息 = 跨文件 calls 边（BFS 顺序）`,
+            },
+          }
 
     await mkdir(placement.dir, { recursive: true })
     const htmlPath = placement.htmlPath
@@ -435,12 +524,22 @@ export function archRoutes(deps: ArchDeps): {
     }
     const meta = await writeArtifactMeta(htmlPath, rendered, scope)
     const info = await stat(htmlPath)
+    /**
+     * v17 C-9.2：**additive** 回填 `subtitle`——与 MCP `prism_arch_generate` 走同一 reader
+     * （`irSubtitle`，单一真相源），值是**实际渲染的那个 IR**（node 模式即上面覆写后的版本）
+     * 的 `meta.subtitle`。前端据此呈现服务端真实计数（如「N 跳被略去」），而非静态口径文案。
+     */
+    const subtitle = irSubtitle(rendered)
     return ok({
       type,
       project: projectName,
-      node: nodeId,
+      // node 模式 = 起点 id；symbols 模式 = **链首** id（回显既有字段，语义见下）
+      node: headId,
+      // 只在 symbols 模式出现（additive）：让调用方一眼看到这条链就是它给的那条
+      ...(symbols.length > 0 ? { symbols } : {}),
       root: placement.root,
       root_file: rootFile,
+      ...(subtitle !== undefined ? { subtitle } : {}),
       name: `${name}.html`,
       /** 产物相对**项目根**的路径（正斜杠，便于界面直接拼 / 展示） */
       relative_path: relative(placement.root, htmlPath).split(sep).join('/'),

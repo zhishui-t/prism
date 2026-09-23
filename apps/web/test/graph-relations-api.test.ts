@@ -191,6 +191,7 @@ describe('archRenderFromGraph（F5 导出时序图）', () => {
       node: 'entry',
       root: '/tmp/demo',
       root_file: 'proj/src/cli/entry.ts',
+      subtitle: '代码图谱派生（Graphify 6 节点）｜ 根 = proj/src/cli/entry.ts',
       name: 'sequence-entry-20260917-101112-ab12cd34.html',
       relative_path: '.prism/arch/sequence/sequence-entry-20260917-101112-ab12cd34.html',
       bytes: 1234,
@@ -286,5 +287,23 @@ describe('graphRollup：分层聚合查询串拼装', () => {
 
     stubFetch({ ok: false, error: { code: 'graph_not_found', message: '项目没有图谱产物' } })
     await expect(api.graphRollup({ project: 'empty', level: 'community' })).rejects.toThrow(/^graph_not_found: /)
+  })
+
+  it('v17 B-7 翻页：`{ project, cursor }` 只发 project+cursor（不再带 level/parent）', async () => {
+    const calls = stubFetch({
+      ok: true,
+      value: { level: 'dir', parent: 'community:7', total: 503, truncated: true, nodes: [], edges: [] },
+    })
+    await api.graphRollup({ project: 'demo', cursor: 'eyJ2IjoxfQ' })
+    const qs = params(calls[0]!)
+    expect(qs.get('project')).toBe('demo')
+    expect(qs.get('cursor')).toBe('eyJ2IjoxfQ')
+    expect(qs.has('level')).toBe(false)
+    expect(qs.has('parent')).toBe(false)
+  })
+
+  it('v17 B-7 游标失效：409 `stale_cursor` 也按 D-1 抛原文（消费方据此回首页重查）', async () => {
+    stubFetch({ ok: false, error: { code: 'stale_cursor', message: '图谱已重建，翻页游标失效：请回首页重新查询' } })
+    await expect(api.graphRollup({ project: 'demo', cursor: 'stale' })).rejects.toThrow(/^stale_cursor: /)
   })
 })

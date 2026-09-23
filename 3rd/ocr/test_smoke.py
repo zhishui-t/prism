@@ -6,7 +6,12 @@
 
   1. ``--fake``（图片）→ stdout Markdown 含 ``## 第 1 页`` 与 mock 标记，exit 0；
   2. ``--fake --json``（图片）→ stdout 可 JSON 解析，pages[0].page == 1，exit 0；
-  3. 无参数 / 坏参数 → exit 2（用法错误）。
+  3. ``--fake --json`` 含顶层 ``models_used``（v17 B-A1：table/layout 计数，fake 恒 0）；
+  4. ``--fake`` 认 ``--table/--no-table/--layout/--no-layout`` 四个透传 flag，exit 0；
+  5. 无参数 / 坏参数 → exit 2（用法错误）。
+
+真模型断言（版面/表格）在 ``test_layout_table.py``（缺模型则 SKIP），不在本文件——
+本文件是 ``scripts/setup-ocr.mjs --check`` 的快速自测，必须秒级完成。
 
 用法::
 
@@ -81,6 +86,34 @@ def check_json() -> None:
     record(bool(pages) and pages[0].get("page") == 1, "json pages[0].page == 1")
     record(payload.get("total_pages") == 1, "json total_pages == 1")
     record(payload.get("file") == TINY_FIXTURE.name, "json file 为输入文件名")
+    # v17 B-A1：--fake 也必须输出 models_used 结构（值恒 0，不加载任何模型）
+    used = payload.get("models_used")
+    record(
+        isinstance(used, dict) and used.get("table") == 0 and used.get("layout") == 0,
+        "json models_used 结构存在且 fake 恒 0",
+        str(used),
+    )
+
+
+def check_enhancement_flags() -> None:
+    """v17 B-A1：四个透传 flag 都要被接受，--fake 下 exit 0 且 models_used 恒 0。"""
+    for flags in (("--no-table", "--no-layout"), ("--table", "--layout")):
+        result = run_main(rel(TINY_FIXTURE), "--fake", "--json", *flags)
+        label = " ".join(flags)
+        if result.returncode != 0:
+            record(False, f"--fake {label} exit 0", f"exit={result.returncode} stderr={result.stderr.strip()[:120]}")
+            continue
+        try:
+            payload = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            record(False, f"--fake {label} 输出可解析", str(exc))
+            continue
+        used = payload.get("models_used") or {}
+        record(
+            used.get("table") == 0 and used.get("layout") == 0,
+            f"--fake {label} models_used 恒 0",
+            str(used),
+        )
 
 
 def check_usage_guards() -> None:
@@ -108,6 +141,7 @@ def main() -> int:
 
     check_markdown()
     check_json()
+    check_enhancement_flags()
     check_usage_guards()
 
     failed = [name for ok, name, _ in _results if not ok]

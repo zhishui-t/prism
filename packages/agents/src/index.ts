@@ -38,6 +38,7 @@ export {
   renderMarkdownFile,
   emitScalar,
   stripPrismMarkerTail,
+  stripAllMarkerTails,
 } from './frontmatter.js'
 export type { FrontmatterData, FrontmatterValue } from './frontmatter.js'
 

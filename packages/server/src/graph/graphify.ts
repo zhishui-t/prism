@@ -344,7 +344,9 @@ export function formatCommand(resolved: GraphifyCommand, args: string[]): string
   return parts.join(' ')
 }
 
-// ===== 查询命令封装（Python 版 graphify 的 query/path/explain/affected/god-nodes） =====
+// ===== 查询命令封装（Python 版 graphify 的 query/explain/affected/god-nodes） =====
+// 注：`path` **不在**此列——v17 C-8 起改由 `graphPathChain` 服务端读图 BFS（见下文
+// 「调用链路径」节），不再起子进程。
 
 /** 图谱查询选项（graph 路径缺省用 <root>/graphify-out/graph.json）。 */
 export interface GraphQueryOptions {
@@ -376,8 +378,9 @@ async function runGraphQuery(
    * 只有不带 `$` 的 `Depth:` 能解析（黑盒现象即「raw 有命中行、nodes 恒空」）。
    * 单元 fixture 若用 `\n` join 则看不出来，故按真实 CLI 形态用 `\r\n` 钉死（见 graphify.test.ts）。
    *
-   * 只此一处归一，下游 graphQuery/graphPath/graphExplain/graphAffected 全部受益——
+   * 只此一处归一，下游 graphQuery/graphExplain/graphAffected 全部受益——
    * **不要**在各解析点各自剥 `\r`。`raw` 回显随之变成 LF（调试用字段，跨平台稳定，可接受）。
+   * （`graphPath` 子命令的解析行 v17 C-8 已随该封装一并删除；`graphPathChain` 读 JSON，不经此归一。）
    */
   const normalize = (text: string): string => text.replace(/\r\n/g, '\n')
   // Python 版会在 stderr 打 skill 版本告警，不视为错误
@@ -414,33 +417,6 @@ export async function graphQuery(
     if (line.startsWith('EDGE ')) edges.push(line.slice(5).trim())
   }
   return { raw: stdout, nodes, edges }
-}
-
-/** 最短路径（`graphify path "A" "B" --graph <path>`）。 */
-export async function graphPath(
-  root: string,
-  from: string,
-  to: string,
-  options: GraphQueryOptions = {},
-): Promise<{ raw: string; hops: number | null; chain: string[]; found: boolean }> {
-  const { stdout } = await runGraphQuery(['path', from, to, '--graph', defaultGraphPath(root)], options)
-  const found = !/^No (node matching|path)/i.test(stdout.trim())
-  const hopsMatch = stdout.match(/\((\d+) hops?\)/)
-  const chainLine = stdout.split('\n').find((l) => l.includes('-->'))
-  const chain =
-    chainLine === undefined
-      ? []
-      : chainLine
-          .replace(/^\s*/, '')
-          .split(/--[^-]*-->/)
-          .map((s) => s.trim())
-          .filter((s) => s !== '')
-  return {
-    raw: stdout,
-    hops: hopsMatch !== null ? Number(hopsMatch[1]) : null,
-    chain,
-    found,
-  }
 }
 
 /** 节点解释（`graphify explain "X" --graph <path>`）。 */
@@ -613,6 +589,19 @@ const graphDocumentCache = new Map<string, { key: string; graph: CodeGraph }>()
  * （`not_found` 图谱不存在 / `bad_request` 产物不可解析），避免第二套文案。
  */
 export async function readCodeGraphCached(root: string): Promise<CodeGraph> {
+  return (await readCodeGraphCachedVersioned(root)).graph
+}
+
+/**
+ * 同 `readCodeGraphCached`，但**一并返回版本键** `mtimeMs:size`（= 缓存的失效键）。
+ *
+ * 单开这一支的理由（v17 B-7）：rollup 分页要把图版本键写进 `next_cursor` 载荷——图一重建
+ * （mtime/size 变）旧游标即失效（路由比对后回 409）。让调用方**复用同一次 stat**、
+ * 也复用同一个键格式，避免第二处 `mtimeMs:size` 拼装漂移。
+ */
+export async function readCodeGraphCachedVersioned(
+  root: string,
+): Promise<{ graph: CodeGraph; version: string }> {
   const path = defaultGraphPath(root)
   let key: string
   try {
@@ -621,15 +610,14 @@ export async function readCodeGraphCached(root: string): Promise<CodeGraph> {
   } catch {
     // 产物缺失/不可 stat：清掉可能存在的陈旧条目，让 readCodeGraph 抛标准错误
     graphDocumentCache.delete(path)
-    return await readCodeGraph(root)
+    // readCodeGraph 对缺失产物必抛，`version` 只是为类型齐全；调用方拿不到它
+    return { graph: await readCodeGraph(root), version: '' }
   }
   const hit = graphDocumentCache.get(path)
-  if (hit !== undefined && hit.key === key) {
-    return hit.graph
-  }
+  if (hit !== undefined && hit.key === key) return { graph: hit.graph, version: key }
   const graph = await readCodeGraph(root)
   graphDocumentCache.set(path, { key, graph })
-  return graph
+  return { graph, version: key }
 }
 
 // ===== 调用链关系查询（v8 F4：直读 graph.json 内存过滤，零子进程） =====
@@ -834,7 +822,8 @@ type GraphNodeResolution =
  * ② 否则 `norm_label` 精确匹配（查询串先 `toLowerCase()` 归一：实测 `norm_label ≡ label.toLowerCase()`）；
  * ③ 仍未命中 → `norm_label` **前缀**匹配；
  * ④ 命中恰好 1 个 → 用它；⑤ ≥2 个 → 多义（候选交 UI 挑）；⑥ 0 个 → 无此节点。
- * ②③ 都可能多义（本仓 2056 个唯一 norm_label / 2340 节点，164 个 label 重名）。
+ * ②③ 都可能多义（本仓 2340 节点仅 2063 个唯一 label；按归一化名寻址时，2056 个唯一
+ * `norm_label` 里有 164 个对应多个节点）。
  */
 function resolveGraphNode(nodes: GraphNodeRecord[], query: string): GraphNodeResolution {
   const exactId = nodes.find((n) => n.id === query)
@@ -899,6 +888,203 @@ function compareLine(a: string, b: string): number {
   const right = Number(b)
   if (Number.isInteger(left) && Number.isInteger(right)) return left - right
   return a < b ? -1 : 1
+}
+
+// ===== 调用链路径（v17 C-8：服务端读图 + BFS 自求路径） =====
+
+/**
+ * 路径链上的一跳节点。
+ *
+ * `file`/`line` 取的是该节点**发出**的那条边的调用点（`relations` 的 `dir=out` 同口径：
+ * 边上的 `source_file` + `source_location`，形如 `"L52"`）——即「它在哪里调起了下一跳」。
+ * 于是**末位**节点（链尾）的 file/line 恒为空串：链尾没有下一跳可标。
+ */
+export interface GraphPathChainHop {
+  /** 节点 id（前端导出时序图直接用：`symbols: chain.map((h) => h.id)`） */
+  id: string
+  /** 节点 label（渲染用；节点无 label → 回落 id） */
+  label: string
+  /** 调用发出侧文件（项目相对、正斜杠）；链尾/多义跳 → 空串 */
+  file: string
+  /** 调用发出侧行号（纯数字串，剥 `L` 前缀）；链尾/多义跳 → 空串 */
+  line: string
+  /** 该跳的**符号**在图内没有唯一节点对应（起/终点入参多义）→ true；此时 file/line 必为空串 */
+  ambiguous?: boolean
+}
+
+export interface GraphPathChainResult {
+  /**
+   * 链路的**文本渲染**（服务端自求；**不再是** graphify 子进程原文）。
+   * 人类可读输出（CLI 非 `--json`）用它；形态刻意贴近原来的 graphify 输出
+   * （`Shortest path (N hops):` + `A --calls--> B`）。
+   */
+  raw: string
+  /** 跳数 = `chain.length - 1`；无解/无节点 → null */
+  hops: number | null
+  chain: GraphPathChainHop[]
+  found: boolean
+}
+
+/**
+ * 两节点间**有向**最短路径（v17 C-8 / SPEC-C8.1）。
+ *
+ * 为什么不再调 `graphify path` 子进程：它的输出**只有 label 链**（`graphify.ts` 旧实现），
+ * 而下游（时序图导出 / 前端链路图）**按节点 id 寻址**（本仓冻结裁决 F5-2 禁止 label 顶替
+ * 寻址；本仓 2340 节点仅 2063 个唯一 label，159 个 label 值跨文件重名）——label 反推必错。故改为：**服务端直读
+ * `<root>/graphify-out/graph.json` → 在内存里自己 BFS**（带 mtime+size 失效键的进程内缓存，
+ * 只缓存 read+parse，与 rollup 同先例），每跳 file:line 从 BFS 用到的**边数据**取。
+ *
+ * 入参语义（`from`/`to` 既可是节点 id 也可是符号名）：
+ * ① 精确 `id` 命中优先；② 其次 `norm_label` 精确（唯一 → 用；多义 → **多源 BFS**）；
+ * ③ 再退唯一前缀（与 `/api/graph/relations` 共用同一个 `resolveGraphNode`，不另造一套）。
+ * 多义端点**不猜**：以全部候选为 BFS 源/靶，取**首个可达**的候选落链（图内节点序 →
+ * 邻居 id 序，全程确定），并把该端点标 `ambiguous: true`（file/line 置空，前端灰显）。
+ *
+ * 无解 / 端点在图内不存在 / 起终点落到同一节点 → `found: false` + `chain: []`
+ * （**不抛错**：调用方查一个不存在的符号只是「没路径」，不是服务端故障）。
+ *
+ * 方向口径：**有向**（沿 `source → target`），与 graphify CLI 的默认（不加 `--undirected`）
+ * 一致。边的端点是 `source`/`target`、调用点是 `source_file`/`source_location`（本仓
+ * 7103 边实测；graphify 内部才用的 `_src`/`_tgt` 标记本仓产物里 0 条）。
+ */
+export async function graphPathChain(
+  root: string,
+  from: string,
+  to: string,
+): Promise<GraphPathChainResult> {
+  const document = await readGraphDocumentCached(root)
+  const nodes = readGraphNodes(document)
+  const edges = readGraphEdges(document)
+
+  const empty = (raw: string): GraphPathChainResult => ({ raw, hops: null, chain: [], found: false })
+
+  const source = resolveGraphNode(nodes, from)
+  if (source.kind === 'missing') return empty(`No node matching '${from}' found.`)
+  const target = resolveGraphNode(nodes, to)
+  if (target.kind === 'missing') return empty(`No node matching '${to}' found.`)
+
+  // 有向邻接 + 同向首条边（BFS 只关心「这条边在」，file:line/relation 取首条即可）
+  const adjacency = new Map<string, string[]>()
+  const edgeOf = new Map<string, Record<string, unknown>>()
+  for (const edge of edges) {
+    const edgeSource = asText(edge['source'])
+    const edgeTarget = asText(edge['target'])
+    if (edgeSource === '' || edgeTarget === '') continue
+    const list = adjacency.get(edgeSource) ?? []
+    list.push(edgeTarget)
+    adjacency.set(edgeSource, list)
+    const key = pairKey(edgeSource, edgeTarget)
+    if (!edgeOf.has(key)) edgeOf.set(key, edge)
+  }
+  // 邻居**排序**：同长度的多条路径之间必须有唯一的确定解（否则同一张图两次查询可能给出不同链）
+  for (const [key, list] of adjacency) {
+    adjacency.set(key, [...new Set(list)].sort())
+  }
+
+  const sources = endpointIds(nodes, source)
+  const targets = new Set(endpointIds(nodes, target))
+
+  // 多源 BFS：源按**图内节点序**入队（「图内首个唯一匹配」的落地），邻居按 id 序展开
+  const previous = new Map<string, string>()
+  const seen = new Set<string>(sources)
+  const queue = [...sources]
+  let end: string | null = null
+  while (queue.length > 0) {
+    const current = queue.shift()!
+    if (targets.has(current)) {
+      end = current
+      break
+    }
+    for (const next of adjacency.get(current) ?? []) {
+      if (seen.has(next)) continue
+      seen.add(next)
+      previous.set(next, current)
+      queue.push(next)
+    }
+  }
+
+  if (end === null) {
+    return empty(`No path found between '${from}' and '${to}'.`)
+  }
+  const ids: string[] = [end]
+  while (previous.has(ids[0]!)) {
+    ids.unshift(previous.get(ids[0]!)!)
+  }
+  if (ids.length < 2) {
+    // 起终点落到同一节点（含 from===to）：0 跳不是调用链，宁缺毋滥
+    return empty(
+      `'${from}' 与 '${to}' 解析到同一节点 ${ids[0]}，无法构造调用链（请用更具体的符号或节点 id）。`,
+    )
+  }
+
+  const labelById = new Map(nodes.map((node) => [node.id, node.label]))
+  const ambiguousEnds = new Set<number>([0, ids.length - 1].filter((index) =>
+    (index === 0 ? source : target).kind === 'ambiguous',
+  ))
+
+  const chain: GraphPathChainHop[] = ids.map((id, index) => {
+    const ambiguous = ambiguousEnds.has(index)
+    // file/line = 该节点**发出**的那条边（链尾没有下一跳 → 空串）；多义跳**不带** file:line
+    const next = index + 1 < ids.length ? edgeOf.get(pairKey(id, ids[index + 1]!)) : undefined
+    const location = ambiguous || next === undefined ? { file: '', line: '' } : locationOfEdge(next)
+    return {
+      id,
+      label: labelById.get(id)?.trim() || id,
+      file: location.file,
+      line: location.line,
+      ...(ambiguous ? { ambiguous: true } : {}),
+    }
+  })
+
+  const segments = ids.map((id, index) => {
+    const label = chain[index]!.label
+    if (index === 0) return label
+    const edge = edgeOf.get(pairKey(ids[index - 1]!, id))
+    const relation = edge !== undefined ? asText(edge['relation']) || 'related' : 'related'
+    return `--${relation}--> ${label}`
+  })
+
+  return {
+    raw: `Shortest path (${chain.length - 1} hops):\n  ${segments.join(' ')}`,
+    hops: chain.length - 1,
+    chain,
+    found: true,
+  }
+}
+
+/** 端点解析结果 → **图内节点序**的候选 id 列表（单义 = 1 个）。 */
+function endpointIds(
+  nodes: GraphNodeRecord[],
+  resolution: GraphNodeResolution,
+): string[] {
+  if (resolution.kind === 'found') return [resolution.node.id]
+  if (resolution.kind === 'ambiguous') {
+    const ids = new Set(resolution.candidates.map((candidate) => candidate.id))
+    return nodes.filter((node) => ids.has(node.id)).map((node) => node.id)
+  }
+  return []
+}
+
+/** 边索引键（`\u0000` 分隔：节点 id 里不会出现该字符，避免拼接歧义）。 */
+function pairKey(source: string, target: string): string {
+  return `${source}\u0000${target}`
+}
+
+/** 边的调用点 file:line（`source_location` 剥 `L` 前缀；**不**回落节点——链路里边的位置才是这一跳的位置）。 */
+function locationOfEdge(edge: Record<string, unknown>): { file: string; line: string } {
+  return {
+    file: asText(edge['source_file']).replace(/\\/g, '/'),
+    line: stripLinePrefix(asText(edge['source_location'])),
+  }
+}
+
+/**
+ * `readGraphDocument` 的**缓存版**：走 `readCodeGraphCached` 的 `path + mtimeMs + size`
+ * 失效键（rollup 先例——只缓存 read+parse，不缓存派生结果；图重建天然换 key）。
+ */
+async function readGraphDocumentCached(root: string): Promise<Record<string, unknown>> {
+  const graph = await readCodeGraphCached(root)
+  return graph as unknown as Record<string, unknown>
 }
 
 // ===== 导出命令封装（graphify export <format>） =====

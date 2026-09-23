@@ -5,17 +5,24 @@
  *   node scripts/setup-ocr.mjs [选项]
  *
  * 装两样东西（都**不进发行包**，见下）：
- *   1. **pip 依赖** → 当前 Python 环境（`3rd/ocr/requirements.txt`：rapidocr + onnxruntime + pypdfium2）
- *   2. **PP-OCRv5 server 三件套 ONNX** → `3rd/ocr/models/`（det / rec / cls，共约 179MB）
+ *   1. **pip 依赖** → 当前 Python 环境（`3rd/ocr/requirements.txt`）
+ *   2. **ONNX 模型** → `3rd/ocr/models/`：
+ *      - **核心三件套**（det / rec / cls，PP-OCRv5 server，共约 179MB）——OCR 主路；
+ *      - **可选两件**（v17 B-A1）：`slanet-plus.onnx`（表格结构，约 7.4MB）+
+ *        `pp_doc_layoutv3.onnx`（版面分析，约 124MB）——扫描表格还原与多栏阅读顺序。
+ *        两件缺任一件时 OCR 主路照常，只是**回到无 table/layout 的旧输出**（设计 A-0）。
  *
  * 为什么**显式**下载模型而不用 rapidocr 的自动拉取：rapidocr 缺省首次运行会联网把模型
  * 下载进 site-packages，破坏「装完即可离线」的承诺（工具侧 ocr_main.py 也一律显式传
  * `Det/Rec/Cls.model_path`）。所以模型由本脚本显式落到 `3rd/ocr/models/`，且**逐个校验
  * SHA256**——ModelScope 的 resolve 链接走重定向，半截包/被代理截断的包若无校验会一路
- * 带到运行时，表现为难以定位的推理报错。
+ * 带到运行时，表现为难以定位的推理报错。表格/版面两件走 `rapid_table` / `rapid_layout`
+ * pip 包（同 rapidocr 家族维护），由 ocr_main.py 显式传模型路径，同样**绝不联网拉取**。
  *
- * 模型版本 = `MODELSCOPE_TAG`（RapidAI/RapidOCR 仓库的发布 tag）。升级要点：
- *   1) 改 `MODELSCOPE_TAG`，2) 重算三件的 bytes + SHA256（`node -e` 算即可），
+ * 模型版本 = `MODELSCOPE_TAG`（RapidAI/RapidOCR 仓库的发布 tag）+ 表格/版面各自的
+ * ModelScope 仓库 master 分支（下游 pip 包的 `default_models.yaml` 即为钉版依据）。
+ * 升级要点：
+ *   1) 改对应 tag/URL，2) 重算 bytes + SHA256（`node -e` 算即可），
  *   3) 与 `3rd/ocr/README.md` 的说明保持一致。
  *
  * 产物（gitignored，不进仓库）：`3rd/ocr/models/*.onnx`
@@ -50,13 +57,27 @@ const TEST_SMOKE = join(OCR_DIR, 'test_smoke.py')
 const FIXTURES_DIR = join(OCR_DIR, 'fixtures')
 const EXPECTED_JSON = join(FIXTURES_DIR, 'expected.json')
 
-/** 模型发布 tag（锁定上游版本；升级见文件头）。 */
+/** 核心三件套的发布 tag（锁定上游版本；升级见文件头）。 */
 const MODELSCOPE_TAG = 'v3.9.2'
 const MODEL_BASE = `https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/${MODELSCOPE_TAG}/onnx/PP-OCRv5`
 
 /**
- * 三件套清单。bytes / sha256 为官方发布值——**不要凭记忆改**，
+ * 可选两件（v17 B-A1）的上游 URL：表格 / 版面各自的 ModelScope 仓库（master 分支，
+ * 与下游 pip 包 `default_models.yaml` 钉的同一份发布物）。
+ */
+const TABLE_MODEL_URL = 'https://www.modelscope.cn/models/RapidAI/RapidTable/resolve/master/slanet-plus.onnx'
+const LAYOUT_MODEL_URL =
+  'https://www.modelscope.cn/models/RapidAI/RapidLayout/resolve/master/onnx/pp_doc_layout/pp_doc_layoutv3.onnx'
+
+/**
+ * 模型清单。bytes / sha256 为官方发布值——**不要凭记忆改**，
  * 改动必须重新下载核对（见文件头「升级要点」）。
+ *
+ * `file` 决定落盘名——五件一律**平铺**在 `<models>/` 下（与 `ocr_main.py` 的
+ * `MODEL_FILES` 及 knowledge 侧 `ocrModelsReady()` 的「至少三件 .onnx」口径一致）；
+ * `dir` 只用于拼核心三件套的缺省 URL（`<MODEL_BASE>/<dir>/<file>`），表格/版面两件
+ * 另给完整 `url`（不同仓库）。`optional: true` 的两件缺失只影响 table/layout 增强，
+ * **不阻断 OCR 主路**（`--check` 仍报状态，但 `--check` 退出码与安装流程都不强制）。
  */
 const MODELS = [
   {
@@ -80,7 +101,28 @@ const MODELS = [
     bytes: 6_776_876,
     sha256: '7d3c02ef6c7da8ae08b4347cc7695b2081aae68c325d64375724ecf39c99e743',
   },
+  {
+    role: 'table',
+    dir: '',
+    file: 'slanet-plus.onnx',
+    url: TABLE_MODEL_URL,
+    bytes: 7_758_305,
+    sha256: 'd57a942af6a2f57d6a4a0372573c696a2379bf5857c45e2ac69993f3b334514b',
+    optional: true,
+  },
+  {
+    role: 'layout',
+    dir: '',
+    file: 'pp_doc_layoutv3.onnx',
+    url: LAYOUT_MODEL_URL,
+    bytes: 130_502_330,
+    sha256: '250dbad1dfb9e4983fab75e1bf5085cd56ec3f41d5c7d0f8623ec74856e7aa67',
+    optional: true,
+  },
 ]
+
+/** 核心三件套（主路就绪判据）；其余为可选两件。 */
+const CORE_MODELS = MODELS.filter((m) => m.optional !== true)
 
 /** pip 镜像回落（默认源失败时试一次；见 main 里的说明）。 */
 const PIP_MIRROR = 'https://pypi.tuna.tsinghua.edu.cn/simple'
@@ -142,20 +184,36 @@ async function run(cmd, cmdArgs) {
   if (code !== 0) throw new Error(`命令失败（退出码 ${code}）: ${cmd} ${cmdArgs.join(' ')}`)
 }
 
-/** pip 依赖是否可导入（三者缺一即视为未就绪）。 */
-function depsReady(python) {
-  const result = spawnSync(python, ['-c', 'import rapidocr, onnxruntime, pypdfium2'], {
+/** 核心 pip 依赖模块（OCR 主路）。 */
+const CORE_DEPS = ['rapidocr', 'onnxruntime', 'pypdfium2']
+/** 可选 pip 依赖模块（v17 B-A1：表格结构 + 版面分析）。 */
+const EXTRA_DEPS = ['rapid_table', 'rapid_layout']
+
+/** 指定模块是否都能 import（`modules` 为空视为就绪）。 */
+function importable(python, modules) {
+  if (modules.length === 0) return true
+  const result = spawnSync(python, ['-c', `import ${modules.join(', ')}`], {
     cwd: ROOT,
     encoding: 'utf-8',
   })
   return result.status === 0
 }
 
+/** 核心 pip 依赖是否可导入（三者缺一即视为未就绪）。 */
+function depsReady(python) {
+  return importable(python, CORE_DEPS)
+}
+
+/** 可选 pip 依赖（表格/版面）是否可导入。 */
+function optionalDepsReady(python) {
+  return importable(python, EXTRA_DEPS)
+}
+
 /** 安装 pip 依赖；已就绪则跳过（--force 重装）。默认源失败时回落清华镜像。 */
 async function installPip() {
   const python = resolvePython()
-  if (!FORCE && depsReady(python)) {
-    log(`pip 依赖已就绪，跳过: rapidocr / onnxruntime / pypdfium2（--force 可重装）`)
+  if (!FORCE && depsReady(python) && optionalDepsReady(python)) {
+    log(`pip 依赖已就绪，跳过: ${[...CORE_DEPS, ...EXTRA_DEPS].join(' / ')}（--force 可重装）`)
     return
   }
   log(`安装 Python 依赖（解释器 ${python}）…`)
@@ -167,7 +225,11 @@ async function installPip() {
     await run(python, ['-m', 'pip', 'install', '-q', '-r', REQUIREMENTS, '-i', PIP_MIRROR])
   }
   if (!depsReady(python)) {
-    throw new Error('pip 安装完成但仍无法导入 rapidocr / onnxruntime / pypdfium2')
+    throw new Error(`pip 安装完成但仍无法导入核心依赖 ${CORE_DEPS.join(' / ')}`)
+  }
+  if (!optionalDepsReady(python)) {
+    // 可选两件装不上不阻断主路（对齐设计 A-0「模型未装静默跳过」），给出告警即可
+    log(`⚠ 可选依赖 ${EXTRA_DEPS.join(' / ')} 仍无法导入——表格/版面增强不可用（OCR 主路照常）`)
   }
   log('pip 依赖就绪')
 }
@@ -175,7 +237,7 @@ async function installPip() {
 /** 下载单个模型：校验通过才改名落位；失败清理 .part。 */
 async function downloadModel(model) {
   const dest = join(MODELS_DIR, model.file)
-  const url = `${MODEL_BASE}/${model.dir}/${model.file}`
+  const url = model.url ?? `${MODEL_BASE}/${model.dir}/${model.file}`
   log(`下载（${model.role}）${url}`)
 
   const tmp = `${dest}.${randomUUID().slice(0, 8)}.part`
@@ -278,42 +340,60 @@ async function selfTest() {
   return text
 }
 
-/** --check：轻量报告四项，exit 0 当且仅当 pip 依赖 + 模型都就绪（自测失败亦置非零）。 */
+/**
+ * `--check`：轻量报告各项状态。
+ *
+ * **退出码 0 的判据只含核心项**（核心 pip 依赖 + 核心三件套模型 + `--fake` 自测）：
+ * 可选两件（表格/版面）缺失时**报告状态但不置非零**——它们不阻断 OCR 主路，
+ * 只是让 table/layout 增强回到旧输出（设计 A-0「模型未装静默跳过」）。
+ */
 async function checkOnly() {
   const python = resolvePython()
   log(`Python 解释器: ${python}`)
 
-  const deps = spawnSync(python, ['-c', 'import rapidocr, onnxruntime, pypdfium2'], {
+  const deps = spawnSync(python, ['-c', `import ${CORE_DEPS.join(', ')}`], {
     cwd: ROOT,
     encoding: 'utf-8',
   })
   const depsOk = deps.status === 0
   log(
-    `pip 依赖: ${depsOk ? '就绪' : '缺失'}（rapidocr / onnxruntime / pypdfium2）` +
+    `pip 依赖（核心）: ${depsOk ? '就绪' : '缺失'}（${CORE_DEPS.join(' / ')}）` +
       (depsOk ? '' : `——${errorLine(deps.stderr)}`),
   )
 
-  let modelsOk = true
+  const extras = spawnSync(python, ['-c', `import ${EXTRA_DEPS.join(', ')}`], {
+    cwd: ROOT,
+    encoding: 'utf-8',
+  })
+  const extrasOk = extras.status === 0
+  log(
+    `pip 依赖（可选：表格/版面）: ${extrasOk ? '就绪' : '缺失'}（${EXTRA_DEPS.join(' / ')}）` +
+      (extrasOk ? '' : `——${errorLine(extras.stderr)}`),
+  )
+
+  const modelStatus = new Map()
   for (const model of MODELS) {
     const dest = join(MODELS_DIR, model.file)
+    let status
     if (!existsSync(dest)) {
-      modelsOk = false
-      log(`模型(${model.role}): 缺失 → ${model.file}`)
-      continue
+      status = `缺失 → ${model.file}`
+    } else {
+      const info = await stat(dest)
+      if (info.size !== model.bytes) {
+        status = `大小不符（${info.size} ≠ ${model.bytes}）→ ${model.file}`
+      } else if ((await sha256File(dest)) !== model.sha256) {
+        status = `SHA256 不符 → ${model.file}`
+      } else {
+        status = `就绪 → ${model.file}`
+      }
     }
-    const info = await stat(dest)
-    if (info.size !== model.bytes) {
-      modelsOk = false
-      log(`模型(${model.role}): 大小不符（${info.size} ≠ ${model.bytes}）→ ${model.file}`)
-      continue
-    }
-    if ((await sha256File(dest)) !== model.sha256) {
-      modelsOk = false
-      log(`模型(${model.role}): SHA256 不符 → ${model.file}`)
-      continue
-    }
-    log(`模型(${model.role}): 就绪 → ${model.file}`)
+    modelStatus.set(model, status)
+    log(`模型(${model.role}${model.optional === true ? '，可选' : ''}): ${status}`)
   }
+  const coreModelsOk = CORE_MODELS.every((m) => modelStatus.get(m).startsWith('就绪'))
+  const extrasModelsOk = MODELS.filter((m) => m.optional === true).every((m) =>
+    modelStatus.get(m).startsWith('就绪'),
+  )
 
   let smokeOk = true
   if (existsSync(TEST_SMOKE)) {
@@ -327,7 +407,14 @@ async function checkOnly() {
     log(`--fake 自测: 跳过（未找到 ${TEST_SMOKE}）`)
   }
 
-  process.exitCode = depsOk && modelsOk && smokeOk ? 0 : 1
+  if (!extrasOk || !extrasModelsOk) {
+    log(
+      '提示: 表格/版面增强未就绪（可选）——扫描 PDF 的表格还原与多栏阅读顺序不可用，' +
+        'OCR 主路照常。补齐请重跑 node scripts/setup-ocr.mjs',
+    )
+  }
+
+  process.exitCode = depsOk && coreModelsOk && smokeOk ? 0 : 1
 }
 
 async function main() {
@@ -348,7 +435,21 @@ async function main() {
     if (SKIP_MODELS) {
       log('--skip-models：跳过模型下载')
     } else {
-      for (const model of MODELS) await ensureModel(model)
+      for (const model of MODELS) {
+        if (model.optional === true) {
+          // 可选两件（表格/版面）下载/校验失败**不阻断**主路——只告警，继续装核心件
+          try {
+            await ensureModel(model)
+          } catch (error) {
+            log(
+              `⚠ 可选模型（${model.role}）未就绪：${error instanceof Error ? error.message : String(error)}` +
+                '——表格/版面增强不可用，OCR 主路照常',
+            )
+          }
+        } else {
+          await ensureModel(model)
+        }
+      }
     }
 
     if (SKIP_SELFTEST) {

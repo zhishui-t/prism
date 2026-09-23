@@ -32,6 +32,11 @@ import {
   scanProject,
   type ScanOptions,
 } from '../src/kb/scan.js'
+import {
+  parseOcrFlag,
+  resolveOcrWiringConfig,
+  resolveOcrWiringConfigForHome,
+} from '../src/kb/wiring.js'
 import { MemoryKb, imageOnlyPdf, makeTempDir, putFile } from './helpers.js'
 
 const FIXTURES = fileURLToPath(new URL('../../../3rd/ocr/fixtures/', import.meta.url))
@@ -352,4 +357,75 @@ describe('真机（条件跳过：需要 3rd/ocr 模型 + pip 依赖）', () => 
     expect(await kb.get('IDX-img-tiny')).toBeNull()
     expect(report.by_skip_reason[SKIP_REASONS.noTextDetected]).toBe(1)
   }, 300_000)
+})
+
+// ---------------------------------------------------------------------------
+// v17 B-A1：OCR 表格/版面扁平键（`ocr_table` / `ocr_layout`）与 scan 透传
+// ---------------------------------------------------------------------------
+
+describe('OCR 增强装配（v17 A-0 / SPEC-A1.2、A2.3）', () => {
+  it('parseOcrFlag：缺省开 / 显式 on-off / 非法值告警回落', () => {
+    expect(parseOcrFlag(undefined, true)).toBe(true)
+    expect(parseOcrFlag('', true)).toBe(true)
+    for (const on of ['on', 'ON', 'true', '1', ' on ']) expect(parseOcrFlag(on, true)).toBe(true)
+    for (const off of ['off', 'OFF', 'false', '0', ' off ']) expect(parseOcrFlag(off, true)).toBe(false)
+
+    const warnings: string[] = []
+    expect(parseOcrFlag('yes', true, 'ocr_table', warnings)).toBe(true) // 非法 → 回落缺省
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain('ocr_table')
+    expect(warnings[0]).toContain('yes')
+  })
+
+  it('resolveOcrWiringConfig：两键都开 + 两件模型在位才启用（否则回旧输出）', () => {
+    // 缺省（未配置）→ 开；模型都在位 → enabled
+    expect(resolveOcrWiringConfig({ tableModelReady: true, layoutModelReady: true })).toEqual({
+      ocr: { table: true, layout: true },
+      enabled: true,
+      warnings: [],
+    })
+    // ocr_table=false → 整个增强关（layout 也关，保证逐字回旧输出）
+    expect(
+      resolveOcrWiringConfig({ table: 'off', tableModelReady: true, layoutModelReady: true }),
+    ).toEqual({ ocr: { table: false, layout: false }, enabled: false, warnings: [] })
+    // ocr_layout=false → 同样全关（没有 layout 就没有 table 区域）
+    expect(
+      resolveOcrWiringConfig({ layout: 'off', tableModelReady: true, layoutModelReady: true }).enabled,
+    ).toBe(false)
+    // 模型缺一 → 关
+    expect(resolveOcrWiringConfig({ tableModelReady: true, layoutModelReady: false }).enabled).toBe(false)
+    expect(resolveOcrWiringConfig({}).enabled).toBe(false) // 两件都未就绪（缺省 readiness=false）
+    // 非法值告警合并
+    const warnings: string[] = []
+    resolveOcrWiringConfig({ table: 'maybe', layout: 'nope', warnings })
+    expect(warnings).toHaveLength(2)
+  })
+
+  it('resolveOcrWiringConfigForHome：ocr_table=off 时无论模型在不在都关（读 prism.yaml 单点）', async () => {
+    const home = await makeTempDir('prism-ocr-home-')
+    await writeFile(join(home, 'prism.yaml'), 'ocr_table: off\n', 'utf-8')
+    expect(resolveOcrWiringConfigForHome(home).enabled).toBe(false)
+  })
+
+  it('scan：ocr 选项透传到 runner（缺省都开；显式关才关）', async () => {
+    const tiny = await readFile(TINY)
+    const seen: Array<{ table?: boolean; layout?: boolean } | undefined> = []
+    const run: OcrRunner = async (_input, options) => {
+      seen.push(options)
+      return { ok: true, markdown: GOOD_OCR }
+    }
+    setOcrHooks({ available: () => true, run })
+
+    const root = await makeProject({ 'README.md': '# 项目\n\n说明。' })
+    await putBinary(root, 'img/logo.png', tiny)
+
+    await scan(root, new MemoryKb(), { ocr: { table: false, layout: false } })
+    await scan(root, new MemoryKb()) // 缺省（不传 ocr）→ 都开
+    // dry-run 也会真跑转换（未变文件才短路）——此处两个 kb 都是空的，各跑一次
+
+    expect(seen).toEqual([
+      { table: false, layout: false },
+      { table: true, layout: true },
+    ])
+  })
 })

@@ -38,7 +38,9 @@
 >
 > - **F3 外部技能删除（数据安全轨）**：新增 `DELETE /api/skills/external/:name` —— 删**外部技能**（人写在 `skills_dir` 下、非 Prism 产物的技能目录）：整目录搬进回收站，**200 + `{ skills_dir, removed: [目录], trash_id }`**（`trash_id` 供 UI 提示 3 天内可 `prism trash restore <id>` 还原）。错误：SKILL.md 含 Prism marker → **409 `id_conflict`**（提示走卸载）；目录不存在 / 存在但无 SKILL.md → **404**（非技能目录不可删）；`:name` 为空串 / `.` / `..` / 含路径分隔符 → **400**。`skills_dir` 取**配置解析后**的同源值（`resolveDirsFromHome(home,{rootExplicit:true}).skillsDir`，与 `GET /api/skills`、`installedSkillNames` 同源，**不用 `harnessPaths`**——prism.yaml 覆盖 `skills_dir` 时它会读错目录）；外部判定**按落点文件**（有 SKILL.md 且无 marker），**不查内置清单**——否则会误伤「复制内置后改写的人写同名技能」。`GET /api/skills/usage` 每行增只读 **`external_removable`**（= 有 SKILL.md 且无 marker；无 SKILL.md/未落盘/Prism 产物恒 `false`），供 UI 区分「删除」与「卸载」。
 > - **F5 导出时序图（调用链轨）**：`POST /api/arch/render` 增 **`mode: 'from-graph'`** 分支——入参 `{ mode, type: 'sequence', project, node }`（`node` = **图谱节点 id**，即四模式查询结果的 `other`，**不是符号名**：label 跨文件重名会静默选错）。服务端读 graph.json 一次 → 该节点 `source_file` 作 rootFile → `buildSequenceIr` → `renderDiagram`，响应沿用既有结构（`preview` URL 新标签打开）。三类 **`bad_request`**：节点 id 不存在 / 图谱无跨文件 calls 边 / **指定根文件无跨文件 calls 边**（高频路径，文案指引换起点）。产物名 `sequence-<消毒 id>-<yyyyMMdd-HHmmss>-<sha256(原始 id) 前 8 位>.html`（CJK 符号消毒后会同名互覆，靠短哈希防撞），落**项目源** `<projectRoot>/.prism/arch/sequence/`，**不落**全局 archify 目录（避免 arch 页双源列表堆积无归属噪音）。
-> - **F9 分层聚合·逐级探索（性能轨）**：新增 `GET /api/graph/rollup?project=&level=community|dir|file|symbol&parent=<合成 id?>` → `{ level, parent, total, truncated, nodes: [{ id, label, kind, symbol_count, community? }], edges: [{ from, to, weight }] }`（**不含 `project`**，形状钉死给前端）。合成 id 编码 `community:<n>` / `dir:<path>` / `file:<path>`（正斜杠）；community 层无 parent，dir/file/symbol 层 parent 必填。三层是**独立投影、非包含树**（同一文件的符号可属多个社区：dir 层计数只数该父社区成员，file/symbol 层是全图口径——下钻计数变化是设计语义，不是 bug）。`weight` = **跨组 calls 族边条数**（`calls`/`invokes`；**不计 `imports`/`re_exports` 等结构边**，与边自带的 `weight` 字段无关）。单层 >500 节点按 `symbol_count` 降序（label 字典序次级）截断，`total` = 截断前全量、`truncated` 标记，**edges 只保留两端都在返回节点集内的**（无悬挂边）。level 非法 / 该层缺 parent → **400**；parent 反解后在图中无对应实体 → **404**。`level=symbol&parent=file:<path>` 是 file 节点的**只读出口**：`nodes[].id` 是**真实图谱节点 id**（合成节点在四模式查询里必 404），`kind='symbol'`，`edges` 恒 `[]`。读图带**进程内缓存**（只包 read+parse、不缓存聚合结果，失效键 `path+mtime+size`）。
+> - **F9 分层聚合·逐级探索（性能轨；v17 B-7 真分页）**：新增 `GET /api/graph/rollup?project=&level=community|dir|file|symbol&parent=<合成 id?>`（翻页用 `&cursor=<上页 next_cursor>`）→ `{ level, parent, total, truncated, nodes: [{ id, label, kind, symbol_count, community? }], edges: [{ from, to, weight }], next_cursor? }`（**不含 `project`**，形状钉死给前端）。合成 id 编码 `community:<n>` / `dir:<path>` / `file:<path>`（正斜杠）；community 层无 parent，dir/file/symbol 层 parent 必填。三层是**独立投影、非包含树**（同一文件的符号可属多个社区：dir 层计数只数该父社区成员，file/symbol 层是全图口径——下钻计数变化是设计语义，不是 bug）。`weight` = **跨组 calls 族边条数**（`calls`/`invokes`；**不计 `imports`/`re_exports` 等结构边**，与边自带的 `weight` 字段无关）。单层 >500 节点按 `symbol_count` 降序（label 字典序次级）**分页**（每页 500 条）：首页起响应带不透明 `next_cursor`（base64url 的 JSON 载荷，**内嵌图版本键 = 产物 `mtimeMs:size`**），`?cursor=` 取次页（**游标自包含**：给 cursor 时不再传 `level`/`parent`，同给也不改判），耗尽即**无** `next_cursor`。`total` = 全量节点数、`truncated` = 本层是否超 500 条。**edges 口径**：每条跨组边只在「较晚一端入页」的那一页出现一次——首页只含页内节点间的边，次页补齐「新节点 ↔ **已翻页节点**」的跨页边（不重不漏、无悬挂边）。level 非法 / 该层缺 parent / 游标载荷形态非法（非 base64url JSON、版本或字段不符）→ **400**；parent 反解后在图中无对应实体 → **404**；游标内嵌的图版本键与当前图不符（**图已重建**）→ **409 `stale_cursor`**（消费方回首页重查——重建期翻页会重复/漏项，以此声明兜底）。`level=symbol&parent=file:<path>` 是 file 节点的**只读出口**：`nodes[].id` 是**真实图谱节点 id**（合成节点在四模式查询里必 404），`kind='symbol'`，`edges` 恒 `[]`。读图带**进程内缓存**（只包 read+parse、不缓存聚合结果，失效键 `path+mtime+size`）。
+> - **C-8 路径链（v17，调用链轨）**：`GET /api/graph/path` / `prism_graph_path` / `prism graph path` 由「spawn `graphify path` 拿标签链」改为**服务端读 `graph.json` + BFS 自求**（标签寻址会因跨文件重名选错，F5-2 只认 id）。响应**新增** `chain: [{ id, label, file, line, ambiguous? }]`（既有 `raw`/`hops`/`found` 保留）；每跳 `file`/`line` 取**发出该跳的 calls 边**的 `source_file`/`source_location`，歧义端点该跳置空 + `ambiguous:true`。子进程封装 `graphPath` 及其单测**已删**（三面改走 BFS 后零消费方）。明细见 `code-graph.md §4`。
+> - **C-9 symbols 入参（v17，调用链轨）**：`prism_arch_generate`（`type: 'sequence'`）/ `POST /api/arch/render`（`mode: 'from-graph'`）/ `prism arch from-graph sequence --symbols` 新增可选 `symbols: string[]`（节点 **id** 数组）——按**相邻对**取边（6 跳 → 7 参与者 + 6 消息），只取相邻两点间的边、防链外边混入；缺边/边无 file:line 略去并在 subtitle 计数。未给 `symbols` = 现行 `node`/`rootFile` 口径**逐字节不变**；`node` 与 `symbols` **互斥**（同给 → `bad_request`）。`symbols` 直接消费 C-8 的 `chain[].id`。**C-9.2（v17）**：`POST /api/arch/render`（`mode: 'from-graph'`）响应**additive** 回填 `subtitle`（= **实际渲染的那个 IR** 的 `meta.subtitle`，即 node 模式覆写后的版本 / symbols 模式由生成器自陈的计数），与 MCP `prism_arch_generate` 走**同一 reader**（`graph/archify.ts` 的 `irSubtitle`，单一真相源——两处各拼一遍必漂移）；既有响应键集一个不动，前端据此呈现服务端真实计数（旧服务端缺该字段时回落静态口径文案）。
 >
 > **已废弃**：工作队列（`prism_work_*` 工具、`work` 命令、`/api/work/*`）——见 `work-queue.md` 顶部；下方 §1 的 `work` 分组与 §2.7 已失效。同理 `uninit` / `harness detect` / `skill sync` 均未实现。
 
@@ -127,13 +129,13 @@ prism
 │   ├── validate <type> <ir.json>   校验 IR（schema + 布局）
 │   ├── render <type> <ir.json>     渲染为自包含 HTML（--book/--module 归到书内）
 │   ├── from-team <team_id>         由团队定义自动派生工作流图（IR 是纯函数产物，零手写）
-│   ├── from-graph <type> <project> 由代码图谱派生 architecture|sequence|dataflow（--top/--limit；缺省落 <project>/.prism/arch/）
+│   ├── from-graph <type> <project> 由代码图谱派生 architecture|sequence|dataflow（--top/--limit；sequence 可加 --symbols <id,id,…> 按相邻对取边；缺省落 <project>/.prism/arch/）
 │   └── from-state [--title <t>]    由 Prism 任务状态机派生生命周期图（14 态 36 转移）
 │
 ├── graph                   代码图谱（Python 版 graphify）
 │   ├── build <project>     建图（graphify <root> + cluster-only --no-label，零 LLM）
 │   ├── query <q>           BFS 遍历查询
-│   ├── path <a> <b>        最短路径
+│   ├── path <a> <b>        最短路径（服务端读图 BFS；标签或 id 皆可，输出带 id 的链）
 │   ├── explain <node>      节点解释
 │   ├── affected <node>     变更影响面（--depth）
 │   ├── god-nodes           枢纽节点（--top）
@@ -217,7 +219,7 @@ prism
 | 工具 | 作用 |
 | :--- | :--- |
 | `prism_graph_query` | 查询（BFS/DFS） |
-| `prism_graph_path` | 最短路径 |
+| `prism_graph_path` | 最短路径（v17 C-8：**服务端读图 BFS**，不再 spawn `graphify path`；响应含 `chain[{id,label,file,line,ambiguous?}]`，`id` 可回喂 `prism_arch_generate.symbols`） |
 | `prism_graph_explain` | 节点解释 |
 | `prism_graph_affected` | 变更影响面 |
 | `prism_graph_summary` | 图谱统计（节点/边/社区） |
@@ -233,7 +235,7 @@ prism
 
 | 工具 | 作用 |
 | :--- | :--- |
-| `prism_arch_generate` | 由 `type` 分派生成五类图并落盘 —— `workflow`（需 `team`）、`architecture`/`sequence`/`dataflow`（需已注册 `project`）、`lifecycle`（无入参）。返回 `{ type, html, ir, bytes, title, subtitle, source, project?, book?, module? }`。**落盘（v9 F1）**：项目三类图缺省落 `<projectRoot>/.prism/arch/<type>/`（未注册 → not_found；root 被删/被挪 → `project_root_missing`，**不 mkdir 复活**），`workflow`/`lifecycle` 落 `<PRISM_HOME>/archify/<type>/`，可选 `out` 完全接管（跳过项目解析）。**写 sidecar** `*.meta.json`（含可选 `book`/`module` 作用域）——v9 起 MCP 与 CLI/HTTP 同口径 |
+| `prism_arch_generate` | 由 `type` 分派生成五类图并落盘 —— `workflow`（需 `team`）、`architecture`/`sequence`/`dataflow`（需已注册 `project`）、`lifecycle`（无入参）。返回 `{ type, html, ir, bytes, title, subtitle, source, project?, book?, module? }`。可选 `symbols: string[]`（**仅 `sequence`**，v17 C-9）——给定时改按**相邻对**取边（`[s0..s6]` → 7 参与者 + 6 条消息，**只取相邻两点的边**，防链外边混入；缺边/边无 file:line 的跳略去并在 subtitle 计数），未给 = 现行行为**逐字节不变**；`node` 与 `symbols` **互斥**（同给 → `bad_request`）。**落盘（v9 F1）**：项目三类图缺省落 `<projectRoot>/.prism/arch/<type>/`（未注册 → not_found；root 被删/被挪 → `project_root_missing`，**不 mkdir 复活**），`workflow`/`lifecycle` 落 `<PRISM_HOME>/archify/<type>/`，可选 `out` 完全接管（跳过项目解析）。**写 sidecar** `*.meta.json`（含可选 `book`/`module` 作用域）——v9 起 MCP 与 CLI/HTTP 同口径 |
 
 > **v9 F1 资产归位（HTTP 面）**：`GET /api/arch/diagrams` **双源**——各注册项目
 > `<projectRoot>/.prism/arch/<type>/*.html` + 全局 `<PRISM_HOME>/archify/<type>/*.html`。

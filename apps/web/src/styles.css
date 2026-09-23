@@ -588,10 +588,16 @@ tr:last-child td { border-bottom: 0; }
 .chain-node.pick:focus-visible { transform: translateY(calc(-1 * var(--press))); }
 .chain-node.pick:hover rect,
 .chain-node.pick:focus-visible rect { stroke: var(--buckram); }
+/* 多义跳（v17 W-8，服务端 `chain[].ambiguous`）：图内没有唯一符号对应 → 灰显。
+   复用 `button:disabled` 的 `opacity` 惯例（不引新颜色），语义同「不可定位」。 */
+.chain-node.ambiguous { opacity: 0.5; }
 .chain-edge { fill: none; stroke-width: 1.5; }
 .chain-edge.out,
 .chain-edge.down { stroke: var(--buckram); }
 .chain-edge.in { stroke: var(--lamp); }
+/* 段标注（v17 W-8 的 `file:line`）：贴段右侧起排、左对齐——默认的 `text-anchor: middle`
+   会让字压在那段竖线上。色取既有 `--mute`（与图例同族），字族字号继承 `.chain-graph text`。 */
+.chain-graph .chain-edge-label { text-anchor: start; fill: var(--mute); }
 .chain-arrow.out,
 .chain-arrow.down { fill: var(--buckram); }
 .chain-arrow.in { fill: var(--lamp); }

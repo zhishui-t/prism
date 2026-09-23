@@ -18,12 +18,14 @@
  *   6. file 卡片的「查此节点」→ 符号列表（只读）→ 点符号**切回查询态**对该**真实 id**
  *      发四模式查询（含「先前停在 path 档」这一路径——`pickSymbol` 不被 mode 守卫挡掉）；
  *       dir/community 卡片**没有**这个入口；
- *   7. 截断（`truncated`）如实告知 + 客户端「更多」只翻已取回的数据（**不发请求**）；
+ *   7. 截断（`truncated`）如实告知 + **B-7 真分页**：本地翻完用 `next_cursor` 取次页并并进本层
+ *      （跨页边在次页补齐）、409 `stale_cursor` → 丢弃本层回第一页重查；
  *   8. 空态 / 错误态（含重试）。
  *
  * mock 口径：与 `graph-query-dom.test.ts` 同款——stub 最外层 `globalThis.fetch`，
  * 让 `api.ts` 与页面一起跑真代码（要断言「打到了哪个 URL、带了什么参数」）。
- * rollup 的桩按 `level|parent` 取，未知键回 `not_stubbed` 信封（用例写漏会红，不会静默过）。
+ * rollup 的桩按 `level|parent` 取（翻页按 `cursor:<游标>`），未知键回 `not_stubbed` 信封
+ * （用例写漏会红，不会静默过）。
  */
 
 import { act, createElement } from 'react'
@@ -48,7 +50,10 @@ const STATUS = {
 
 /** 路径 → 信封（非 rollup 的既有端点用）。 */
 let payloads: Record<string, unknown> = {}
-/** `level|parent` → 信封（rollup 全部四层）。 */
+/**
+ * rollup 桩：首页按 `level|parent` 取，翻页按 `cursor:<游标>` 取。
+ * 未知键回 `not_stubbed` 信封（用例写漏会红，不会静默过）。
+ */
 let rollups: Record<string, unknown> = {}
 let requests: URL[] = []
 /** `hold()` 挂起中的响应：settle 之前该路径的 fetch 一直悬着。 */
@@ -91,7 +96,11 @@ beforeEach(() => {
     if (url.pathname === '/api/graph/projects') return Promise.resolve({ json: async () => ok([PROJECT]) })
     if (url.pathname === '/api/graph/status') return Promise.resolve({ json: async () => ok(STATUS) })
     if (url.pathname === '/api/graph/rollup') {
-      const key = `${url.searchParams.get('level')}|${url.searchParams.get('parent') ?? ''}`
+      const cursor = url.searchParams.get('cursor')
+      const key =
+        cursor !== null
+          ? `cursor:${cursor}`
+          : `${url.searchParams.get('level')}|${url.searchParams.get('parent') ?? ''}`
       const hit = rollups[key]
       return Promise.resolve({
         json: async () =>
@@ -216,6 +225,18 @@ function crumbs(): string[] {
 
 function lastRollup(level: string): URL | undefined {
   return [...rollupRequests()].reverse().find((u) => u.searchParams.get('level') === level)
+}
+
+/** 翻页请求（带 `cursor` 的那些）——B-7 真分页用。 */
+function cursorRequests(): URL[] {
+  return rollupRequests().filter((u) => u.searchParams.has('cursor'))
+}
+
+/** 某一层（`level` + 可选 `parent`）被请求了几次——409 回首页重查要看这个。 */
+function layerRequests(level: string, parent: string | null = null): URL[] {
+  return rollupRequests().filter(
+    (u) => u.searchParams.get('level') === level && (u.searchParams.get('parent') ?? null) === parent,
+  )
 }
 
 // ===== rollup 夹具（形状逐字对齐后端 `graph-rollup.test.ts`） =====
@@ -543,7 +564,7 @@ describe('F9ui file 出口：查此节点 → 符号列表 → 发四模式查�
 })
 
 describe('F9ui 截断与分页', () => {
-  it('`truncated` 如实告知「共多少 / 给了多少」，不假装能拉回余量', async () => {
+  it('`truncated` 如实告知「共多少 / 已加载多少」', async () => {
     rollups['community|'] = ok({
       level: 'community',
       parent: null,
@@ -555,10 +576,10 @@ describe('F9ui 截断与分页', () => {
     await render()
     await toExplore()
     const note = one('.explore-truncated')!
-    expect(note.textContent).toBe(t('graph.explore.truncated', { total: 503, returned: 1 }))
+    expect(note.textContent).toBe(t('graph.explore.truncated', { total: 503, loaded: 1 }))
   })
 
-  it('超过一屏只渲染一屏 + 「更多」；点「更多」展开**已取回**的数据，不发请求', async () => {
+  it('本地未翻完时「更多」只切本地（不发请求）', async () => {
     const nodes = Array.from({ length: 130 }, (_, i) => ({
       id: `community:${i}`,
       label: `C${i}`,
@@ -579,8 +600,130 @@ describe('F9ui 截断与分页', () => {
     await click(one<HTMLButtonElement>('.explore-more button')!)
     expect(cards()).toHaveLength(130)
     expect(one('.explore-more')).toBeNull()
-    // 全程只有最初那一笔 rollup——分页是纯切片
+    // 全程只有最初那一笔 rollup——本地还有余量，不请求
     expect(rollupRequests()).toHaveLength(1)
+  })
+
+  it('v17 B-7 真分页：本地翻完 + `next_cursor` → 点「更多」用游标取次页并并进本层', async () => {
+    const page1 = Array.from({ length: 60 }, (_, i) => ({
+      id: `community:${i}`,
+      label: `C${i}`,
+      kind: 'community',
+      symbol_count: 60 - i,
+    }))
+    const page2 = Array.from({ length: 10 }, (_, i) => ({
+      id: `community:${60 + i}`,
+      label: `C${60 + i}`,
+      kind: 'community',
+      symbol_count: 10 - i,
+    }))
+    rollups['community|'] = ok({
+      level: 'community',
+      parent: null,
+      total: 70,
+      truncated: true,
+      nodes: page1,
+      edges: [],
+      next_cursor: 'cur-1',
+    })
+    rollups['cursor:cur-1'] = ok({
+      level: 'community',
+      parent: null,
+      total: 70,
+      truncated: true,
+      nodes: page2,
+      edges: [],
+      // 耗尽：次页无 next_cursor
+    })
+    await render()
+    await toExplore()
+
+    // 第一页 60 条已铺满一屏，「更多」此时指向**服务端次页**
+    await click(one<HTMLButtonElement>('.explore-more button')!)
+
+    expect(cursorRequests()).toHaveLength(1)
+    const sent = cursorRequests()[0]!
+    expect(sent.searchParams.get('cursor')).toBe('cur-1')
+    // 游标自包含：翻页请求**不带** level/parent
+    expect(sent.searchParams.has('level')).toBe(false)
+    expect(sent.searchParams.has('parent')).toBe(false)
+
+    expect(cards()).toHaveLength(70)
+    // 两页都取完 + 本地全显示 → 「更多」消失
+    expect(one('.explore-more')).toBeNull()
+  })
+
+  it('v17 B-7 跨页边在次页补齐：次页带回「新节点 ↔ 已翻页节点」的边（卡片强度更新）', async () => {
+    const page1 = Array.from({ length: 60 }, (_, i) => ({
+      id: `community:${i}`,
+      label: `C${i}`,
+      kind: 'community',
+      symbol_count: 60 - i,
+    }))
+    rollups['community|'] = ok({
+      level: 'community',
+      parent: null,
+      total: 61,
+      truncated: true,
+      nodes: page1,
+      edges: [],
+      next_cursor: 'cur-1',
+    })
+    // 次页：新节点 community:60，边只含它与已翻页的 community:0 之间那条（首页因对端缺席看不到）
+    rollups['cursor:cur-1'] = ok({
+      level: 'community',
+      parent: null,
+      total: 61,
+      truncated: true,
+      nodes: [{ id: 'community:60', label: 'C60', kind: 'community', symbol_count: 1 }],
+      edges: [{ from: 'community:0', to: 'community:60', weight: 3 }],
+    })
+    await render()
+    await toExplore()
+
+    // 首页：community:0 没有跨组边（对端在第 2 页）→ 无强度标记
+    expect(cardByLabel('C0').querySelector('.explore-weight')).toBeNull()
+
+    await click(one<HTMLButtonElement>('.explore-more button')!)
+    expect(cards()).toHaveLength(61)
+    // 次页补齐后，页 1 的卡片也拿到了跨页边（卡片数字是**边条数**：C0 出 1、C60 入 1）
+    expect(cardByLabel('C0').querySelector('.explore-weight')!.textContent).toBe('\u21921')
+    expect(cardByLabel('C60').querySelector('.explore-weight')!.textContent).toBe('\u21901')
+  })
+
+  it('v17 B-7 收 409 `stale_cursor` → 丢弃本层已取回的页、回第一页重查（不报错给用户）', async () => {
+    const page1 = Array.from({ length: 60 }, (_, i) => ({
+      id: `community:${i}`,
+      label: `C${i}`,
+      kind: 'community',
+      symbol_count: 60 - i,
+    }))
+    const firstPageValue = {
+      level: 'community',
+      parent: null,
+      total: 70,
+      truncated: true,
+      nodes: page1,
+      edges: [],
+      next_cursor: 'cur-1',
+    }
+    rollups['community|'] = ok(firstPageValue)
+    rollups['cursor:cur-1'] = { ok: false, error: { code: 'stale_cursor', message: '图谱已重建，翻页游标失效：请回首页重新查询' } }
+
+    await render()
+    await toExplore()
+    expect(layerRequests('community')).toHaveLength(1)
+
+    await click(one<HTMLButtonElement>('.explore-more button')!)
+    await act(async () => {})
+
+    // 翻页失败没有把错误摆到界面上（那是 stale_cursor 的特殊处理）
+    expect(one('.act-bar.err')).toBeNull()
+    // 而是回第一页重查：community 层被请求了第二次
+    expect(layerRequests('community')).toHaveLength(2)
+    expect(cards()).toHaveLength(60)
+    // 重查回来后（图已刷新，新页仍带游标）「更多」可再点
+    expect(one('.explore-more button')).not.toBeNull()
   })
 
   it('未截断时不出截断说明（不与「一屏分页」混为一谈）', async () => {

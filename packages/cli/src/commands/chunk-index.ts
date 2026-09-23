@@ -57,6 +57,12 @@ export interface ChunkBackfillInput {
   book?: string
   /** 段向量计算端口；未装配（嵌入不可用）时 undefined → 只补段行与段 FTS */
   embed?: (text: string) => Promise<Float32Array | null>
+  /**
+   * 段向量**批量**端口（v17 §B-5，可选）：`(texts) => (Float32Array|null)[]`（等长同序）。
+   * 提供时本模块对该条目缺向量的段**一次算整批**（一篇 entry 的全部缺段为一批），
+   * 否则逐段走 `embed`——未提供时行为与改动前逐字节一致。
+   */
+  embedBatch?: (texts: string[]) => Promise<(Float32Array | null)[]>
   /** 当前嵌入模型 id（判「段向量是否齐全」的同一把尺子；缺省 'unknown'，同 service 口径） */
   model?: string
 }
@@ -169,7 +175,7 @@ export async function backfillChunks(input: ChunkBackfillInput): Promise<ChunkBa
     }
 
     // ④ 向量就绪？嵌入不可用 → 判据为真（补不了，不阻塞跳过——M-9）
-    if (current.length === 0 || input.embed === undefined) {
+    if (current.length === 0 || (input.embed === undefined && input.embedBatch === undefined)) {
       if (!rewrote) report.skipped++
       continue
     }
@@ -181,23 +187,47 @@ export async function backfillChunks(input: ChunkBackfillInput): Promise<ChunkBa
     }
 
     const computed: Array<{ id: number; vec: Float32Array }> = []
-    for (const row of missing) {
-      let vec: Float32Array | null
+    if (input.embedBatch !== undefined) {
+      // v17 §B-5：一次算整批（该条目全部缺段）。失败位 null → 逐段记入 failed（可定位 seq）。
+      let results: Array<Float32Array | null>
       try {
-        vec = await input.embed(row.embedInput)
+        results = await input.embedBatch(missing.map((row) => row.embedInput))
       } catch (error) {
-        report.failed.push({
-          entry: entry.id,
-          seq: row.seq,
-          reason: `嵌入失败: ${error instanceof Error ? error.message : String(error)}`,
-        })
+        const reason = `嵌入失败: ${error instanceof Error ? error.message : String(error)}`
+        for (const row of missing) report.failed.push({ entry: entry.id, seq: row.seq, reason })
         continue
       }
-      if (vec === null || vec.length === 0) {
-        report.failed.push({ entry: entry.id, seq: row.seq, reason: '嵌入不可用（返回空向量）' })
-        continue
+      for (let i = 0; i < missing.length; i++) {
+        const row = missing[i]
+        const vec = results[i]
+        if (row === undefined) continue
+        if (vec === null || vec === undefined || vec.length === 0) {
+          report.failed.push({ entry: entry.id, seq: row.seq, reason: '嵌入不可用（返回空向量）' })
+          continue
+        }
+        computed.push({ id: row.id, vec })
       }
-      computed.push({ id: row.id, vec })
+    } else {
+      const embed = input.embed
+      if (embed === undefined) continue
+      for (const row of missing) {
+        let vec: Float32Array | null
+        try {
+          vec = await embed(row.embedInput)
+        } catch (error) {
+          report.failed.push({
+            entry: entry.id,
+            seq: row.seq,
+            reason: `嵌入失败: ${error instanceof Error ? error.message : String(error)}`,
+          })
+          continue
+        }
+        if (vec === null || vec.length === 0) {
+          report.failed.push({ entry: entry.id, seq: row.seq, reason: '嵌入不可用（返回空向量）' })
+          continue
+        }
+        computed.push({ id: row.id, vec })
+      }
     }
     if (computed.length === 0) continue
 

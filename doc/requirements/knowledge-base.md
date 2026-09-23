@@ -380,6 +380,7 @@ CREATE VIRTUAL TABLE kb_fts USING fts5(body, seg, tokenize='unicode61');
 
 | 参数 | 默认 | 作用 |
 | :--- | :--- | :--- |
+| `hybrid` | 未给 = 自动 | 检索模式开关：`false` 强制纯 BM25（关向量路，显式关**不报**降级）；`true`/未给且向量可用 → BM25+向量 RRF |
 | `hybrid_candidates` | `HYBRID_CANDIDATES = 50` | 每路候选池上限（最终再截断到 `limit`）；**提高它才能召回长尾** |
 | `rrf_k` | `RRF_K = 60` | RRF 平滑常数 `1/(k+rank)`，越小越强调头部 |
 | `vector_floor` | `VECTOR_FLOOR = 0.42` | 绝对余弦下限（低于视为不相关，防噪声经 RRF 混入） |
@@ -442,8 +443,10 @@ uploaded → converting → converted → previewing → active
 
 - 引擎：`@firecrawl/anydoc`（MIT，零依赖，已实测）。
 - 支持：doc/docx/pdf/ppt/xlsx/epub/csv/rtf/odt → GFM Markdown。
-- **边界（v14 起内置 OCR 管道，可选安装）**：图片型扫描 PDF / 图片文件走 `3rd/ocr`（pypdfium2 300dpi 栅格化 + RapidOCR PP-OCRv5 server 三件套，本地判别模型零 LLM）→ 转文本入库；**未安装时维持原行为**（返回 `unsupported` / `needs_ocr` 并报告原因），已装时扫描 PDF / 图片转文本入库。装法 `pnpm run 3rd:setup`（模型 ~180MB 按需下载，模型目录不进发行包）。**R7 不破**：源文件不改，OCR 产物只是入库文本。
-- **D-v14-1（记债，S9）**：OCR **只取文字块**——图表只提取文字标签（视觉语义不做）、扫描表格**不还原结构**（文本块入库）、**版面分析不做**、**公式识别不做**（三项属「与 WeKnora 对比的剩余差距」，按需走 PP-Structure 同族路线补）；**文档内嵌图片**（docx 插图 / PDF 图区域）本轮不做。
+- **边界（v14 起内置 OCR 管道，可选安装）**：图片型扫描 PDF / 图片文件走 `3rd/ocr`（pypdfium2 300dpi 栅格化 + RapidOCR PP-OCRv5 server 三件套，本地判别模型零 LLM）→ 转文本入库；**未安装时维持原行为**（返回 `unsupported` / `needs_ocr` 并报告原因），已装时扫描 PDF / 图片转文本入库。装法 `pnpm run 3rd:setup`（核心三件套模型 ~180MB，按需下载，模型目录不进发行包）。**R7 不破**：源文件不改，OCR 产物只是入库文本。
+- **边界（v17 A-1/A-2 增强，可选安装）**：核心三件套之外再加两个**可选**判别模型——`rapid_table`（SLANet-Plus，**扫描表格还原为 Markdown 表格**）+ `rapid_layout`（PP-DocLayoutv3，**版面分析**：区域分类 + 多栏/双栏**阅读顺序还原**）。两者缺失（文件或 pip 包任一不在）时**静默回落**到 v14 行为（纯文字块，逐行坐标顺序）——**输出与旧版逐字节相同**（单栏无表格文档有回归锚点）。开关走 `prism.yaml` 扁平键 `ocr_table` / `ocr_layout`（默认 `on`；任一 `off` 或不就绪即回落旧行为）。**表格模型只在版面检出 table 区域时才推理**（无表格页零调用）。
+- **边界（v17 A-3/A-4，可选安装）**：**公式占位**——版面判出的独立公式块（`display_formula`）在正文里留 `[公式]` 占位，公式区域的散行文本不进正文；**占位文本本身进 FTS 与段向量**（「此处有公式」是可检索信息）。**不做 LaTeX**（真识别记债 D-v17-1）。**文档内嵌图片**——`toMarkdownBytes` 支持格式（**PDF 除外**）里的内嵌图，经 anydoc `toDocument` 取 `assets[].data` → 临时文件 → 同一 OCR 管道 → 文本以 `> [图片 N]…` 引用块插回原 alt 位置；图片 OCR 文本同正常文本进 FTS / 段向量。mediaType 白名单 png/jpeg/webp，白名单外跳过；OCR 未就绪时整条内嵌图路径不走（与 v14 逐字节回落契约零冲突）。
+- **D-v14-1（记债，S9；v17 部分核销）**：OCR 文字块提取保持——图表**视觉语义**仍不做（只提取文字标签）。**已落地**：扫描表格结构还原（v17 A-1）、版面分析 / 多栏阅读顺序（v17 A-2）、公式占位 `[公式]`（v17 A-3）、文档内嵌图片提取（v17 A-4）→ 这些自本版起**不再是差距**。**剩余差距**：图表视觉语义、**公式真识别**（LaTeX，记债 D-v17-1）。
 
 ### 6.5 富化 ⚠ 已改为宿主直付（2026-09-10：工作队列移除）
 

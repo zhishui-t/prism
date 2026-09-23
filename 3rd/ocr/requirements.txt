@@ -1,3 +1,5 @@
 rapidocr==3.9.2
 onnxruntime>=1.16
 pypdfium2>=4
+rapid_table==3.0.2
+rapid_layout==1.2.1

@@ -27,6 +27,7 @@ import {
   activeRerankModel,
   activeTier,
   embedText,
+  embedBatchText,
   embeddingInstalled,
   ensureEmbeddingServer,
   gpuBackendLabel,
@@ -34,6 +35,7 @@ import {
   rerankInstalled,
   rerankServerAlive,
   resolveKbConfigForHome,
+  resolveEmbedBatchForHome,
   resolveRerankConfigForHome,
   resolveTier,
   stopEmbeddingServer,
@@ -348,6 +350,8 @@ async function reindex(ctx: CommandContext): Promise<number> {
         const r = await embedText(text)
         return r.ok && r.vector !== undefined ? r.vector : null
       },
+      // v17 §B-5：批口（扁平键 `embed_batch`）——一次算一篇 entry 的全部缺段
+      embedBatch: async (texts) => embedBatchText(texts, resolveEmbedBatchForHome(ctx.home)),
       model: def.id,
     })
     const payload = {

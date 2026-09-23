@@ -10,7 +10,7 @@ import {
   mergeProjectGraphs,
   resolveGraphifyCommand,
   runGraphify,
-  graphPath as queryPath,
+  graphPathChain as queryPath,
   graphExplain as queryExplain,
   graphAffected as queryAffected,
   graphGodNodes as queryGodNodes,
@@ -246,7 +246,13 @@ async function ensureGraph(ctx: CommandContext, root: string): Promise<boolean> 
   }
 }
 
-/** `prism graph path <from> <to> --project <名>`。 */
+/**
+ * `prism graph path <from> <to> --project <名>`。
+ *
+ * v17 C-8：服务端读图 BFS（零子进程）。`--json` 下链上每跳带 `id` 与调用点
+ * `file`/`line`（多义跳 `ambiguous:true` + file/line 空）；非 `--json` 打印服务端
+ * 渲染的链路文本（`Shortest path (N hops):` + `A --calls--> B`）。
+ */
 async function graphPathCmd(ctx: CommandContext, args: string[], values: ArgValues): Promise<number> {
   const [from, to] = args
   if (from === undefined || to === undefined) {
@@ -255,7 +261,7 @@ async function graphPathCmd(ctx: CommandContext, args: string[], values: ArgValu
   }
   const target = await resolveProject(ctx, values, undefined, '用法: prism graph path <from> <to> --project <项目名>')
   if (target === null || !(await ensureGraph(ctx, target.root))) return 1
-  const result = await queryPath(target.root, from, to, { cwd: target.root })
+  const result = await queryPath(target.root, from, to)
   if (ctx.json) {
     ctx.stdout(JSON.stringify({ ok: true, value: { project: target.project, ...result } }))
     return result.found ? 0 : 1

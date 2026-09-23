@@ -240,7 +240,18 @@ describe('四模式 chips 与端点映射', () => {
   })
 
   it('切「A→B 调用链」→ 出第二个输入框、关系下拉消失，请求走 `/api/graph/path` 带 from/to', async () => {
-    payloads['/api/graph/path'] = ok({ project: 'demo', raw: '', hops: 2, chain: ['a', 'm', 'b'], found: true })
+    // v17 C-8：`chain` 是 `{ id, label, file, line, ambiguous? }[]`（本棒渲染面只用 label）
+    payloads['/api/graph/path'] = ok({
+      project: 'demo',
+      raw: '',
+      hops: 2,
+      chain: [
+        { id: 'n0', label: 'a', file: '', line: '' },
+        { id: 'n1', label: 'm', file: '', line: '' },
+        { id: 'n2', label: 'b', file: '', line: '' },
+      ],
+      found: true,
+    })
     await render()
     expect(nodeInputs()).toHaveLength(1)
 

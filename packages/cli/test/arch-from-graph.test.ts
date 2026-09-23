@@ -29,7 +29,7 @@ afterEach(async () => {
   }
 })
 
-/** 3 个目录角色 + 跨文件 calls 边（architecture 生成器的最小可用输入）。 */
+/** 3 个目录角色 + 跨文件 calls 边（architecture 生成器的最小可用输入；v17 C-9 另需调用点 file:line）。 */
 const GRAPH = {
   nodes: [
     { id: 'cli', label: 'entry', source_file: 'proj/src/cli/entry.ts', community: 0 },
@@ -37,8 +37,8 @@ const GRAPH = {
     { id: 'store', label: 'db', source_file: 'proj/src/store/db.ts', community: 2 },
   ],
   links: [
-    { source: 'cli', target: 'api', relation: 'calls' },
-    { source: 'api', target: 'store', relation: 'calls' },
+    { source: 'cli', target: 'api', relation: 'calls', source_file: 'proj/src/cli/entry.ts', source_location: 'L12' },
+    { source: 'api', target: 'store', relation: 'calls', source_file: 'proj/src/api/routes.ts', source_location: 'L34' },
   ],
 }
 
@@ -139,4 +139,39 @@ describe('prism arch from-graph（v9 F1 落点）', () => {
     expect(meta.ir_file).toBe('demo.ir.json')
     expect(meta.archify_version).toBe('2.16.0')
   }, 120_000)
+
+  /**
+   * v17 C-9：`--symbols <id,id,...>`（链上节点 id，取自 `prism graph path --json` 的
+   * `chain[].id`）→ 时序图按**相邻对**构：3 参与者 / 2 条消息，链外的 calls 边不进图。
+   */
+  it('--symbols 按链的相邻对出消息（3 参与者 / 2 条消息）', async () => {
+    const { root, ctx } = await setup()
+    const code = await runCommand(ctx, [
+      'arch', 'from-graph', 'sequence', 'demo', '--symbols', 'cli,api,store',
+    ])
+    expect(code).toBe(0)
+    const ir = JSON.parse(
+      await readFile(join(root, '.prism', 'arch', 'sequence', 'demo.ir.json'), 'utf-8'),
+    ) as {
+      participants: Array<{ id: string; label: string }>
+      messages: Array<{ from: string; to: string }>
+      meta: { subtitle: string }
+    }
+    expect(ir.participants).toHaveLength(3)
+    expect(ir.participants.map((participant) => participant.label)).toEqual(['entry', 'routes', 'db'])
+    expect(ir.messages).toHaveLength(2)
+    expect(ir.messages.map((message) => `${message.from}>${message.to}`)).toEqual([
+      `${ir.participants[0]!.id}>${ir.participants[1]!.id}`,
+      `${ir.participants[1]!.id}>${ir.participants[2]!.id}`,
+    ])
+    expect(ir.meta.subtitle).toContain('符号链导出（3 参与者 / 2 条相邻对消息）')
+  }, 120_000)
+
+  it('--symbols 只对 sequence 有意义（其它类型 → bad_request，不静默忽略）', async () => {
+    const { ctx, errors } = await setup()
+    expect(
+      await runCommand(ctx, ['arch', 'from-graph', 'architecture', 'demo', '--symbols', 'cli,api']),
+    ).toBe(1)
+    expect(errors.join('\n')).toContain('--symbols 只对 sequence')
+  })
 })

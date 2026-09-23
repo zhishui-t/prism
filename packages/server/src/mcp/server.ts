@@ -53,13 +53,13 @@ import {
 import {
   runGraphify,
   readCodeGraph,
-  graphPath as queryGraphPath,
+  graphPathChain as queryGraphPathChain,
   graphExplain as queryGraphExplain,
   graphAffected as queryGraphAffected,
   graphGodNodes as queryGraphGodNodes,
   graphSummary as queryGraphSummary,
 } from '../graph/graphify.js'
-import { renderDiagram, writeArtifactMeta } from '../graph/archify.js'
+import { irSubtitle, irTitle, renderDiagram, writeArtifactMeta } from '../graph/archify.js'
 import { assertProjectRoot, resolveArchPlacement, sanitizeArtifactName } from '../graph/arch-placement.js'
 import { inspectGraphStatus, ProjectRegistry } from '../graph/registry.js'
 import { mergeProjectGraphs, type MergeProjectInput } from '../graph/merge.js'
@@ -67,7 +67,7 @@ import { convertFileToMarkdown } from '../kb/convert-file.js'
 import { makeDryRunKb, scanProject } from '../kb/scan.js'
 import type { GraphQuery, KnowledgeService, Layer, SearchQuery, SearchResponse } from '../kb/port.js'
 import { depositWithPolicy, type DepositRequest } from '../kb/deposit-entry.js'
-import { loadKnowledgeService } from '../kb/wiring.js'
+import { loadKnowledgeService, resolveOcrWiringConfigForHome } from '../kb/wiring.js'
 import { buildContextPack } from '../kb/context-pack.js'
 import { writeEnrichment } from '../kb/enrich-writeback.js'
 import { DEFAULT_SERVE_PORT, ensureServe } from '../serve-control.js'
@@ -193,11 +193,9 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
     const to = typeof args.to === 'string' ? args.to.trim() : ''
     if (from === '' || to === '') throw new Error('prism_graph_path 需要 { from, to, project }')
     const { project, root } = await requireProject(args, 'prism_graph_path')
-    const result = await queryGraphPath(root, from, to, {
-      cwd: root,
-      ...(deps.graphifyEnv !== undefined ? { env: deps.graphifyEnv } : {}),
-      ...(deps.graphifyTimeoutMs !== undefined ? { timeoutMs: deps.graphifyTimeoutMs } : {}),
-    })
+    // v17 C-8：服务端读图 BFS（零子进程）。chain 每跳带 id 与调用点 file:line——`id` 就是
+    // 传给 `prism_arch_generate` 的 `symbols` 元素（导出时序图）。
+    const result = await queryGraphPathChain(root, from, to)
     return { project, ...result }
   }
 
@@ -717,8 +715,17 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
           ...(limit !== undefined ? { maxConnections: limit } : {}),
         })
       } else if (type === 'sequence') {
+        // v17 C-9：给了 symbols（链上节点 id，来自 prism_graph_path 的 chain[].id）→ IR 按
+        // 相邻对构（只取链内边）；不传 → 现行为（根 = 调用图度数最高的文件）逐字节不变。
+        const symbols = Array.isArray(args.symbols)
+          ? args.symbols
+              .filter((item): item is string => typeof item === 'string')
+              .map((item) => item.trim())
+              .filter((item) => item !== '')
+          : []
         ir = buildSequenceIr(graph, {
           title,
+          ...(symbols.length > 0 ? { symbols } : {}),
           ...(top !== undefined ? { maxParticipants: top } : {}),
           ...(limit !== undefined ? { maxMessages: limit } : {}),
         })
@@ -759,15 +766,16 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
       ...(moduleName !== undefined ? { module: moduleName } : {}),
     })
 
-    const meta = (ir as { meta?: { title?: string; subtitle?: string } }).meta ?? {}
+    // title/subtitle 经 `graph/archify.ts` 的共享 reader 取（与 HTTP from-graph 同一真相源；
+    // 直接读 `ir.meta.*` 曾是第二处取值，改一处漏一处必漂移）。
     return {
       type,
       ...scope,
       html: rendered.htmlPath,
       ir: irPath,
       bytes: rendered.bytes,
-      title: meta.title,
-      subtitle: meta.subtitle,
+      title: irTitle(ir),
+      subtitle: irSubtitle(ir),
       source: placement.project !== undefined ? 'project' : 'global',
       ...(placement.project !== undefined ? { project: placement.project } : {}),
       ...(book !== undefined ? { book } : {}),
@@ -984,8 +992,13 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
       call: async (args) => {
         const path = asString(args.path)
         if (path === undefined) throw new Error('prism_kb_convert 需要 { path }')
+        // v17 M-2：与 `prism_kb_import`（同文件 scanProject 路）同口径——注入
+        // `resolveOcrWiringConfigForHome` 的表格/版面结论；否则 convert 恒走 layout+table
+        // 增强，`ocr_table`/`ocr_layout`/`PRISM_OCR=off` 在此路失效（两转换路配置响应分裂）。
+        const ocr = resolveOcrWiringConfigForHome(deps.home)
         return await convertFileToMarkdown(path, {
           ...(typeof args.max_chars === 'number' ? { maxChars: args.max_chars } : {}),
+          ocr: ocr.ocr,
         })
       },
     },
@@ -1027,6 +1040,9 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
           : undefined
         const service = await kb()
         const target = dryRun ? makeDryRunKb(service) : service
+        // v17 §A-0：OCR 表格/版面增强开关（prism.yaml 的 ocr_table/ocr_layout；缺省开，
+        // 模型未装 → enabled=false → 回旧输出）
+        const ocrEnabled = resolveOcrWiringConfigForHome(deps.home)
         const report = await scanProject(target, {
           root,
           layer: 'project',
@@ -1037,6 +1053,7 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
             ? { respectGitignore: args.respect_gitignore }
             : {}),
           ...(includeExt !== undefined && includeExt.length > 0 ? { includeExt } : {}),
+          ocr: ocrEnabled.ocr,
         })
         return {
           root: report.root,
@@ -1288,12 +1305,13 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
     },
     {
       name: 'prism_graph_path',
-      description: '代码图谱两节点最短路径（graphify path；返回跳数与链路）',
+      description:
+        '代码图谱两节点最短路径（服务端读图 BFS，零子进程/零 LLM；返回跳数与链路）。chain 每跳带 { id, label, file, line, ambiguous? }——id 可直接喂给 prism_arch_generate 的 symbols 导出时序图；file/line 是该节点**发出**的那条边的调用点（链尾为空）；端点符号在图内多义时该跳 ambiguous=true 且 file/line 为空。无路径/端点不存在 → found:false（不是错误）。',
       inputSchema: {
         type: 'object',
         properties: {
-          from: { type: 'string', description: '起点节点标签' },
-          to: { type: 'string', description: '终点节点标签' },
+          from: { type: 'string', description: '起点：节点 id 或符号名（label 跨文件重名时按图内首个可达匹配落链）' },
+          to: { type: 'string', description: '终点：节点 id 或符号名' },
           project: { type: 'string' },
         },
         required: ['from', 'to', 'project'],
@@ -1369,13 +1387,19 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
     {
       name: 'prism_arch_generate',
       description:
-        '派生并渲染 archify 架构图（五类：workflow / architecture / sequence / lifecycle / dataflow），返回 HTML 与 IR 路径。IR 全部由 Prism 内置纯函数生成器派生——调用方不需要写任何 IR。workflow 需 { team }；architecture/sequence/dataflow 需 { project }（已注册且已建图，产物落 <projectRoot>/.prism/arch/<type>/）；lifecycle 无需入参（源自 @prism/core 的任务状态机常量）。可选 { book, module } 写进产物 sidecar，让项目图挂到知识库树对应书/模块下（缺省则进全局图集）。生成器在数据不足时会**明确报错而不是造图**（如图谱没有跨文件 calls 边 → 无法画时序图；所有源文件同目录 → 无法分层画依赖流向）。',
+        '派生并渲染 archify 架构图（五类：workflow / architecture / sequence / lifecycle / dataflow），返回 HTML 与 IR 路径。IR 全部由 Prism 内置纯函数生成器派生——调用方不需要写任何 IR。workflow 需 { team }；architecture/sequence/dataflow 需 { project }（已注册且已建图，产物落 <projectRoot>/.prism/arch/<type>/）；序列图另可给 { symbols }（链上节点 id，取自 prism_graph_path 的 chain[].id）按**相邻对**出消息，不传则按调用图度数最高的文件扩邻域；lifecycle 无需入参（源自 @prism/core 的任务状态机常量）。可选 { book, module } 写进产物 sidecar，让项目图挂到知识库树对应书/模块下（缺省则进全局图集）。生成器在数据不足时会**明确报错而不是造图**（如图谱没有跨文件 calls 边 → 无法画时序图；所有源文件同目录 → 无法分层画依赖流向）。',
       inputSchema: {
         type: 'object',
         properties: {
           type: { enum: ['workflow', 'architecture', 'sequence', 'lifecycle', 'dataflow'] },
           team: { type: 'string', description: 'type=workflow 时的团队 id' },
           project: { type: 'string', description: 'type=architecture|sequence|dataflow 时的已建图项目名' },
+          symbols: {
+            type: 'array',
+            items: { type: 'string' },
+            description:
+              '可选（type=sequence）：**链上节点 id 数组**，取自 prism_graph_path 的 chain[].id（按相邻对出消息，链外边不进图）；不传 = 按调用图度数最高的文件扩邻域',
+          },
           title: { type: 'string', description: '可选：覆盖图标题' },
           top: { type: 'integer', minimum: 1, description: '可选：组件/参与者上限' },
           limit: { type: 'integer', minimum: 1, description: '可选：连线/消息上限' },

@@ -406,6 +406,66 @@ describe('段向量缺口补齐（单点实现 backfillChunks）', () => {
     ])
     expect(vectorCount(kb)).toBe(0)
   })
+
+  it('v17 §B-5：注入 embedBatch → 一篇 entry 的缺段**一次算整批**，单口零调用', async () => {
+    const kb = makeKb(home)
+    await depositDoc(kb, 'K-1')
+
+    const singleCalls: string[] = []
+    const batchCalls: string[][] = []
+    const report = await backfillChunks({
+      knowledge: kb.persistence.knowledge,
+      chunkOptions: { minChars: 120, maxChars: 2000 },
+      embed: async (text) => {
+        singleCalls.push(text)
+        return new Float32Array([1, 0, 0])
+      },
+      embedBatch: async (texts) => {
+        batchCalls.push([...texts])
+        return texts.map(() => new Float32Array([1, 0, 0]))
+      },
+      model: 'test-1d',
+    })
+    expect(report).toMatchObject({ scanned: 1, skipped: 0, refilled: 1, vectors: 3 })
+    expect(batchCalls).toHaveLength(1) // 整篇一次
+    expect(batchCalls[0]).toHaveLength(3)
+    expect(singleCalls).toHaveLength(0) // 有批口就不走单口
+    expect(vectorCount(kb)).toBe(3)
+  })
+
+  it('v17 §B-5：批口逐位 null → 失败段按 seq 记入 failed，其余照补', async () => {
+    const kb = makeKb(home)
+    await depositDoc(kb, 'K-1')
+
+    const report = await backfillChunks({
+      knowledge: kb.persistence.knowledge,
+      chunkOptions: { minChars: 120, maxChars: 2000 },
+      embedBatch: async (texts) => texts.map((_, i) => (i === 1 ? null : new Float32Array([1, 0, 0]))),
+      model: 'test-1d',
+    })
+    expect(report.vectors).toBe(2)
+    expect(report.failed.map((f) => f.seq)).toEqual([1])
+    expect(report.failed[0]?.reason).toBe('嵌入不可用（返回空向量）')
+    expect(vectorCount(kb)).toBe(2)
+  })
+
+  it('v17 §B-5：批口整批抛错 → 该条目全部缺段记入 failed（可重跑），不中断', async () => {
+    const kb = makeKb(home)
+    await depositDoc(kb, 'K-1')
+
+    const report = await backfillChunks({
+      knowledge: kb.persistence.knowledge,
+      chunkOptions: { minChars: 120, maxChars: 2000 },
+      embedBatch: async () => {
+        throw new Error('boom')
+      },
+      model: 'test-1d',
+    })
+    expect(report.vectors).toBe(0)
+    expect(report.failed.map((f) => f.seq)).toEqual([0, 1, 2])
+    expect(report.failed[0]?.reason).toContain('boom')
+    expect(vectorCount(kb)).toBe(0)
+  })
 })
 
 // ── SPEC-5.3 红线 + 帮助文案 ─────────────────────────────────────────────────

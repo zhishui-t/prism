@@ -40,6 +40,8 @@ interface RollupValue {
   truncated: boolean
   nodes: RollupNode[]
   edges: RollupEdge[]
+  /** v17 B-7：仅当本页之后还有节点时出现（耗尽无此键） */
+  next_cursor?: string
 }
 
 interface Envelope {
@@ -134,6 +136,8 @@ const dirs: string[] = []
 let app: AppHandle
 let base: string
 let cacheGraphFile = ''
+/** v17 B-7 分页夹具的 graph.json 绝对路径（409 用例要在这里改 mtime）。 */
+let pagedGraphFile = ''
 
 // ===== 「`links: []` + `edges` 非空」fixture（派修 P2-4：边读取取非空侧）=====
 //
@@ -163,6 +167,11 @@ beforeAll(async () => {
   )
   const big = await tempDir('prism-rollup-big-')
   await putFile(join(big, 'graphify-out', 'graph.json'), JSON.stringify(bigFixture()))
+  // B-7 分页夹具：与 big 同形，但**独占一个目录**——409 用例要改它的 mtime，
+  // 不污染 big 的截断断言（同形图各自一份，隔离优先）。
+  const paged = await tempDir('prism-rollup-paged-')
+  pagedGraphFile = join(paged, 'graphify-out', 'graph.json')
+  await putFile(pagedGraphFile, JSON.stringify(bigFixture()))
   const cache = await tempDir('prism-rollup-cache-')
   cacheGraphFile = join(cache, 'graphify-out', 'graph.json')
   await putFile(cacheGraphFile, cacheGraphJson(1))
@@ -180,6 +189,7 @@ beforeAll(async () => {
       projects: {
         demo: { root, built_at: '2026-09-17T00:00:00.000Z', registered_at: '2026-09-17T00:00:00.000Z' },
         big: { root: big, built_at: null, registered_at: '2026-09-17T00:00:00.000Z' },
+        paged: { root: paged, built_at: null, registered_at: '2026-09-17T00:00:00.000Z' },
         cache: { root: cache, built_at: null, registered_at: '2026-09-17T00:00:00.000Z' },
         edgeside: { root: edgeSide, built_at: null, registered_at: '2026-09-17T00:00:00.000Z' },
         // 已登记但产物缺失
@@ -224,6 +234,11 @@ function valueOf(json: Envelope): RollupValue {
 
 const idsOf = (value: RollupValue): string[] => value.nodes.map((node) => node.id)
 
+/** 反解 `next_cursor` 载荷（base64url JSON）——用于断言载荷里内嵌了图版本键。 */
+function decodeCursor(raw: string): Record<string, unknown> {
+  return JSON.parse(Buffer.from(raw, 'base64url').toString('utf-8')) as Record<string, unknown>
+}
+
 describe('F9 rollup：community 层', () => {
   it('按 community 分组、未分组桶 community:_、label 回落 Community <id>', async () => {
     const { status, json } = await rollup(q('demo', 'community'))
@@ -265,9 +280,11 @@ describe('F9 rollup：community 层', () => {
     ])
   })
 
-  it('响应形状钉死：恰好 { level, parent, total, truncated, nodes, edges }', async () => {
+  it('响应形状钉死：恰好 { level, parent, total, truncated, nodes, edges }（未截断层不带 next_cursor）', async () => {
     const value = valueOf((await rollup(q('demo', 'community'))).json)
     expect(Object.keys(value).sort()).toEqual(['edges', 'level', 'nodes', 'parent', 'total', 'truncated'])
+    // B-7：`next_cursor` 是**可选**键——本层未超上限，既无下一页也不带该键
+    expect('next_cursor' in value).toBe(false)
   })
 })
 
@@ -492,5 +509,131 @@ describe('F9 rollup：parent 反解与错误', () => {
 
     const file = await rollup(q('demo', 'symbol', 'file:src/nope.ts'))
     expect(file.status).toBe(404)
+  })
+})
+
+// ===== v17 B-7：真分页（next_cursor / ?cursor= / 页内 edges / 409）=====
+//
+// 夹具 = `bigFixture()`（503 个 dir 桶：`zz_heavy`(3) + `d000..d501`(1)），独占 `paged` 目录。
+// 页 1 = zz_heavy + d000..d498（500）；页 2 = d499..d501（3）。
+
+describe('B-7 rollup 分页：next_cursor / 页内 edges', () => {
+  it('首页：total=503、带 next_cursor（恰好多这一个键），页内 edges 只有页内边', async () => {
+    const { status, json } = await rollup(q('paged', 'dir', `community:${BIG_COMMUNITY}`))
+    expect(status).toBe(200)
+    const value = valueOf(json)
+    expect(value.total).toBe(503)
+    expect(value.truncated).toBe(true)
+    expect(value.nodes).toHaveLength(500)
+    // 形状：仍是那六键 + `next_cursor`
+    expect(Object.keys(value).sort()).toEqual([
+      'edges',
+      'level',
+      'next_cursor',
+      'nodes',
+      'parent',
+      'total',
+      'truncated',
+    ])
+    expect(typeof value.next_cursor).toBe('string')
+    // 首页 edges 只含页内边：h0 → n_d501 的跨页边**首页看不见**（d501 在第 2 页）
+    expect(value.edges).toEqual([
+      { from: 'dir:d000', to: 'dir:d001', weight: 1 },
+      { from: 'dir:d000', to: `dir:${HEAVY_DIR}`, weight: 1 },
+      { from: `dir:${HEAVY_DIR}`, to: 'dir:d000', weight: 1 },
+    ])
+  })
+
+  it('游标载荷内嵌图版本键（mtimeMs:size），level/parent/offset 齐备', async () => {
+    const value = valueOf((await rollup(q('paged', 'dir', `community:${BIG_COMMUNITY}`))).json)
+    const payload = decodeCursor(value.next_cursor!)
+    const info = await stat(pagedGraphFile)
+    expect(payload).toEqual({
+      v: 1,
+      level: 'dir',
+      parent: `community:${BIG_COMMUNITY}`,
+      offset: 500,
+      graph: `${info.mtimeMs}:${info.size}`,
+    })
+  })
+
+  it('次页：?cursor= 取回剩余 3 个节点，**跨页边在次页补齐**', async () => {
+    const first = valueOf((await rollup(q('paged', 'dir', `community:${BIG_COMMUNITY}`))).json)
+    const second = valueOf(
+      (await rollup(new URLSearchParams({ project: 'paged', cursor: first.next_cursor! }).toString())).json,
+    )
+    expect(second.level).toBe('dir')
+    expect(second.parent).toBe(`community:${BIG_COMMUNITY}`)
+    expect(second.total).toBe(503)
+    expect(idsOf(second)).toEqual(['dir:d499', 'dir:d500', 'dir:d501'])
+    // 跨页边不丢：h0（页 1）→ n_d501（页 2）在次页出现（首页因对端缺席被滤掉）
+    expect(second.edges).toEqual([{ from: `dir:${HEAVY_DIR}`, to: 'dir:d501', weight: 1 }])
+    // 耗尽：末页无 next_cursor
+    expect('next_cursor' in second).toBe(false)
+
+    // 两页并起来 = 无重不漏的 503 个节点
+    const union = new Set([...idsOf(first), ...idsOf(second)])
+    expect(union.size).toBe(503)
+  })
+
+  it('游标自包含：同给 level/parent 也不会改判（cursor 胜）', async () => {
+    const first = valueOf((await rollup(q('paged', 'dir', `community:${BIG_COMMUNITY}`))).json)
+    const params = new URLSearchParams({
+      project: 'paged',
+      level: 'community', // 故意给个与游标不符的层
+      parent: 'community:99',
+      cursor: first.next_cursor!,
+    })
+    const value = valueOf((await rollup(params.toString())).json)
+    expect(value.level).toBe('dir')
+    expect(idsOf(value)).toEqual(['dir:d499', 'dir:d500', 'dir:d501'])
+  })
+
+  it('未超上限的层不带 next_cursor（community 层 1 个桶）', async () => {
+    const value = valueOf((await rollup(q('paged', 'community'))).json)
+    expect(value.truncated).toBe(false)
+    expect('next_cursor' in value).toBe(false)
+  })
+
+  it('cursor 形态非法 / 版本不符 → 400', async () => {
+    const bad = await rollup('project=paged&cursor=!!!not-base64url!!!')
+    expect(bad.status).toBe(400)
+    expect(bad.json.error?.code).toBe('bad_request')
+
+    const wrongVersion = await rollup(
+      `project=paged&cursor=${Buffer.from(JSON.stringify({ v: 999, level: 'dir', parent: null, offset: 0, graph: 'x' })).toString('base64url')}`,
+    )
+    expect(wrongVersion.status).toBe(400)
+    expect(wrongVersion.json.error?.message).toContain('版本不支持')
+
+    const negativeOffset = await rollup(
+      `project=paged&cursor=${Buffer.from(JSON.stringify({ v: 1, level: 'dir', parent: 'community:7', offset: -1, graph: 'x' })).toString('base64url')}`,
+    )
+    expect(negativeOffset.status).toBe(400)
+    expect(negativeOffset.json.error?.message).toContain('offset')
+  })
+
+  it('图重建（mtime 变）→ 旧 cursor 一律 409 stale_cursor；重查首页恢复正常', async () => {
+    const first = valueOf((await rollup(q('paged', 'dir', `community:${BIG_COMMUNITY}`))).json)
+    const stale = first.next_cursor!
+    // 重建等价：产物 mtime 变（size 不变，版本键仍变）
+    const before = await stat(pagedGraphFile)
+    const bumped = new Date(before.mtimeMs + 5000)
+    await utimes(pagedGraphFile, bumped, bumped)
+
+    const conflict = await rollup(
+      new URLSearchParams({ project: 'paged', cursor: stale }).toString(),
+    )
+    expect(conflict.status).toBe(409)
+    expect(conflict.json.error?.code).toBe('stale_cursor')
+
+    // 回首页重查：拿到新游标，且新游标版本键与旧的不同
+    const fresh = valueOf((await rollup(q('paged', 'dir', `community:${BIG_COMMUNITY}`))).json)
+    expect(fresh.next_cursor).toBeDefined()
+    expect(fresh.next_cursor).not.toBe(stale)
+    const freshSecond = valueOf(
+      (await rollup(new URLSearchParams({ project: 'paged', cursor: fresh.next_cursor! }).toString())).json,
+    )
+    expect(idsOf(freshSecond)).toEqual(['dir:d499', 'dir:d500', 'dir:d501'])
   })
 })

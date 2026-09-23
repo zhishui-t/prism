@@ -127,7 +127,14 @@ export async function newRole(input: NewRoleInput): Promise<RoleWriteResult> {
   }
   ensureDir(input.rolesDir)
 
-  const body = (input.body ?? ROLE_BODY_SKELETON).replaceAll(ROLE_TEMPLATE_NAME_PLACEHOLDER, name).trimEnd()
+  // 创建路径（**第三入口**）与 patch 的两个正文入口（`splitFrontmatter` 的 body / `patch.body`）
+  // 同口径：正文先剥净尾部旧 marker，末尾再统一重挂一枚 fresh。
+  // `--body-file` / `--from` 带来的正文可能带历史累积 marker（`--from` 经 `parseRoleMarkdown`
+  // 只剥尾部**一枚**），不剥会被后续 append 的新小节/新 marker 埋进**新文件正文中段**——
+  // 尾部正则从此够不着，且新文件一落盘就带中段残留（`patchRoleRaw` 的两个入口已修，此处补齐）。
+  const body = stripAllMarkerTails(
+    (input.body ?? ROLE_BODY_SKELETON).replaceAll(ROLE_TEMPLATE_NAME_PLACEHOLDER, name),
+  )
   const role: RoleDefinition = {
     name,
     description: input.description ?? ROLE_DESCRIPTION_PLACEHOLDER,

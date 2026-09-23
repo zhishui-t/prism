@@ -58,6 +58,10 @@ export {
   // v13 §1.1：CLI 的 `kb reindex --chunks` 需与服务**同一份** chunkOptions（单点解析）
   resolveKbConfigForHome,
   CHUNK_MIN_CHARS,
+  // v17 §B-5：embed 批量化扁平键（`embed_batch`）解析与注入单点
+  DEFAULT_EMBED_BATCH,
+  resolveEmbedBatch,
+  resolveEmbedBatchForHome,
   // v14 §1.1：rerank 扁平键（`rerank_enabled` / `rerank_model`）解析与注入单点
   makeRerankFn,
   parseRerankEnabled,
@@ -67,8 +71,14 @@ export {
   parseGraphFusion,
   parseGraphFusionDecay,
   resolveGraphFusionConfigForHome,
+  // v17 §A-0：OCR 表格/版面扁平键（`ocr_table` / `ocr_layout`）解析单点
+  parseOcrFlag,
+  resolveOcrWiringConfig,
+  resolveOcrWiringConfigForHome,
   type GraphFusionWiringConfig,
   type KbWiringConfig,
+  type OcrWiringConfig,
+  type OcrWiringInput,
   type RerankWiringConfig,
   type RerankWiringInput,
 } from './kb/wiring.js'
@@ -94,13 +104,17 @@ export {
   accelBackend,
   activeModel,
   activeTier,
+  batchTimeoutMs,
+  callEmbedBatch,
   cpuBackendHint,
+  embedBatchText,
   embeddingInstalled,
   ensureEmbeddingServer,
   embedText,
   gpuBackendLabel,
   gpuServerCandidates,
   preferredBackend,
+  setEmbeddingFetch,
   setEmbeddingTier,
   stopEmbeddingServer,
   // v14 §1.1/§1.2：rerank 第二实例（独立端口/PID/锁/日志/健康检查 + /rerank 调用）
@@ -122,6 +136,7 @@ export {
   type AccelBackend,
   type EmbedText,
   type EmbeddingBackend,
+  type EmbeddingFetch,
   type RerankCallResult,
   type RerankFetch,
 } from './kb/embedding.js'
@@ -196,7 +211,7 @@ export {
   defaultGraphPath,
   readCodeGraph,
   graphQuery,
-  graphPath,
+  graphPathChain,
   graphExplain,
   graphAffected,
   graphGodNodes,
@@ -209,6 +224,9 @@ export {
   type GraphifyExportFormat,
   type GraphExportResult,
   type GraphQueryOptions,
+  // v17 C-8：路径链（服务端读图 BFS；chain 里每跳带 id 与调用点 file:line）
+  type GraphPathChainHop,
+  type GraphPathChainResult,
   formatCommand,
   DEFAULT_GRAPHIFY_TIMEOUT_MS,
   PRISM_EXCLUDED_SCAN_DIR,

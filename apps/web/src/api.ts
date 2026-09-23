@@ -294,12 +294,31 @@ export interface GraphRelations {
   candidates?: GraphRelationCandidate[]
 }
 
-/** `GET /api/graph/path` 的 value（graphify 子进程；`chain` 已由服务端切好）。 */
+/**
+ * 链上的一跳（v17 C-8：`chain` 由 label 串升级为**带 id 与调用点**的结构）。
+ *
+ * - `id` 是**唯一寻址键**（label 不唯一：F5-2 禁止 label 顶替寻址）——`symbols` 导出时序图
+ *   就是 `chain.map((hop) => hop.id)`；
+ * - `file`/`line` 是该节点**发出**的那条边的调用点（`relations` 的 `dir=out` 同口径）；
+ *   **链尾**没有下一跳 → 双空；
+ * - `ambiguous` = 该跳的符号在图内没有唯一节点对应（起/终点入参多义）→ 此时 file/line 双空，
+ *   界面灰显（W-8 渲染；本棒只落类型）。
+ */
+export interface GraphPathHop {
+  id: string
+  label: string
+  file: string
+  line: string
+  ambiguous?: boolean
+}
+
+/** `GET /api/graph/path` 的 value（v17 C-8：服务端读图 BFS，**不再**起 graphify 子进程）。 */
 export interface GraphPath {
   project: string
+  /** 服务端渲染的链路文本（**不再是**子进程原文）；CLI 人类可读输出同源 */
   raw: string
   hops: number | null
-  chain: string[]
+  chain: GraphPathHop[]
   found: boolean
 }
 
@@ -349,8 +368,8 @@ export interface RollupEdge {
 /**
  * `GET /api/graph/rollup` 的 value。
  *
- * ⚠ **响应不含 `project`**（后端形状按 F9 契约钉死为恰好这六个键，逐字见
- * `graph-rollup.test.ts` 的「响应形状钉死」用例）——不要在本类型上加 `project`。
+ * ⚠ **响应不含 `project`**（后端形状按 F9 契约钉死为恰好这六个键 + 可选的 `next_cursor`，
+ * 逐字见 `graph-rollup.test.ts` 的「响应形状钉死」用例）——不要在本类型上加 `project`。
  */
 export interface RollupResult {
   level: RollupLevel
@@ -358,10 +377,18 @@ export interface RollupResult {
   parent: string | null
   /** 截断**前**的全量节点数 */
   total: number
-  /** 是否被服务端按 `symbol_count` 降序截断（上限 500，**无分页参数**） */
+  /** 本层是否超过单页上限（= 会被分页；单页 500 条） */
   truncated: boolean
   nodes: RollupNode[]
   edges: RollupEdge[]
+  /**
+   * 下一页游标（v17 B-7）——**仅当本页之后还有节点时出现**（耗尽即无此键）。
+   *
+   * 不透明串：原样回传给 `graphRollup({ project, cursor })` 即可，**不要解析**。
+   * 载荷内嵌图版本键（产物 `mtimeMs:size`）——图一重建旧游标即失效，服务端回
+   * 409 `stale_cursor`，消费方须**回第一页重查**（见 `explore-logic.ts` 的 `isStaleCursorError`）。
+   */
+  next_cursor?: string
 }
 
 /**
@@ -401,12 +428,19 @@ export interface ArchFromGraphResult {
   type: string
   /** 项目名 */
   project: string
-  /** 起点节点 id（回显） */
+  /** 节点 id（回显）：`node` 模式 = 起点；`symbols` 模式 = **链首** id */
   node: string
+  /** v17 C-9：仅在 `symbols` 模式出现（原样回显调用方给的链），便于调用方对账 */
+  symbols?: string[]
   /** 项目根（绝对路径） */
   root: string
   /** 实际用作根文件的仓库相对路径（正斜杠） */
   root_file: string
+  /**
+   * v17 C-9.2（additive）：服务端自陈的图注（真实计数 / 口径说明，取渲染 IR 的 `meta.subtitle`）。
+   * 与 MCP `prism_arch_generate` 同源；缺省时前端回落静态口径文案（向后兼容旧服务端）。
+   */
+  subtitle?: string
   /** 产物文件名，如 `sequence-<消毒 id>-<yyyyMMdd-HHmmss>-<短哈希>.html` */
   name: string
   /** 产物相对**项目根**的路径（正斜杠），便于界面直接展示 */
@@ -596,7 +630,7 @@ export const api = {
     return request<GraphRelations>(`/api/graph/relations?${qs.toString()}`)
   },
 
-  /** A→B 调用链（`GET /api/graph/path`，graphify 子进程：首次调用可能数秒）。 */
+  /** A→B 调用链（`GET /api/graph/path`，v17 C-8 起服务端读图 BFS：毫秒级、零子进程） */
   graphPath: (params: { project: string; from: string; to: string }) => {
     const qs = new URLSearchParams({ project: params.project, from: params.from, to: params.to })
     return request<GraphPath>(`/api/graph/path?${qs.toString()}`)
@@ -610,35 +644,51 @@ export const api = {
   },
 
   /**
-   * 分层聚合·逐级探索（v10 F9 → `GET /api/graph/rollup`）。
+   * 分层聚合·逐级探索（v10 F9 → v17 B-7 真分页 → `GET /api/graph/rollup`）。
    *
-   * - `level='community'` **不接受** `parent`（传了服务端 400）；其余三层必带。
-   * - `parent` 形态：`dir` 层 = `community:<n>`；`file` 层 = `dir:<路径>`；`symbol` 层 = `file:<路径>`。
-   * - 形态错 → 400 `bad_request`；形态对但图中无此实体 → 404 `not_found`；
-   *   项目未登记 → 404 `not_found`；已登记但产物缺失 → 404 `graph_not_found`。
+   * 两种调用形态（**游标自包含**，二选一）：
+   * - 首页：`{ project, level, parent? }`——`level='community'` **不接受** `parent`（传了服务端 400）；
+   *   其余三层必带。`parent` 形态：`dir` 层 = `community:<n>`；`file` 层 = `dir:<路径>`；
+   *   `symbol` 层 = `file:<路径>`。
+   * - 翻页：`{ project, cursor }`——`cursor` 取上一页的 `next_cursor`，此时**不再传** `level/parent`
+   *   （服务端以游标为准，同给也不会改判）。
+   *
+   * 形态错 → 400 `bad_request`；形态对但图中无此实体 → 404 `not_found`；
+   * 项目未登记 → 404 `not_found`；已登记但产物缺失 → 404 `graph_not_found`；
+   * 游标失效（图已重建）→ 409 `stale_cursor`（消费方回首页重查）。
    */
-  graphRollup: (params: { project: string; level: RollupLevel; parent?: string }) => {
-    const qs = new URLSearchParams({ project: params.project, level: params.level })
-    if (params.parent !== undefined && params.parent !== '') qs.set('parent', params.parent)
+  graphRollup: (
+    params: { project: string; level: RollupLevel; parent?: string } | { project: string; cursor: string },
+  ) => {
+    const qs = new URLSearchParams({ project: params.project })
+    if ('cursor' in params) {
+      qs.set('cursor', params.cursor)
+    } else {
+      qs.set('level', params.level)
+      if (params.parent !== undefined && params.parent !== '') qs.set('parent', params.parent)
+    }
     return request<RollupResult>(`${GRAPH_ROLLUP_ENDPOINT}?${qs.toString()}`)
   },
 
   /**
-   * F5：由**图谱节点 id** 导出时序图（`POST /api/arch/render` 的 `mode: 'from-graph'` 分支）。
+   * F5 + v17 C-9：导出时序图（`POST /api/arch/render` 的 `mode: 'from-graph'` 分支）。
    *
-   * `node` 必须是**节点 id**：四模式结果里带 id 的只有 `relations`（`value.node` 是命中
-   * 节点 id、`items[].other` 是对端 id）。UI 侧的取用与「拿不到就禁用」的判据见
-   * `pages/graph-logic.ts` 的 `sequenceAddress`；错误码→文案的映射见同文件的
-   * `sequenceExportErrorKey`。
+   * 两种**寻址形态**（二选一，服务端互斥 → 同给 `bad_request`）：
+   * - `{ node }` = 单个**节点 id**（`relations` 的 `value.node`）——按起点所在文件扩调用邻域；
+   * - `{ symbols }` = **节点 id 数组**（`path` 的 `chain[].id`，v17 C-9 新增 additive 入参）
+   *   ——按链的**相邻对**取边成 IR（N 个 id → N 参与者 / N-1 条消息）。
+   * 两种都必须是**节点 id**：label 跨文件重名（F5-2 禁 label 寻址）。UI 侧的取用与
+   * 「拿不到就禁用」的判据见 `pages/graph-logic.ts` 的 `sequenceTarget`；错误码→文案的映射
+   * 见同文件的 `sequenceExportErrorKey`。
    */
-  archRenderFromGraph: (params: { project: string; node: string }) =>
+  archRenderFromGraph: (params: { project: string; node: string } | { project: string; symbols: string[] }) =>
     request<ArchFromGraphResult>(ARCH_RENDER_ENDPOINT, {
       method: 'POST',
       body: JSON.stringify({
         mode: ARCH_RENDER_MODE_FROM_GRAPH,
         type: 'sequence',
         project: params.project,
-        node: params.node,
+        ...('node' in params ? { node: params.node } : { symbols: params.symbols }),
       }),
     }),
 

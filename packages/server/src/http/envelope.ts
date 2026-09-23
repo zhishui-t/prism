@@ -30,6 +30,9 @@ export const ERROR_CODES = [
   //   （不自动插小节 → 400）；- `stale_write`：PATCH 的 `if_match` 与磁盘 mtime 不符（409）。
   'workflow_section_missing',
   'stale_write',
+  // v17 B-7：rollup 分页游标内嵌的图版本键与当前图不符（图已重建）→ 409，消费方回首页重查。
+  // 与 `stale_write` 同「陈旧」语义，但对象不同（陈旧的是**读游标**而非写前提），故单列。
+  'stale_cursor',
   'internal',
 ] as const
 
@@ -71,6 +74,8 @@ const ERROR_STATUS: Record<ErrorCode, number> = {
   workflow_section_missing: 400,
   // 陈旧写（if_match 不符）= 并发冲突语义，与 id_conflict / build_in_progress 同档 409
   stale_write: 409,
+  // 陈旧读游标（游标载荷内嵌的图版本键与当前图不符 = 翻页途中图被重建）→ 409
+  stale_cursor: 409,
   internal: 500,
 }
 

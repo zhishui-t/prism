@@ -78,20 +78,27 @@ export {
 // 文档格式分流与转换（A2）：文本直读、二进制走 anydoc、图片/扫描 PDF 走 OCR（B-4）
 export {
   CONVERTIBLE_EXTENSIONS,
+  EMBEDDED_IMAGE_MEDIA_TYPES,
   MIN_OCR_VALID_CHARS,
   OCR_IMAGE_EXTENSIONS,
+  OCR_LAYOUT_MODEL_FILE,
   OCR_MODEL_COUNT,
   OCR_RUN_TIMEOUT_MS,
+  OCR_TABLE_MODEL_FILE,
   SUPPORTED_EXTENSIONS,
   TEXT_EXTENSIONS,
+  buildOcrToolArgs,
   countValidChars,
   extensionOf,
   isSupported,
   ocrAvailable,
   ocrDepsReady,
+  ocrExtrasDepsReady,
+  ocrLayoutModelReady,
   ocrModelCount,
   ocrModelsDir,
   ocrModelsReady,
+  ocrTableModelReady,
   ocrToolDir,
   parseOcrOff,
   probeConverter,
@@ -102,8 +109,10 @@ export {
   type ConvertResult,
   type ConvertStatus,
   type OcrHooks,
+  type OcrRunOptions,
   type OcrRunResult,
   type OcrRunner,
+  type ToMarkdownOptions,
 } from './convert.js'
 
 export {
