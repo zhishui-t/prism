@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { AuditLog, TrashStore } from '@prism/core'
+import { AuditLog, TrashStore, tmpTag } from '@prism/core'
 
 import { startServer, type AppHandle } from '../src/app.js'
 import { CORE_DEV_TEAM_MD } from '../src/roles/templates.js'
@@ -37,7 +37,7 @@ describe('people 路由（design-v3 §3.4 F11：信封 + issues + activate）', 
   let harnessRoot: string
 
   beforeAll(async () => {
-    const tmp = await mkdtemp(join(tmpdir(), 'prism-people-routes-'))
+    const tmp = await mkdtemp(join(tmpdir(), `prism-people-routes-${tmpTag()}-`))
     home = join(tmp, 'home')
     harnessRoot = join(tmp, 'zcode')
     // B8：数据源与 CLI 同源（resolveDirs）——用 prism.yaml 显式指向临时目录，避免回落真实宿主
@@ -225,7 +225,7 @@ describe('people 写路由（F-C3 新建团队）与有效集（F-D2）', () => 
   let writeDir: string
 
   beforeAll(async () => {
-    tmp = await mkdtemp(join(tmpdir(), 'prism-people-create-'))
+    tmp = await mkdtemp(join(tmpdir(), `prism-people-create-${tmpTag()}-`))
     home = join(tmp, 'home')
     writeDir = join(tmp, 'managed-teams')
     await mkdir(home, { recursive: true })
@@ -368,7 +368,7 @@ describe('people 写路由 v6（角色与团队 增删改）', () => {
   let trashStore: TrashStore
 
   beforeAll(async () => {
-    tmp = await mkdtemp(join(tmpdir(), 'prism-people-v6-'))
+    tmp = await mkdtemp(join(tmpdir(), `prism-people-v6-${tmpTag()}-`))
     home = join(tmp, 'home')
     // 读源 = 临时 home 下；**写目标另给**（写路径只认 body 里的显式目录）
     rolesDir = join(tmp, 'managed-roles')
@@ -664,7 +664,7 @@ describe('people 写路由 v6（角色与团队 增删改）', () => {
 
 /** 为一个受管 roles 目录造一个最小 home（写 prism.yaml 指向它），用于「读回」断言。 */
 async function rolesHome(dir: string): Promise<string> {
-  const h = await mkdtemp(join(tmpdir(), 'prism-people-v6-read-'))
+  const h = await mkdtemp(join(tmpdir(), `prism-people-v6-read-${tmpTag()}-`))
   await writeFile(join(h, 'prism.yaml'), `roles_dir: ${dir.replaceAll('\\', '/')}\n`, 'utf-8')
   return h
 }

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import type { HarnessRegistry } from '@prism/core'
 
-import { createHarnessRegistry } from '@prism/core'
+import { createHarnessRegistry, tmpTag } from '@prism/core'
 
 import { createZcodeAdapter } from '../src/adapters/zcode.js'
 import { createTeamRegistry } from '../src/registry.js'
@@ -61,8 +61,8 @@ describe('ZCode 适配器（HarnessAdapter 实现）', () => {
   let repoDir = ''
 
   beforeEach(() => {
-    zcodeDir = join(tmpdir(), `prism-zcode-${Date.now()}-${Math.random().toString(36).slice(2)}`)
-    repoDir = join(tmpdir(), `prism-repo-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+    zcodeDir = join(tmpdir(), `prism-zcode-${tmpTag()}-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+    repoDir = join(tmpdir(), `prism-repo-${tmpTag()}-${Date.now()}-${Math.random().toString(36).slice(2)}`)
   })
   afterEach(() => {
     /* 临时目录留给系统清理 */
@@ -161,7 +161,7 @@ describe('HarnessRegistry（core 下沉：编译期注册，运行期单激活�
 describe('团队注册表（TeamRegistry）', () => {
   it('loadFromDir 载入 <team_id>.md；坏文件计入 failures 不中断', async () => {
     const { mkdirSync, writeFileSync } = await import('node:fs')
-    const dir = join(tmpdir(), `prism-teams-${Date.now()}`)
+    const dir = join(tmpdir(), `prism-teams-${tmpTag()}-${Date.now()}`)
     mkdirSync(dir, { recursive: true })
     writeFileSync(join(dir, 'core-dev.md'), TEAM_RAW)
     writeFileSync(join(dir, 'broken.md'), '---\nteam_id: &a x\n---\n')

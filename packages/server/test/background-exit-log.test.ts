@@ -22,6 +22,7 @@ import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { tmpTag } from '@prism/core'
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
@@ -44,7 +45,7 @@ const ENTRY = join(PKG_ROOT, 'dist', 'background.js')
 const cleanup: string[] = []
 
 async function tempDir(prefix: string): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), prefix))
+  const dir = await mkdtemp(join(tmpdir(), prefix.replace(/-$/, `-${tmpTag()}-`)))
   cleanup.push(dir)
   return dir
 }

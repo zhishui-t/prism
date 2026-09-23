@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { openPersistence, prismPaths } from '@prism/core'
+import { openPersistence, prismPaths, tmpTag } from '@prism/core'
 // OCR 就绪判据的**实现**在 knowledge（doctor 侧只读它的导出，不另立一套口径）
 import {
   OCR_MODEL_COUNT,
@@ -66,7 +66,7 @@ export async function runDoctor(ctx: CommandContext, _args: string[], values: Ar
   const paths = prismPaths(home)
   try {
     mkdirSync(paths.home, { recursive: true })
-    const probe = mkdtempSync(join(tmpdir(), 'prism-doctor-'))
+    const probe = mkdtempSync(join(tmpdir(), `prism-doctor-${tmpTag()}-`))
     const file = join(probe, 'w')
     writeFileSync(file, 'ok')
     const content = readFileSync(file, 'utf-8')

@@ -21,6 +21,7 @@
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { tmpTag } from '@prism/core'
 
 import { PrismKnowledgeService } from '@prism/knowledge'
 
@@ -34,7 +35,7 @@ import type { SearchQuery, SearchResponse, SearchResult } from '../src/kb/port.j
 const dirs: string[] = []
 
 async function makeHome(prefix = 'kb-hybrid-'): Promise<string> {
-  const home = await mkdtemp(join(tmpdir(), prefix))
+  const home = await mkdtemp(join(tmpdir(), prefix.replace(/-$/, `-${tmpTag()}-`)))
   dirs.push(home)
   return home
 }

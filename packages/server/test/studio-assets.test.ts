@@ -16,12 +16,13 @@ import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
+import { prismTmpPrefix } from '@prism/core'
 
 import { resolveAssetsDir } from '../src/http/routes/studio.js'
 
 /** 造一个假发行布局，返回「studio 模块位置」的 metaUrl 与预期发行根。 */
 function fakeLayout(relativeFile: string): { url: string; expectedRoot: string } {
-  const root = mkdtempSync(join(tmpdir(), 'prism-assets-'))
+  const root = mkdtempSync(join(tmpdir(), prismTmpPrefix('assets')))
   mkdirSync(join(root, '3rd'), { recursive: true }) // 发行根特征（repoRoot 判据）
   const abs = join(root, relativeFile)
   mkdirSync(dirname(abs), { recursive: true })

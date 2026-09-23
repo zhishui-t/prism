@@ -10,4 +10,12 @@ export * from './audit/index.js'
 export * from './safety/index.js'
 export * from './trash/index.js'
 export * from './harness/adapter.js'
-export { prismHome, prismPaths, repoRoot, DEFAULT_PRISM_HOME, type PrismPaths } from './config/paths.js'
+export {
+  prismHome,
+  prismPaths,
+  repoRoot,
+  tmpTag,
+  prismTmpPrefix,
+  DEFAULT_PRISM_HOME,
+  type PrismPaths,
+} from './config/paths.js'

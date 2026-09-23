@@ -36,6 +36,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
+import { tmpTag } from '@prism/core'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
@@ -61,7 +62,7 @@ afterEach(() => {
 })
 
 function tmp(prefix: string): string {
-  const dir = mkdtempSync(join(tmpdir(), prefix))
+  const dir = mkdtempSync(join(tmpdir(), prefix.replace(/-$/, `-${tmpTag()}-`)))
   made.push(dir)
   return dir
 }

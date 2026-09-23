@@ -4,6 +4,7 @@ import { join } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
+import { tmpTag } from '@prism/core'
 import { PrismKnowledgeService } from '../src/service.js'
 import { makeTempDir } from '../../server/test/helpers.js'
 
@@ -91,7 +92,7 @@ describe('软删与 reindex 共存（BLK-2 回归）', () => {
 describe('软删引用型不改写项目原件', () => {
   it('引用型软删：原件逐字节不变，DB status=deprecated，reindex 后仍 deprecated', async () => {
     const kb = await makeKb()
-    const proj = mkdtempSync(join(tmpdir(), 'prism-rm-idx-'))
+    const proj = mkdtempSync(join(tmpdir(), `prism-rm-idx-${tmpTag()}-`))
     const original = '---\ntitle: 项目设计文档\nauthor: user\n---\n\n# 项目设计文档\n\n原件内容。\n'
     const src = join(proj, 'design.md')
     writeFileSync(src, original, 'utf-8')
@@ -130,7 +131,7 @@ describe('硬删不碰项目原件', () => {
 
     const kb = await makeKb()
     // 造一个真实项目文件
-    const proj = await mkdtemp(join(tmpdir(), 'prism-origin-'))
+    const proj = await mkdtemp(join(tmpdir(), `prism-origin-${tmpTag()}-`))
     await mkdir(join(proj, 'docs'), { recursive: true })
     const file = join(proj, 'docs', 'readme.md')
     await writeFile(file, '# 项目文档\n\n这是用户的项目文件。', 'utf-8')

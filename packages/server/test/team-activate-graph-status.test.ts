@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
+import { prismTmpPrefix } from '@prism/core'
 import { CORE_DEV_TEAM_MD, fillTeamTemplate } from '@prism/agents'
 
 import { startServer, type AppHandle } from '../src/app.js'
@@ -41,9 +42,9 @@ let projectRoot: string
 let buildCalls = 0
 
 beforeAll(async () => {
-  home = await mkdtemp(join(tmpdir(), 'prism-activate-home-'))
-  const harnessRoot = await mkdtemp(join(tmpdir(), 'prism-activate-harness-'))
-  projectRoot = await mkdtemp(join(tmpdir(), 'prism-activate-proj-'))
+  home = await mkdtemp(join(tmpdir(), prismTmpPrefix('activate-home')))
+  const harnessRoot = await mkdtemp(join(tmpdir(), prismTmpPrefix('activate-harness')))
+  projectRoot = await mkdtemp(join(tmpdir(), prismTmpPrefix('activate-proj')))
 
   app = await startServer({
     home,

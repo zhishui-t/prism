@@ -16,11 +16,11 @@ import { pathToFileURL } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
 
-import { repoRoot } from '@prism/core'
+import { prismTmpPrefix, repoRoot } from '@prism/core'
 
 /** 在临时目录里造一个假发行布局，返回「某文件位置」的 metaUrl 与预期根。 */
 function fakeLayout(relativeFile: string): { url: string; expectedRoot: string } {
-  const root = mkdtempSync(join(tmpdir(), 'prism-root-'))
+  const root = mkdtempSync(join(tmpdir(), prismTmpPrefix('root')))
   mkdirSync(join(root, '3rd'), { recursive: true }) // 发行根特征
   const abs = join(root, relativeFile)
   mkdirSync(dirname(abs), { recursive: true })
@@ -44,7 +44,7 @@ describe('repoRoot 向上查找发行根（打包事故回归）', () => {
   })
 
   it('找不到特征目录 → null（调用方回落）', () => {
-    const base = mkdtempSync(join(tmpdir(), 'prism-noroot-'))
+    const base = mkdtempSync(join(tmpdir(), prismTmpPrefix('noroot')))
     const f = join(base, 'a', 'b.js')
     mkdirSync(join(base, 'a'), { recursive: true })
     writeFileSync(f, '// x', 'utf-8')

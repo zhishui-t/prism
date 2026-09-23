@@ -9,6 +9,7 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
+import { prismTmpPrefix } from '@prism/core'
 import { createKnowledgeService } from '@prism/knowledge'
 import { describe, expect, it } from 'vitest'
 
@@ -16,7 +17,7 @@ import { defaultContext, runCommand, type CommandContext } from '../src/argv.js'
 
 /** 建临时项目：README.md + CMakeLists.txt + index.html + src/api.h。 */
 async function makeProject(): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), 'prism-kb-sync-proj-'))
+  const root = await mkdtemp(join(tmpdir(), prismTmpPrefix('kb-sync-proj')))
   await mkdir(join(root, 'src'), { recursive: true })
   await writeFile(join(root, 'README.md'), '# 项目\n\n说明。', 'utf-8')
   await writeFile(join(root, 'CMakeLists.txt'), 'cmake_minimum_required(VERSION 3.20)', 'utf-8')
@@ -27,7 +28,7 @@ async function makeProject(): Promise<string> {
 
 describe('prism kb sync：默认文档集 + --include-ext', () => {
   it('默认跳过构建文件与 html 并分列；--include-ext h 把 h 文件纳入（纯文本直读）', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'prism-kb-sync-home-'))
+    const home = await mkdtemp(join(tmpdir(), prismTmpPrefix('kb-sync-home')))
     const root = await makeProject()
     const kb = createKnowledgeService({ home })
     const lines: string[] = []
@@ -72,8 +73,8 @@ describe('prism kb sync：默认文档集 + --include-ext', () => {
  */
 describe('prism kb sync：MAJ-2 人读输出对账（纳入 + 处理失败 + 未纳入 = 总数）', () => {
   it('候选内失败单列「处理失败」，不再混进「未纳入」', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'prism-kb-recon-home-'))
-    const root = await mkdtemp(join(tmpdir(), 'prism-kb-recon-proj-'))
+    const home = await mkdtemp(join(tmpdir(), prismTmpPrefix('kb-recon-home')))
+    const root = await mkdtemp(join(tmpdir(), prismTmpPrefix('kb-recon-proj')))
     await writeFile(join(root, 'README.md'), '# 项目', 'utf-8')
     await writeFile(join(root, 'CMakeLists.txt'), 'cmake_minimum_required(VERSION 3.20)', 'utf-8')
     await writeFile(join(root, 'index.html'), '<h1>默认不扫</h1>', 'utf-8')

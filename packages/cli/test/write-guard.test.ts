@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { prismTmpPrefix } from '@prism/core'
 
 import type { CommandContext } from '../src/argv.js'
 import { defaultContext, runCommand } from '../src/argv.js'
@@ -23,9 +24,9 @@ describe('B6 写守卫：默认宿主目录写入需确认', () => {
   let bareCtx: CommandContext
 
   beforeEach(async () => {
-    fakeDefaultZcode = mkdtempSync(join(tmpdir(), 'prism-guard-default-'))
-    bareHome = mkdtempSync(join(tmpdir(), 'prism-guard-home-')) // 无 prism.yaml → 默认链
-    directZcode = mkdtempSync(join(tmpdir(), 'prism-guard-direct-'))
+    fakeDefaultZcode = mkdtempSync(join(tmpdir(), prismTmpPrefix('guard-default')))
+    bareHome = mkdtempSync(join(tmpdir(), prismTmpPrefix('guard-home'))) // 无 prism.yaml → 默认链
+    directZcode = mkdtempSync(join(tmpdir(), prismTmpPrefix('guard-direct')))
     prevEnv = process.env['PRISM_HARNESS_ROOT']
     process.env['PRISM_HARNESS_ROOT'] = fakeDefaultZcode // 默认链重定向到临时目录（守卫仍触发：env 不算显式）
     lines = []

@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vitest'
+import { prismTmpPrefix } from '@prism/core'
 
 import {
   ensureHarnessPluginsLoaded,
@@ -65,7 +66,7 @@ function writePlugin(root: string, name: string, id: string): string {
 let home: string
 
 function fresh(): string {
-  home = mkdtempSync(join(tmpdir(), 'prism-harness-plugin-'))
+  home = mkdtempSync(join(tmpdir(), prismTmpPrefix('harness-plugin')))
   process.env['PRISM_HARNESS_DIR'] = join(home, 'harnesses')
   mkdirSync(process.env['PRISM_HARNESS_DIR'], { recursive: true })
   resetHarnessPlugins()

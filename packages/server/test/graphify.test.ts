@@ -2,6 +2,7 @@ import { chmod, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { tmpTag } from '@prism/core'
 
 import {
   buildGraphArgs,
@@ -22,7 +23,7 @@ import {
 const isWin = process.platform === 'win32'
 
 async function tempDir(): Promise<string> {
-  const dir = join(tmpdir(), `prism-graphify-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+  const dir = join(tmpdir(), `prism-graphify-${tmpTag()}-${Date.now()}-${Math.random().toString(36).slice(2)}`)
   await mkdir(dir, { recursive: true })
   return dir
 }

@@ -5,11 +5,18 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { createKnowledgeService, type KnowledgeService } from '@prism/knowledge'
+import { tmpTag } from '@prism/core'
 
 import { defaultContext, runCommand, type CommandContext } from '../src/argv.js'
 
+/**
+ * 临时目录前缀内嵌运行标记 `PRISM_TMP_TAG`（core.tmpTag）：afterEach 的清理带
+ * `.catch(() => {})`（Windows 句柄占用时静默放弃），实际靠 tmp-reaper 兜底——
+ * 不嵌标记就会被 v18 收窄后的 reaper 当「并行外部进程」跳过，成为永残留。
+ */
 async function tempDir(prefix: string): Promise<string> {
-  return await mkdtemp(join(tmpdir(), prefix))
+  const stem = prefix.endsWith('-') ? prefix.slice(0, -1) : prefix
+  return await mkdtemp(join(tmpdir(), `${stem}-${tmpTag()}-`))
 }
 
 /** 假 graphify：extract 时产出 .graphify 产物（graph.json + manifest + studio/index.html）。 */

@@ -14,6 +14,7 @@ import { stat, utimes } from 'node:fs/promises'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { tmpTag } from '@prism/core'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { startServer, type AppHandle } from '../src/app.js'
@@ -153,7 +154,7 @@ const EDGE_SIDE_NODES: FixtureNode[] = [
 const EDGE_SIDE_EDGES: FixtureLink[] = [{ source: 'e1', target: 'e2', relation: 'calls' }]
 
 async function tempDir(prefix: string): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), prefix))
+  const dir = await mkdtemp(join(tmpdir(), prefix.replace(/-$/, `-${tmpTag()}-`)))
   dirs.push(dir)
   return dir
 }

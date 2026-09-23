@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { TrashStore } from '@prism/core'
+import { TrashStore, tmpTag } from '@prism/core'
 
 import { defaultContext, runCommand, type CommandContext } from '../src/argv.js'
 
@@ -58,7 +58,7 @@ describe('prism team --source / --roles-dir（v6.2）', () => {
   })
 
   const mkSrc = async (prefix: string): Promise<string> => {
-    const dir = await mkdtemp(join(tmpdir(), prefix))
+    const dir = await mkdtemp(join(tmpdir(), prefix.replace(/-$/, `-${tmpTag()}-`)))
     cleanup.push(dir)
     return dir
   }

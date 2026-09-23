@@ -73,3 +73,27 @@ export function repoRoot(fromMetaUrl: string, maxDepth = 8): string | null {
   }
   return null
 }
+
+/**
+ * **运行标记**：标识「同一批进程」的隔离键，嵌入 `os.tmpdir()` 里 `prism-*` 临时条目名。
+ *
+ * 为什么不能只用 pid（v18 教训）：vitest 3 默认 `pool: 'forks'`，测试进程的 pid 是
+ * **worker** 的、globalSetup 回收器 teardown 跑在**主**进程、CLI 子进程是第三种——
+ * pid 匹配永不命中。改用环境变量传递：主进程注入一次，worker / 孙进程（spawn 默认
+ * 继承 env）拿到**同一标记**。
+ *
+ * 非 vitest 场景（CLI / server 独立运行）没有注入方，回落 `p<本进程 pid>` 保底——
+ * 进程隔离自然成立；`p` 前缀避免纯数字 pid 与目录名里 Date.now 之类的数字段撞车。
+ */
+export function tmpTag(): string {
+  return process.env.PRISM_TMP_TAG || `p${process.pid}`
+}
+
+/**
+ * tmpdir 里 `prism-<用途>-<tag>-` 形态的 mkdtemp 前缀（`-<tag>-` 两端连字符锚定，
+ * 供 test/global-tmp-reaper.ts 按运行标记精确回收）。所有往 `os.tmpdir()` 落
+ * `prism-*` 条目的创建点（产品 + 测试）一律经此拼前缀，**不得手写前缀字符串**。
+ */
+export function prismTmpPrefix(use: string): string {
+  return `prism-${use}-${tmpTag()}-`
+}

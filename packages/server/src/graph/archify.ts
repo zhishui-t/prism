@@ -18,7 +18,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { PrismError, repoRoot } from '@prism/core'
+import { PrismError, repoRoot, tmpTag } from '@prism/core'
 
 /** 五类图（archify schema 的 diagram_type 枚举）。 */
 export const ARCHIFY_DIAGRAM_TYPES = [
@@ -278,7 +278,7 @@ export async function validateDiagram(
   options: ArchifyRunOptions = {},
 ): Promise<ArchifyValidation> {
   assertDiagramType(type)
-  const dir = await mkdtemp(join(tmpdir(), 'prism-archify-validate-'))
+  const dir = await mkdtemp(join(tmpdir(), `prism-archify-validate-${tmpTag()}-`))
   const inputPath = join(dir, 'ir.json')
   try {
     await writeFile(inputPath, JSON.stringify(ir), 'utf-8')
@@ -329,7 +329,7 @@ export async function renderDiagram(
       )
     }
   }
-  const dir = await mkdtemp(join(tmpdir(), 'prism-archify-render-'))
+  const dir = await mkdtemp(join(tmpdir(), `prism-archify-render-${tmpTag()}-`))
   const inputPath = join(dir, 'ir.json')
   const outPath = resolve(outputHtmlPath)
   try {

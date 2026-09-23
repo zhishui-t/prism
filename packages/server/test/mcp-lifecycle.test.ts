@@ -3,11 +3,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
+import { prismTmpPrefix } from '@prism/core'
 
 import { createMcpTools } from '../src/mcp/server.js'
 import type { KnowledgeService, SearchQuery, SearchResult } from '../src/kb/port.js'
 
-const makeTempDir = (): Promise<string> => mkdtemp(join(tmpdir(), 'prism-mcp-lifecycle-'))
+const makeTempDir = (): Promise<string> => mkdtemp(join(tmpdir(), prismTmpPrefix('mcp-lifecycle')))
 
 /**
  * F-T1：MCP 工具集惰性打开 SQLite（知识库），必须可被显式释放。

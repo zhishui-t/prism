@@ -2,11 +2,12 @@ import { describe, expect, it } from 'vitest'
 import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { tmpTag } from '@prism/core'
 
 import { findPrismBlock, hasPrismBlock, injectAgentsBlock, removeAgentsBlock } from '../src/agents-md.js'
 
 async function tmpFile(name: string, content?: string): Promise<string> {
-  const path = join(tmpdir(), `prism-inject-${Date.now()}-${name}`)
+  const path = join(tmpdir(), `prism-inject-${tmpTag()}-${Date.now()}-${name}`)
   if (content !== undefined) await writeFile(path, content, 'utf-8')
   return path
 }

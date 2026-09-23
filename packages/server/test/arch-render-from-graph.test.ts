@@ -22,6 +22,7 @@ import { existsSync } from 'node:fs'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { tmpTag } from '@prism/core'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
@@ -38,7 +39,7 @@ import { putFile } from './helpers.js'
 
 const dirs: string[] = []
 async function tempDir(prefix: string): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), prefix))
+  const dir = await mkdtemp(join(tmpdir(), prefix.replace(/-$/, `-${tmpTag()}-`)))
   dirs.push(dir)
   return dir
 }

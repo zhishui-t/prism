@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
+import { prismTmpPrefix } from '@prism/core'
 
 import {
   INBOX_DIR,
@@ -101,5 +102,5 @@ describe('ownerFromPath（表无 owner 列，从 path 段反解）', () => {
 })
 
 function mkTmp(): string {
-  return mkdtempSync(join(tmpdir(), 'prism-kb-store-'))
+  return mkdtempSync(join(tmpdir(), prismTmpPrefix('kb-store')))
 }

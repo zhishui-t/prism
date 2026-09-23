@@ -4,7 +4,7 @@ import { join } from 'node:path'
 
 import { afterAll, describe, expect, it } from 'vitest'
 
-import { isPrismError } from '@prism/core'
+import { isPrismError, prismTmpPrefix } from '@prism/core'
 
 import { splitFrontmatter } from '../src/frontmatter.js'
 import { PrismKnowledgeService } from '../src/service.js'
@@ -13,7 +13,7 @@ let service: PrismKnowledgeService | undefined
 let home: string | undefined
 
 function makeService(): PrismKnowledgeService {
-  home = mkdtempSync(join(tmpdir(), 'prism-kb-version-'))
+  home = mkdtempSync(join(tmpdir(), prismTmpPrefix('kb-version')))
   return new PrismKnowledgeService({ home })
 }
 
@@ -233,7 +233,7 @@ describe('留痕与统计（§3.5 content_hash + AuditLog；tree/stats）', () =
 /** 版本历史查询面（F-B4）：listVersions 降序 + is_latest；不存在 id → 空数组。 */
 describe('listVersions（F-B4 版本历史查询面）', () => {
   it('多版次 → 降序返回全部版次 + is_latest 正确', async () => {
-    const kb = new PrismKnowledgeService({ home: mkdtempSync(join(tmpdir(), 'prism-kb-versions-')) })
+    const kb = new PrismKnowledgeService({ home: mkdtempSync(join(tmpdir(), prismTmpPrefix('kb-versions'))) })
     await kb.deposit({ ...BASE, id: 'VER-1', content: '第一版' })
     await kb.deposit({ ...BASE, id: 'VER-1', content: '第二版' })
     await kb.deposit({ ...BASE, id: 'VER-1', content: '第三版' })
@@ -249,7 +249,7 @@ describe('listVersions（F-B4 版本历史查询面）', () => {
   })
 
   it('单版次 → 1 条；不存在 id → 空数组（不报错）', async () => {
-    const kb = new PrismKnowledgeService({ home: mkdtempSync(join(tmpdir(), 'prism-kb-versions2-')) })
+    const kb = new PrismKnowledgeService({ home: mkdtempSync(join(tmpdir(), prismTmpPrefix('kb-versions2'))) })
     await kb.deposit({ ...BASE, id: 'VER-2', content: '唯一版' })
     expect(await kb.listVersions('VER-2')).toHaveLength(1)
     expect(await kb.listVersions('NO-SUCH-ID')).toEqual([])
@@ -257,7 +257,7 @@ describe('listVersions（F-B4 版本历史查询面）', () => {
   })
 
   it('软删后仍列出版次且状态为 deprecated（版本历史不隐藏）', async () => {
-    const kb = new PrismKnowledgeService({ home: mkdtempSync(join(tmpdir(), 'prism-kb-versions3-')) })
+    const kb = new PrismKnowledgeService({ home: mkdtempSync(join(tmpdir(), prismTmpPrefix('kb-versions3'))) })
     await kb.deposit({ ...BASE, id: 'VER-3', content: 'a' })
     await kb.remove('VER-3')
     const versions = await kb.listVersions('VER-3')

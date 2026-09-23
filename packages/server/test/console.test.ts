@@ -4,13 +4,14 @@ import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
+import { tmpTag } from '@prism/core'
 import { startServer } from '../src/app.js'
 import { resolveWebDistDir, webDistCandidates } from '../src/http/routes/console.js'
 import type { AppHandle } from '../src/app.js'
 
 /** 伪造控制台 dist：index.html + assets/x.js。 */
 async function makeFakeDist(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), 'prism-web-dist-'))
+  const dir = await mkdtemp(join(tmpdir(), `prism-web-dist-${tmpTag()}-`))
   await writeFile(join(dir, 'index.html'), '<!doctype html><html><body><h1>FAKE CONSOLE</h1></body></html>', 'utf-8')
   await mkdir(join(dir, 'assets'), { recursive: true })
   await writeFile(join(dir, 'assets', 'x.js'), 'console.log("fake-asset")', 'utf-8')
@@ -26,7 +27,7 @@ describe('控制台静态服务（GET /* 兜底，不劫持 /api 与 /studio）'
   beforeAll(async () => {
     dist = await makeFakeDist()
     cleanups.push(dist)
-    const empty = await mkdtemp(join(tmpdir(), 'prism-web-empty-'))
+    const empty = await mkdtemp(join(tmpdir(), `prism-web-empty-${tmpTag()}-`))
     cleanups.push(empty)
     app = await startServer({ home: empty, port: 0, webDist: dist })
     base = `http://127.0.0.1:${app.port}`
@@ -100,7 +101,7 @@ describe('控制台静态服务（GET /* 兜底，不劫持 /api 与 /studio）'
 
   it('dist 不存在 → 404 + 可读提示（指向 PRISM_WEB_DIST）', async () => {
     const app2 = await startServer({
-      home: await mkdtemp(join(tmpdir(), 'prism-web-home2-')),
+      home: await mkdtemp(join(tmpdir(), `prism-web-home2-${tmpTag()}-`)),
       port: 0,
       webDist: join(tmpdir(), 'prism-web-dist-确实不存在-9x9'),
     })

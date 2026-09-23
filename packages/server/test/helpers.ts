@@ -1,5 +1,5 @@
 import type { BookNode, BookStructure, CatalogEntry, DepositResult, EntryVersion, GraphPath, GraphQuery, GraphView, KnowledgeEntry, KnowledgeService, KbStats, Layer, SearchQuery, SearchResponse, SearchResult } from '../src/kb/port.js'
-import { PrismError } from '@prism/core'
+import { PrismError, tmpTag } from '@prism/core'
 import { createHash } from 'node:crypto'
 import { mkdtemp, writeFile, mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -494,9 +494,16 @@ function inboxRank(slug: string): number {
   return slug === INBOX ? 1 : 0
 }
 
-/** 临时目录（自动前缀），用于隔离 PRISM_HOME / 项目根。 */
+/**
+ * 临时目录（自动前缀），用于隔离 PRISM_HOME / 项目根。
+ *
+ * v18 起前缀内嵌运行标记 `PRISM_TMP_TAG`（见 core.tmpTag）：server 测试自己不 rm、
+ * 全靠 vitest globalSetup 的 tmp-reaper 兜底回收——不嵌标记就会被 reaper 当
+ * 「并行外部进程」跳过（v18 收窄口径），每跑一轮净增一批永残留。
+ */
 export async function makeTempDir(prefix: string): Promise<string> {
-  return await mkdtemp(join(tmpdir(), prefix))
+  const stem = prefix.endsWith('-') ? prefix.slice(0, -1) : prefix
+  return await mkdtemp(join(tmpdir(), `${stem}-${tmpTag()}-`))
 }
 
 /** 写文件（自动建父目录）。 */

@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
 
-import { isPrismError } from '@prism/core'
+import { isPrismError, prismTmpPrefix } from '@prism/core'
 
 import { setOcrHooks, toMarkdown } from '../src/convert.js'
 import { PrismKnowledgeService } from '../src/service.js'
@@ -13,7 +13,7 @@ import { PrismKnowledgeService } from '../src/service.js'
 let home: string | undefined
 
 function makeService(): PrismKnowledgeService {
-  home = mkdtempSync(join(tmpdir(), 'prism-kb-search-'))
+  home = mkdtempSync(join(tmpdir(), prismTmpPrefix('kb-search')))
   return new PrismKnowledgeService({ home })
 }
 
@@ -179,7 +179,7 @@ afterEach(() => {
 
 describe('v17 公式占位与内嵌图文本可检索（A3.1 / A4.2）', () => {
   it('`[公式]` 与 `> [图片 N]` 是正文文本：搜「公式」「图片」均命中', async () => {
-    const svc = new PrismKnowledgeService({ home: mkdtempSync(join(tmpdir(), 'prism-kb-v17-')) })
+    const svc = new PrismKnowledgeService({ home: mkdtempSync(join(tmpdir(), prismTmpPrefix('kb-v17'))) })
     try {
       await svc.deposit({
         id: 'PLACEHOLDER-1',
@@ -211,7 +211,7 @@ describe('v17 公式占位与内嵌图文本可检索（A3.1 / A4.2）', () => {
     expect(converted.status).toBe('converted')
     expect(converted.markdown).toContain('> [图片 1] 截图里的关键结论')
 
-    const svc = new PrismKnowledgeService({ home: mkdtempSync(join(tmpdir(), 'prism-kb-v17-')) })
+    const svc = new PrismKnowledgeService({ home: mkdtempSync(join(tmpdir(), prismTmpPrefix('kb-v17'))) })
     try {
       await svc.deposit({
         id: 'EMBED-1',

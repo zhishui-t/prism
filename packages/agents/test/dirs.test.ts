@@ -3,6 +3,7 @@ import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { tmpTag } from '@prism/core'
 
 import {
   expandTildePath,
@@ -14,7 +15,7 @@ import {
 import { DEFAULT_ZCODE_DIR } from '../src/adapters/zcode.js'
 
 function makeTmp(): string {
-  return join(tmpdir(), `prism-dirs-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+  return join(tmpdir(), `prism-dirs-${tmpTag()}-${Date.now()}-${Math.random().toString(36).slice(2)}`)
 }
 
 describe('prism.yaml 最小解析（三个标量键）', () => {

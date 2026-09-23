@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
+import { tmpTag } from '@prism/core'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { startServer, type AppHandle } from '../src/app.js'
@@ -13,7 +14,7 @@ const NL = String.fromCharCode(10)
 const dirs: string[] = []
 
 async function tempDir(prefix: string): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), prefix))
+  const dir = await mkdtemp(join(tmpdir(), prefix.replace(/-$/, `-${tmpTag()}-`)))
   dirs.push(dir)
   return dir
 }

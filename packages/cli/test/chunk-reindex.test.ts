@@ -14,6 +14,7 @@ import { mkdtemp, rm, unlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { tmpTag } from '@prism/core'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
@@ -32,7 +33,7 @@ const HOMES: string[] = []
 const SERVICES: PrismKnowledgeService[] = []
 
 async function tempHome(prefix: string): Promise<string> {
-  const home = await mkdtemp(join(tmpdir(), prefix))
+  const home = await mkdtemp(join(tmpdir(), prefix.replace(/-$/, `-${tmpTag()}-`)))
   HOMES.push(home)
   return home
 }

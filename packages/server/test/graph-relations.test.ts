@@ -11,6 +11,7 @@
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { tmpTag } from '@prism/core'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { startServer, type AppHandle } from '../src/app.js'
@@ -106,7 +107,7 @@ let app: AppHandle
 let base: string
 
 async function tempDir(prefix: string): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), prefix))
+  const dir = await mkdtemp(join(tmpdir(), prefix.replace(/-$/, `-${tmpTag()}-`)))
   dirs.push(dir)
   return dir
 }

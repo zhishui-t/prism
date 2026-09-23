@@ -3,6 +3,7 @@ import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { tmpTag } from '@prism/core'
 
 import { createRoleRegistry } from '../src/registry.js'
 import { RoleParseError, extractPrinciple, parseRoleMarkdown } from '../src/role/parse.js'
@@ -18,7 +19,7 @@ import { renderZcodeRole } from '../src/role/render.js'
 const REAL_AGENTS_DIR = join(homedir(), '.zcode', 'agents')
 
 function makeTmp(): string {
-  return join(tmpdir(), `prism-agents-test-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+  return join(tmpdir(), `prism-agents-test-${tmpTag()}-${Date.now()}-${Math.random().toString(36).slice(2)}`)
 }
 
 const BASIC_ROLE = [

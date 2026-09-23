@@ -38,7 +38,7 @@ import { tmpdir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { join } from 'node:path'
 
-import { repoRoot } from '@prism/core'
+import { repoRoot, tmpTag } from '@prism/core'
 
 /** anydoc 运行时目录（setup-anydoc.mjs 的安装目标）。发行根向上查找，兼容打包布局。 */
 export function anydocRuntimeDir(): string {
@@ -651,7 +651,7 @@ async function embedImageText(
   const lines = markdown.split('\n')
   const consumed = new Set<number>()
   const replacements = new Map<number, string[]>()
-  const dir = await mkdtemp(join(tmpdir(), 'prism-ocr-asset-'))
+  const dir = await mkdtemp(join(tmpdir(), `prism-ocr-asset-${tmpTag()}-`))
   try {
     for (const ref of refs) {
       const index = findAltLine(lines, consumed, ref.alt)

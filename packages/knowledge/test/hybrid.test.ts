@@ -10,7 +10,7 @@ import { join } from 'node:path'
 
 import { afterAll, describe, expect, it } from 'vitest'
 
-import { openPersistence } from '@prism/core'
+import { openPersistence, prismTmpPrefix } from '@prism/core'
 
 import { PrismKnowledgeService } from '../src/service.js'
 import { blobToVector, cosine } from '../src/vector.js'
@@ -46,7 +46,7 @@ let service: PrismKnowledgeService | undefined
 
 async function seed(): Promise<PrismKnowledgeService> {
   if (service) return service
-  home = mkdtempSync(join(tmpdir(), 'prism-kb-hybrid-'))
+  home = mkdtempSync(join(tmpdir(), prismTmpPrefix('kb-hybrid')))
   const svc = new PrismKnowledgeService({ home, embed: fakeEmbed })
   await svc.deposit({
     id: 'PHONE-1',
@@ -98,7 +98,7 @@ describe('混合检索（BM25 + 向量 RRF）', () => {
   })
 
   it('未注入 embed → 纯 BM25（既有行为不变）', async () => {
-    const soloHome = mkdtempSync(join(tmpdir(), 'prism-kb-hybrid-solo-'))
+    const soloHome = mkdtempSync(join(tmpdir(), prismTmpPrefix('kb-hybrid-solo')))
     const svc = new PrismKnowledgeService({ home: soloHome })
     await svc.deposit({
       id: 'X-1',
@@ -116,7 +116,7 @@ describe('混合检索（BM25 + 向量 RRF）', () => {
   it('召回不受插入顺序影响：语义相关但插入靠后的条目也必须召回（候选池不限行）', async () => {
     // 回归：旧实现用 SQL `LIMIT 50` 取候选，库一大就任意截断，插入靠后的相关条目永远
     // 召不回。这里 60 条无关填充 + 目标条目最后插入，目标仍须被向量召回。
-    const home = mkdtempSync(join(tmpdir(), 'prism-kb-pool-'))
+    const home = mkdtempSync(join(tmpdir(), prismTmpPrefix('kb-pool')))
     const svc = new PrismKnowledgeService({ home, embed: fakeEmbed })
     for (let i = 0; i < 60; i++) {
       await svc.deposit({
@@ -149,7 +149,7 @@ describe('混合检索（BM25 + 向量 RRF）', () => {
     // 回归：旧 reindex 只重建 entries/fts/edges，不碰 kb_vectors——改了文件内容，
     // 旧向量仍残留并参与检索（entry_id/version 不变）。这里改「电脑桶→手机桶」，
     // 断言库里的向量从 [0,1] 变成 [1,0]。
-    const home = mkdtempSync(join(tmpdir(), 'prism-kb-reidx-vec-'))
+    const home = mkdtempSync(join(tmpdir(), prismTmpPrefix('kb-reidx-vec')))
     const svc = new PrismKnowledgeService({ home, embed: fakeEmbed })
     const r = await svc.deposit({
       id: 'MUT',
