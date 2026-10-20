@@ -3,8 +3,10 @@ import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactNode } fr
 
 import { api, type ArchDiagram, type BookNode, type BookStructure, type CatalogEntry, type EntryVersion, type SearchHitSegment, type SearchResponse } from '../api.ts'
 import { ConfirmModal } from '../components/ConfirmModal.tsx'
+import { Icon } from '../components/Icon.tsx'
 import { MarkdownBlocks } from '../components/Markdown.tsx'
 import { Ref } from '../components/ref.tsx'
+import { SearchField } from '../components/SearchField.tsx'
 import { State } from '../components/State.tsx'
 import { CopyButton, EmptyBlock, PageHead } from '../components/ui.tsx'
 import { useAsync } from '../components/useAsync.ts'
@@ -1019,14 +1021,15 @@ export function KnowledgePage({
               {/* 左栏：目录（或检索结果，二选一，永不并排） */}
               <div className="book-sidebar">
                 <div className="book-search">
-                  <input
-                    type="text"
-                    placeholder={t('knowledge.searchPlaceholder')}
-                    aria-label={t('knowledge.searchPlaceholder')}
+                  <SearchField
                     value={search}
-                    onChange={(e) => setSearch(e.target.value)}
+                    onChange={setSearch}
+                    placeholder={t('knowledge.searchPlaceholder')}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') enterSearch()
+                    }}
+                    onClear={() => {
+                      if (searching) exitSearch()
                     }}
                   />
                 </div>
@@ -1338,11 +1341,28 @@ export function KnowledgePage({
                   </div>
                 ) : meta === null ? (
                   <div className="empty-hint swap-in">
-                    {/* B-2e §P3：📖 字形装饰已删（§3.D 默认禁 emoji）——空态只由两行文案承担。 */}
-                    <span>{t('knowledge.selectEntry')}</span>
-                    <span className="small" style={{ color: 'var(--mute)' }}>
-                      {t('knowledge.bookSummary', { entries: stats.data?.entries ?? 0, books: books.length })}
-                    </span>
+                    <div className="empty-card">
+                      <span className="empty-icon">
+                        <Icon name="book" size={26} />
+                      </span>
+                      <h3>{t('knowledge.selectEntry')}</h3>
+                      <p className="small muted">
+                        {t('knowledge.bookSummary', { entries: stats.data?.entries ?? 0, books: books.length })}
+                      </p>
+                      <div className="empty-layers">
+                        <span className="small muted">{t('knowledge.browseByLayer')}</span>
+                        {LAYER_CHIPS.filter((chip) => chip !== 'all').map((chip) => (
+                          <button
+                            key={chip}
+                            type="button"
+                            className={`toc-chip${layer === chip ? ' active' : ''}`}
+                            onClick={() => pickLayer(chip)}
+                          >
+                            {layerLabel(chip)}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   </div>
                 ) : (
                   /* v7.1 P2：换条目时右栏内容**轻过渡**（纯 opacity，`key` 让动画随换条重放）。

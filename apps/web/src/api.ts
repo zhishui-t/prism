@@ -1,7 +1,7 @@
-/** Prism server 响应信封（design.md §4）。 */
-export type Envelope<T> =
-  | { ok: true; value: T }
-  | { ok: false; error: { code: string; message: string } }
+import { request } from './http.ts'
+
+/** Prism server 响应信封（design.md §4）；唯一实现在 `./http.ts`。 */
+export type { Envelope } from './http.ts'
 
 /**
  * 一条命中段（v13 W-2，SPEC-3.1/3.6）——与 `packages/knowledge/src/types.ts` 的
@@ -463,26 +463,9 @@ export interface HealthInfo {
 }
 
 /**
- * 统一请求：解析信封，失败抛错（页面据此显示错误态）。
- *
- * ⚠ **契约（debts D-1，不得更改）**：错误**必须**以 `` `${code}: ${message}` `` 抛成 `Error.message`
- * ——错误码靠这个前缀承载。消费方按前缀分派：
- * - `components/EffectiveSkills.tsx`：`err.startsWith('not_found')` → 换成「角色不存在」的人话；
- * - 各页 `State` / `.error` 直接展示原文（`code: message`）。
- * 因此**不要**把它改成结构化 error、也不要在前缀里加别的东西；要翻译码，请在消费方做映射。
- * （`api-team.ts` 的同名函数是同一契约的第二处实现，改一处必须同步另一处。）
+ * 请求信封的唯一实现在 `./http.ts`（GET 在途合并 / headers 合并 / D-1 错误前缀）。
+ * 本模块只保留 re-export 以兼容既有 import。
  */
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
-    headers: { 'content-type': 'application/json' },
-    ...init,
-  })
-  const body = (await res.json()) as Envelope<T>
-  if (!body.ok) {
-    throw new Error(`${body.error.code}: ${body.error.message}`)
-  }
-  return body.value
-}
 
 export const api = {
   health: () => request<HealthInfo>('/api/health'),

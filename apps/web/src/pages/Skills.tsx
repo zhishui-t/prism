@@ -10,8 +10,10 @@ import {
 import { ConfirmModal } from '../components/ConfirmModal.tsx'
 import { CountLine } from '../components/CountLine.tsx'
 import { EffectiveSkills } from '../components/EffectiveSkills.tsx'
+import { Icon } from '../components/Icon.tsx'
 import { MarkdownBlocks } from '../components/Markdown.tsx'
 import { NavRow } from '../components/NavRow.tsx'
+import { SearchField } from '../components/SearchField.tsx'
 import { ScopeLayerRows } from '../components/SkillScopeList.tsx'
 import { State } from '../components/State.tsx'
 import { CopyCommand, Modal, PageHead, Pane, StatusTag, firstSentence } from '../components/ui.tsx'
@@ -267,12 +269,17 @@ export function SkillsPage({ sel }: { sel?: string }) {
    * 保留的两轴都**行动相关**：已装/未装（决定命令块出不出）与 被角色/团队引用（决定谁是引用方）。
    */
   const counts = useMemo(
-    () => ({
-      installed: rows.filter((r) => r.installed).length,
-      missing: rows.filter((r) => !r.installed).length,
-      byRole: rows.filter((r) => r.roles.length > 0).length,
-      byTeam: rows.filter((r) => r.teams.length > 0).length,
-    }),
+    () =>
+      rows.reduce(
+        (acc, r) => {
+          if (r.installed) acc.installed += 1
+          else acc.missing += 1
+          if (r.roles.length > 0) acc.byRole += 1
+          if (r.teams.length > 0) acc.byTeam += 1
+          return acc
+        },
+        { installed: 0, missing: 0, byRole: 0, byTeam: 0 },
+      ),
     [rows],
   )
 
@@ -280,12 +287,16 @@ export function SkillsPage({ sel }: { sel?: string }) {
   const keyword = filter.trim().toLowerCase()
   /** 过滤态：决定「空分类组渲不渲染」（见下方 `groupSkills` 的 `hideEmpty`）。 */
   const filterActive = keyword !== '' || onlyMissing
-  const shown = rows.filter((r) => {
-    if (onlyMissing && r.installed) return false
-    if (keyword === '') return true
-    const hay = [r.name, r.summary, ...r.roles, ...r.teams].join(' ').toLowerCase()
-    return hay.includes(keyword)
-  })
+  const shown = useMemo(
+    () =>
+      rows.filter((r) => {
+        if (onlyMissing && r.installed) return false
+        if (keyword === '') return true
+        const hay = [r.name, r.summary, ...r.roles, ...r.teams].join(' ').toLowerCase()
+        return hay.includes(keyword)
+      }),
+    [rows, onlyMissing, keyword],
+  )
 
   const categoryNames = categories.data?.categories
 
@@ -313,13 +324,19 @@ export function SkillsPage({ sel }: { sel?: string }) {
    * （过滤后某组空了，该组连组头一起消失，不留空壳）。分类清单就绪时它同时是**组集与组序**
    * （空分类成组）；未就绪（`undefined`）时退回「由行推组」的旧口径。判据在 `skills-logic.ts`。
    */
-  const groups = groupSkills(shown, namedOrder, { hideEmpty: filterActive })
+  const groups = useMemo(
+    () => groupSkills(shown, namedOrder, { hideEmpty: filterActive }),
+    [shown, namedOrder, filterActive],
+  )
 
   /**
    * 参与排序的**已命名组序**：清单就绪时用 `namedOrder`（含被过滤隐藏的空组——移动不丢它们的
    * 相对位置）；未就绪时由可见组推（那一支没有空组，两者等价）。
    */
-  const movableOrder = namedOrder ?? groups.filter((g) => g.category !== UNCATEGORIZED).map((g) => g.category)
+  const movableOrder = useMemo(
+    () => namedOrder ?? groups.filter((g) => g.category !== UNCATEGORIZED).map((g) => g.category),
+    [namedOrder, groups],
+  )
 
   /** 组头 ↑↓：改生效序 → 存 localStorage（未分类不参与，见 `moveGroup` 的契约）。 */
   const reorder = (name: string, delta: -1 | 1) => {
@@ -720,13 +737,21 @@ export function SkillsPage({ sel }: { sel?: string }) {
             <input type="checkbox" checked={onlyMissing} onChange={(e) => setOnlyMissing(e.target.checked)} />
             {t('skills.onlyMissing')}
           </label>
-          <input
-            className="role-filter"
-            placeholder={t('skills.filterPlaceholder')}
-            aria-label={t('skills.filterPlaceholder')}
+          <SearchField
             value={filter}
-            onChange={(e) => setFilter(e.target.value)}
+            onChange={setFilter}
+            placeholder={t('skills.filterPlaceholder')}
           />
+          <button
+            type="button"
+            className="tool-btn"
+            disabled={loading}
+            aria-busy={loading}
+            onClick={refreshAll}
+          >
+            <Icon name="refresh" size={13} />
+            {t('common.refresh')}
+          </button>
         </div>
 
         {dirMissing && <div className="banner small">{t('skills.dirMissing')}</div>}
@@ -793,9 +818,15 @@ export function SkillsPage({ sel }: { sel?: string }) {
                       setNotice('')
                     }}
                   >
+                    <Icon name="plus" size={13} />
                     {t('skills.category.add')}
                   </button>
                 )}
+              </div>
+              <div className="skill-list-head" aria-hidden="true">
+                <span>{t('common.name')}</span>
+                <span>{t('skills.col.refs')}</span>
+                <span>{t('skills.col.source')}</span>
               </div>
               {/* F7 分类分组（§3.5）：**层级载体是「组」本身**——折叠态下组头是唯一的可见结构
                   （列表的第一眼 = 组名 + 计数）；展开后组内每一行仍按技能三层排（分组**不改变**
@@ -950,7 +981,7 @@ export function SkillsPage({ sel }: { sel?: string }) {
                             `categoryColor`），未分类不渲染色点——「同一个分类一个色」是稳定判据。
                             W-6：**空分类组**（清单里有、0 条技能）照常出组头 + 计数 0，组内给一句
                             空态（不是空白网格，也不是连组头一起消失）。 */}
-                        <div className="skill-grid">
+                        <div className="skill-grid dense">
                           {group.skills.length === 0 && (
                             <p className="muted small skill-group-empty">{t('skills.category.empty')}</p>
                           )}
@@ -976,9 +1007,13 @@ export function SkillsPage({ sel }: { sel?: string }) {
                                 {/* F8 §3.4 #5 的口径不变：摘要收 **1 行 ≤32 字**（列表只留入口，
                                     全文进详情第一眼 `.skill-desc`）；截断由共用的 `.role-desc`
                                     （`-webkit-line-clamp: 1`）兜底，全文进 `title`（悬停可读）。 */}
-                                {row.summary !== '' && (
+                                {row.summary !== '' ? (
                                   <div className="role-desc" title={row.summary}>
                                     {firstSentence(row.summary, 32)}
+                                  </div>
+                                ) : (
+                                  <div className="role-desc skill-usage">
+                                    {t('skills.usageLine', { roles: row.roles.length, teams: row.teams.length })}
                                   </div>
                                 )}
                                 {/* S3：来源与宿主是**标记**不是标题，不参与第一眼的名字行；
@@ -1173,7 +1208,7 @@ function SkillBody({
           <div className="row">
             <button
               type="button"
-              className="tool-btn"
+              className="primary"
               disabled={busy || !skillsDir}
               aria-busy={busy}
               title={dirMissing ? t('skills.dirMissing') : undefined}
@@ -1200,11 +1235,11 @@ function SkillBody({
       {detail.installed && (
         <div className="row" style={{ marginTop: 'var(--s-2)' }}>
           {externalRemovable ? (
-            <button type="button" className="tool-btn" disabled={busy} onClick={onAskDelete}>
+            <button type="button" className="tool-btn danger" disabled={busy} onClick={onAskDelete}>
               {t('skills.delete.action')}
             </button>
           ) : (
-            <button type="button" className="tool-btn" disabled={busy || skillsDir === ''} onClick={onAskUninstall}>
+            <button type="button" disabled={busy || skillsDir === ''} onClick={onAskUninstall}>
               {t('skills.uninstall.action')}
             </button>
           )}

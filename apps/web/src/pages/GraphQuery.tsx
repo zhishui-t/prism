@@ -359,12 +359,18 @@ export function GraphQueryCard({ q }: { q: GraphQueryController }) {
       <div className="row" style={{ marginTop: 'var(--s-2)' }}>
         <input
           className="grow"
+          data-search-input=""
           placeholder={placeholder}
           aria-label={placeholder}
           value={q.node}
           onChange={(e) => q.setNode(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') q.run()
+            if (e.key === 'Escape') {
+              e.preventDefault()
+              q.setNode('')
+              e.currentTarget.blur()
+            }
           }}
         />
         {q.mode === 'path' && (

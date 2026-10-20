@@ -1,4 +1,5 @@
 import { api, type GraphProject, type ScanRecord } from '../api.ts'
+import { Icon } from '../components/Icon.tsx'
 import { State } from '../components/State.tsx'
 import { useAsync } from '../components/useAsync.ts'
 import { CopyCommand, PageHead, Pane, StatusTag } from '../components/ui.tsx'
@@ -38,6 +39,7 @@ export function ProjectsPage() {
               {/* v7.1 P2：刷新此前点了毫无动静（按钮不置灰、不换文案、也没有任何在途标记）。
                   这里只补「在途」这一件事：置灰防双击 + `aria-busy` 让读屏也知道在拉。 */}
               <button onClick={projects.reload} disabled={projects.loading} aria-busy={projects.loading}>
+                <Icon name="refresh" size={14} />
                 {t('common.refresh')}
               </button>
             </span>
@@ -124,6 +126,7 @@ function ScanHistoryCard() {
           <span className="spacer">
             {/* v7.1 P2：与上面「已登记项目」的刷新同一口径（在途置灰 + `aria-busy`）。 */}
             <button onClick={history.reload} disabled={history.loading} aria-busy={history.loading}>
+              <Icon name="refresh" size={14} />
               {t('common.refresh')}
             </button>
           </span>

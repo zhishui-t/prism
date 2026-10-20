@@ -1,4 +1,5 @@
 import { useT } from '../i18n.ts'
+import { Icon } from './Icon.tsx'
 
 interface StateProps {
   loading?: boolean
@@ -33,6 +34,15 @@ export function State({ loading, error, empty, emptyText, children }: StateProps
     )
   }
   if (error) return <div className="error">{t('common.loadFailed', { msg: error })}</div>
-  if (empty) return <div className="empty">{emptyText ?? t('common.empty')}</div>
+  if (empty) {
+    return (
+      <div className="empty">
+        <span className="empty-icon">
+          <Icon name="inbox" size={22} />
+        </span>
+        <span>{emptyText ?? t('common.empty')}</span>
+      </div>
+    )
+  }
   return <>{children}</>
 }

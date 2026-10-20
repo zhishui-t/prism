@@ -19,7 +19,10 @@
 import { useEffect, useState } from 'react'
 
 import { teamApi } from '../../api-team.ts'
+import { ConfirmModal } from '../../components/ConfirmModal.tsx'
+import { Icon } from '../../components/Icon.tsx'
 import { NavRow } from '../../components/NavRow.tsx'
+import { SearchField } from '../../components/SearchField.tsx'
 import { State } from '../../components/State.tsx'
 import { useAsync } from '../../components/useAsync.ts'
 import { Drawer, Modal, PageHead, StatusTag, firstSentence } from '../../components/ui.tsx'
@@ -50,6 +53,9 @@ export function TeamsPage({
    * 意图与选中是两件事：新建不因「恰好选中了某团队」而变成编辑。
    */
   const [formIntent, setFormIntent] = useState<null | 'create' | 'edit'>(null)
+  /** TeamForm 报上来的「有未保存修改」；只用于拦截 X / Esc / 遮罩关闭，不拦表单内的显式「取消」。 */
+  const [formDirty, setFormDirty] = useState(false)
+  const [pendingDiscard, setPendingDiscard] = useState(false)
   const [banner, setBanner] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
   /** R-6 Q1：创建成功后**先不切选中**（否则抽屉会从「新建」翻成「编辑」，就地反馈被顶掉），
    *  记下 id，等抽屉关闭再落选中。**写入只有 `onCreated`、消费只有 `closeForm()`，消费即清。** */
@@ -95,10 +101,35 @@ export function TeamsPage({
    */
   const closeForm = () => {
     setFormIntent(null)
+    setFormDirty(false)
+    setPendingDiscard(false)
     if (pendingSelect !== '') {
       onSelect?.(pendingSelect)
       setPendingSelect('')
     }
+  }
+
+  /**
+   * 打开表单：意图与选中解耦（R-8-4），并把「脏」状态清掉——上一份表单的未保存标记
+   * 不能泄漏到新打开的表单。
+   */
+  const openForm = (intent: 'create' | 'edit') => {
+    setFormDirty(false)
+    setPendingDiscard(false)
+    setFormIntent(intent)
+    setBanner(null)
+  }
+
+  /**
+   * 浮层关闭请求（X / Esc / 点遮罩）：有未保存修改先确认；表单内的「取消」按钮
+   * 仍走 `closeForm`（显式放弃，不再二次确认）。
+   */
+  const requestCloseForm = () => {
+    if (formDirty) {
+      setPendingDiscard(true)
+      return
+    }
+    closeForm()
   }
 
   useEffect(() => {
@@ -144,10 +175,10 @@ export function TeamsPage({
           <button
             className="primary"
             onClick={() => {
-              setFormIntent('create')
-              setBanner(null)
+              openForm('create')
             }}
           >
+            <Icon name="plus" size={15} />
             {t('teams.new')}
           </button>
         </PageHead>
@@ -174,6 +205,15 @@ export function TeamsPage({
           </div>
         )}
 
+        <div className="team-toolbar">
+          <SearchField
+            value={filter}
+            onChange={setFilter}
+            placeholder={t('teams.filterPlaceholder')}
+          />
+          <span className="small muted team-total">{t('teams.total', { n: shown.length })}</span>
+        </div>
+
         <State
           loading={teams.loading}
           error={teams.error}
@@ -184,38 +224,36 @@ export function TeamsPage({
               高度链不变：`.md` 仍是 `.page-fill` 的剩余高度子项，`.md-list` 自己滚。 */}
           <div className="md solo">
             <div className="md-list">
-              <div style={{ padding: 'var(--s-1) var(--s-1) var(--s-2)' }}>
-                <input
-                  style={{ width: '100%' }}
-                  placeholder={t('teams.filterPlaceholder')}
-                  aria-label={t('teams.filterPlaceholder')}
-                  value={filter}
-                  onChange={(e) => setFilter(e.target.value)}
-                />
-              </div>
               {shown.length === 0 && (
                 <div className="small muted" style={{ padding: 'var(--s-2)' }}>
                   {t('common.empty')}
                 </div>
               )}
-              {shown.map((team) => (
-                <NavRow
-                  key={team.team_id}
-                  href={hrefOf({ page: 'teams', sel: team.team_id })}
-                  selected={selected === team.team_id}
-                  /* 导航靠 href（键盘 / 中键 / 复制深链都通）；onClick 只清上一次的写操作提示条 */
-                  onClick={() => setBanner(null)}
-                >
-                  {/* v12 F3：行主标题**只有 team_id**——团队 `name` UI 零展示（SPEC-3.1）。 */}
-                  <span className="t">{team.team_id}</span>
-                  {team.description !== '' && <span className="s">{firstSentence(team.description, 76)}</span>}
-                  <span className="tags">
-                    {team.default && <StatusTag kind="ok">{t('teams.default')}</StatusTag>}
-                    <StatusTag kind="info">{t('teams.membersCount', { n: team.members.length })}</StatusTag>
-                    <StatusTag kind="info">{t('teams.stages', { n: team.workflow.length })}</StatusTag>
-                  </span>
-                </NavRow>
-              ))}
+              <div className="team-grid">
+                {shown.map((team) => (
+                  <NavRow
+                    key={team.team_id}
+                    href={hrefOf({ page: 'teams', sel: team.team_id })}
+                    selected={selected === team.team_id}
+                    className="team-row"
+                    /* 导航靠 href（键盘 / 中键 / 复制深链都通）；onClick 只清上一次的写操作提示条 */
+                    onClick={() => setBanner(null)}
+                  >
+                    <div className="team-row-head">
+                      <span className="team-avatar" aria-hidden="true">
+                        {team.team_id.slice(0, 1).toUpperCase()}
+                      </span>
+                      <span className="t">{team.team_id}</span>
+                    </div>
+                    {team.description !== '' && <span className="s">{firstSentence(team.description, 76)}</span>}
+                    <span className="tags">
+                      {team.default && <StatusTag kind="ok">{t('teams.default')}</StatusTag>}
+                      <StatusTag kind="info">{t('teams.membersCount', { n: team.members.length })}</StatusTag>
+                      <StatusTag kind="info">{t('teams.stages', { n: team.workflow.length })}</StatusTag>
+                    </span>
+                  </NavRow>
+                ))}
+              </div>
             </div>
           </div>
 
@@ -239,7 +277,7 @@ export function TeamsPage({
                   error={detail.error}
                   teamsDir={teamsDir}
                   onOpenUsage={onOpenUsageSkills}
-                  onEdit={() => setFormIntent('edit')}
+                  onEdit={() => openForm('edit')}
                   onDeleted={(text) => afterWrite('ok', text, { close: true })}
                 />
               </div>
@@ -251,7 +289,7 @@ export function TeamsPage({
       {formIntent !== null && (
         <Drawer
           title={formIntent === 'edit' ? `${t('teams.form.edit')} › ${selected}` : t('teams.form.new')}
-          onClose={closeForm}
+          onClose={requestCloseForm}
         >
           {formIntent === 'edit' &&
             (detail.data === undefined ? (
@@ -268,6 +306,7 @@ export function TeamsPage({
                 onReloadRoles={roleIndex.reload}
                 rolesDir={roleIndex.data?.rolesDir}
                 defaultTeamsDir={teamsDir}
+                onDirtyChange={setFormDirty}
                 onCancel={closeForm}
                 onSaved={() => {
                   // R-6 Q1：保存成功**不关抽屉**——文案与 warning 由 TeamForm 就地渲染，只刷新数据
@@ -285,6 +324,7 @@ export function TeamsPage({
               onReloadRoles={roleIndex.reload}
               existingIds={list.map((x) => x.team_id)}
               defaultTeamsDir={teamsDir}
+              onDirtyChange={setFormDirty}
               onCancel={closeForm}
               onCreated={(id) => {
                 // R-6 Q1：结果就地留在抽屉内 → 不关抽屉、不立刻切选中（见 pendingSelect）
@@ -294,6 +334,20 @@ export function TeamsPage({
             />
           )}
         </Drawer>
+      )}
+
+      {pendingDiscard && (
+        <ConfirmModal
+          title={t('common.discardTitle')}
+          body={<p className="muted">{t('common.discardBody')}</p>}
+          confirmLabel={t('common.discard')}
+          cancelLabel={t('common.keepEditing')}
+          onConfirm={() => {
+            setPendingDiscard(false)
+            closeForm()
+          }}
+          onCancel={() => setPendingDiscard(false)}
+        />
       )}
     </>
   )

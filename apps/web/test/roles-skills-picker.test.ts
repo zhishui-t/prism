@@ -130,6 +130,22 @@ async function fill(target: HTMLInputElement, value: string): Promise<void> {
   })
 }
 
+/** 受控 textarea 同上（HTMLTextAreaElement 的 setter 不在 Input 原型上）。 */
+async function fillArea(target: HTMLTextAreaElement, value: string): Promise<void> {
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
+    if (setter === undefined) throw new Error('happy-dom 缺 textarea value setter')
+    setter.call(target, value)
+    target.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+}
+
+async function pressEscape(): Promise<void> {
+  await act(async () => {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+  })
+}
+
 function button(label: string, scope: ParentNode = container): HTMLButtonElement {
   const hit = all('button', scope).find((b) => b.textContent?.trim() === label)
   if (hit === undefined) throw new Error(`未找到按钮：${label}`)
@@ -481,5 +497,36 @@ describe('F1 提交：白名单真的发出去了（端到端）', () => {
     expect(input.skills).toEqual(['tech-doc', 'frontend-design', 'ghost-skill'])
     // B1 不回归：books 不在 skills 选取器的管辖内，改技能**不该**动知识绑定
     expect(input.knowledge?.books).toEqual(['prism'])
+
+    // v19：保存成功后就地给「查看角色」出口（关抽屉回详情，不需要猜怎么离开）
+    await click(button(t('roles.form.viewAfterSave'), one('.drawer')!))
+    expect(one('.drawer')).toBeNull()
+  })
+})
+
+describe('v19 角色表单未保存离开确认', () => {
+  /** 窄版确认模态（详情是 `.modal-lg`、选取器是 `.modal-md`，确认框两者都不带）。 */
+  function confirm(): Element | null {
+    return all('.modal').find((m) => !m.classList.contains('modal-lg') && !m.classList.contains('modal-md')) ?? null
+  }
+
+  it('有未保存修改时 Esc 先确认：继续编辑保留表单，放弃才关', async () => {
+    await render('dev-1')
+    await openForm()
+    const area = one<HTMLTextAreaElement>('.drawer textarea')
+    expect(area).not.toBeNull()
+    await fillArea(area!, '改过的描述')
+
+    await pressEscape()
+    expect(one('.drawer')).not.toBeNull()
+    expect(confirm()).not.toBeNull()
+
+    await click(button(t('common.keepEditing')))
+    expect(confirm()).toBeNull()
+    expect(one('.drawer')).not.toBeNull()
+
+    await pressEscape()
+    await click(button(t('common.discard')))
+    expect(one('.drawer')).toBeNull()
   })
 })

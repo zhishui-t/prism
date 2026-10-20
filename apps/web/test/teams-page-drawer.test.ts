@@ -184,6 +184,31 @@ describe('TeamsPage 抽屉意图（create / edit 分状态）', () => {
     expect(el('.drawer')).toBeNull()
   })
 
+  it('创建成功后就地给「查看详情」出口：点击即关抽屉（不需要先猜怎么离开）', async () => {
+    await render('')
+    await createTeam('t-new')
+    await click(button(t('teams.form.viewAfterSave')))
+    expect(el('.drawer')).toBeNull()
+  })
+
+  it('有未保存修改时 Esc 先确认：继续编辑保留表单，放弃才关', async () => {
+    await render('')
+    await click(button(t('teams.new')))
+    await fill(input('#ntf-teamId'), 't-dirty')
+
+    await pressEscape()
+    expect(el('.drawer')).not.toBeNull()
+    expect([...container.querySelectorAll('.modal')].some((m) => !m.classList.contains('modal-lg'))).toBe(true)
+
+    await click(button(t('common.keepEditing')))
+    expect([...container.querySelectorAll('.modal')].some((m) => !m.classList.contains('modal-lg'))).toBe(false)
+    expect(el('.drawer')).not.toBeNull()
+
+    await pressEscape()
+    await click(button(t('common.discard')))
+    expect(el('.drawer')).toBeNull()
+  })
+
   it('选中团队时点「+ 新建团队」→ 开的是**空的新建表单**，不是编辑表单（R-8-4 主回归）', async () => {
     await render('t-a')
     // 前置：详情确实已就绪（「编辑」按钮只在 detail 到手后才渲染），否则本用例断言不成立

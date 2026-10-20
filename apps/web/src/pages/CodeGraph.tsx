@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 
 import { api } from '../api.ts'
+import { Icon } from '../components/Icon.tsx'
 import { State } from '../components/State.tsx'
 import { useAsync } from '../components/useAsync.ts'
 import { EmptyBlock, PageHead, StatusTag } from '../components/ui.tsx'
@@ -119,7 +120,10 @@ export function CodeGraphPage({ sel }: { sel?: string }) {
     <div className="graph-page">
       {/* §3.5：项目台账是「项目」的唯一权威页（登记 / 根目录 / 扫描历史都在那里） */}
       <PageHead title={t('graph.title')} sub={t('graph.desc')}>
-        <button onClick={() => navigate({ page: 'projects' })}>{t('graph.projectsLink')}</button>
+        <button onClick={() => navigate({ page: 'projects' })}>
+          <Icon name="folder" size={15} />
+          {t('graph.projectsLink')}
+        </button>
       </PageHead>
 
       <div className="pane">

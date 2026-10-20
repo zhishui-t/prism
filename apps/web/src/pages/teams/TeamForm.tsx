@@ -40,6 +40,8 @@ interface CommonProps {
   onReloadRoles: () => void
   defaultTeamsDir: string | undefined
   onCancel: () => void
+  /** 未保存修改状态（父级据此决定 X / Esc / 遮罩关闭是否先确认）。 */
+  onDirtyChange?: (dirty: boolean) => void
 }
 
 export type TeamFormProps = (
@@ -132,7 +134,7 @@ function initialValues(props: TeamFormProps, t: TFunc): TeamFormValues {
 
 export function TeamForm(props: TeamFormProps) {
   const t = useT()
-  const { roles, rolesLoading, rolesError, onReloadRoles, defaultTeamsDir, onCancel } = props
+  const { roles, rolesLoading, rolesError, onReloadRoles, defaultTeamsDir, onCancel, onDirtyChange } = props
   const isCreate = props.mode === 'create'
   const idPrefix = isCreate ? 'ntf-' : 'etf-'
   const editTeam = props.mode === 'edit' ? props.team : undefined
@@ -140,12 +142,21 @@ export function TeamForm(props: TeamFormProps) {
 
   const [baseline, setBaseline] = useState<TeamFormValues>(() => initialValues(props, t))
   const [v, setV] = useState<TeamFormValues>(baseline)
+  /** 未保存修改：与初值快照逐字段比较（保存成功后 baseline 跟上，自动预选也同步进 baseline）。 */
+  const dirty = JSON.stringify(v) !== JSON.stringify(baseline)
+  useEffect(() => {
+    onDirtyChange?.(dirty)
+  }, [dirty, onDirtyChange])
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [alert, setAlert] = useState('')
   /** T4：保存后抽屉不立即关闭，把服务端 warning 留在保存按钮上方。 */
   const [saveWarn, setSaveWarn] = useState<string[]>([])
   /** R-6 Q1：保存成功文案也留在抽屉内（不再上抛给列表提示条）。 */
   const [saveOk, setSaveOk] = useState('')
+  // 保存成功后再改字段：旧的成功文案不再代表当前值，撤掉它。
+  useEffect(() => {
+    if (dirty && saveOk !== '') setSaveOk('')
+  }, [dirty, saveOk])
   const [submitting, setSubmitting] = useState(false)
   /** v11 F2：保存撞上「文件被别人改过」（409 stale_write）→ 给「重新加载」出口，不静默覆盖。 */
   const [stale, setStale] = useState(false)
@@ -187,19 +198,20 @@ export function TeamForm(props: TeamFormProps) {
     setV((prev) => ({ ...prev, workflow: draftFromStages(templateStages(t, prev.template)) }))
   }, [isCreate, v.template, t])
 
-  // 角色库是异步到的：到手后补一次「预选 1 个 dev-1 + 1 个 tester」；用户已动手则不覆盖（仅 create）
+  // 角色库是异步到的：到手后补一次「预选 1 个 dev-1 + 1 个 tester」；用户已动手则不覆盖（仅 create）。
+  // 自动预选属于**初值**，必须同步进 baseline——否则一打开新建表单就显示「有未保存修改」。
+  // 只同步 counts，不把用户已输入的其它字段吸收进 baseline。
   useEffect(() => {
     if (!isCreate || seeded.current || roles.length === 0) return
     seeded.current = true
-    setV((prev) => {
-      if (Object.values(prev.counts).some((c) => c > 0)) return prev
-      const counts = { ...prev.counts }
-      for (const name of ['dev-1', 'tester']) {
-        if (roles.some((r) => r.name === name)) counts[name] = 1
-      }
-      return { ...prev, counts }
-    })
-  }, [roles, isCreate])
+    if (Object.values(v.counts).some((c) => c > 0)) return
+    const counts = { ...v.counts }
+    for (const name of ['dev-1', 'tester']) {
+      if (roles.some((r) => r.name === name)) counts[name] = 1
+    }
+    setV({ ...v, counts })
+    setBaseline({ ...baseline, counts })
+  }, [roles, isCreate, v, baseline])
 
   const set = <K extends keyof TeamFormValues>(key: K, value: TeamFormValues[K]) =>
     setV((prev) => ({ ...prev, [key]: value }))
@@ -269,6 +281,8 @@ export function TeamForm(props: TeamFormProps) {
         // R-6 Q1：创建结果就地留在抽屉内（含回读比对 warning），父级只刷新列表 + 记下待选中 id
         setSaveOk(t('teams.form.created', { id: input.team_id, path: result.path }))
         setSaveWarn(warning === '' ? [] : [warning])
+        // 保存成功 = 当前值成为新初值；此后不再算「未保存修改」
+        setBaseline(v)
         props.onCreated(input.team_id)
       }
     } catch (e) {
@@ -297,7 +311,14 @@ export function TeamForm(props: TeamFormProps) {
        * 不然第二次保存带的还是上一次读到的 mtime，而文件刚被自己改过 ⇒ 必然 409，
        * 用户会撞上一个「我什么都没改也被说成别人改过」的假冲突。
        */
-      if (result.source_mtime !== undefined) set('sourceMtime', result.source_mtime)
+      if (result.source_mtime !== undefined) {
+        const next = { ...v, sourceMtime: result.source_mtime }
+        setV(next)
+        // 写后 mtime 是新的初值；否则保存成功后立刻又会被判成「有未保存修改」
+        setBaseline(next)
+      } else {
+        setBaseline(v)
+      }
       // 服务端的 issues（如 members 变更触发的 workflow_pruned）必须可见，不静默
       const warns = (result.issues ?? []).filter((i) => i.level !== 'error').map((i) => i.message)
       // T4 + R-6 Q1：成功文案与 warning 都留在抽屉内（保存按钮上方），抽屉不关
@@ -508,7 +529,10 @@ export function TeamForm(props: TeamFormProps) {
       {/* R-6 Q1：保存成功的反馈贴在保存按钮上方（与 T4 warning 同槽），抽屉不关 */}
       {saveOk !== '' && (
         <div className="banner small" role="status">
-          {saveOk}
+          <span>{saveOk}</span>
+          <button type="button" className="tool-btn" onClick={onCancel}>
+            {t('teams.form.viewAfterSave')}
+          </button>
         </div>
       )}
 

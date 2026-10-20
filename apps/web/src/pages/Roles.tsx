@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 import { api, type BookNode } from '../api.ts'
 import {
@@ -11,10 +11,12 @@ import {
 } from '../api-team.ts'
 import { ConfirmModal } from '../components/ConfirmModal.tsx'
 import { CountLine } from '../components/CountLine.tsx'
+import { Icon } from '../components/Icon.tsx'
 import { PickerDialog, SelectedChips, type PickerGroup } from '../components/LibraryPicker.tsx'
 import { MarkdownBlocks } from '../components/Markdown.tsx'
 import { NavRow } from '../components/NavRow.tsx'
 import { Ref } from '../components/ref.tsx'
+import { SearchField } from '../components/SearchField.tsx'
 import { State } from '../components/State.tsx'
 import { CopyCommand, Drawer, EmptyBlock, Modal, PageHead, firstSentence, stripStrongMarkers } from '../components/ui.tsx'
 import { useAsync } from '../components/useAsync.ts'
@@ -62,6 +64,32 @@ const COLOR_MAP: Record<string, string> = {
 }
 function colorOf(c?: string): string {
   return (c !== undefined && COLOR_MAP[c]) || 'var(--role-gray)'
+}
+
+/**
+ * 模型标识的展示面：完整值常形如 `custom:account%3A…:GLM-5.3-Flash`，
+ * 卡片里只显示最后一段（真正可读的模型名），完整值留在 `title` 上。
+ * 没有分隔符的值（如 `sonnet`）原样返回——数据口径与测试都不受影响。
+ */
+function shortModel(model: string): string {
+  const cut = model.lastIndexOf(':')
+  return cut === -1 ? model : model.slice(cut + 1)
+}
+
+/** 角色表单的未保存比较快照：字段顺序固定，数组原样入列。 */
+function roleFormSnapshot(v: {
+  name: string
+  description: string
+  color: string
+  model: string
+  thought: string
+  skills: string[]
+  layers: string
+  books: string[]
+  body: string
+  dir: string
+}): string {
+  return JSON.stringify([v.name, v.description, v.color, v.model, v.thought, v.skills, v.layers, v.books, v.body, v.dir])
 }
 
 /** 校验码 → 人话（R7）。静态映射：动态拼 key 会被 `dead-keys.mjs` 判为疑似引用（§6.2 禁令）。 */
@@ -213,12 +241,10 @@ export function RolesPage({ sel }: { sel?: string }) {
       {notice !== '' && <div className="banner small">{notice}</div>}
 
       <div className="role-toolbar">
-        <input
-          className="role-filter"
+        <SearchField
           value={filter}
+          onChange={setFilter}
           placeholder={t('roles.filterPlaceholder')}
-          aria-label={t('roles.filterPlaceholder')}
-          onChange={(e) => setFilter(e.target.value)}
         />
         <button
           type="button"
@@ -229,7 +255,8 @@ export function RolesPage({ sel }: { sel?: string }) {
           {t('roles.countLine', { total: roleList.length, issues: issueRoles })}
         </button>
         <span className="spacer" />
-        <button type="button" className="tool-btn" onClick={() => setForm({ mode: 'new', initial: null })}>
+        <button type="button" className="primary" onClick={() => setForm({ mode: 'new', initial: null })}>
+          <Icon name="plus" size={15} />
           {t('roles.new')}
         </button>
       </div>
@@ -498,7 +525,11 @@ function RoleGlance({ role }: { role: RoleDefinition }) {
         </div>
       </div>
       <div className="role-tags">
-        {role.model !== undefined && role.model !== '' && <span className="tag">{t('roles.form.model')}: {role.model}</span>}
+        {role.model !== undefined && role.model !== '' && (
+          <span className="tag" title={role.model}>
+            {t('roles.form.model')}: {shortModel(role.model)}
+          </span>
+        )}
         {role.thoughtLevel !== undefined && role.thoughtLevel !== '' && <span className="tag">{t('roles.form.thought')}: {role.thoughtLevel}</span>}
         <span className="tag">{role.installed === true ? t('common.installed') : t('common.notInstalled')}</span>
       </div>
@@ -545,6 +576,22 @@ function RoleForm({
   const [error, setError] = useState('')
   /** R-6 Q1：保存反馈**就地**留在抽屉内（保存后不关抽屉），不再上抛给列表提示条。 */
   const [saved, setSaved] = useState('')
+  /** 未保存修改：初值快照 vs 当前值；保存成功后快照跟上。 */
+  const [baseline, setBaseline] = useState(() => roleFormSnapshot(seed))
+  const [pendingDiscard, setPendingDiscard] = useState(false)
+
+  const dirty =
+    roleFormSnapshot({ name, description, color, model, thought, skills, layers, books, body, dir }) !== baseline
+  // 保存成功后再改字段：旧的成功文案不再代表当前值，撤掉它（避免「显示已保存、实际有改动」）。
+  useEffect(() => {
+    if (dirty && saved !== '') setSaved('')
+  }, [dirty, saved])
+
+  /** X / Esc / 遮罩关闭：有未保存修改先确认；表单内「取消」走 `onClose`（显式放弃）。 */
+  const requestClose = () => {
+    if (dirty) setPendingDiscard(true)
+    else onClose()
+  }
 
   /**
    * 技能台账（两路合并，与技能页**同一份** `mergeSkillCatalog`）：表单里的 chips 需要
@@ -616,6 +663,8 @@ function RoleForm({
       else if (initial !== null) await teamApi.updateRole(initial.name, input)
       const who = mode === 'new' ? name.trim() : (initial?.name ?? '')
       setSaved(t(mode === 'new' ? 'roles.form.created' : 'roles.form.updated', { name: who }))
+      // 保存成功 = 当前值成为新初值；此后不再算「未保存修改」
+      setBaseline(roleFormSnapshot({ name, description, color, model, thought, skills, layers, books, body, dir }))
       onSaved()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -625,16 +674,17 @@ function RoleForm({
   }
 
   return (
-    <Drawer
-      width={560}
-      title={t(mode === 'new' ? 'roles.form.new' : 'roles.form.edit')}
-      onClose={onClose}
+    <>
+      <Drawer
+        width={560}
+        title={t(mode === 'new' ? 'roles.form.new' : 'roles.form.edit')}
+        onClose={requestClose}
       footer={
         <>
           <button type="button" className="tool-btn" disabled={busy} onClick={onClose}>
             {t('common.cancel')}
           </button>
-          <button type="button" className="tool-btn" disabled={!canSubmit} onClick={() => void submit()}>
+          <button type="button" className="primary" disabled={!canSubmit} onClick={() => void submit()}>
             {busy ? t('roles.form.saving') : t('common.save')}
           </button>
         </>
@@ -643,7 +693,18 @@ function RoleForm({
       {error !== '' && <div className="error">{error}</div>}
       {saved !== '' && (
         <div className="banner small" role="status">
-          {saved}
+          <span>{saved}</span>
+          <button
+            type="button"
+            className="tool-btn"
+            onClick={() => {
+              const created = name.trim()
+              onClose()
+              if (mode === 'new' && created !== '') navigate({ page: 'roles', sel: created })
+            }}
+          >
+            {t('roles.form.viewAfterSave')}
+          </button>
         </div>
       )}
 
@@ -758,6 +819,20 @@ function RoleForm({
           onClose={() => setPicker(null)}
         />
       )}
-    </Drawer>
+      </Drawer>
+      {pendingDiscard && (
+        <ConfirmModal
+          title={t('common.discardTitle')}
+          body={<p className="muted">{t('common.discardBody')}</p>}
+          confirmLabel={t('common.discard')}
+          cancelLabel={t('common.keepEditing')}
+          onConfirm={() => {
+            setPendingDiscard(false)
+            onClose()
+          }}
+          onCancel={() => setPendingDiscard(false)}
+        />
+      )}
+    </>
   )
 }

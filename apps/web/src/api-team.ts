@@ -1,6 +1,6 @@
 /** 角色 / 团队 / 技能 相关 API（design-v3.md §3.3）。 */
 
-import type { Envelope } from './api.ts'
+import { request } from './http.ts'
 
 export interface KnowledgeBinding {
   layers: string[]
@@ -489,21 +489,8 @@ export interface ValidationResult {
 }
 
 /**
- * 统一请求：解析信封，失败抛错（与 `api.ts` 的 `request()` 同一契约的第二处实现）。
- *
- * ⚠ **契约（debts D-1，不得更改）**：错误**必须**以 `` `${code}: ${message}` `` 抛成 `Error.message`
- * ——错误码靠这个前缀承载（消费方按 `startsWith('not_found')` 之类的判断分派）。
- * 改这里就必须同步 `api.ts` 的同名函数。
+ * 请求信封的唯一实现在 `./http.ts`（与 `api.ts` 共用；错误前缀契约见该文件头注）。
  */
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
-    headers: { 'content-type': 'application/json' },
-    ...init,
-  })
-  const body = (await res.json()) as Envelope<T>
-  if (!body.ok) throw new Error(`${body.error.code}: ${body.error.message}`)
-  return body.value
-}
 
 /** 技能使用视图（/api/skills/usage）。 */
 export interface SkillUsage {

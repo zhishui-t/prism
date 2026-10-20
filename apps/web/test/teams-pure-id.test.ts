@@ -106,9 +106,9 @@ async function fill(target: HTMLInputElement, value: string): Promise<void> {
   })
 }
 
-/** 搜索框（列表里唯一的输入框——`md-list` 顶部那颗）。 */
+/** 搜索框（列表上方常驻工具条里的唯一输入框；v19 起不再随列表滚动）。 */
 function filterBox(): HTMLInputElement {
-  const hit = one<HTMLInputElement>('.md-list input')
+  const hit = one<HTMLInputElement>('.team-toolbar input')
   if (hit === null) throw new Error('未找到筛选输入框')
   return hit
 }

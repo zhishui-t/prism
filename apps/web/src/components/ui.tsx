@@ -7,10 +7,12 @@
  * 收成一处，四页只填数据。
  */
 
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useRef, type ReactNode } from 'react'
 
 import { useT } from '../i18n.ts'
+import { Icon } from './Icon.tsx'
 import { useOverlayLayer, useScrollLock } from './overlay-stack.ts'
+import { useClipboard } from './useClipboard.ts'
 
 /** 把一段长描述压成「一句话」：取首个句末标点之前，超长再截。 */
 export function firstSentence(text: string, max = 90): string {
@@ -81,31 +83,12 @@ export function StatusTag({ kind = 'info', children, title }: { kind?: 'ok' | 'w
   )
 }
 
-/** 复制的共享逻辑：成功置 `copied`，1.6s 后复位（失败静默，不打断）。 */
-function useCopyFeedback(text: string): { copied: boolean; copy: () => void } {
-  const [copied, setCopied] = useState(false)
-  useEffect(() => {
-    if (!copied) return
-    const timer = window.setTimeout(() => setCopied(false), 1600)
-    return () => window.clearTimeout(timer)
-  }, [copied])
-  return {
-    copied,
-    copy: () => {
-      void navigator.clipboard?.writeText(text).then(
-        () => setCopied(true),
-        () => setCopied(false),
-      )
-    },
-  }
-}
-
 /** 复制按钮（`tool-btn`）：一键复制 + 1.6s「已复制」反馈（C5：源码视图工具条用）。 */
 export function CopyButton({ text, label }: { text: string; label?: string }) {
   const t = useT()
-  const { copied, copy } = useCopyFeedback(text)
+  const { copied, copy } = useClipboard()
   return (
-    <button type="button" className="tool-btn" onClick={copy}>
+    <button type="button" className="tool-btn" onClick={() => copy(text)}>
       {copied ? t('common.copied') : (label ?? t('common.copy'))}
     </button>
   )
@@ -114,25 +97,28 @@ export function CopyButton({ text, label }: { text: string; label?: string }) {
 /** 命令块：等宽展示 + 一键复制（复制失败静默，不打断）。 */
 export function CopyCommand({ command, label }: { command: string; label?: string }) {
   const t = useT()
-  const { copied, copy } = useCopyFeedback(command)
+  const { copied, copy } = useClipboard()
   return (
     <div className="cmd-row">
       <code className="cmd">{command}</code>
-      <button type="button" onClick={copy}>
+      <button type="button" onClick={() => copy(command)}>
         {copied ? t('common.copied') : (label ?? t('common.copy'))}
       </button>
     </div>
   )
 }
 
-/** 空态块：一句结论 + 一句出路 + 可选命令。 */
+/** 空态块：图标 + 一句结论 + 一句出路 + 可选命令。 */
 export function EmptyBlock({ title, desc, command }: { title: string; desc?: string; command?: string }) {
   return (
-    <div className="empty" style={{ textAlign: 'left' }}>
-      <div style={{ fontWeight: 600, marginBottom: 'var(--s-1)' }}>{title}</div>
-      {desc !== undefined && <div className="small muted">{desc}</div>}
+    <div className="empty empty-block">
+      <span className="empty-icon">
+        <Icon name="inbox" size={22} />
+      </span>
+      <div className="empty-title">{title}</div>
+      {desc !== undefined && <div className="empty-desc small muted">{desc}</div>}
       {command !== undefined && (
-        <div style={{ marginTop: 'var(--s-2)' }}>
+        <div className="empty-action">
           <CopyCommand command={command} />
         </div>
       )}
@@ -204,8 +190,15 @@ export function Drawer({
         <div className="drawer-head">
           <h3>{title}</h3>
           <span className="spacer">
-            <button type="button" onClick={onClose}>
-              {t('common.close')}
+            <button
+              type="button"
+              className="icon-btn"
+              aria-label={t('common.close')}
+              title={t('common.close')}
+              onClick={onClose}
+            >
+              <Icon name="close" size={16} />
+              <span className="sr-only">{t('common.close')}</span>
             </button>
           </span>
         </div>
@@ -274,8 +267,15 @@ export function Modal({
         <div className="modal-head">
           <h3>{title}</h3>
           <span className="spacer">
-            <button type="button" onClick={onClose}>
-              {t('common.close')}
+            <button
+              type="button"
+              className="icon-btn"
+              aria-label={t('common.close')}
+              title={t('common.close')}
+              onClick={onClose}
+            >
+              <Icon name="close" size={16} />
+              <span className="sr-only">{t('common.close')}</span>
             </button>
           </span>
         </div>
