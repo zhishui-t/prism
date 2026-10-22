@@ -12,7 +12,7 @@
  * （角色/团队就直接住在宿主目录，没有第二份副本可搬运；建角色走 `role new` 或直接写文件）。
  */
 
-import { existsSync } from 'node:fs'
+import { existsSync, statSync } from 'node:fs'
 import { readFile, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 
@@ -144,6 +144,9 @@ export function defaultHarnessRoot(home?: string): string {
  * CLI `prism skill install` 的落点、MCP `prism_skill_list` 回填的 `skills_dir` **同源**。
  * 早期用 `harnessPaths().skillsDir`（只认适配器默认），在 prism.yaml 覆盖 `skills_dir` 时
  * 会去读一个并不存在安装产物的目录 → `skill_unknown` 误报（2026-09-12 一并收口）。
+ *
+ * Windows 联接 / POSIX 软链在 Dirent 里报 `isSymbolicLink()` 而非目录（联接是 Windows
+ * 免管理员做目录别名的唯一手段）——指向目录的链入条目按已装认（2026-10-22）。
  */
 export async function installedSkillNames(harnessRoot: string, home?: string): Promise<string[] | undefined> {
   const dir = resolveDirsFromHome(home, { harnessRoot, rootExplicit: true }).skillsDir
@@ -152,9 +155,18 @@ export async function installedSkillNames(harnessRoot: string, home?: string): P
   }
   try {
     const entries = await readdir(dir, { withFileTypes: true })
-    return entries.filter((e) => e.isDirectory()).map((e) => e.name)
+    return entries.filter((e) => e.isDirectory() || (e.isSymbolicLink() && statIsDir(join(dir, e.name)))).map((e) => e.name)
   } catch {
     return undefined
+  }
+}
+
+/** 断链（目标已不存在）不算目录——抛错吞掉按 false 处理，不让整个名单失效。 */
+function statIsDir(p: string): boolean {
+  try {
+    return statSync(p).isDirectory()
+  } catch {
+    return false
   }
 }
 
