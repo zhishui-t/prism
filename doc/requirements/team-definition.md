@@ -47,14 +47,18 @@
 
 ### 1.1 与 agent-team 的分工（关键）
 
+> **2026-10-22 更新**：独立 `agent-team` 技能已并入 **prism 内置技能**
+> （`references/agent-team.md` 队长手册 + 配套件）。下表的两形态分工语义不变，
+> 但「临时组建」的承载者从独立 Skill 改为 prism 技能内的手册。
+
 用户此前定："Agent-Team 可以内置好，也可以主会话临时组建。" 两种形态分工：
 
 | 形态 | 承载者 | 特征 |
 | :--- | :--- | :--- |
 | **内置团队** | **Prism 团队定义** | 固定成员、固定工作流，可复用、可装配、可版本化 |
-| **临时组建** | `agent-team` Skill | 队长按任务动态挑人，工作流临时定 |
+| **临时组建** | prism 技能的 Agent Team 手册 | 队长按任务动态挑人，工作流临时定 |
 
-**两者不冲突**：Prism 团队定义可被 agent-team 当作"预设花名册"读取；临时组队时可以不读。
+**两者不冲突**：Prism 团队定义可被手册当作"预设花名册"读取；临时组队时可以不读。
 
 ---
 
@@ -425,7 +429,7 @@ deposit:
 | 类别 | 例子 | 存放 | 宿主如何获得 |
 | :--- | :--- | :--- | :--- |
 | **Prism 自有 Skill** | `taint_trace`、`code_review`、`payload_generate` | **`<PRISM_HOME>/skills/<id>/SKILL.md`**（唯一一份，不复制） | **启动团队时按绝对路径注册进 ZCode 配置**（见 §6.2） |
-| **宿主原生 Skill** | `graphify`、`agent-team`、`cangjie` | `~/.zcode/skills/`、`~/.agents/skills/` | ZCode 自行发现 |
+| **宿主原生 Skill** | `graphify`、`cangjie`（原 `agent-team` 已于 2026-10-22 并入 prism 内置技能） | `~/.zcode/skills/`、`~/.agents/skills/` | ZCode 自行发现 |
 
 ### 6.2 直接装在宿主 Skill 目录
 

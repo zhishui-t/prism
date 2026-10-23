@@ -697,7 +697,16 @@ pnpm run release      # 发 GitHub Release（复用本机 git 凭据，无需手
 const AGENT_TEAM_ASSET_BASE = new URL('./assets/agent-team/', import.meta.url)
 
 function loadAgentTeamAsset(rel: string): string {
-  return readFileSync(new URL(rel, AGENT_TEAM_ASSET_BASE), 'utf-8')
+  try {
+    return readFileSync(new URL(rel, AGENT_TEAM_ASSET_BASE), 'utf-8')
+  } catch (err) {
+    // assets 是构建产物的一部分（build 时 copy-assets.mjs 拷进 dist）：缺失说明只跑了
+    // tsc 没走完整 build，或打包时漏拷——直接给出可行动的提示，而不是裸露的 ENOENT。
+    throw new Error(
+      `内置 skill assets 缺失: assets/agent-team/${rel}（请执行 \`pnpm --filter @prism/skills build\`；` +
+        `发行包请跑 \`pnpm test:package\` 验证）。原始错误: ${String(err)}`,
+    )
+  }
 }
 
 const PRISM_AGENT_TEAM_ASSETS: SkillAsset[] = [

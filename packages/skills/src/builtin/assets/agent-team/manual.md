@@ -25,6 +25,11 @@
 
 需求澄清协议见 `references/agent-team/clarification.md`，派遣细节见 `references/agent-team/roles.md`，异常查 `references/agent-team/exceptions.md`，角色物化（升级为带专属模型/档位的 agent 文件）见 `references/agent-team/adding-agents.md`。
 
+> **路径基准**：本手册位于 `references/agent-team.md`（技能内），但文中所有
+> `references/…` / `templates/…` / `scripts/…` 路径都相对**技能根目录**（`SKILL.md` 所在目录，
+> 装好后即宿主 `skills_dir/prism/`），**不是**相对本文件所在目录——别拼成
+> `references/references/…`。
+
 ## 流水线（6 阶段 · 四卡点）
 
 ### A. 需求澄清（从重——本 skill 的第一原则）
