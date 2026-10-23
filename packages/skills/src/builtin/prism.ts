@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+
 import type { PrismSkill, SkillAsset } from '../types.js'
 import { PRISM_MARKER_PREFIX, prismSkillMarker } from '../marker.js'
 
@@ -12,7 +14,7 @@ import { PRISM_MARKER_PREFIX, prismSkillMarker } from '../marker.js'
  */
 const PRISM_SKILL_CONTENT = `---
 name: prism
-description: "使用 Prism 平台能力时触发：检索/沉淀知识（kb）、查询知识图谱与代码图谱（graph）、渲染架构图（arch）、启用团队与派发角色（team/role）、领取 LLM 待办（work）。或用户提到 prism、PRISM_HOME、知识库、落库、代码图谱、影响面、架构图、启用团队时使用。注意：纯代码结构问答优先 graphify；本 Skill 负责 Prism 服务接入与资产消费。"
+description: "使用 Prism 平台能力时触发：检索/沉淀知识（kb）、查询知识图谱与代码图谱（graph）、渲染架构图（arch）、启用团队与派发角色（team/role）、领取 LLM 待办（work）。组队干活（Prism Agent Team 队长手册）：用户说「组队」「开团」「团队协作」「多agent」或点名团队（如交付团队）时，先读技能内 references/agent-team.md 按其执行。或用户提到 prism、PRISM_HOME、知识库、落库、代码图谱、影响面、架构图、启用团队时使用。注意：纯代码结构问答优先 graphify；本 Skill 负责 Prism 服务接入与资产消费。"
 ---
 
 ${prismSkillMarker('prism')}
@@ -46,6 +48,7 @@ Prism 是本机的**研发效能控制面**：知识库、知识图谱、代码�
 | 谁调用谁 / 影响面 / 最短路径 | \`prism_graph_query/path/affected/explain/god-nodes\` | [references/graph.md](references/graph.md) |
 | 画架构图 / 时序图 / 数据流图 | **Prism 自动派生，你不用产 IR**：\`prism_arch_generate\`（或 CLI \`prism arch from-team / from-graph / from-state\`） | [references/arch.md](references/arch.md) |
 | 派团队干活 | 先 \`prism_team_activate\` 看 dispatch，再派发 | [references/team.md](references/team.md) |
+| **组队 / 开团 / 团队协作 / 多 agent** | 你当**队长**，读 Prism Agent Team 手册按其执行（澄清→组队→分桶派发→验收；队长不写码） | [references/agent-team.md](references/agent-team.md) |
 | 导入项目文档（二进制） | \`prism_kb_convert\`（→Markdown）→ 你提炼 → \`prism_kb_deposit\` | [references/import.md](references/import.md) |
 | 批量导入整个项目文档 | \`prism_kb_import\`（扫目录建引用索引） | [references/import.md](references/import.md) |
 | 回写你的 LLM 产出（摘要/标签/实体） | \`prism_kb_enrich\` | [references/import.md](references/import.md) |
@@ -93,6 +96,16 @@ prism serve --ensure               # 后台幂等起控制台（已在跑则复�
    建团队 = \`prism_team_new\`（MCP）／\`prism team new <id>\`（CLI）／web 控制台。
    改/删同理同名：\`prism_role_edit|rm\`、\`prism_team_edit|rm\`（CLI \`role edit|rm\` / \`team edit|rm\`）。
    派生要求：\`prism_team_activate\` 报 \`fallback\` 时说明该角色文件不在宿主目录，别去找"装配命令"。
+
+## 2.5 Prism Agent Team——组队干活时先读手册
+
+用户说「组队」「开团」「团队协作」「多 agent」或点名团队（如「用交付团队」）→ 你是**队长**：
+先读 [references/agent-team.md](references/agent-team.md) 再动手。三条底线：
+
+- **队长只做五件事**（需求澄清 / 分桶派发 / 产物验收 / 冲突仲裁 / 黑板与 DAG 维护）——
+  写码、写测试、跑修复命令一律转任务单派发；手册「队长纪律」有红旗自查
+- **点名团队 = 严格执行**：编制 / 工作流 / 门禁 / 卡点照团队定义原样执行（先 \`prism_team_activate\`）
+- **派发质量**：任务按「独立性 × 写域」分桶并行；任务单六要素缺一不派；派发 ≠ 完成，回收必验收
 
 ## 3. 硬约定（违反会被评审打回）
 
@@ -675,13 +688,38 @@ pnpm run release      # 发 GitHub Release（复用本机 git 凭据，无需手
   },
 ]
 
+/**
+ * Prism Agent Team（2026-10-22 并入）：组队/派发/黑板/门禁的队长手册与配套件。
+ * 内容以真实文件维护（markdown 直接可编辑，dag.mjs 保持源码形态——不做模板字符串内嵌，
+ * 避免转义地狱）；build 时由 scripts/copy-assets.mjs 拷进 dist（打包每包只带 dist）。
+ * src 与 dist 下 `import.meta.url` 相对深度一致，两种形态都能解析。
+ */
+const AGENT_TEAM_ASSET_BASE = new URL('./assets/agent-team/', import.meta.url)
+
+function loadAgentTeamAsset(rel: string): string {
+  return readFileSync(new URL(rel, AGENT_TEAM_ASSET_BASE), 'utf-8')
+}
+
+const PRISM_AGENT_TEAM_ASSETS: SkillAsset[] = [
+  { path: 'references/agent-team.md', content: loadAgentTeamAsset('manual.md') },
+  { path: 'references/agent-team/clarification.md', content: loadAgentTeamAsset('references/clarification.md') },
+  { path: 'references/agent-team/roles.md', content: loadAgentTeamAsset('references/roles.md') },
+  { path: 'references/agent-team/exceptions.md', content: loadAgentTeamAsset('references/exceptions.md') },
+  { path: 'references/agent-team/adding-agents.md', content: loadAgentTeamAsset('references/adding-agents.md') },
+  { path: 'templates/task-brief.md', content: loadAgentTeamAsset('templates/task-brief.md') },
+  { path: 'templates/team-manifest.md', content: loadAgentTeamAsset('templates/team-manifest.md') },
+  { path: 'templates/agents.md', content: loadAgentTeamAsset('templates/agents.md') },
+  { path: 'templates/delivery-report.md', content: loadAgentTeamAsset('templates/delivery-report.md') },
+  { path: 'scripts/dag.mjs', content: loadAgentTeamAsset('scripts/dag.mjs') },
+]
+
 /** prism 元 skill：教宿主如何使用 Prism（随 `prism init` / `prism skill install` 安装）。 */
 export const prismSkill: PrismSkill = {
   name: 'prism',
   description:
-    '使用 Prism 平台能力时触发：检索/沉淀知识（kb）、查询知识图谱与代码图谱（graph）、渲染架构图（arch）、启用团队与派发角色（team/role）、领取 LLM 待办（work）。或用户提到 prism、PRISM_HOME、知识库、落库、代码图谱、影响面、架构图、启用团队时使用。注意：纯代码结构问答优先 graphify；本 Skill 负责 Prism 服务接入与资产消费。',
+    '使用 Prism 平台能力时触发：检索/沉淀知识（kb）、查询知识图谱与代码图谱（graph）、渲染架构图（arch）、启用团队与派发角色（team/role）、领取 LLM 待办（work）。组队干活（Prism Agent Team 队长手册）：用户说「组队」「开团」「团队协作」「多agent」或点名团队（如交付团队）时，先读技能内 references/agent-team.md 按其执行。或用户提到 prism、PRISM_HOME、知识库、落库、代码图谱、影响面、架构图、启用团队时使用。注意：纯代码结构问答优先 graphify；本 Skill 负责 Prism 服务接入与资产消费。',
   content: PRISM_SKILL_CONTENT,
-  assets: PRISM_SKILL_ASSETS,
+  assets: [...PRISM_SKILL_ASSETS, ...PRISM_AGENT_TEAM_ASSETS],
   builtin: true,
 }
 

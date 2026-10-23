@@ -16,7 +16,7 @@ members:
     count: 1
   - role: junior-dev
     count: 1
-skills: [agent-team]
+skills: [prism]
 knowledge:
   layers: [global, project]
   books: []
@@ -37,9 +37,10 @@ rework_limit: 2
 
 # 交付团队
 
-> **队长手册绑定（严格执行）**：启用本团队 = 队长（主会话）先加载 `agent-team` skill
-> （frontmatter `skills: [agent-team]`），但 skill 只贡献**操作手法**——需求澄清协议、文件黑板
-> （`.agent-team/`）、会话登记、DAG、断点恢复、异常兜底。**流程内容一律以本文件为准，
+> **队长手册绑定（严格执行）**：启用本团队 = 队长（主会话）先加载 `prism` 技能的
+> 《Prism Agent Team》队长手册（`references/agent-team.md`；frontmatter `skills: [prism]` 已声明），
+> 手册只贡献**操作手法**——需求澄清协议、文件黑板（`.agent-team/`）、会话登记、DAG、断点恢复、
+> 异常兜底、队长纪律（禁做清单/红旗自查/兜底接管前置）。**流程内容一律以本文件为准，
 > 照原样执行，不得改编**：
 > - **编制固定**：只用本文件 members 声明的岗位（dev×2 / frontend-dev / tester-whitebox /
 >   tester-blackbox / reviewer / junior-dev）——不虚拟兜底、不增减编制、不换角；角色文件缺位

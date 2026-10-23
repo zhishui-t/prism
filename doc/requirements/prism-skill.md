@@ -129,8 +129,16 @@ ZCode 只在会话启动扫描 `~/.zcode/agents/`。装配步骤：
 | `references/graph.md` | 需要图谱查询/建图/陈旧检测 |
 | `references/team.md` | 需要装配/启用团队 |
 | `references/tools.md` | 需要完整 MCP 工具签名 |
+| `references/agent-team.md` | **组队/派发/黑板/门禁——Prism Agent Team 队长手册**（2026-10-22 并入） |
 
 **好处**：SKILL.md 保持精炼，不把全部细节塞进每次触发。
+
+> **2026-10-22：Prism Agent Team 队长手册并入**。原独立 `agent-team` 技能（组队澄清、四卡点、
+> 文件黑板、会话登记、DAG、队长纪律、任务单六要素/分桶派发）整体收进 prism 技能，触发词
+> （组队/开团/团队协作/多agent/点名团队）并入 description。手册与配套件以**真实文件**维护在
+> `packages/skills/src/builtin/assets/agent-team/`（markdown 直接可编辑、`scripts/dag.mjs` 保持
+> 源码形态——不做模板字符串内嵌），build 时 `scripts/copy-assets.mjs` 拷进 dist（打包每包
+> 只带 dist），`import.meta.url` 相对定位在 src/dist 双态成立。独立技能退役，源头唯一。
 
 ---
 

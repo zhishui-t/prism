@@ -70,10 +70,12 @@ describe('installSkills（design-v3 §5 冲突策略；全部写临时目录）'
     expect(await readdir(target)).toContain('prism')
   })
 
-  it('内置 prism skill 带 references/（渐进披露），安装后 7 个引用文件就位', async () => {
+  it('内置 prism skill 带 references/（渐进披露）+ Agent Team 手册，安装后引用文件就位', async () => {
     await installSkills({ targetDir: target, skills: listBuiltinSkills() })
-    const refs = await readdir(join(target, 'prism', 'references'))
-    expect(refs.sort()).toEqual([
+    const refs = (await readdir(join(target, 'prism', 'references'))).sort()
+    expect(refs).toEqual([
+      'agent-team',
+      'agent-team.md',
       'arch.md',
       'cli.md',
       'enrich.md',
@@ -82,6 +84,14 @@ describe('installSkills（design-v3 §5 冲突策略；全部写临时目录）'
       'knowledge.md',
       'team.md',
     ])
+    // 手册配套件（templates/ 与 scripts/）一并就位
+    expect((await readdir(join(target, 'prism', 'templates'))).sort()).toEqual([
+      'agents.md',
+      'delivery-report.md',
+      'task-brief.md',
+      'team-manifest.md',
+    ])
+    expect((await readdir(join(target, 'prism', 'scripts'))).sort()).toEqual(['dag.mjs'])
   })
 
   it('附带文件路径越界（..）→ bad_request', async () => {
