@@ -30,9 +30,9 @@ describe('prism 技能内置 Prism Agent Team 手册', () => {
     }
   })
 
-  it('手册含关键治理条款（模式判定/严格执行/分桶/六要素/队长纪律/完成≠关闭）', () => {
+  it('手册含关键治理条款（模式判定/严格执行/分桶/六要素/队长纪律/完成≠关闭/压缩恢复）', () => {
     const manual = prismSkill.assets?.find((a) => a.path === 'references/agent-team.md')?.content ?? ''
-    for (const kw of ['执行模式', '严格执行', '按独立性分桶', '任务单六要素', '队长纪律', '完成 ≠ 关闭']) {
+    for (const kw of ['执行模式', '严格执行', '按独立性分桶', '任务单六要素', '队长纪律', '完成 ≠ 关闭', '上下文压缩', '断点快照']) {
       expect(manual, `手册缺关键词: ${kw}`).toContain(kw)
     }
   })
