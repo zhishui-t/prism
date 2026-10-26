@@ -23,18 +23,22 @@
 
 import { useEffect, useState } from 'react'
 
+import { api } from '../../api.ts'
 import { adaptWorkflowParse, teamApi, type TeamActivation, type TeamDefinition } from '../../api-team.ts'
 import { ConfirmModal } from '../../components/ConfirmModal.tsx'
 import { CountLine } from '../../components/CountLine.tsx'
 import { Markdown } from '../../components/Markdown.tsx'
 import { Ref } from '../../components/ref.tsx'
 import { State } from '../../components/State.tsx'
+import { useAsync } from '../../components/useAsync.ts'
 import { Pane, StatusTag, firstSentence } from '../../components/ui.tsx'
 import { useT, type DictKey } from '../../i18n.ts'
 import { describeFailure } from './errors.ts'
 import { TeamEffectiveSkills } from './parts/TeamEffectiveSkills.tsx'
+import { TeamRuntimePane } from './parts/TeamRuntimePane.tsx'
 import { WorkflowFlow } from './parts/WorkflowFlow.tsx'
 import { toFlowStages, workflowStateOf } from './workflow-model.ts'
+import { WorkflowGraph } from '../WorkflowGraph.tsx'
 
 /** 层 → 字典键（静态映射，避免模板串拼 key）。 */
 const LAYER_LABEL: Record<string, DictKey> = {
@@ -65,6 +69,8 @@ export function TeamDetail({
   const t = useT()
   /** 装配状态：只有点过「启用团队」才有——避免把「未装配」误读成「坏了」。 */
   const [activation, setActivation] = useState<TeamActivation | null>(null)
+  /** 工作流 Pane 的视图（图 | 卡片——图只读，编辑仍走既有表单；默认图：它是更完整的一眼视图）。 */
+  const [wfView, setWfView] = useState<'cards' | 'graph'>('graph')
   const [activating, setActivating] = useState(false)
   const [actError, setActError] = useState('')
   /** 启用结果条默认收成一行摘要（T3：一屏内可见，展开才看清单）。 */
@@ -75,6 +81,15 @@ export function TeamDetail({
   const [delError, setDelError] = useState('')
   /** `null` = 跟随父级给的默认目录；用户动过就固化为自己的值。 */
   const [dirOverride, setDirOverride] = useState<string | null>(null)
+  /** 已注册项目名（运行时看板的项目选择器；空 = 还没注册任何项目）。 */
+  const projects = useAsync<string[]>(
+    () =>
+      api
+        .graphProjects()
+        .then((list) => list.map((p) => p.project))
+        .catch(() => []),
+    [],
+  )
 
   const dirValue = dirOverride ?? teamsDir ?? ''
   const effectiveDir = dirValue.trim()
@@ -243,9 +258,37 @@ export function TeamDetail({
               head={
                 <div className="pane-head">
                   <CountLine size="section" bare label={t('teams.workflow')} count={detail.workflow.length} />
+                  <span className="flex-1" />
+                  <button
+                    type="button"
+                    className="rel-link"
+                    onClick={() => setWfView(wfView === 'cards' ? 'graph' : 'cards')}
+                    title={t('workflows.viewGraph')}
+                  >
+                    {wfView === 'cards' ? t('workflows.viewGraph') : t('workflows.viewTable')}
+                  </button>
                 </div>
               }
             >
+              {/* 数据质量可见化：工作流表的行级问题（列数不符截断 / 序号回退）曾静默吞掉
+                  整个「设计审核」阶段——这里把 issues 里 workflow_* 的问题摆出来。 */}
+              {(detail.issues ?? []).some((i) => i.code.startsWith('workflow_')) && (
+                <details className="team-deep">
+                  <summary>{t('teams.wf.issuesDetail')}</summary>
+                  <div className="small">
+                    {(detail.issues ?? [])
+                      .filter((i) => i.code.startsWith('workflow_'))
+                      .map((i, k) => (
+                        <div key={k} className="runtime-gap lv-warning">
+                          <span className={`issue-level ${i.level === 'error' ? 'error' : 'warning'}`}>
+                            {i.level === 'error' ? t('roles.level.error') : t('roles.level.warning')}
+                          </span>
+                          <span>{i.message}</span>
+                        </div>
+                      ))}
+                  </div>
+                </details>
+              )}
               {state === 'prose' ? (
                 <>
                   <div className="small muted">{t('teams.wf.prose.title')}</div>
@@ -261,12 +304,26 @@ export function TeamDetail({
                 </>
               ) : state === 'missing' ? (
                 <div className="small muted">{t('teams.wf.missing.title')}</div>
+              ) : wfView === 'graph' ? (
+                <WorkflowGraph
+                  nodes={toFlowStages(detail.workflow).map((s) => ({
+                    order: s.order,
+                    label: s.stage,
+                    owner: s.roles,
+                    reflow: s.reflow,
+                  }))}
+                />
               ) : (
                 <WorkflowFlow workflow={toFlowStages(detail.workflow)} />
               )}
             </Pane>
           )
         })()}
+
+      {/* 运行时看板（只读）：把项目 `.agent-team/` 黑板读成「现在该派谁」——
+          任务四态 / 可派发集 / 会话登记 / 门禁 / 缺口。放在工作流之后：工作流是「应该怎么跑」，
+          这里才是「实际跑到哪了」。 */}
+      <TeamRuntimePane teamId={id} projects={projects.data ?? []} />
 
       {/* F8 §2.1 常用带①：成员表（紧凑网格：`Ref kind="role"` + `×N` 的 `StatusTag`）。
           §2.4 #6：`teams.rosterHint` 由常驻说明行降级为 Pane 头 `CountLine` 的 `title`。 */}

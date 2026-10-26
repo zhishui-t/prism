@@ -1,4 +1,5 @@
 import { listBuiltinSkills } from '@prism/skills'
+import { readTeamRuntime } from '@prism/agents'
 import { PrismError } from '@prism/core'
 import type { TrashStore } from '@prism/core'
 import { existsSync } from 'node:fs'
@@ -56,6 +57,11 @@ export interface PeopleDeps {
    * 守 R1「不抢调度」：缺省绝不建图；不注入则 `?build=1` 报错而非静默跳过。
    */
   requestGraphBuild?: (project: string) => Promise<{ job_id: string }>
+  /**
+   * 团队运行时看板（`GET /api/teams/:id/runtime`）：项目名 → 已注册项（含 root）。
+   * 未注册返回 null/undefined → 404。**不注入**时该路由 404（不猜项目根，守 R1/R6）。
+   */
+  resolveProject?: (project: string) => Promise<{ project: string; root: string } | null>
 }
 
 /**
@@ -85,6 +91,7 @@ export function peopleRoutes(deps: PeopleDeps): {
   teams: (ctx: RouteContext) => Promise<Envelope>
   team: (ctx: RouteContext) => Promise<Envelope>
   teamActivate: (ctx: RouteContext) => Promise<Envelope>
+  teamRuntime: (ctx: RouteContext) => Promise<Envelope>
   skills: (ctx: RouteContext) => Promise<Envelope>
   skillCategories: (ctx: RouteContext) => Promise<Envelope>
   skillCategoryCreate: (ctx: RouteContext) => Promise<Envelope>
@@ -236,6 +243,40 @@ export function peopleRoutes(deps: PeopleDeps): {
       graph_status: graphStatus,
       ...(graphBuild !== undefined ? { graph_build: graphBuild } : {}),
     })
+  }
+
+  /**
+   * 团队运行时看板（`GET /api/teams/:id/runtime?project=<名>`）——**只读**。
+   *
+   * 定位（R1）：Prism 不调度、不派发；运行时真相是项目下的 `.agent-team/` 黑板
+   * （`dag.json` / `agents.md` / `context.md` / 门禁 / DELIVERY）。本路由只把黑板
+   * 读成结构化快照 + 推导「可派发集」+ 对账缺口，供控制台监控与宿主自检。
+   *
+   * - `project` **必填**且必须是已注册项目（Prism 不猜项目根，守 R1/R6）；
+   *   未注册 → `not_found`，绝不回落到「当前工作目录」。
+   * - 项目没黑板 → 正常返回 `has_blackboard:false` + info 级 gap（不是错误——
+   *   团队可以刚建、还没开工）。
+   */
+  const teamRuntime = async (ctx: RouteContext): Promise<Envelope> => {
+    const id = ctx.params.id ?? ''
+    const project = (ctx.query.get('project') ?? '').trim()
+    /** 可选任务目录（.agent-team/<run>/）；省略 = 自动选 dag 最新；'' = 旧版平铺布局。 */
+    const runQuery = ctx.query.get('run')
+    const run = runQuery === null ? undefined : runQuery.trim()
+    if (project === '') {
+      throw new PrismError('bad_request', '需要 ?project=<名>（选择已注册项目；Prism 不猜项目根，守 R1）')
+    }
+    // 团队本身要存在（不存在就别给一份「空黑板看起来正常」的假象）
+    const found = await loadTeam(teamsDir, id, { rolesDir, knownSkills: await knownSkills() })
+    if (found === null) {
+      return fail('not_found', teamNotFoundMessage(teamsDir, id))
+    }
+    const info = await deps.resolveProject?.(project)
+    if (info === undefined || info === null) {
+      return fail('not_found', `未注册的项目: ${project}（可经 prism project add / prism graph build 登记）`)
+    }
+    const runtime = await readTeamRuntime(info.root, project, run)
+    return ok({ team_id: id, ...runtime })
   }
 
   /**
@@ -500,6 +541,7 @@ export function peopleRoutes(deps: PeopleDeps): {
     teams,
     team,
     teamActivate,
+    teamRuntime,
     skills,
     skillCategories,
     skillCategoryCreate,

@@ -55,6 +55,30 @@ vi.mock('../src/api-team.ts', async (importOriginal) => ({
         warnings: [],
       }),
     create: () => Promise.resolve({ ok: true, path: '/tmp/prism-teams/new.md', issues: [] }),
+    /**
+     * v19.1：团队详情新增「运行时」Pane（读 `.agent-team/` 黑板）。
+     * 本文件锁的是层级结构，不测黑板内容——给一个「无黑板」的最小形状即可。
+     */
+    runtime: (id: string, project: string) =>
+      Promise.resolve({
+        team_id: id,
+        project,
+        root: `/tmp/${project}`,
+        hasBlackboard: false,
+        title: project,
+        dagTitle: '',
+        tasks: [],
+        edges: [],
+        counts: { done: 0, running: 0, pending: 0, blocked: 0 },
+        ready: [],
+        waiting: [],
+        dispatch: [],
+        snapshot: [],
+        gates: [],
+        delivery: null,
+        files: [],
+        gaps: [],
+      }),
   },
 }))
 
@@ -109,6 +133,12 @@ function one<T extends Element>(selector: string): T | null {
 }
 
 /** 点一下（`WorkflowFlow` 的阶段卡是 `<button>`，点开才渲染明细）。 */
+/** v19.2 起工作流 Pane 默认**图视图**；锁卡片链（.flow-*）的断言先切「步骤表」。 */
+async function switchToCards(): Promise<void> {
+  const btn = [...container.querySelectorAll('button')].find((b) => b.textContent?.trim() === t('workflows.viewTable'))
+  if (btn !== undefined) await click(btn)
+}
+
 async function click(target: Element): Promise<void> {
   await act(async () => {
     target.dispatchEvent(new MouseEvent('click', { bubbles: true }))
@@ -152,21 +182,26 @@ afterEach(async () => {
 })
 
 describe('F8 §2.2 工作流在第一眼：提到概览之上，且不得降级/折叠', () => {
-  it('详情三段带的顺序：第一眼 Pane → 工作流 Pane → 成员表 Pane → 两栏区 → 深挖折叠', async () => {
+  /** v19.1：工作流之后新增「运行时」Pane（黑板实况）——顺序仍是「第一眼 → 工作流 → 运行时 → 名册 → 两栏 → 深挖」。 */
+  it('详情带的顺序：第一眼 Pane → 工作流 Pane → 运行时 Pane → 成员表 Pane → 两栏区 → 深挖折叠', async () => {
     await render('t-a')
-    expect(bandOrder()).toEqual(['pane', 'pane', 'pane', 'two-col', 'team-deep'])
+    expect(bandOrder()).toEqual(['pane', 'pane', 'pane', 'pane', 'two-col', 'team-deep'])
   })
 
   it('工作流 Pane **在成员表 Pane 之前**（此前它是第 4 块，被概览挤到下面）', async () => {
     await render('t-a')
     const panes = all('.modal-content .swap-in > .pane')
-    expect(panes.length).toBe(3)
-    expect(panes[1]!.querySelector('.flow-scroll'), '第二个 Pane 不是工作流').not.toBeNull()
-    expect(panes[2]!.querySelector('.form-grid'), '第三个 Pane 不是成员表').not.toBeNull()
+    expect(panes.length).toBe(4)
+    expect(panes[1]!.querySelector('.flow-scroll, .wf-graph-wrap'), '第二个 Pane 不是工作流').not.toBeNull()
+    expect(panes[2]!.querySelector('.runtime-pane'), '第三个 Pane 不是运行时').not.toBeNull()
+    expect(panes[3]!.querySelector('.form-grid'), '第四个 Pane 不是成员表').not.toBeNull()
   })
 
   it('工作流本体不被折叠包裹（灵魂不得降级成深挖项）', async () => {
     await render('t-a')
+    // 图视图同样不得进折叠容器
+    expect(one('.wf-graph-wrap')!.closest('details')).toBeNull()
+    await switchToCards()
     expect(one('.flow-scroll .workflow-flow')).not.toBeNull()
     expect(one('.flow-scroll')!.closest('details')).toBeNull()
     // 阶段卡的「点阶段看明细」折叠仍是既有 `.collapse`（F3/v7.1 契约，未被本轮改动）
@@ -406,6 +441,7 @@ describe('v11 F2：工作流 Pane 的三态与缺列降级（渲染码一字未�
   it('只有「序号 + 名称」也成链（箭头只出现在第二个之后）', async () => {
     data.teams = [thin()]
     await render('t-a')
+    await switchToCards()
     expect(all('.flow-step')).toHaveLength(2)
     expect(all('.flow-arrow')).toHaveLength(1)
     expect(all('.stage-num').map((n) => n.textContent)).toEqual(['1', '2'])
@@ -415,6 +451,7 @@ describe('v11 F2：工作流 Pane 的三态与缺列降级（渲染码一字未�
   it('缺 roles ⇒ 明细里画不出角色徽章（行还在，不是整块塌掉）；缺 reflow ⇒ 不画回流那一行', async () => {
     data.teams = [thin()]
     await render('t-a')
+    await switchToCards()
     await click(all('.flow-stage')[0]!)
 
     const labels = all('.flow-detail .scope-label').map((n) => n.textContent)
@@ -454,7 +491,7 @@ describe('v11 F2：工作流 Pane 的三态与缺列降级（渲染码一字未�
     ]
     await render('t-a')
     const panes = all('.modal-content .swap-in > .pane')
-    expect(panes).toHaveLength(3)
+    expect(panes).toHaveLength(4) // v19.1：+ 运行时 Pane
     expect(panes[1]!.textContent).toContain(t('teams.wf.missing.title'))
     expect(one('.flow-scroll')).toBeNull()
   })
@@ -463,6 +500,7 @@ describe('v11 F2：工作流 Pane 的三态与缺列降级（渲染码一字未�
     // 前置自证：夹具**确实**没有 workflow_raw，否则本用例测的是另一条路
     expect((data.teams[0] as TeamDefinition).workflow_raw).toBeUndefined()
     await render('t-a')
+    await switchToCards()
     expect(one('.flow-scroll .workflow-flow')).not.toBeNull()
     expect(one('.wf-prose-body')).toBeNull()
     expect(one('.swap-in')!.textContent).not.toContain(t('teams.wf.missing.title'))

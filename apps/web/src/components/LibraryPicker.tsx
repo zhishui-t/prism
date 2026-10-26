@@ -50,7 +50,7 @@ export interface PickerGroup {
   items: PickerItem[]
 }
 
-export type PickerKind = 'skill' | 'book' | 'role'
+export type PickerKind = 'skill' | 'book' | 'role' | 'workflow'
 
 /**
  * 文案表：`kind` → 静态字典键（**不**在渲染里拼 `picker.x.${kind}`——§6.2 禁动态拼 key，
@@ -94,6 +94,11 @@ const COPY: Record<PickerKind, PickerCopy> = {
     title: 'picker.title.role',
     search: 'picker.search.role',
     empty: 'picker.empty.role',
+  },
+  workflow: {
+    title: 'picker.title.workflow',
+    search: 'picker.search.workflow',
+    empty: 'picker.empty.workflow',
   },
 }
 

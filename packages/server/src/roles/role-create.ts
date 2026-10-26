@@ -33,6 +33,8 @@ export interface RoleWriteBody {
   description?: unknown
   skills?: unknown
   knowledge?: unknown
+  /** 挂载的工作流单元 id 列表（workflow-asset.md；`[]` = 清空；缺省 = 不改）。 */
+  workflows?: unknown
   body?: unknown
   /** `PATCH` 上 `''` / `null` = 清除该 frontmatter 键；缺省 = 不改。 */
   color?: unknown
@@ -112,6 +114,7 @@ export async function updateRoleDefinition(
     // edit 用**严格**解析：显式给出数组（含 `[]`）就是要写入的值 —— `[]` = 清空白名单
     // （`strArray` 会把 `[]` 折成 undefined，用在 edit 上会让「清空」静默失效）
     ...(strictStrArray(body.skills) !== undefined ? { skills: strictStrArray(body.skills)! } : {}),
+    ...(strictStrArray(body.workflows) !== undefined ? { workflows: strictStrArray(body.workflows)! } : {}),
     ...(strictKnowledge(body.knowledge) !== undefined ? { knowledge: strictKnowledge(body.knowledge)! } : {}),
     ...(typeof body.body === 'string' ? { body: body.body } : {}),
     // `color`/`model`/`thought_level` 的 edit 语义：缺省 = 不改；`''` 或 `null` = 清除该键
@@ -122,7 +125,7 @@ export async function updateRoleDefinition(
       : {}),
   }
   if (Object.keys(patch).length === 0) {
-    throw new PrismError('bad_request', 'role_patch_empty：未给出任何要修改的字段（description/skills/knowledge/body/color/model/thought_level）')
+    throw new PrismError('bad_request', 'role_patch_empty：未给出任何要修改的字段（description/skills/workflows/knowledge/body/color/model/thought_level）')
   }
   const result = await run(() => editRole({ name, rolesDir: targetDir, patch }))
   return { path: result.written[0]!, overwritten: false }

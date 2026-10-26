@@ -22,6 +22,7 @@ vi.mock('../src/pages/Projects.tsx', () => ({ ProjectsPage: () => null }))
 vi.mock('../src/pages/Roles.tsx', () => ({ RolesPage: () => null }))
 vi.mock('../src/pages/Skills.tsx', () => ({ SkillsPage: () => null }))
 vi.mock('../src/pages/teams/TeamsPage.tsx', () => ({ TeamsPage: () => null }))
+vi.mock('../src/pages/Workflows.tsx', () => ({ WorkflowsPage: () => null }))
 
 import { setLang } from '../src/i18n.ts'
 import { Shell } from '../src/Shell.tsx'
@@ -56,19 +57,20 @@ afterEach(async () => {
   window.location.hash = ''
 })
 
-describe('v19 侧栏：三组、六个一级页、当前页高亮', () => {
-  it('六个导航项按三组排布（知识与图谱 / 工作区 / 组织）', async () => {
+describe('v19 侧栏：三组、七个一级页、当前页高亮', () => {
+  it('七个导航项按三组排布（知识与图谱 / 工作区 / 组织）', async () => {
     await render('#/knowledge')
     const groups = [...container.querySelectorAll('.nav-block-label')].map((n) => n.textContent)
     expect(groups).toEqual(['知识与图谱', '工作区', '组织'])
     const links = [...container.querySelectorAll<HTMLAnchorElement>('.sidebar .nav-item')]
-    expect(links.map((a) => a.textContent)).toEqual(['知识库', '代码图谱', '项目台账', '角色', '团队', '技能'])
+    expect(links.map((a) => a.textContent)).toEqual(['知识库', '代码图谱', '项目台账', '角色', '团队', '工作流', '技能'])
     expect(links.map((a) => a.getAttribute('href'))).toEqual([
       '#/knowledge',
       '#/graph',
       '#/projects',
       '#/roles',
       '#/teams',
+      '#/workflows',
       '#/skills',
     ])
   })

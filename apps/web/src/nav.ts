@@ -5,4 +5,4 @@
  * 任务中心（tasks）已随本轮重设计整体移除，不再是一级页。
  */
 
-export type PageKey = 'knowledge' | 'graph' | 'projects' | 'roles' | 'teams' | 'skills'
+export type PageKey = 'knowledge' | 'graph' | 'projects' | 'roles' | 'teams' | 'workflows' | 'skills'

@@ -30,14 +30,14 @@ export interface Route {
   query?: Readonly<Record<string, string>>
 }
 
-const PAGES: readonly PageKey[] = ['knowledge', 'graph', 'projects', 'roles', 'teams', 'skills']
+const PAGES: readonly PageKey[] = ['knowledge', 'graph', 'projects', 'roles', 'teams', 'workflows', 'skills']
 const DEFAULT_PAGE: PageKey = 'knowledge'
 /**
  * 支持「页/实体」两段的页面。
  * `graph` 的实体是**项目名**（`#/graph/<project>`，§3.5）——未命中时页内回落第一个项目
  * 并 `replace` 修正 hash（design-v7 §2.5，不进历史）。
  */
-const WITH_SEL: readonly PageKey[] = ['knowledge', 'roles', 'teams', 'skills', 'graph']
+const WITH_SEL: readonly PageKey[] = ['knowledge', 'roles', 'teams', 'workflows', 'skills', 'graph']
 
 /**
  * 宽松解码：畸形 `%` 序列（`100%`、`%E4`、`%zz`）原样透传，**不抛**。

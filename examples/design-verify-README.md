@@ -62,3 +62,12 @@ echo $?   # 0 = 无 BLOCKER；1 = 有 BLOCKER（看输出的裁决表）
 在 agent-team / delivery 流水线内，本技能可作为**卡点③（设计确认）质量审核**的执行手法
 （锚点核查替代泛泛评审，gate.md 并入 `.design_ok` 证据链）；独立使用时流程完整自洽。
 `.design-verify/` 与 `.agent-team/` 两块黑板并存互不干扰。
+
+## 组合层索引
+
+- **端到端总图**：`examples/pipeline.md`——五层组合模型、主干地图（需求→验证→交付→沉淀）、
+  工件链注册表、统一路由表、证据链与 KB 钩子、多团队三衔接面
+- **工作流单元库**：`examples/workflows/`——本技能的六步登记为 `design-verify-flow.md`
+  （载体即本技能，不重写）；角色级/团队级工作流的一等公民约定
+- **独立团队示例**：`examples/teams/vuln-response.md`——独立 intake（漏洞报告/扫描结果），
+  与开发团队通过工件面/门禁面/知识面衔接

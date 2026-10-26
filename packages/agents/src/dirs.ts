@@ -32,11 +32,12 @@ export interface PrismDirConfig {
   harness?: string
   roles_dir?: string
   teams_dir?: string
+  workflows_dir?: string
   skills_dir?: string
 }
 
 /** 目录键（不含 harness）。 */
-export type PrismDirKey = 'roles_dir' | 'teams_dir' | 'skills_dir'
+export type PrismDirKey = 'roles_dir' | 'teams_dir' | 'workflows_dir' | 'skills_dir'
 
 /** 解析后的目录集。 */
 /**
@@ -55,6 +56,8 @@ export interface ResolvedDirs {
   rolesDir: string
   /** 团队定义受管目录（适配器 `agent.teamDir`；未约定则 roles_dir 同级 teams/）。 */
   teamsDir: string
+  /** 工作流单元目录（适配器 `agent.workflowDir`；未约定则 roles_dir 同级 workflows/）。 */
+  workflowsDir: string
   /** Skill 受管目录（适配器 `skill.nativeDir`；不支持则 <root>/skills 兜底）。 */
   skillsDir: string
   /**
@@ -64,6 +67,7 @@ export interface ResolvedDirs {
   provenance: {
     roles: DirProvenance
     teams: DirProvenance
+    workflows: DirProvenance
     skills: DirProvenance
   }
   /** 运行时激活的宿主适配器 id（prism.yaml `harness` 键；缺省 zcode）。 */
@@ -78,6 +82,7 @@ export interface ResolvedDirs {
   guard: {
     roles: boolean
     teams: boolean
+    workflows: boolean
     skills: boolean
   }
 }
@@ -95,10 +100,10 @@ export function loadPrismConfig(home?: string): PrismDirConfig | null {
   return parsePrismConfig(raw)
 }
 
-/** prism.yaml 最小解析：只认 harness/roles_dir/teams_dir/skills_dir 四个标量键。 */
+/** prism.yaml 最小解析：只认 harness/roles_dir/teams_dir/workflows_dir/skills_dir 五个标量键。 */
 export function parsePrismConfig(raw: string): PrismDirConfig {
   const config: PrismDirConfig = {}
-  const KNOWN: readonly string[] = ['harness', 'roles_dir', 'teams_dir', 'skills_dir']
+  const KNOWN: readonly string[] = ['harness', 'roles_dir', 'teams_dir', 'workflows_dir', 'skills_dir']
   for (const rawLine of raw.replace(/\r\n/g, '\n').split('\n')) {
     const line = rawLine.trim()
     if (line === '' || line.startsWith('#')) continue
@@ -117,6 +122,7 @@ export function parsePrismConfig(raw: string): PrismDirConfig {
     if (key === 'harness') config.harness = value
     else if (key === 'roles_dir') config.roles_dir = value
     else if (key === 'teams_dir') config.teams_dir = value
+    else if (key === 'workflows_dir') config.workflows_dir = value
     else if (key === 'skills_dir') config.skills_dir = value
   }
   return config
@@ -154,11 +160,13 @@ export function resolveDirs(
     rolesDir,
     // 适配器未约定 teamDir 时回落到 roles_dir 同级 teams/（避开 agent 扫描路径，B7）
     teamsDir: layout.teamsDir ?? join(dirname(rolesDir), 'teams'),
+    // 工作流单元同 teams 的落点策略：roles 同级 workflows/
+    workflowsDir: layout.workflowsDir ?? join(dirname(rolesDir), 'workflows'),
     skillsDir: layout.skillsDir ?? join(harnessRoot, 'skills'),
-    provenance: { roles: 'default', teams: 'default', skills: 'default' },
+    provenance: { roles: 'default', teams: 'default', workflows: 'default', skills: 'default' },
     harness: harnessId,
     harnessRoot,
-    guard: { roles: true, teams: true, skills: true },
+    guard: { roles: true, teams: true, workflows: true, skills: true },
   }
   const has = (key: keyof PrismDirConfig): boolean =>
     config !== null && config !== undefined && config[key] !== undefined && config[key] !== ''
@@ -170,15 +178,17 @@ export function resolveDirs(
     roles: provenanceOf(has('roles_dir')),
     // teams_dir 未配置但 roles_dir 已配置 → 跟随（与 guard.teams / 落点联动口径一致）
     teams: provenanceOf(has('teams_dir') || has('roles_dir')),
+    workflows: provenanceOf(has('workflows_dir') || has('roles_dir')),
     skills: provenanceOf(has('skills_dir')),
   }
-  // 显式 harnessRoot → 全部放行；否则逐键按「prism.yaml 是否配置」判定（teams 缺省跟随 roles_dir 落点）
+  // 显式 harnessRoot → 全部放行；否则逐键按「prism.yaml 是否配置」判定（teams/workflows 缺省跟随 roles_dir 落点）
   if (!explicit) {
     resolved.guard.roles = !has('roles_dir')
     resolved.guard.teams = !has('teams_dir') && !has('roles_dir')
+    resolved.guard.workflows = !has('workflows_dir') && !has('roles_dir')
     resolved.guard.skills = !has('skills_dir')
   } else {
-    resolved.guard = { roles: false, teams: false, skills: false }
+    resolved.guard = { roles: false, teams: false, workflows: false, skills: false }
   }
   for (const [key, value] of Object.entries(config ?? {})) {
     if (value === undefined || value === '') continue
@@ -186,12 +196,17 @@ export function resolveDirs(
     const absolute = isAbsolute(expanded) ? expanded : join(harnessRoot, expanded) // 相对路径相对 ZCode 根解释
     if (key === 'roles_dir') resolved.rolesDir = absolute
     else if (key === 'teams_dir') resolved.teamsDir = absolute
+    else if (key === 'workflows_dir') resolved.workflowsDir = absolute
     else if (key === 'skills_dir') resolved.skillsDir = absolute
   }
   // teams_dir 未显式配置时跟随 roles_dir 的**同级** teams/ ——与 guard.teams 的判定口径保持一致
   // （guard 按「roles_dir 已配置 → teams 视为显式跟随」放行，落点必须同样跟随，否则守卫放行却写默认宿主，qa 快审实测踩中）
   if (!has('teams_dir') && has('roles_dir')) {
     resolved.teamsDir = join(dirname(resolved.rolesDir), 'teams')
+  }
+  // workflows_dir 同一跟随口径（guard 与落点联动，同上）
+  if (!has('workflows_dir') && has('roles_dir')) {
+    resolved.workflowsDir = join(dirname(resolved.rolesDir), 'workflows')
   }
   return resolved
 }

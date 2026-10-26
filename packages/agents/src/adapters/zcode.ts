@@ -49,6 +49,8 @@ export function createZcodeAdapter(opts: ZcodeAdapterOptions = {}): HarnessAdapt
   // 团队定义落在宿主根的 teams/（agents 的同级）——ZCode 递归扫描 agents/ 下全部 .md，
   // 团队文件含 name+description 会被误注册成 agent（R3 实测 / B7），故必须移出 agents/。
   const teamDir = join(root, 'teams')
+  // 工作流单元目录：宿主根的 workflows/（约定层即用此目录；资产化后 Prism 原生读取）
+  const workflowDir = join(root, 'workflows')
   const adapter: HarnessAdapter<RoleDefinition, TeamDefinition> = {
     id: ZCODE_ADAPTER_ID,
     displayName: 'ZCode',
@@ -66,6 +68,7 @@ export function createZcodeAdapter(opts: ZcodeAdapterOptions = {}): HarnessAdapt
       projectDir: opts.repoDir ? join(opts.repoDir, '.zcode', 'agents') : '<repo>/.zcode/agents',
       filePattern: '<role>.md',
       teamDir,
+      workflowDir,
       frontmatterFields: ZCODE_FRONTMATTER_FIELDS,
       bodyConvention: '## 核心契约',
       activation: 'session-start',

@@ -101,6 +101,8 @@ export interface HarnessLayout {
   rolesDir: string
   /** 团队定义目录；适配器未约定则 null（调用方回落到 rolesDir 同级 teams/） */
   teamsDir: string | null
+  /** 工作流单元目录；适配器未约定则 null（调用方回落到 rolesDir 同级 workflows/） */
+  workflowsDir: string | null
   /** Skill 安装目录；适配器不支持 Skill 则 null */
   skillsDir: string | null
 }
@@ -121,6 +123,7 @@ export function harnessLayout(id?: string, root?: string): HarnessLayout {
     root: root ?? adapter.defaultRoot,
     rolesDir: adapter.agent.globalDir,
     teamsDir: adapter.agent.teamDir,
+    workflowsDir: adapter.agent.workflowDir,
     skillsDir: adapter.skill.nativeDir,
   }
 }

@@ -15,6 +15,13 @@ export type {
   TeamMember,
   WorkflowStage,
   WorkflowCoreField,
+  WorkflowStep,
+  WorkflowDefinition,
+  StepSerializeRow,
+  StepSerializeInput,
+  WorkflowPatch,
+  EditWorkflowInput,
+  WorkflowEditResult,
   RawWorkflowTable,
   ParseIssue,
   WorkflowParseResult,
@@ -40,6 +47,14 @@ export {
   parseTeamMarkdown,
   parseWorkflowTable,
   parseRoleCell,
+  // 工作流单元（一等资产，workflow-asset.md）
+  parseWorkflowMarkdown,
+  validateWorkflow,
+  validateWorkflowUniqueness,
+  serializeStepTable,
+  serializeStepSection,
+  editWorkflow,
+  WorkflowWriteError,
   // 工作流弹性解析 + 序列化（v11 F2：GET workflow_raw / PATCH workflow 的读写单点）
   parseWorkflowSection,
   locateWorkflowSection,
@@ -133,6 +148,9 @@ export {
   loadRole,
   loadTeams,
   loadTeam,
+  loadWorkflows,
+  loadWorkflow,
+  workflowNotFoundMessage,
   installedSkillNames,
   harnessPaths,
   harnessAdapterOf,
@@ -172,6 +190,15 @@ export {
   type UpdateTeamBody,
   type CreateTeamResult,
 } from './team-create.js'
+
+// 工作流单元读侧详情单点 + 写盘（v2 图编辑器：HTTP PATCH 与 MCP prism_workflow_edit 共用）
+export {
+  readWorkflowDetail,
+  updateWorkflowDefinition,
+  parseStepsPatch,
+  type UpdateWorkflowBody,
+  type WorkflowReadDetail,
+} from './workflow-create.js'
 
 // 团队读侧单点（v11 派修 M-3：`GET /api/teams/:id` 与 MCP `prism_team_get` 共用，
 // 保证 workflow_raw / source_mtime 两面同源）

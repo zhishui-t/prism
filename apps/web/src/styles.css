@@ -1768,6 +1768,13 @@ tbody tr:hover td { background: color-mix(in srgb, var(--sheet-2) 56%, transpare
   max-height: 85vh;
   padding: 0;
 }
+.modal.modal-xl {
+  display: flex;
+  flex-direction: column;
+  width: min(96vw, 96rem);
+  max-height: 92vh;
+  padding: 0;
+}
 .modal.modal-md {
   display: flex;
   flex-direction: column;
@@ -2072,4 +2079,171 @@ tbody tr:hover td { background: color-mix(in srgb, var(--sheet-2) 56%, transpare
   .role-filter { flex: 1 1 100%; }
   .book-sidebar { width: 260px; max-width: 260px; }
   .book-layout { border-radius: var(--r-2); }
+}
+
+/* 工作流库详情（workflow-asset v1：只读弹窗）——步骤表按「步骤块 + 明细行」渲染，
+   明细行复用 .flow-detail-row；步骤头复用阶段卡的 .stage-num/.stage-name。 */
+.wf-steps { display: flex; flex-direction: column; gap: var(--s-3); }
+.wf-step { display: flex; flex-direction: column; gap: var(--s-1); }
+.wf-step-head { display: flex; align-items: baseline; gap: var(--s-2); flex-wrap: wrap; }
+
+/* 工作流图（workflow-asset v2）：泳道×列节点图。色全走 token，SVG 内零 inline。 */
+.wf-graph-wrap { display: flex; flex-direction: column; gap: var(--s-2); }
+/* 图编辑器画布：固定大高度（.chain-graph 全局 height:auto 会把蛇形内容压成窄条） */
+.wf-graph-wrap .chain-graph {
+  height: clamp(340px, 58vh, 600px);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  background: var(--paper);
+}
+/* 泳道带：交替底纹（不透明，与画布 --paper 拉开层次）+ 左缘胶囊标签垂直居中于带 */
+.wf-lane-bg { fill: var(--sheet-2); }
+.wf-lane-bg.alt { fill: color-mix(in srgb, var(--sheet-2) 55%, var(--paper)); }
+.wf-lane-tag { fill: var(--rule-strong); }
+/* ⚠ 文本族必须带 `.wf-graph-wrap` 前缀：`.chain-graph text`（类+元素，0,1,1）会压过
+   单类规则（0,1,0）——曾让全部 wf 文字回落成 12px 等宽居中（步骤名叠序号徽标）。 */
+.wf-graph-wrap .wf-lane-label { fill: var(--ink); font-size: 11.5px; font-weight: 650; font-family: var(--font-ui); }
+/* 回流边中点的「回 N」语义标签 */
+.wf-graph-wrap .wf-reflow-tag { fill: var(--warn); font-size: 11px; font-weight: 600; font-family: var(--font-ui); }
+.wf-edge-g.dimmed { opacity: .15; }
+/* 回流边点击热区（透明加宽描边——细虚线点不中） */
+.wf-edge-hit { fill: none; stroke: transparent; stroke-width: 14; cursor: pointer; pointer-events: stroke; }
+.wf-graph-wrap .wf-edge-hit:hover + .wf-reflow-tag, .wf-graph-wrap .wf-edge-g:hover .wf-reflow-tag { font-weight: 700; }
+/* 缩放/平移图层：transform 来自 useZoom（内容必须包在这里，否则缩放按钮空转） */
+.wf-zoom-layer { transform-origin: 0 0; }
+/* 拖动落点虚线占位框 */
+.wf-drop-ghost { fill: color-mix(in srgb, var(--buckram) 12%, transparent); stroke: var(--buckram); stroke-width: 1.6; stroke-dasharray: 6 4; }
+.wf-lane-bg.drop { stroke: var(--buckram); stroke-width: 1.2; stroke-dasharray: 4 4; }
+.wf-node.selected .wf-node-box { stroke: var(--buckram); stroke-width: 2.4; }
+.wf-node.dragging { opacity: .85; }
+.wf-graph-tip { margin: 0; }
+
+/* 编辑态分栏：图 + 右侧字段面板（窄屏回落单列，面板在图下方） */
+.wf-edit-split { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: var(--s-3); align-items: start; }
+@media (max-width: 1100px) { .wf-edit-split { grid-template-columns: minmax(0, 1fr); } }
+.wf-inspector {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: var(--s-3);
+  background: var(--sheet-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-2);
+  max-height: clamp(340px, 58vh, 600px);
+  overflow-y: auto;
+}
+.wf-inspector-head { display: flex; align-items: center; gap: var(--s-1); }
+.wf-inspector-head .tool-btn { min-width: 30px; padding: 0 var(--s-1); }
+.wf-fields { display: flex; flex-direction: column; gap: var(--s-2); }
+.wf-fields .field > span { font-size: var(--fs-100); }
+.wf-fields input, .wf-fields textarea, .wf-fields select { font-size: var(--fs-200); }
+.wf-fields-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s-2); }
+.wf-step-edit {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: var(--s-3);
+  background: var(--sheet-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-2);
+}
+.wf-step-edit-head { display: flex; align-items: center; gap: var(--s-2); }
+.wf-step-edit-head .stage-name { font-weight: 600; }
+.wf-reflow-text { color: var(--warn); }
+.danger-ghost { color: var(--err); }
+.danger-ghost:hover:not(:disabled) { border-color: var(--err); color: var(--err); }
+/* 节点 */
+.wf-node-box { fill: var(--sheet); stroke: var(--rule-strong); stroke-width: 1.4; }
+.wf-node:hover .wf-node-box, .wf-node:focus-visible .wf-node-box { stroke: var(--buckram); }
+.wf-node.moved .wf-node-box { stroke: var(--warn); stroke-width: 2.2; }
+.wf-node.dimmed { opacity: .22; }
+.wf-node.draggable { cursor: grab; }
+.wf-node.draggable:active { cursor: grabbing; }
+.wf-node-order-bg { fill: var(--buckram); }
+.wf-graph-wrap .wf-node-order { fill: var(--on-buckram); font-size: 13px; font-weight: 700; }
+.wf-graph-wrap .wf-node-label { fill: var(--ink); font-size: 13.5px; font-weight: 600; text-anchor: start; font-family: var(--font-ui); }
+.wf-graph-wrap .wf-node-sub { fill: var(--mute); font-size: 11.5px; text-anchor: start; font-family: var(--font-ui); }
+/* 边：前向实线 / 回流虚线（warn）/ 橡皮筋 */
+.wf-edge { fill: none; stroke: var(--mute); stroke-width: 1.8; }
+.wf-edge.reflow { stroke: var(--warn); stroke-dasharray: 6 4; }
+.wf-edge.rubber { stroke: var(--buckram); stroke-dasharray: 3 4; }
+.wf-edge.dimmed { opacity: .15; }
+.wf-edge.editable { cursor: pointer; }
+.wf-edge.editable:hover { stroke-width: 2.6; }
+.wf-arrow-head { fill: var(--mute); }
+.wf-arrow-head.reflow { fill: var(--warn); }
+/* 回流手柄（节点右缘小圆点） */
+.wf-handle { fill: var(--sheet); stroke: var(--buckram); stroke-width: 2; cursor: crosshair; }
+.wf-handle:hover { r: 9; }
+.wf-toolbar { display: flex; gap: var(--s-2); align-items: center; }
+.wf-toolbar .flex-1 { flex: 1; }
+
+/* ============================================================================
+   团队运行时看板（只读黑板）
+   ========================================================================== */
+.runtime-project { display: inline-flex; align-items: center; gap: var(--s-1); }
+.runtime-project select { font-size: var(--fs-200); height: 26px; padding: 0 var(--s-1); }
+.runtime-empty { display: flex; flex-direction: column; gap: var(--s-1); }
+.runtime-board { display: flex; flex-direction: column; gap: var(--s-2); }
+.runtime-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+  font-size: var(--fs-200);
+}
+.runtime-goal { margin-left: auto; max-width: 46ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.runtime-summary .tag-done { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 34%, transparent); }
+.runtime-summary .tag-running { color: var(--buckram); border-color: color-mix(in srgb, var(--buckram) 34%, transparent); }
+.runtime-summary .tag-blocked { color: var(--err); border-color: color-mix(in srgb, var(--err) 34%, transparent); }
+.runtime-table td { vertical-align: top; }
+.runtime-table tr.is-ready td { background: color-mix(in srgb, var(--buckram) 7%, transparent); }
+.runtime-table tr.is-ready td:first-child { box-shadow: inset 2px 0 0 var(--buckram); }
+.runtime-deps { font-size: var(--fs-100); }
+.runtime-gaps { display: flex; flex-direction: column; gap: var(--s-1); }
+.runtime-gap-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: var(--s-1); }
+.runtime-gap { display: flex; align-items: baseline; gap: var(--s-2); flex-wrap: wrap; }
+.runtime-gap.lv-error { border-left: 2px solid var(--err); padding-left: var(--s-2); }
+.runtime-gap.lv-warning { border-left: 2px solid var(--warn); padding-left: var(--s-2); }
+.runtime-gap.lv-info { border-left: 2px solid var(--rule-strong); padding-left: var(--s-2); }
+.runtime-deep > summary { cursor: pointer; font-size: var(--fs-200); color: var(--mute); }
+.runtime-kv-row { display: contents; }
+.runtime-gates { display: flex; align-items: center; gap: var(--s-1); flex-wrap: wrap; margin-top: var(--s-2); }
+.runtime-gates .tag.is-missing { opacity: .55; text-decoration: line-through; }
+
+/* 角色问题分级标签（v19.1：error 与 warning 视觉分开——两者含义差很远） */
+.issue-level {
+  flex: 0 0 auto;
+  font-size: var(--fs-100);
+  font-weight: 600;
+  padding: 0 6px;
+  border-radius: var(--r-1);
+  border: 1px solid var(--rule-strong);
+  color: var(--mute);
+}
+.issue-level.error {
+  color: var(--err);
+  border-color: color-mix(in srgb, var(--err) 40%, transparent);
+  background: color-mix(in srgb, var(--err) 10%, transparent);
+}
+.issue-level.warning {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 34%, transparent);
+  background: color-mix(in srgb, var(--warn) 8%, transparent);
+}
+
+/* 运行时：交付门禁条 + 契约列 */
+.runtime-gate-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+  padding: var(--s-2);
+  border-radius: var(--r-2);
+  background: color-mix(in srgb, var(--warn) 8%, var(--sheet-2));
+  border-left: 3px solid var(--warn);
+}
+.runtime-gate-bar.ok {
+  background: color-mix(in srgb, var(--ok) 8%, var(--sheet-2));
+  border-left-color: var(--ok);
 }

@@ -25,14 +25,17 @@ import {
   loadPrismConfig,
   parseRoleMarkdown,
   parseTeamMarkdown,
+  parseWorkflowMarkdown,
   resolveDirsFromHome,
   resolveRoleFile,
   resolveTeamExtends,
   validateRole,
   validateTeam,
+  validateWorkflow,
   type EffectiveSkillSet,
   type RoleDefinition,
   type TeamDefinition,
+  type WorkflowDefinition,
 } from '@prism/agents'
 import { PrismError, type McpConvention } from '@prism/core'
 import { listBuiltinSkills } from '@prism/skills'
@@ -276,6 +279,60 @@ async function loadTeamRaw(teamsDir: string, teamId: string): Promise<TeamDefini
   const parsed = parseTeamMarkdown(await readFile(file, 'utf-8'), { sourcePath: file, declaredKeys: declared })
   if (parsed.extends === null || parsed.extends === '') return parsed
   return await resolveTeamExtends({ team: parsed, declared }, async (id) => await loadTeamRaw(teamsDir, id))
+}
+
+// ---------------------------------------------------------------------------
+// 工作流单元加载（workflow-asset.md；v1 只读——无底账/无 mtime 复杂度，故不单设 workflow-read.ts）
+// ---------------------------------------------------------------------------
+
+/**
+ * 加载工作流单元库：扫 `<workflowsDir>/*.md`。
+ * **跳过无 frontmatter 的文档文件**（如库里的 README.md——`no_frontmatter` 视为「不是单元」而非错误）；
+ * 其余解析失败原样抛出（坏单元要可见，不静默吞）。
+ */
+export async function loadWorkflows(
+  workflowsDir: string,
+  opts: { roles?: RoleDefinition[]; rolesDir?: string; knownSkills?: string[] } = {},
+): Promise<WorkflowDefinition[]> {
+  if (!existsSync(workflowsDir)) return []
+  const roles = opts.roles ?? (opts.rolesDir !== undefined ? await loadRoles(opts.rolesDir) : [])
+  const out: WorkflowDefinition[] = []
+  for (const name of (await readdir(workflowsDir)).filter((n) => n.endsWith('.md')).sort()) {
+    const file = join(workflowsDir, name)
+    let raw: string
+    try {
+      raw = await readFile(file, 'utf-8')
+    } catch {
+      continue
+    }
+    let parsed: WorkflowDefinition
+    try {
+      parsed = parseWorkflowMarkdown(raw, { sourcePath: file })
+    } catch (err) {
+      if (err instanceof Error && err.message.startsWith('no_frontmatter')) continue // 文档文件，非单元
+      throw err
+    }
+    out.push({ ...parsed, issues: validateWorkflow(parsed, { roles, knownSkills: opts.knownSkills }).issues })
+  }
+  return out
+}
+
+/** 加载单个工作流单元（`<workflowsDir>/<id>.md`）；不存在 → null。 */
+export async function loadWorkflow(
+  workflowsDir: string,
+  workflowId: string,
+  opts: { roles?: RoleDefinition[]; rolesDir?: string; knownSkills?: string[] } = {},
+): Promise<WorkflowDefinition | null> {
+  const file = join(workflowsDir, `${workflowId}.md`)
+  if (!existsSync(file)) return null
+  const roles = opts.roles ?? (opts.rolesDir !== undefined ? await loadRoles(opts.rolesDir) : [])
+  const parsed = parseWorkflowMarkdown(await readFile(file, 'utf-8'), { sourcePath: file })
+  return { ...parsed, issues: validateWorkflow(parsed, { roles, knownSkills: opts.knownSkills }).issues }
+}
+
+/** 「工作流不存在」文案单点（与 {@link teamNotFoundMessage} 同口径）。 */
+export function workflowNotFoundMessage(workflowsDir: string, workflowId: string): string {
+  return `工作流单元不存在: ${workflowId}（数据源 ${workflowsDir}/<id>.md）`
 }
 
 // ---------------------------------------------------------------------------

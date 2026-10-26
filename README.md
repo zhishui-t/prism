@@ -345,6 +345,7 @@ prism
 ├── harness    list | show                              宿主适配器（内置 + 运行期插件）
 ├── role       list | show | new | edit | rm | validate | render
 ├── team       list | show | new | edit | rm | validate | render | activate
+├── workflow   list | show | validate | edit              工作流单元库（一等资产；edit 改步骤表）
 ├── skill      list | install | update | uninstall | rm | validate | effective | categorize | category
 ├── kb         import | sync | search | get | tree | stats | graph | path
 │              | export | remove | restore | conflicts | resolve | history | reindex [--chunks]
@@ -356,7 +357,7 @@ prism
 └── harness / audit
 ```
 
-**MCP 工具 49 个**：知识库 17 · 代码图谱 8 · 架构图谱 1 · 角色/团队/技能 22 · 上下文包 1（`tools/list` 实测）。
+**MCP 工具 53 个**：知识库 17 · 代码图谱 8 · 架构图谱 1 · 角色/团队/技能 23 · 工作流 3 · 上下文包 1（`tools/list` 实测）。
 
 ---
 

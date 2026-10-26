@@ -75,10 +75,16 @@ knowledge:                       # 知识绑定（层 + 可选书）
   layers: [global, role]
   books:                         # 可选：限定具体书，省略 = 该层全部
     - security-redline
+workflows:                       # 可选：挂载的工作流单元 id（workflow-asset.md；与 skills 同模式）
+  - vuln-response-flow
 ---
 ```
 
 > **兼容性**：既有 agent 格式的 `model` / `thoughtLevel` / `injectAgentsMd` 字段仍被接受（导入时保留）。Prism 的推荐做法是把模型与思考档位放在**团队层**（环境属性，换宿主/配额就要变），而非焊死在角色定义里。
+>
+> **workflows 双形态**（2026-10-24 起，workflow-asset.md）：Prism 规范形态写 frontmatter `workflows` 键；
+> **ZCode 宿主原生形态不进 frontmatter**（白名单只有六字段），落正文 overlay 节 `## 工作流绑定`
+> （`- <id>` 行）——parse 双回收、render 幂等注入、`role edit` 补丁双分流，与 skills/knowledge 同一口径。
 
 ### 3.3 正文结构
 

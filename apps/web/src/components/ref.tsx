@@ -13,7 +13,7 @@
 import { hrefOf, type Route } from '../route.ts'
 import { useT } from '../i18n.ts'
 
-export type RefKind = 'role' | 'team' | 'skill' | 'project' | 'book'
+export type RefKind = 'role' | 'team' | 'skill' | 'project' | 'book' | 'workflow'
 
 export interface RefProps {
   kind: RefKind
@@ -41,6 +41,8 @@ export function refRoute(kind: RefKind, name: string | undefined, opts: { layer?
       return { page: 'teams', sel: v }
     case 'skill':
       return { page: 'skills', sel: v }
+    case 'workflow':
+      return { page: 'workflows', sel: v }
     case 'project':
       return { page: 'projects' }
     case 'book': {

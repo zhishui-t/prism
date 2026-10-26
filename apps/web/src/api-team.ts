@@ -12,6 +12,8 @@ export interface RoleDefinition {
   description: string
   color?: string
   skills: string[]
+  /** 挂载的工作流单元 id（镜像 @prism/agents RoleDefinition.workflows；未声明 = undefined） */
+  workflows?: string[]
   knowledge: KnowledgeBinding
   principle: string
   body: string
@@ -438,6 +440,81 @@ export interface GraphStatusDetail {
   note?: string
 }
 
+/**
+ * 团队运行时看板（镜像 @prism/agents `TeamRuntime`；`GET /api/teams/:id/runtime`）。
+ *
+ * 数据源是项目 `.agent-team/` 黑板（**只读**，Prism 不调度）：任务四态 + 可派发集 +
+ * 会话登记 + 门禁 + 断点快照 + 对账 gaps。web 无 @prism/* 依赖，类型镜像。
+ */
+export interface RuntimeTaskView {
+  id: string
+  label: string
+  role: string
+  status: 'done' | 'running' | 'pending' | 'blocked'
+  statusRaw: string
+  deps: string[]
+  /** 依赖已就绪、自身待开始 → 现在就能派。 */
+  ready: boolean
+  /** 依赖未就绪。 */
+  waiting: boolean
+  missingDeps: string[]
+  /** 结构化契约（dag.json 的 kind/objective/acceptance/inScope/verify/verdict 等）。 */
+  contract: {
+    kind: string
+    objective: string
+    acceptance: string[]
+    inScope: string[]
+    outOfScope: string[]
+    verify: string[]
+    reviewedTaskId: string
+    verdict: string
+    findings: Array<{ severity: string; text: string }>
+    acceptanceResults: Array<{ acceptance: string; status: string; evidence?: string }>
+    commandsRun: Array<{ command: string; status: string; output?: string }>
+    changedPaths: string[]
+    attempt: number | null
+  }
+}
+
+export interface RuntimeGapView {
+  level: 'error' | 'warning' | 'info'
+  code: string
+  message: string
+  where?: string
+}
+
+export interface TeamRuntimeView {
+  team_id: string
+  project: string
+  root: string
+  hasBlackboard: boolean
+  title: string
+  dagTitle: string
+  tasks: RuntimeTaskView[]
+  edges: Array<{ from: string; to: string }>
+  counts: { done: number; running: number; pending: number; blocked: number }
+  ready: string[]
+  waiting: string[]
+  dispatch: Array<{
+    role: string
+    agentId: string | null
+    sessionId: string | null
+    state: string
+    taskIds: string[]
+  }>
+  snapshot: Array<{ key: string; value: string }>
+  gates: Array<{ name: string; present: boolean }>
+  delivery: { file: string; mtime: number } | null
+  files: Array<{ name: string; present: boolean; mtime?: number }>
+  gaps: RuntimeGapView[]
+  /** 交付门禁（机械判定：全部完成 + 审核 pass + 无失败）。 */
+  deliveryGate: { ok: boolean; blockers: RuntimeGapView[] }
+  /** 本次读的任务目录（'' = 旧版平铺 / 无黑板）。 */
+  run: string
+  /** 全部任务目录（同项目多团队并行时切换）。 */
+  runs: Array<{ id: string; title: string; dagMtime?: number; legacy: boolean }>
+}
+
 export interface TeamActivation {
   team_id: string
   members: Array<{
@@ -697,6 +774,8 @@ export interface RoleWriteInput {
   description?: string
   /** 能力白名单；`[]` = 清空（仅 PATCH 有意义） */
   skills?: string[]
+  /** 挂载的工作流单元 id（workflow-asset v1；仅 PATCH 认，`[]` = 清空挂载） */
+  workflows?: string[]
   knowledge?: KnowledgeBinding
   /** 正文（Markdown）。`new` 时省略 → 用内置骨架；`update` 时给出即整体替换正文。 */
   body?: string
@@ -801,6 +880,17 @@ export const teamApi = {
     ),
   team: (id: string) => request<TeamDefinition>(`/api/teams/${encodeURIComponent(id)}`),
   activate: (id: string) => request<TeamActivation>(`/api/teams/${encodeURIComponent(id)}/activate`),
+  /**
+   * 团队运行时看板（只读）：读项目 `.agent-team/` 黑板。
+   *
+   * `project` **必填**（PRISM 不猜项目根）：未给 → 服务端 400；未注册 → 404。
+   */
+  /** `run` 省略 = 自动选 dag 最新；'' = 旧版平铺布局。 */
+  runtime: (id: string, project: string, run?: string) => {
+    const qs = new URLSearchParams({ project })
+    if (run !== undefined) qs.set('run', run)
+    return request<TeamRuntimeView>(`/api/teams/${encodeURIComponent(id)}/runtime?${qs.toString()}`)
+  },
   /** 内置 Skill 清单（v7 改型：`{ skills, skills_dir }`，与 MCP `prism_skill_list` 对齐）。 */
   skills: () => request<SkillListResult>('/api/skills'),
   skill: (name: string) => request<SkillDetail>(`/api/skills/${encodeURIComponent(name)}`),

@@ -588,3 +588,259 @@ export function formatLocation(file: string, line: string): string {
   if (line === '') return file
   return `${file}:${line}`
 }
+
+/* ===== 工作流图（workflow-asset v2 图编辑器）——纯函数 =====
+ * 图结构 = 泳道（横向带，承接/负责角色）× 步骤序；带内超过 WF_ROW_LEN 个步骤时
+ * **蛇形折行**（偶数行左→右、奇数行右→左，行尾与下一行行首垂直相邻——前向边全是
+ * 短直线，长流程不会摊成超宽扁条）。
+ * 布局/边/聚焦一律以**数组下标**为身份（order 只用于展示与「回 N」解析）——
+ * order 重复或跳号的历史数据不会让节点重叠（数据问题由 validateWorkflow 报 error 拦保存）。 */
+
+/** 图节点（工作流单元步骤与团队阶段的公共投影）。 */
+export interface WfGraphNode {
+  order: number
+  label: string
+  /** 承接（多值；首个为泳道归属）。 */
+  owner: string[]
+  /** 回流列原文（「回 N」规范形可解析成边；其余原样保留为节点注记）。 */
+  reflow: string
+  /** 调用方载荷（原步骤对象；随排序/重编号原样带回——编辑器据此重建提交行）。 */
+  data?: unknown
+}
+
+export const WF_NODE_W = 224
+export const WF_NODE_H = 56
+/** 行内（横向）步骤间距。 */
+export const WF_STEP_GAP = 56
+/** 带内折行的行距（纵向）。 */
+export const WF_ROW_GAP = 28
+/** 泳道带之间的额外纵向间距。 */
+export const WF_LANE_GAP = 20
+/** 左侧泳道标签带宽。 */
+export const WF_LANE_LABEL_W = 110
+/** 每条泳道每行的最大步骤数（蛇形折行阈值）。 */
+export const WF_ROW_LEN = 4
+export const WF_PAD = 24
+
+/** 泳道序：承接主语（owner[0]，空 → '—'）按首次出现顺序。 */
+export function wfLanes(nodes: readonly WfGraphNode[]): string[] {
+  const lanes: string[] = []
+  for (const n of nodes) {
+    const lane = n.owner[0] ?? '—'
+    if (!lanes.includes(lane)) lanes.push(lane)
+  }
+  return lanes
+}
+
+/** 泳道带在画布内的起始列（带按画布列容量 C 居中；带最大行宽 = min(count, ROW_LEN)）。
+ * 列坐标是连续值——窄带可落在半列上实现真居中。 */
+export function wfBandStartCol(count: number, capacity: number): number {
+  return (capacity - Math.min(count, WF_ROW_LEN)) / 2
+}
+
+/** 蛇形折行：带内第 j 个（共 count 个）→ 行号与列号（偶行左→右、奇行右→左贴满行宽——
+ * 折行处与上行尾垂直相邻；带整体按画布列容量居中）。 */
+export function wfRowCol(j: number, count: number, capacity: number): { row: number; col: number } {
+  const row = Math.floor(j / WF_ROW_LEN)
+  const m = j % WF_ROW_LEN
+  const start = wfBandStartCol(count, capacity)
+  return { row, col: row % 2 === 0 ? start + m : start + WF_ROW_LEN - 1 - m }
+}
+
+/** 泳道×蛇行布局：数组下标 → 节点左上角（用户坐标）+ 画布内容尺寸 + 各带行数。 */
+export interface WfLayout {
+  lanes: string[]
+  /** 数组下标 → 节点左上角（用户坐标）。 */
+  positions: Map<number, { x: number; y: number }>
+  /** 各泳道的折行行数（与 lanes 同序）。 */
+  laneRows: number[]
+  /** 各泳道带的纵向区间起点（内容坐标，含 PAD；与 lanes 同序）。 */
+  laneTops: number[]
+  width: number
+  height: number
+}
+
+export function wfLayout(nodes: readonly WfGraphNode[]): WfLayout {
+  const lanes = wfLanes(nodes)
+  const laneRows: number[] = []
+  const laneTops: number[] = []
+  const capacity = wfCapacity(nodes)
+  let top = WF_PAD
+  for (const lane of lanes) {
+    const count = nodes.filter((m) => (m.owner[0] ?? '—') === lane).length
+    const rows = Math.max(1, Math.ceil(count / WF_ROW_LEN))
+    laneRows.push(rows)
+    laneTops.push(top)
+    top += rows * (WF_NODE_H + WF_ROW_GAP) - WF_ROW_GAP + WF_LANE_GAP
+  }
+  const positions = new Map<number, { x: number; y: number }>()
+  const laneSeen = new Map<string, number>()
+  nodes.forEach((n, i) => {
+    const lane = n.owner[0] ?? '—'
+    const laneIndex = Math.max(0, lanes.indexOf(lane))
+    const j = laneSeen.get(lane) ?? 0
+    laneSeen.set(lane, j + 1)
+    const count = nodes.filter((m) => (m.owner[0] ?? '—') === lane).length
+    const { row, col } = wfRowCol(j, count, capacity)
+    positions.set(i, {
+      x: WF_LANE_LABEL_W + col * (WF_NODE_W + WF_STEP_GAP),
+      y: (laneTops[laneIndex] ?? WF_PAD) + row * (WF_NODE_H + WF_ROW_GAP),
+    })
+  })
+  const contentH =
+    laneRows.reduce((s, r) => s + r * (WF_NODE_H + WF_ROW_GAP) - WF_ROW_GAP, 0) +
+    Math.max(0, laneRows.length - 1) * WF_LANE_GAP
+  return {
+    lanes,
+    positions,
+    laneRows,
+    laneTops,
+    width: WF_LANE_LABEL_W + capacity * WF_NODE_W + (capacity - 1) * WF_STEP_GAP + WF_PAD,
+    height: WF_PAD * 2 + contentH,
+  }
+}
+
+/** 解析回流规范形「回 N」（容忍全角空格/无空格）；解析不出 → null。 */
+export function parseReflowTarget(reflow: string): number | null {
+  const m = /回\s*(\d+)/.exec(reflow.trim())
+  if (m === null) return null
+  const n = Number.parseInt(m[1]!, 10)
+  return Number.isInteger(n) && n >= 1 ? n : null
+}
+
+/** 图边：前向（顺序相邻）+ 回流（可解析的返回边）。from/to 均为数组下标。 */
+export interface WfGraphEdge {
+  kind: 'forward' | 'reflow'
+  from: number
+  to: number
+  /** 回流原文（前向边为 ''）。 */
+  raw: string
+}
+
+export function wfEdges(nodes: readonly WfGraphNode[]): WfGraphEdge[] {
+  const edges: WfGraphEdge[] = []
+  for (let i = 0; i + 1 < nodes.length; i++) {
+    edges.push({ kind: 'forward', from: i, to: i + 1, raw: '' })
+  }
+  const byOrder = new Map<number, number>()
+  nodes.forEach((n, i) => {
+    if (!byOrder.has(n.order)) byOrder.set(n.order, i)
+  })
+  for (let i = 0; i < nodes.length; i++) {
+    const target = parseReflowTarget(nodes[i]!.reflow)
+    const to = target === null ? undefined : byOrder.get(target)
+    if (to !== undefined && to !== i) {
+      edges.push({ kind: 'reflow', from: i, to, raw: nodes[i]!.reflow })
+    }
+  }
+  return edges
+}
+
+/** 上下游可达集（聚焦用；from/to 双向各用独立 seen——共用会断链，dag.mjs 同款口径）。 */
+export function wfRelated(edges: readonly WfGraphEdge[], node: number): Set<number> {
+  const upstream = new Map<number, number[]>()
+  const downstream = new Map<number, number[]>()
+  for (const e of edges) {
+    downstream.set(e.from, [...(downstream.get(e.from) ?? []), e.to])
+    upstream.set(e.to, [...(upstream.get(e.to) ?? []), e.from])
+  }
+  const out = new Set<number>([node])
+  const walk = (n: number, adj: Map<number, number[]>, seen: Set<number>): void => {
+    for (const next of adj.get(n) ?? []) {
+      if (seen.has(next)) continue
+      seen.add(next)
+      out.add(next)
+      walk(next, adj, seen)
+    }
+  }
+  walk(node, upstream, new Set([node]))
+  walk(node, downstream, new Set([node]))
+  return out
+}
+
+/** 画布列容量 = 各带最大行宽（至少 2 列——单列窄带会放大失真）；布局与落点共用。 */
+export function wfCapacity(nodes: readonly WfGraphNode[]): number {
+  const lanes = wfLanes(nodes)
+  return Math.max(
+    2,
+    ...lanes.map((lane) => Math.min(WF_ROW_LEN, nodes.filter((m) => (m.owner[0] ?? '—') === lane).length)),
+    0,
+  )
+}
+
+/** 跨距边路径：水平（含蛇形奇数行的右→左）/ 垂直同列 → 短直线；其余三次贝塞尔（垂直柄）。 */
+export function wfEdgePath(
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+  handle = 40,
+): string {
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  if (Math.abs(dy) < 1 && dx !== 0) return `M${a.x} ${a.y}L${b.x} ${b.y}`
+  if (Math.abs(dx) < 1 && dy > 0) return `M${a.x} ${a.y}L${b.x} ${b.y}`
+  return `M${a.x} ${a.y}C${a.x} ${a.y + handle},${b.x} ${b.y - handle},${b.x} ${b.y}`
+}
+
+/** 回流边路径：源/目标右缘之间的右侧弧（水平柄，多条回流按序错开半径）。 */
+export function wfReflowPath(
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+  radius = 36,
+): string {
+  const x = Math.max(a.x, b.x) + radius
+  return `M${a.x} ${a.y}C${x} ${a.y},${x} ${b.y},${b.x} ${b.y}`
+}
+
+/** 拖动落点：用户坐标 → 泳道与数组插入下标（移除拖动项前的下标口径）。 */
+export function wfDropTarget(
+  nodes: readonly WfGraphNode[],
+  layout: WfLayout,
+  x: number,
+  y: number,
+): { lane: string; insertAt: number } {
+  // 泳道：取带区间包含 y 的；越界夹到最近带
+  let laneIndex = layout.lanes.length - 1
+  for (let i = 0; i < layout.lanes.length; i++) {
+    const top = layout.laneTops[i] ?? 0
+    const bandH = (layout.laneRows[i] ?? 1) * (WF_NODE_H + WF_ROW_GAP) - WF_ROW_GAP + WF_LANE_GAP / 2
+    if (y < top + bandH) {
+      laneIndex = i
+      break
+    }
+  }
+  const lane = layout.lanes[laneIndex] ?? '—'
+  const laneTop = layout.laneTops[laneIndex] ?? 0
+  const memberIdx: number[] = []
+  nodes.forEach((n, i) => {
+    if ((n.owner[0] ?? '—') === lane) memberIdx.push(i)
+  })
+  // 行列反推（与 wfRowCol 对称：行内位 m 由列号按行方向解出，再夹到该行实际节点数）
+  const row = Math.max(0, Math.floor((y - laneTop + WF_ROW_GAP / 2) / (WF_NODE_H + WF_ROW_GAP)))
+  const count = memberIdx.length
+  const k = Math.max(1, Math.min(WF_ROW_LEN, count - row * WF_ROW_LEN))
+  const start = wfBandStartCol(count, wfCapacity(nodes))
+  const col = Math.max(0, Math.floor((x - WF_LANE_LABEL_W + WF_STEP_GAP / 2) / (WF_NODE_W + WF_STEP_GAP)))
+  const m = row % 2 === 0 ? col - start : start + WF_ROW_LEN - 1 - col
+  // 半列边界取整；左侧越界归行首、右侧越界给 k（落行尾之后）
+  const mClamped = Math.max(0, Math.min(Math.round(m), k))
+  const j = row * WF_ROW_LEN + mClamped
+  const clamped = Math.min(j, count)
+  const insertAt = clamped === count
+    ? (memberIdx[memberIdx.length - 1] ?? -1) + 1
+    : (memberIdx[clamped] ?? 0)
+  return { lane, insertAt }
+}
+
+/** 改序后重编回流号：旧序 → 新序映射，规范形「回 N」按映射重写；非规范原样保留。
+ * 泛型只约束 `reflow` 字段——图节点与步骤表草稿（WorkflowStep）都直接可用。 */
+export function wfRenumberReflow<T extends { reflow: string }>(
+  nodes: readonly T[],
+  orderMap: ReadonlyMap<number, number>,
+): string[] {
+  return nodes.map((n) => {
+    const target = parseReflowTarget(n.reflow)
+    if (target === null) return n.reflow
+    const mapped = orderMap.get(target)
+    return mapped === undefined ? n.reflow : `\u56de ${mapped}` /* 回 */
+  })
+}

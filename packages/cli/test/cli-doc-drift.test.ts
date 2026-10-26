@@ -29,7 +29,7 @@ function dispatchedIn(src: string): Set<string> {
 function readmeTreeEntries(readme: string): Map<string, Set<string>> {
   const out = new Map<string, Set<string>>()
   for (const line of readme.split('\n')) {
-    const m = line.match(/^├── (role|team|skill)\s+(.+)$/)
+    const m = line.match(/^├── (role|team|workflow|skill)\s+(.+)$/)
     if (!m) continue
     const items = m[2]
       .split('|')
@@ -50,7 +50,7 @@ function surfaceDocTreeEntries(doc: string): Map<string, Set<string>> {
   for (const line of doc.split('\n')) {
     const head = line.match(/^├── (\w+)/)
     if (head) {
-      current = ['role', 'team', 'skill'].includes(head[1]) ? head[1] : null
+      current = ['role', 'team', 'workflow', 'skill'].includes(head[1]) ? head[1] : null
       continue
     }
     if (current === null || line.includes('⚠') || line.includes('❌')) continue
@@ -67,13 +67,14 @@ function surfaceDocTreeEntries(doc: string): Map<string, Set<string>> {
 const sources = {
   role: dispatchedIn(readRepoFile('packages/cli/src/commands/role.ts')),
   team: dispatchedIn(readRepoFile('packages/cli/src/commands/team.ts')),
+  workflow: dispatchedIn(readRepoFile('packages/cli/src/commands/workflow.ts')),
   skill: dispatchedIn(readRepoFile('packages/cli/src/commands/skill.ts')),
 }
 
 describe('README §5 命令树 vs CLI 实际分派（防漂移）', () => {
   const tree = readmeTreeEntries(readRepoFile('README.md'))
 
-  for (const group of ['role', 'team', 'skill'] as const) {
+  for (const group of ['role', 'team', 'workflow', 'skill'] as const) {
     it(`group ${group} 双向一致`, () => {
       const doc = tree.get(group)
       expect(doc, `README §5 命令树缺 ${group} 分组`).toBeDefined()
@@ -90,7 +91,7 @@ describe('README §5 命令树 vs CLI 实际分派（防漂移）', () => {
 describe('cli-mcp-surface §1 命令树 vs CLI 实际分派（防漂移）', () => {
   const tree = surfaceDocTreeEntries(readRepoFile('doc/requirements/cli-mcp-surface.md'))
 
-  for (const group of ['role', 'team', 'skill'] as const) {
+  for (const group of ['role', 'team', 'workflow', 'skill'] as const) {
     it(`group ${group} 双向一致（⚠/❌ 标注行除外）`, () => {
       const doc = tree.get(group)
       expect(doc, `cli-mcp-surface §1 命令树缺 ${group} 分组`).toBeDefined()

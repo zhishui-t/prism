@@ -224,6 +224,42 @@ rework_limit: 2                    # 返工上限（轮）
 
 **Prism 不做这个转换，也不驱动 DAG。** 它只保证工作流定义完整、可被读取。
 
+#### 4.2.1 运行时看板（v19.1，只读）
+
+调度仍在队长，**真相仍在黑板文件**；Prism 只把黑板读成可监控的结构化快照：
+
+```
+运行时真相（三件套 + 证据面）            Prism 读取（只读）                 消费面
+<projectRoot>/.agent-team/
+├── dag.json      任务四态 + 依赖    →  可派发集 ready / 受阻 waiting  →   GET /api/teams/:id/runtime
+├── agents.md     会话登记            →  角色 → agentId/sessionId      →   MCP prism_team_runtime
+├── context.md    断点快照            →  快照是否比 dag 旧              →   控制台「运行时」Pane
+├── .*_ok         门禁文件            →  有哪些门禁、缺哪些
+└── DELIVERY*.md  交付报告            →  最新交付报告是否落后于 dag
+```
+
+**推导与对账**（`packages/agents/src/runtime/blackboard.ts`）：
+
+- `ready` = 自身 `pending` ∧ 依赖全 `done`（这就是「现在该派谁」）；其余 `pending` 归 `waiting`；
+- 依赖并集 = `nodes[].deps` ∪ `edges`（与 `scripts/dag.mjs` 同口径，去重 + 稳定排序）；
+- **缺口**分三级：`error`（坏 JSON / 依赖缺失 / 依赖成环 / 未知状态）> `warning`（可派发任务的角色
+  没有会话登记 → 会重复派遣；快照比 dag 旧；**任务全完成但最新交付报告比 dag 旧**）> `info`（无门禁 /
+  归档实例无对应任务）；
+- 状态别名归一：`completed|closed → done`、`active|in_progress → running`、`failed|stuck → blocked`；
+  未知值按 `pending` 处理但**保留原文并告警**（不静默吞）。
+
+**边界（守 R1/R6）**：`project` **必填**且须为已注册项目——不猜项目根、不回落到当前工作目录；
+项目没有黑板 → 正常返回 `has_blackboard:false`（团队可以刚建、还没开工），不是错误。
+Prism 不写黑板、不派 agent、不改任务状态。
+
+**按任务分目录（多团队并行）**：黑板是 `.agent-team/<run>/`——**一个任务一个 run 目录**
+（同项目并行两支团队互不覆盖；这是 agent-team 手册的约定，Prism 只负责读）。读取器
+`listTeamRuns` 识别 `.agent-team/` 下含状态文件（dag.json / agents.md / context.md 之一）的
+子目录；`readTeamRuntime` 的 `run` 参数省略 = 自动选 **dag.json 最新**的任务，显式指定不存在
+→ `not_found`（不静默看别的任务）；旧版平铺布局（状态文件直接在 `.agent-team/` 根下）以
+`run: ''`（legacy）兼容读取。HTTP `?run=`、MCP `run` 参数、控制台「运行时」面板的任务选择器
+同口径。
+
 ### 4.3 门禁
 
 门禁文件（`.design_ok` / `.qa_ok`）由**执笔角色**在完成后写入，Prism 只记录、不强制校验（因为 Prism 不在执行链路里）。

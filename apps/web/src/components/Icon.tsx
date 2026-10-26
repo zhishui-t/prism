@@ -32,6 +32,7 @@ export type IconName =
   | 'check'
   | 'database'
   | 'link'
+  | 'workflow'
 
 const PATHS: Record<IconName, ReactNode> = {
   book: (
@@ -137,6 +138,13 @@ const PATHS: Record<IconName, ReactNode> = {
     <>
       <path d="M10 13a5 5 0 0 0 7.1 0l2.1-2.1a5 5 0 0 0-7.1-7.1L11 5" />
       <path d="M14 11a5 5 0 0 0-7.1 0l-2.1 2.1a5 5 0 0 0 7.1 7.1L13 19" />
+    </>
+  ),
+  workflow: (
+    <>
+      <circle cx="5.5" cy="12" r="2.2" />
+      <rect x="14" y="9.8" width="5.4" height="4.4" rx="1.2" />
+      <path d="M7.8 12h3.4M11.2 12l-1.2-1.2M11.2 12l-1.2 1.2" />
     </>
   ),
 }

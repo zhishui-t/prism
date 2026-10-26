@@ -13,6 +13,7 @@ import { defaultGraphifyRunner, graphRoutes, type GraphDeps } from './http/route
 import { studioRoute } from './http/routes/studio.js'
 import { consoleRoute, resolveWebDistDir } from './http/routes/console.js'
 import { peopleRoutes } from './http/routes/people.js'
+import { workflowRoutes } from './http/routes/workflow.js'
 import { resolveDirsFromHome } from './roles/index.js'
 import { archRoutes } from './http/routes/arch.js'
 import { trashStoreFor } from './trash.js'
@@ -196,6 +197,15 @@ export async function createApp(options: AppOptions = {}): Promise<{
       const job = jobs.submit(project, target.root, target.root, runner, {})
       return { job_id: job.job_id }
     },
+    // 团队运行时看板：项目名 → 已注册项（含 root）。未注册 → null → 404（不猜项目根）
+    resolveProject: async (project) => {
+      try {
+        const found = await registry.get(project)
+        return { project: found.project, root: found.root }
+      } catch {
+        return null
+      }
+    },
   })
   // 角色/团队：读路由只读；写路由只认请求体里**显式**给出的 roles_dir / teams_dir
   // （绝不复用 dirs 的默认宿主目录）。增删改三入口在 CLI / HTTP / MCP 上对称。
@@ -206,10 +216,18 @@ export async function createApp(options: AppOptions = {}): Promise<{
   router.add('DELETE', '/api/roles/:name', people.deleteRole)
   router.add('GET', '/api/teams', people.teams)
   router.add('POST', '/api/teams', people.createTeam)
+  // ⚠ 顺序：`/api/teams/:id/runtime` 与 `/activate` 都是两段，`:id` 单段不会吞它们；
+  // 但为可读性与将来加 `/api/teams/:id/*` 子路由，仍把子路由紧跟列表放在 `:id` 之前。
+  router.add('GET', '/api/teams/:id/runtime', people.teamRuntime)
+  router.add('GET', '/api/teams/:id/activate', people.teamActivate)
   router.add('GET', '/api/teams/:id', people.team)
   router.add('PATCH', '/api/teams/:id', people.updateTeam)
   router.add('DELETE', '/api/teams/:id', people.deleteTeam)
-  router.add('GET', '/api/teams/:id/activate', people.teamActivate)
+  // 工作流单元（workflow-asset.md：读两条 + v2 图编辑器写一条；数据源与 CLI/MCP 同源）
+  const workflowRoutes_ = workflowRoutes({ home, harnessRoot: dirs.harnessRoot })
+  router.add('GET', '/api/workflows', workflowRoutes_.workflows)
+  router.add('GET', '/api/workflows/:id', workflowRoutes_.workflow)
+  router.add('PATCH', '/api/workflows/:id', workflowRoutes_.workflowUpdate)
   router.add('GET', '/api/skills', people.skills)
   router.add('GET', '/api/skills/usage', people.skillUsage)
   router.add('GET', '/api/skills/effective', people.skillsEffective)

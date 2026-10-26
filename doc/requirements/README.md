@@ -19,6 +19,7 @@
 | `knowledge-base.md` | 知识库：层→书→模块→条目、检索、导入、落库、护栏 |
 | `role-definition.md` | 角色定义：决策契约、核心第一原则、白名单、知识绑定 |
 | `team-definition.md` | 团队定义：成员引用、固定工作流、沉淀规则、Skill 指定 |
+| `workflow-asset.md` | 工作流单元：一等资产（角色级/团队级）、文件契约、校验口径、三入口只读面（v1） |
 | `harness-adapters.md` | ZCode 适配：原生约定 + Prism 叠加、装配、启用生命周期、model 冲突 |
 | `skill-loading.md` | Skill 管理：直接装在宿主 Skill 目录，抽象在代码层 |
 | `init-and-registration.md` | 接入初始化：`prism init` 注册 MCP + 复制 Skill |

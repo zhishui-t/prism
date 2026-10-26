@@ -128,9 +128,11 @@ function body(result: GraphQueryResult, onNodePick: NodePick): ReactNode {
 /** 未测量时的容器盒（happy-dom 下 `getBoundingClientRect()` 恒为 0；真机首帧布局前也是 0）。 */
 const NO_BOX: Size = { w: 0, h: 0 }
 
-interface Zoom {
+export interface Zoom {
   /** SPEC-1.8：倍率 ≥ 1.5 → 节点 `<text>` 追加 `id · file:line` 第二行。 */
   annotate: boolean
+  /** 当前缩放倍率（节点拖动把屏幕增量换算回用户坐标用）。 */
+  scale: number
   /** 内层 `<g>` 的 transform（**用户坐标**；fit 态 = `translate(0 0) scale(1)`，见 `userTransform`）。 */
   transform: string
   /** 挂到 `<svg>` 上的 props（ref / 类名 / wheel / pointer）；调用方把 viewBox / role / aria 写在它**后面**。 */
@@ -150,7 +152,7 @@ interface Zoom {
  * 那组数由「容器与内容双向比取 min + 居中」算出，窗口尺寸或内容一变就重算
  * （`userTransform` 里解释了写进 `<g>` 时为什么还要归一化一次）。
  */
-function useZoom(vb: Rect): Zoom {
+export function useZoom(vb: Rect): Zoom {
   const t = useT()
   const ref = useRef<SVGSVGElement | null>(null)
   const [box, setBox] = useState<Size>(NO_BOX)
@@ -272,6 +274,7 @@ function useZoom(vb: Rect): Zoom {
 
   return {
     annotate: annotationVisible(zoomRatio(view, fit)),
+    scale: zoomRatio(view, fit),
     transform: transformAttr(userTransform(view, fit)),
     toolbar: (
       /* SPEC-1.5：± 走原生 `<button>`（可聚焦，Enter / Space 天然可触发）；百分比只读 */

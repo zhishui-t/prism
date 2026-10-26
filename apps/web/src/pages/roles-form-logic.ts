@@ -27,6 +27,8 @@ export interface RoleFormValues {
   layers: string
   /** 知识书目（F1 起有编辑位；空 = 不写该键，服务端缺省补 `[]` = 清空绑定）。 */
   books: string[]
+  /** 工作流挂载（workflow-asset v1；仅 edit 提交——create 服务端暂不认该键）。 */
+  workflows: string[]
   body: string
   dir: string
 }
@@ -76,6 +78,7 @@ export function seedRoleFormValues(rolesDir: string, initial: RoleDefinition | n
     skills: [...(initial?.skills ?? [])],
     layers: (initial?.knowledge?.layers ?? ['global']).join(', '),
     books: [...(initial?.knowledge?.books ?? [])],
+    workflows: [...(initial?.workflows ?? [])],
     body: initial?.body ?? '',
     dir: rolesDir,
   }
@@ -106,6 +109,9 @@ export function buildRoleInput(mode: 'new' | 'edit', v: RoleFormValues): RoleWri
     roles_dir: v.dir.trim(),
   }
   if (mode === 'new') input.name = v.name.trim()
+  // 工作流挂载：仅 edit 提交（服务端 create 暂不认该键）。恒发数组——空数组 = 清空挂载
+  // （strictStrArray 语义），与 books 的「空不发键」不同：workflows 是独立补丁键，无整块默认值。
+  else input.workflows = v.workflows
   // 置空语义：新建时省略（用缺省），编辑时显式 null（清除该 frontmatter 键）
   if (v.color !== '') input.color = v.color as RoleWriteInput['color']
   else if (mode === 'edit') input.color = null

@@ -19,6 +19,8 @@ export interface AgentConvention {
   filePattern: string
   /** 团队定义目录（宿主根下独立于 agent 扫描路径，如 ~/.zcode/teams）。 */
   teamDir: string | null
+  /** 工作流单元目录（宿主根下，如 ~/.zcode/workflows）；宿主无此约定则 null（回落 roles 同级 workflows）。 */
+  workflowDir: string | null
   /** 该 harness 支持的 frontmatter 字段集；Prism 扩展不得越界（扩展一律放正文）。 */
   frontmatterFields: readonly string[]
   /** 正文约定首节标题（如 '## 核心契约'）。 */

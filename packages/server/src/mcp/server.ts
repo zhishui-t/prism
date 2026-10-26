@@ -15,6 +15,7 @@ import {
   buildTaskLifecycleIr,
   buildTeamWorkflowIr,
   ensureHarnessPluginsLoaded,
+  readTeamRuntime,
 } from '@prism/agents'
 import { listBuiltinSkills } from '@prism/skills'
 
@@ -32,6 +33,9 @@ import {
   loadRoles,
   loadTeam,
   loadTeams,
+  loadWorkflow,
+  loadWorkflows,
+  updateWorkflowDefinition,
 
   readTeamDetail,
   renderZcodeTeam,
@@ -46,9 +50,11 @@ import {
   uninstallSkillDefinitions,
   updateRoleDefinition,
   updateTeamDefinition,
+  workflowNotFoundMessage,
   type NewTeamBody,
   type RoleWriteBody,
   type UpdateTeamBody,
+  type UpdateWorkflowBody,
 } from '../roles/index.js'
 import {
   runGraphify,
@@ -75,9 +81,12 @@ import { trashStoreFor } from '../trash.js'
 
 /**
  * MCP stdio 服务（design.md §4 最小集 + design-v3 §3.4 P6 增量，手写 JSON-RPC 2.0）：
- * 知识库 / 图谱 / 角色 / 团队 / 技能，共 49 个工具（v6：角色与团队补齐增删改查；
+ * 知识库 / 图谱 / 角色 / 团队 / 工作流 / 技能，共 53 个工具（v6：角色与团队补齐增删改查；
  * v12 F4：技能分类清单增删改 `prism_skill_category_add|rename|rm`；
- * v15 B-4：外部技能删除 `prism_skill_rm`）。
+ * v15 B-4：外部技能删除 `prism_skill_rm`；
+ * workflow-asset v1：工作流单元只读两条 `prism_workflow_list|get`；
+ * workflow-asset v2：图编辑器写路径 `prism_workflow_edit`；
+ * 运行时看板：`prism_team_runtime`（只读黑板，Prism 不调度））。
  * ⚠ 上面这个数是**对外口径**，由 `packages/server/test/tool-surface-drift.test.ts` 锁定（MIN-1）。
  * 独立进程运行（`node dist/mcp/server.js`），与 prism serve 经 SQLite WAL 并存。
  */
@@ -295,6 +304,7 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
   const harnessRoot = dirs.harnessRoot
   const rolesDir = dirs.rolesDir
   const teamsDir = dirs.teamsDir
+  const workflowsDir = dirs.workflowsDir
   const hostPaths = harnessPaths(harnessRoot, deps.home)
   /**
    * 回收站（v9 F3）：删除角色/团队/Skill 走 `TrashStore.put`，trashDir 与审计都归属
@@ -602,6 +612,37 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
     return { count: teams.length, teams, teams_dir: teamsDir }
   }
 
+  /** 工作流单元列表（workflow-asset.md v1：只读；数据源与 CLI/HTTP 同源）。 */
+  const workflowList = async (): Promise<unknown> => {
+    const workflows = await loadWorkflows(workflowsDir, { rolesDir })
+    return { count: workflows.length, workflows, workflows_dir: workflowsDir }
+  }
+
+  /** 取单个工作流单元（steps + body + issues；只读）。 */
+  const workflowGet = async (args: Record<string, unknown>): Promise<unknown> => {
+    const id = asString(args.workflow)
+    if (id === undefined) {
+      throw new Error('缺少 workflow')
+    }
+    const wf = await loadWorkflow(workflowsDir, id, { rolesDir })
+    if (wf === null) {
+      throw new Error(workflowNotFoundMessage(workflowsDir, id))
+    }
+    return wf
+  }
+
+  /**
+   * 修改工作流单元的步骤表（v2 图编辑器）。与 HTTP `PATCH /api/workflows/:id`、CLI
+   * `prism workflow edit` 共用 `updateWorkflowDefinition`（三入口同口径）。
+   */
+  const workflowEdit = async (args: Record<string, unknown>): Promise<unknown> => {
+    const id = asString(args.workflow)
+    if (id === undefined) {
+      throw new Error('缺少 workflow')
+    }
+    return await updateWorkflowDefinition(id, args as UpdateWorkflowBody)
+  }
+
   /**
    * 修改团队（字段补丁；改 members 时工作流就地收窄；给 workflow 时结构化保存；if_match 防陈旧写）。
    * 与 HTTP `PATCH /api/teams/:id`、CLI `prism team edit` 共用 `updateTeamDefinition`（三入口同口径）。
@@ -650,6 +691,32 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
   const teamActivate = async (args: Record<string, unknown>): Promise<unknown> => {
     const team = await requireTeam(args.team_id)
     return await activateTeam(team, { rolesDir, targetDir: hostPaths.agentsDir })
+  }
+
+  /**
+   * `prism_team_runtime`：读项目 `.agent-team/` 黑板的运行时实况（**只读**）。
+   *
+   * Prism 不调度、不派发（R1）——调度在队长，真相在黑板的 dag.json / agents.md /
+   * context.md / 门禁文件。本工具把它们读成结构化快照，回答三件事：
+   * 1. 现在哪些任务**可派发**（依赖已就绪）、哪些在途、哪些受阻；
+   * 2. 会话登记（角色 → agentId / sessionId）与任务是否对得上（对账 gaps）；
+   * 3. 门禁文件与最新交付报告在不在（完成判定的证据面）。
+   *
+   * `project` 必填且必须是已注册项目（不猜项目根）。
+   */
+  const teamRuntime = async (args: Record<string, unknown>): Promise<unknown> => {
+    const teamId = typeof args.team_id === 'string' ? args.team_id.trim() : ''
+    if (teamId === '') {
+      throw new Error('prism_team_runtime 需要 { team_id, project }')
+    }
+    // 团队存在性先验（不存在 → 明确报错，而不是给一份空黑板）
+    await requireTeam(teamId)
+    const { project, root } = await requireProject(args, 'prism_team_runtime')
+    // run 省略 = 自动选 dag.json 最新的任务；'' = 旧版平铺布局；同项目多团队并行时用于区分
+    const runRaw = args.run
+    const run = typeof runRaw === 'string' ? runRaw.trim() : undefined
+    const runtime = await readTeamRuntime(root, project, run === '' ? '' : run)
+    return { team_id: teamId, ...runtime }
   }
 
   /** archify 五类图（与 CLI `arch from-*` 同一批纯函数生成器）。 */
@@ -1674,6 +1741,61 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
       call: roleRender,
     },
     {
+      name: 'prism_workflow_list',
+      description:
+        '列出工作流单元库（一等资产：角色级/团队级过程单元，含 steps 步骤表与校验 issues；数据源 = workflows_dir，只读）。派发子代理时把单元文件路径附进 prompt 让其自读——不转述内容',
+      inputSchema: { type: 'object', properties: {} },
+      call: workflowList,
+    },
+    {
+      name: 'prism_workflow_get',
+      description:
+        '取单个工作流单元（frontmatter 元信息 + steps 步骤表 + 完整正文 + 校验 issues；只读）。角色挂载关系见角色定义的 workflows 字段',
+      inputSchema: {
+        type: 'object',
+        properties: { workflow: { type: 'string', description: '工作流单元 id（= 文件名，kebab-case；取值来自 prism_workflow_list）' } },
+        required: ['workflow'],
+      },
+      call: workflowGet,
+    },
+    {
+      name: 'prism_workflow_edit',
+      description:
+        '修改工作流单元的步骤表（v2 图编辑器写路径；与 HTTP PATCH /api/workflows/:id、CLI prism workflow edit 同口径）。steps=行数组（rowId 取自 prism_workflow_get 的 steps_raw.rowIds 对齐未映射列，无 rowId=新行）；写前服务端校验，error 拒落盘；if_match（取 GET 的 source_mtime）不符 → 409 stale_write。workflows_dir 必填——写路径一律显式参数化，绝不回落到默认宿主目录',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          workflow: { type: 'string', description: '工作流单元 id（kebab-case）' },
+          steps: {
+            type: 'array',
+            description: '步骤行全量（顺序即序号）',
+            items: {
+              type: 'object',
+              properties: {
+                rowId: { type: 'string', description: '原 raw 行身份（steps_raw.rowIds 之一；新行省略）' },
+                order: { type: 'number' },
+                step: { type: 'string' },
+                owner: { type: 'array', items: { type: 'string' }, description: '承接（多值）' },
+                skills: { type: 'string' },
+                input: { type: 'string' },
+                output: { type: 'string' },
+                done: { type: 'string' },
+                reflow: { type: 'string', description: '回流（规范形「回 N」，N=目标步骤序）' },
+                extra: { type: 'object', description: '未映射列值（列名 → 值）' },
+              },
+              required: ['step'],
+            },
+          },
+          columns: { type: 'array', items: { type: 'string' }, description: '列集（含未映射列，保持列序）；缺省沿用原表列集' },
+          if_match: { type: 'number', description: '陈旧写防护：GET 的 source_mtime（epoch 毫秒整数）' },
+          workflows_dir: { type: 'string', description: '写入目录（必填，防误写真实宿主）' },
+          roles_dir: { type: 'string', description: 'binds 校验用的角色库（可选）' },
+        },
+        required: ['workflow', 'steps', 'workflows_dir'],
+      },
+      call: workflowEdit,
+    },
+    {
       name: 'prism_team_list',
       description: '列出团队库团队（数据源 = 宿主团队目录 teams_dir；只读）',
       inputSchema: { type: 'object', properties: {} },
@@ -1700,6 +1822,21 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
         required: ['team_id'],
       },
       call: teamActivate,
+    },
+    {
+      name: 'prism_team_runtime',
+      description:
+        '读团队运行时看板（**只读**，Prism 不调度）：解析项目 `.agent-team/` 黑板（dag.json / agents.md / context.md / 门禁 / DELIVERY）→ 返回任务四态计数、**可派发集**（ready，依赖已就绪）、受阻集（waiting）、会话登记（角色→agentId/sessionId）、每条任务的**结构化契约**（kind/objective/acceptance/inScope/verify/verdict/changedPaths）与对账 gaps。契约校验是机械的：标 done 但验收项无结果、验证命令没跑、改动了写域外文件、并行任务写域重叠、review 非 pass 结案——全都报出来。另有 **deliveryGate**（全部完成 + 审核 pass + 无失败才能交付）。project 必填且须为已注册项目（不猜项目根）。回答「现在该派谁、派什么、谁在做、完成是不是真的」。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          team_id: { type: 'string', description: '团队 id（须存在）' },
+          project: { type: 'string', description: '已注册项目名（黑板在 <projectRoot>/.agent-team/）' },
+          run: { type: 'string', description: '任务目录名（.agent-team/<run>/，同项目多团队并行时区分各任务；省略 = 自动选 dag.json 最新的任务；空串 = 旧版平铺布局）。响应里的 runs 列出全部可选值' },
+        },
+        required: ['team_id', 'project'],
+      },
+      call: teamRuntime,
     },
     {
       name: 'prism_team_new',

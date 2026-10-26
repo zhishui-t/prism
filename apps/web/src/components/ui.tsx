@@ -241,8 +241,8 @@ export function Modal({
   onClose: () => void
   children: ReactNode
   footer?: ReactNode
-  /** 面板尺寸档：`lg`（详情，宽度 `--modal-w`）/ `md`（560px，选取器）。 */
-  size?: 'lg' | 'md'
+  /** 面板尺寸档：`xl`（图/画布档，近全屏）/ `lg`（详情，宽度 `--modal-w`）/ `md`（560px，选取器）。 */
+  size?: 'xl' | 'lg' | 'md'
 }) {
   const t = useT()
   const box = useRef<HTMLDivElement>(null)

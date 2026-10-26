@@ -135,14 +135,15 @@ prism serve --ensure               # 后台幂等起控制台（已在跑则复�
 - **不编边**：图谱没有的关系不要推断；\`confidence\` 字段（EXTRACTED/INFERRED）照实呈现；
 - **不读全图**：用查询拿子图（\`limit\`/\`depth\` 有界），避免把整张图塞进上下文。
 
-## 5. 工具速查（49 个 MCP 工具）
+## 5. 工具速查（53 个 MCP 工具）
 
 | 分组 | 工具 |
 | :--- | :--- |
 | 知识库（17） | \`prism_kb_search\` \`prism_kb_get\` \`prism_kb_deposit\` \`prism_kb_convert\` \`prism_kb_import\` \`prism_kb_enrich\` \`prism_kb_graph\` \`prism_kb_tree\` \`prism_kb_stats\` \`prism_kb_catalog\` \`prism_kb_path\` \`prism_kb_remove\` \`prism_kb_restore\` \`prism_kb_conflicts\` \`prism_kb_resolve_conflict\` \`prism_kb_versions\` \`prism_kb_book_structure\` |
 | 代码图谱（8） | \`prism_graph_query\` \`prism_graph_path\` \`prism_graph_explain\` \`prism_graph_affected\` \`prism_graph_god_nodes\` \`prism_graph_summary\` \`prism_graph_status\` \`prism_graph_merge\` |
 | 架构图谱（1） | \`prism_arch_generate\`（五类图统一入口：workflow 传 \`team\`，architecture/sequence/dataflow 传 \`project\`，lifecycle 无入参；可选 \`book\`/\`module\`/\`out\`；sequence 可加 \`symbols\`（节点 id 数组，按相邻对出图）） |
-| 角色团队（23） | \`prism_role_list\` \`prism_role_get\` \`prism_role_new\` \`prism_role_edit\` \`prism_role_rm\` \`prism_role_render\` \`prism_team_list\` \`prism_team_get\` \`prism_team_new\` \`prism_team_edit\` \`prism_team_rm\` \`prism_team_render\` \`prism_team_activate\` \`prism_context_pack\` \`prism_skill_effective\` \`prism_skill_list\` \`prism_skill_install\` \`prism_skill_uninstall\` \`prism_skill_rm\` \`prism_skill_categorize\` \`prism_skill_category_add\` \`prism_skill_category_rename\` \`prism_skill_category_rm\` |
+| 角色团队（24） | \`prism_role_list\` \`prism_role_get\` \`prism_role_new\` \`prism_role_edit\` \`prism_role_rm\` \`prism_role_render\` \`prism_team_list\` \`prism_team_get\` \`prism_team_new\` \`prism_team_edit\` \`prism_team_rm\` \`prism_team_render\` \`prism_team_activate\` \`prism_team_runtime\` \`prism_context_pack\` \`prism_skill_effective\` \`prism_skill_list\` \`prism_skill_install\` \`prism_skill_uninstall\` \`prism_skill_rm\` \`prism_skill_categorize\` \`prism_skill_category_add\` \`prism_skill_category_rename\` \`prism_skill_category_rm\` |
+| 工作流（3） | \`prism_workflow_list\`（列工作流单元库，数据源 workflows_dir） \`prism_workflow_get { workflow }\`（单个单元：frontmatter 元信息 + steps 步骤表 + 正文 + issues） \`prism_workflow_edit\`（改步骤表：steps 行数组 + if_match 防陈旧写，写前校验）——派发子代理时把单元文件路径附进 prompt 让其自读 |
 
 > **导入三件套**：\`prism_kb_convert\`（文档→Markdown，本地 anydoc 转换）→ 你提炼 →
 > \`prism_kb_deposit\` 逐条落库；或 \`prism_kb_import\` 一次扫描整个项目目录建引用索引。

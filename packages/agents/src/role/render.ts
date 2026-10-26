@@ -31,6 +31,7 @@ export function hasPrismMarker(content: string): boolean {
 /** Prism 叠加层正文节标题（harness §4.2：扩展一律放正文，不进 frontmatter）。 */
 export const OVERLAY_SKILLS_HEADING = '## 能力（Skill 白名单）'
 export const OVERLAY_KNOWLEDGE_HEADING = '## 知识绑定'
+export const OVERLAY_WORKFLOWS_HEADING = '## 工作流绑定'
 
 /** 渲染单个角色为 ZCode 角色文件内容。 */
 export function renderZcodeRole(role: RoleDefinition, env: RenderEnv = {}): string {
@@ -63,6 +64,10 @@ function composeBody(role: RoleDefinition): string {
     if (role.knowledge.layers.length > 0) lines.push(`- layers: ${role.knowledge.layers.join(', ')}`)
     if (books.length > 0) lines.push(`- books: ${books.join(', ')}`)
     parts.push(lines.join('\n'))
+  }
+  const workflows = role.workflows ?? []
+  if (!base.includes(OVERLAY_WORKFLOWS_HEADING) && workflows.length > 0) {
+    parts.push([OVERLAY_WORKFLOWS_HEADING, ...workflows.map((w) => `- ${w}`)].join('\n'))
   }
   return parts.filter((p) => p !== '').join('\n\n')
 }

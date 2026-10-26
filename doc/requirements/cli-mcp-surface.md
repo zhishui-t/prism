@@ -91,6 +91,12 @@ prism
 │   ├── init <id>           建队脚手架（写守卫 + 自动校验；v4 新增）⚠ v6 更名 team new
 │   └── install <team>      装配：批量复制成员角色  ⚠ 已废弃（v6 装配语义移除）
 │
+├── workflow
+│   ├── list                列出工作流单元库（一等资产：角色级/团队级过程单元；workflow-asset v1）
+│   ├── show <id>           查看单元（frontmatter 元信息 + 步骤表 + issues）
+│   ├── validate [<id>]     校验单元（缺省 id = 全库逐个 + id 唯一性）
+│   └── edit <id> --steps-file <json|->  改步骤表（v2 图编辑器写路径；写前校验，error 拒落盘；写守卫）
+│
 ├── skill
 │   ├── list                列出 Prism Skill
 │   ├── install             安装内置 Skill 到宿主 skills 目录
@@ -161,7 +167,7 @@ prism
 
 ## 2. MCP 工具清单
 
-> **v6.2 取齐说明**（2026-09-12）：工具总数 = **49**（`packages/server/src/mcp/server.ts` 内
+> **v6.2 取齐说明**（2026-09-12）：工具总数 = **53**（`packages/server/src/mcp/server.ts` 内
 > `name: 'prism_*'` 逐条计数）。v4 由 31 增至 35；v5 多项目图谱合并（F-C2）新增 `prism_graph_merge`
 > （代码图谱 7 → 8）到 **36**；v6 把「角色 / 团队」补齐成**增删改查**（`new|edit|rm` 在 CLI / HTTP / MCP
 > 三入口**同名同位**）——新增 `prism_role_new|edit|rm`、`prism_team_list|edit|rm|render` 共 7 个，
@@ -248,7 +254,7 @@ prism
 > HTTP `POST /api/arch/render` 亦接可选 `project`（落项目源），但其**不接任意 `out`**——
 > `out` 的「完全接管」语义只在 MCP/CLI 两面存在，避免新增经 HTTP 的任意写入口。
 
-### 2.4 团队与角色（13）
+### 2.4 团队、角色与工作流（17）
 
 > **v6**：补齐增删改——`new|edit|rm` 与 CLI（`prism role|team new|edit|rm`）、
 > HTTP（`POST|PATCH|DELETE /api/roles[/:name]`、`POST|PATCH|DELETE /api/teams[/:id]`）**同名同位**。
@@ -277,6 +283,10 @@ prism
 | `prism_team_rm` | 删除团队文件本体（**搬进回收站**，可 `prism trash restore <trash_id>` 还原；默认 3 天后彻底清除、自动清除需 serve 运行；`teams_dir` 必填；v6 新增） |
 | `prism_team_render` | 渲染宿主格式团队文件（v6 新增） |
 | `prism_team_activate` | 拉取团队运行时配置（含装配状态） |
+| `prism_team_runtime` | 读团队**运行时看板**（只读）：解析项目 `.agent-team/` 黑板 → 任务四态计数、`ready`（依赖已就绪的可派发集）、`waiting`、会话登记（角色→agentId/sessionId）、门禁文件、断点快照与对账 `gaps`（任务无登记 / 依赖缺失 / 依赖成环 / 快照过期 / 全部完成却缺交付报告）。`project` 必填且须为已注册项目（不猜项目根）。**Prism 不调度**——只显示文件里的事实 |
+| `prism_workflow_list` | 列出工作流单元库（一等资产：角色级/团队级过程单元，含 steps 与校验 issues；数据源 = workflows_dir，只读；workflow-asset v1） |
+| `prism_workflow_get` | 取单个工作流单元（frontmatter 元信息 + steps 步骤表 + 完整正文 + issues；只读） |
+| `prism_workflow_edit` | 改步骤表（v2 图编辑器写路径）：steps 行数组（rowId 对齐 `steps_raw` 保未映射列）、可选 columns / if_match（GET 的 source_mtime，不符 → 409 stale_write）；写前校验 error 拒落盘；workflows_dir 必填 |
 
 > **三入口的能力边界（有意不对称；2026-09-12 审查后明确，v6.2 收口）**：
 >

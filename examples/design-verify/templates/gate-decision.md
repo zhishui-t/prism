@@ -2,6 +2,7 @@
 
 > 第 4 步产出。**裁决只能由人做**——AI 整理证据、核对条件，不代填结论。
 > 没有签署的本文件，不开写业务代码。轻量路径可简化为条件表**前三行**（含质检点）+ 三态勾选——质检点任何路径都不可省。
+> 工件链：上游 ← behavior-contract / verdict+semantic-review / trace-matrix / redteam-report 证据｜下游 → 开发交接（接 delivery 时并入 `.agent-team/` 与 `.design_ok` 证据链）。
 
 ## 门禁条件核对
 

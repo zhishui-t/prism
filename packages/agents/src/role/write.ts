@@ -29,7 +29,7 @@ import { renderMarkdownFile, splitFrontmatter, stripAllMarkerTails, type Frontma
 import { ROLE_BODY_SKELETON, ROLE_TEMPLATE_NAME_PLACEHOLDER } from '../templates.js'
 import type { KnowledgeBinding, RoleColor, RoleDefinition, RoleWriteResult } from '../types.js'
 import { extractPrinciple } from './parse.js'
-import { OVERLAY_KNOWLEDGE_HEADING, OVERLAY_SKILLS_HEADING, renderZcodeRole, roleMarker } from './render.js'
+import { OVERLAY_KNOWLEDGE_HEADING, OVERLAY_SKILLS_HEADING, OVERLAY_WORKFLOWS_HEADING, renderZcodeRole, roleMarker } from './render.js'
 
 /** 角色写盘失败（名字非法 / 目录不可写 / 目标不存在等）。 */
 export class RoleWriteError extends Error {
@@ -75,6 +75,8 @@ export interface RolePatch {
   description?: string
   skills?: string[]
   knowledge?: KnowledgeBinding
+  /** 挂载的工作流单元 id（空数组 = 清空；双形态分流同 skills，workflow-asset.md）。 */
+  workflows?: string[]
   /** `null` = 删除该 frontmatter 键（PATCH 的「清除」语义）。 */
   color?: string | null
   model?: string | null
@@ -251,6 +253,14 @@ export function patchRoleRaw(raw: string, patch: RolePatch): string {
       fm.knowledge = knowledgeToFrontmatter(patch.knowledge)
     } else {
       nextBody = replaceSection(nextBody, OVERLAY_KNOWLEDGE_HEADING, knowledgeToOverlay(patch.knowledge))
+    }
+  }
+
+  if (patch.workflows !== undefined) {
+    if (Object.prototype.hasOwnProperty.call(fm, 'workflows')) {
+      fm.workflows = [...patch.workflows]
+    } else {
+      nextBody = replaceSection(nextBody, OVERLAY_WORKFLOWS_HEADING, patch.workflows.map((w) => `- ${w}`).join('\n'))
     }
   }
 

@@ -52,6 +52,9 @@ export function parseRoleMarkdown(raw: string, opts: ParseRoleOptions = {}): Rol
   // skills：frontmatter 优先；ZCode 产物（Prism 渲染）从正文「能力（Skill 白名单）」节回收
   const fmSkills = strArray(data.skills)
   const skills = fmSkills.length > 0 ? fmSkills : extractOverlaySkills(cleanBody)
+  // workflows：同一双形态（frontmatter 优先 / 正文「工作流绑定」节回收，workflow-asset.md）
+  const fmWorkflows = strArray(data.workflows)
+  const workflows = fmWorkflows.length > 0 ? fmWorkflows : extractOverlayWorkflows(cleanBody)
   // knowledge：frontmatter 显式给出时优先；否则从正文「知识绑定」节回收；再缺省 → 导入默认
   const fmKnowledge = typeof data.knowledge === 'object' && data.knowledge !== null ? parseKnowledge(data.knowledge) : undefined
   const knowledge = fmKnowledge ?? extractOverlayKnowledge(cleanBody) ?? parseKnowledge(undefined)
@@ -70,6 +73,7 @@ export function parseRoleMarkdown(raw: string, opts: ParseRoleOptions = {}): Rol
   const thoughtLevel = str(data.thoughtLevel)
   if (thoughtLevel !== undefined) role.thoughtLevel = thoughtLevel as RoleDefinition['thoughtLevel']
   if (typeof data.injectAgentsMd === 'boolean') role.injectAgentsMd = data.injectAgentsMd
+  if (workflows.length > 0) role.workflows = workflows
   if (opts.sourcePath !== undefined) role.sourcePath = opts.sourcePath
   return role
 }
@@ -159,6 +163,18 @@ export function extractOverlayKnowledge(body: string): KnowledgeBinding | undefi
   // 两维皆空才是「无绑定」（layers 空不再吞掉 books）
   if (layers.length === 0 && books.length === 0) return undefined
   return books.length > 0 ? { layers, books } : { layers }
+}
+
+/** 从正文「工作流绑定」节回收挂载的工作流单元 id（`- <id>` 行；无节返回 []）。 */
+export function extractOverlayWorkflows(body: string): string[] {
+  const section = extractSection(body, ['## 工作流绑定'])
+  if (section === '') return []
+  return section
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l.startsWith('- '))
+    .map((l) => l.slice(1).trim())
+    .filter((s) => s !== '')
 }
 
 function parseKnowledge(value: FrontmatterValue | undefined): KnowledgeBinding {

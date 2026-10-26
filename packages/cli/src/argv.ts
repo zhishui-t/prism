@@ -19,6 +19,7 @@ import { runInject } from './commands/inject.js'
 import { runAudit } from './commands/audit.js'
 import { runRole } from './commands/role.js'
 import { runTeam } from './commands/team.js'
+import { runWorkflow } from './commands/workflow.js'
 import { runSkill } from './commands/skill.js'
 import { runTrash } from './commands/trash.js'
 import { cliVersion } from './version.js'
@@ -84,6 +85,13 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
                                            删除团队（**进回收站**，可 prism trash restore <id> 还原；
                                            默认宿主目录需 --yes）
   prism team activate <id> [--source <dir>] [--roles-dir <dir>]
+  prism workflow list [--source <dir>] [--roles-dir <dir>]
+                                           列出工作流单元库（角色级/团队级过程单元；默认 workflows_dir）
+  prism workflow show <id> [--source <dir>] [--roles-dir <dir>]
+  prism workflow validate [<id>] [--source <dir>] [--roles-dir <dir>]
+                                           校验单元（缺省 id = 全库逐个 + id 唯一性）
+  prism workflow edit <id> --steps-file <json|-> [--source <dir>] [--roles-dir <dir>] [--json]
+                                           改步骤表（JSON 行数组；写前校验，error 拒落盘）
   prism skill list | install | update | uninstall | validate [name...] [--force]
   prism skill rm <name> [--harness-root <dir>|--yes]
                                            删除**外部技能**（人写、无 Prism marker）整目录进回收站
@@ -106,12 +114,12 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
                                            --all 清全部。到期的自动清除只在 prism serve 运行时发生
 
 目录解析（装配语义简化——角色/团队/Skill 直接住在宿主目录）：
-  <PRISM_HOME>/prism.yaml 可选覆盖：roles_dir / teams_dir / skills_dir；
-  缺省落点由**激活的 harness 适配器**自述（ZCode 为 ~/.zcode/{agents,teams,skills}）。
+  <PRISM_HOME>/prism.yaml 可选覆盖：roles_dir / teams_dir / workflows_dir / skills_dir；
+  缺省落点由**激活的 harness 适配器**自述（ZCode 为 ~/.zcode/{agents,teams,workflows,skills}）。
   --harness-root 覆盖 harness 根（--zcode-dir 兼容旧名）。
-  --source <dir> 覆盖受管目录本身（role = roles_dir / team = teams_dir；读写命令**一律生效**；
+  --source <dir> 覆盖受管目录本身（role = roles_dir / team = teams_dir / workflow = workflows_dir；读写命令**一律生效**；
                  显式给出即等同 --harness-root，不再需要 --yes）
-  --roles-dir <dir> team 子命令专有：成员校验用的角色库（对齐 MCP team_new|edit 的 roles_dir）
+  --roles-dir <dir> team/workflow 子命令专有：成员与 binds 校验用的角色库（对齐 MCP 的 roles_dir）
   prism kb import <file.md> [--layer --owner --book --module]
   prism kb sync <项目名|项目根> [--owner --book --module] [--ignore-dirs <a,b>] [--include-ext <a,b>] [--dry-run]
                                            扫描项目文档建引用索引（默认只扫文档集；--ignore-dirs 按目录名匹配任意层级，重复出现取最后一个；--include-ext 显式纳入额外扩展名，如 h,cpp）
@@ -194,6 +202,8 @@ const CLI_OPTIONS = {
   source: { type: 'string' },
   /** team 侧成员校验用的角色库（对齐 MCP `prism_team_new|edit` 的 `roles_dir`） */
   'roles-dir': { type: 'string' },
+  /** workflow edit 的步骤行 JSON（`-` = stdin） */
+  'steps-file': { type: 'string' },
   model: { type: 'string' },
   'thought-level': { type: 'string' },
   depth: { type: 'string' },
@@ -319,6 +329,8 @@ export type ArgValues = {
   source?: string
   /** `team <子命令> --roles-dir <dir>`：成员校验用的角色库（对齐 MCP `roles_dir`） */
   'roles-dir'?: string
+  /** `workflow edit --steps-file <json|->`：步骤行 JSON（`-` = stdin） */
+  'steps-file'?: string
   model?: string
   'thought-level'?: string
   depth?: string
@@ -441,7 +453,7 @@ export function dirProvenanceLabel(p: DirProvenance): string {
   return '适配器默认'
 }
 
-export type GuardedTarget = 'roles' | 'teams' | 'skills'
+export type GuardedTarget = 'roles' | 'teams' | 'workflows' | 'skills'
 
 /**
  * B6 写守卫：目标目录取自默认链（非 --harness-root / prism.yaml 显式指定 → 真实宿主目录）时，
@@ -457,7 +469,8 @@ export function guardWriteTarget(
   op: 'write' | 'delete' = 'write',
 ): boolean {
   if (!dirs.guard[target] || plannedWrites <= 0) return true
-  const dirPath = target === 'roles' ? dirs.rolesDir : target === 'teams' ? dirs.teamsDir : dirs.skillsDir
+  const dirPath =
+    target === 'roles' ? dirs.rolesDir : target === 'teams' ? dirs.teamsDir : target === 'workflows' ? dirs.workflowsDir : dirs.skillsDir
   const action = op === 'delete' ? '删除' : '写入'
   if (values.yes === true) {
     ctx.stdout(`--yes：确认${action}默认宿主目录 ${dirPath}（${plannedWrites} 个文件）`)
@@ -554,6 +567,8 @@ export async function runCommand(ctx: CommandContext, argv: string[]): Promise<n
         return await runRole(effective, rest, values)
       case 'team':
         return await runTeam(effective, rest, values)
+      case 'workflow':
+        return await runWorkflow(effective, rest, values)
       case 'skill':
         return await runSkill(effective, rest, values)
       case 'trash':

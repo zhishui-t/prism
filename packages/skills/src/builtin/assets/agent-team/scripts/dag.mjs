@@ -6,7 +6,9 @@
  * 点击节点聚焦其完整上下游链（其余变暗，Esc 解除）、8 秒自动刷新。
  * 布局数学与 weave 的 src/plugins/weave/ui/dag-panel.tsx（compactDagLayout/computeLevels/relatedTaskIds）同构。
  *
- * 用法：node dag.mjs [项目目录]（缺省为当前目录）
+ * 用法：node dag.mjs [项目目录] [任务目录名]（项目目录缺省为当前目录；任务目录名 = .agent-team/<run>/，
+ * 同项目多支团队并行时各自一个目录，互不覆盖。省略时：有旧版平铺 dag.json（.agent-team/dag.json）
+ * 用平铺；否则恰好一个任务目录就用它；多个则列出全部并退出 1）
  *
  * dag.json 格式：
  * {
@@ -15,11 +17,41 @@
  *   "edges": [ ["n1", "n2"], ["n1", "n3", "可选边标签（暂不渲染）"] ]
  * }
  */
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const root = resolve(process.argv[2] ?? process.cwd());
-const dir = join(root, ".agent-team");
+const base = join(root, ".agent-team");
+const runArg = process.argv[3]?.trim() ?? "";
+
+/** 找出全部任务目录（含 dag.json/agents.md/context.md 之一的子目录）。 */
+const listRuns = () => {
+  let entries = [];
+  try {
+    entries = readdirSync(base, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries.filter((e) => e.isDirectory()).filter((e) =>
+    ["dag.json", "agents.md", "context.md"].some((f) => existsSync(join(base, e.name, f))),
+  ).map((e) => e.name).sort();
+};
+
+let dir = base;
+if (runArg !== "") {
+  dir = join(base, runArg);
+} else {
+  const flat = existsSync(join(base, "dag.json"));
+  const runs = listRuns();
+  if (!flat) {
+    if (runs.length === 1) dir = join(base, runs[0]);
+    else if (runs.length > 1) {
+      console.error(`.agent-team/ 下有 ${runs.length} 个任务目录，请指定第二个参数：`);
+      for (const r of runs) console.error(`  ${r}`);
+      process.exit(1);
+    }
+  }
+}
 const jsonPath = join(dir, "dag.json");
 const htmlPath = join(dir, "dag.html");
 

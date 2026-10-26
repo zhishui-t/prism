@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 
 import { api, type BookNode } from '../api.ts'
+import { workflowApi } from '../api-workflow.ts'
 import {
   ROLE_COLOR_OPTIONS,
   THOUGHT_LEVELS,
@@ -86,10 +87,11 @@ function roleFormSnapshot(v: {
   skills: string[]
   layers: string
   books: string[]
+  workflows: string[]
   body: string
   dir: string
 }): string {
-  return JSON.stringify([v.name, v.description, v.color, v.model, v.thought, v.skills, v.layers, v.books, v.body, v.dir])
+  return JSON.stringify([v.name, v.description, v.color, v.model, v.thought, v.skills, v.layers, v.books, v.workflows, v.body, v.dir])
 }
 
 /** 校验码 → 人话（R7）。静态映射：动态拼 key 会被 `dead-keys.mjs` 判为疑似引用（§6.2 禁令）。 */
@@ -192,6 +194,11 @@ export function RolesPage({ sel }: { sel?: string }) {
   const effectiveSet = effective.data != null && effective.data.role === key ? effective.data : null
 
   const issueRoles = useMemo(() => roleList.filter((r) => (r.issues ?? []).length > 0).length, [roleList])
+  /** 有 **error 级**问题的角色数（与「只有提醒」分开——后者不该看起来像坏了）。 */
+  const issueErrors = useMemo(
+    () => roleList.filter((r) => (r.issues ?? []).some((i) => i.level === 'error')).length,
+    [roleList],
+  )
   const shown = useMemo(() => {
     const q = filter.trim().toLowerCase()
     return roleList.filter((r) => {
@@ -253,6 +260,11 @@ export function RolesPage({ sel }: { sel?: string }) {
           onClick={() => setIssuesOnly((v) => !v)}
         >
           {t('roles.countLine', { total: roleList.length, issues: issueRoles })}
+          {issueErrors > 0 && (
+            <span className="small" style={{ color: 'var(--err)', marginLeft: 'var(--s-2)' }}>
+              {t('roles.issueErrors', { n: issueErrors })}
+            </span>
+          )}
         </button>
         <span className="spacer" />
         <button type="button" className="primary" onClick={() => setForm({ mode: 'new', initial: null })}>
@@ -285,6 +297,8 @@ export function RolesPage({ sel }: { sel?: string }) {
           {shown.map((r) => {
             const teamRefs = teamRefsOf(r)
             const issues = r.issues ?? []
+            const errCount = issues.filter((i) => i.level === 'error').length
+            const warnCount = issues.length - errCount
             return (
               <NavRow key={r.name} variant="card" href={hrefOf({ page: 'roles', sel: r.name })}>
                 <div className="role-name">
@@ -296,7 +310,20 @@ export function RolesPage({ sel }: { sel?: string }) {
                 <div className="role-metrics">
                   <CountLine label={t('roles.card.skills')} count={r.skills.length} />
                   <CountLine label={t('roles.card.teams')} count={teamRefs.length} />
-                  <CountLine label={t('roles.issues')} count={issues.length} lamp={issues.length > 0} />
+                  {/* §1.1 契约：第三格恒为**数字计数**，有任何 issue 就点灯（不按级别改文案）。
+                      错误/提醒的区分在列表头与详情分级标签上给（增量视图）。 */}
+                  <CountLine
+                    label={t('roles.issues')}
+                    count={issues.length}
+                    lamp={errCount > 0 || warnCount > 0}
+                    title={
+                      errCount > 0
+                        ? t('roles.issueErrors', { n: errCount })
+                        : warnCount > 0
+                          ? t('roles.issueWarnings', { n: warnCount })
+                          : undefined
+                    }
+                  />
                 </div>
               </NavRow>
             )
@@ -410,6 +437,25 @@ export function RolesPage({ sel }: { sel?: string }) {
               </div>
             </section>
 
+            {/* v19.1 新增：挂载工作流（`frontmatter.workflows` 或正文「工作流绑定」节）。
+                v19 把工作流升为一等资产并允许挂到角色上，但角色页此前**完全不显示**——
+                用户只能去工作流页反查「被谁引用」，本段补上这个正向视图。 */}
+            <section>
+              <CountLine size="section" label={t('roles.workflows')} count={(role.workflows ?? []).length} />
+              <div className="rsec-list">
+                {(role.workflows ?? []).length === 0 ? (
+                  <div className="rsec-empty">
+                    {t('roles.workflows.empty')}{' '}
+                    <a className="ref" href={hrefOf({ page: 'workflows' })}>
+                      {t('roles.workflows.go')}
+                    </a>
+                  </div>
+                ) : (
+                  (role.workflows ?? []).map((wf) => <Ref key={wf} kind="workflow" name={wf} />)
+                )}
+              </div>
+            </section>
+
             {/* 深挖带·一：校验问题清单（R-v8-4：状态位由卡片底行 lamp 承担，清单**默认折叠**）。
                 error 级文本走 `--madder`（唯一的层级外着色之一，与层级无关）。 */}
             {(role.issues ?? []).length > 0 && (
@@ -419,6 +465,9 @@ export function RolesPage({ sel }: { sel?: string }) {
                 </summary>
                 {(role.issues ?? []).map((issue: ValidationIssue, i: number) => (
                   <div key={i} className="rsec-issue">
+                    <span className={`issue-level ${issue.level === 'error' ? 'error' : 'warning'}`}>
+                      {issue.level === 'error' ? t('roles.level.error') : t('roles.level.warning')}
+                    </span>
                     <code className="mono">{issue.code}</code>
                     <span className={`rsec-issue-text${issue.level === 'error' ? ' err' : ''}`}>
                       {ISSUE_KEYS[issue.code] !== undefined ? t(ISSUE_KEYS[issue.code]) : issue.message}
@@ -568,10 +617,12 @@ function RoleForm({
   const [layers, setLayers] = useState(seed.layers)
   /** F1：书目（books）同构升级，从「表单外原样回传」变成可编辑的选取器结果。 */
   const [books, setBooks] = useState(seed.books)
+  /** 工作流挂载（workflow-asset v1）：角色绑定的工作流单元 id（选取器结果）。 */
+  const [workflows, setWorkflows] = useState(seed.workflows)
   const [body, setBody] = useState(seed.body)
   const [dir, setDir] = useState(seed.dir)
-  /** 打开的选取器（`null` = 关；两个字段共用同一个弹层零件）。 */
-  const [picker, setPicker] = useState<'skill' | 'book' | null>(null)
+  /** 打开的选取器（`null` = 关；三个字段共用同一个弹层零件）。 */
+  const [picker, setPicker] = useState<'skill' | 'book' | 'workflow' | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   /** R-6 Q1：保存反馈**就地**留在抽屉内（保存后不关抽屉），不再上抛给列表提示条。 */
@@ -581,7 +632,7 @@ function RoleForm({
   const [pendingDiscard, setPendingDiscard] = useState(false)
 
   const dirty =
-    roleFormSnapshot({ name, description, color, model, thought, skills, layers, books, body, dir }) !== baseline
+    roleFormSnapshot({ name, description, color, model, thought, skills, layers, books, workflows, body, dir }) !== baseline
   // 保存成功后再改字段：旧的成功文案不再代表当前值，撤掉它（避免「显示已保存、实际有改动」）。
   useEffect(() => {
     if (dirty && saved !== '') setSaved('')
@@ -645,6 +696,17 @@ function RoleForm({
     return names.length === 0 ? [] : [{ label: '', items: names.map((name) => ({ name })) }]
   }, [tree.data])
 
+  /**
+   * 工作流库（挂载选取器用）：**平铺**（同书目的「不硬造分类」口径），按 id 排序。
+   * 只在打开过 workflow 选取器后才有意义，但 useAsync 惰性请求一次成本可忽略——
+   * 保持与 skills/books 两个选取器相同的「首屏拉库」行为。
+   */
+  const workflowLib = useAsync(() => workflowApi.list(), [])
+  const workflowGroups = useMemo<PickerGroup[]>(() => {
+    const names = (workflowLib.data?.workflows ?? []).map((w) => w.workflow).sort((a, b) => a.localeCompare(b))
+    return names.length === 0 ? [] : [{ label: '', items: names.map((name) => ({ name })) }]
+  }, [workflowLib.data])
+
   const dirOk = dir.trim() !== ''
   const canSubmit = !busy && dirOk && (mode === 'edit' || name.trim() !== '')
 
@@ -656,7 +718,7 @@ function RoleForm({
     // B1：payload 构造抽到 `roles-form-logic.ts`（纯函数、有回归锁）。F1 起 skills / books
     // 都以**表单值**为准（`knowledge` 在 PATCH 下是全量写入，空 books 即清空绑定）。
     const input: RoleWriteInput = buildRoleInput(mode, {
-      name, description, color, model, thought, skills, layers, books, body, dir,
+      name, description, color, model, thought, skills, layers, books, workflows, body, dir,
     })
     try {
       if (mode === 'new') await teamApi.createRole(input)
@@ -664,7 +726,7 @@ function RoleForm({
       const who = mode === 'new' ? name.trim() : (initial?.name ?? '')
       setSaved(t(mode === 'new' ? 'roles.form.created' : 'roles.form.updated', { name: who }))
       // 保存成功 = 当前值成为新初值；此后不再算「未保存修改」
-      setBaseline(roleFormSnapshot({ name, description, color, model, thought, skills, layers, books, body, dir }))
+      setBaseline(roleFormSnapshot({ name, description, color, model, thought, skills, layers, books, workflows, body, dir }))
       onSaved()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -775,6 +837,17 @@ function RoleForm({
         </div>
       </div>
 
+      {/* 工作流挂载（workflow-asset v1）：与 books 同构，库换工作流单元（编辑模式才随 PATCH 提交）。 */}
+      <div className="field">
+        <span>{t('workflows.mountLabel')}</span>
+        <SelectedChips names={workflows} onRemove={(n) => setWorkflows((prev) => removeFromList(prev, n))} />
+        <div className="row">
+          <button type="button" className="tool-btn" onClick={() => setPicker('workflow')}>
+            {t('picker.open.workflow')}
+          </button>
+        </div>
+      </div>
+
       <label className="field">
         <span>{t('roles.form.dir')}</span>
         <input value={dir} onChange={(e) => setDir(e.target.value)} />
@@ -816,6 +889,19 @@ function RoleForm({
           onToggle={(n) => setBooks((prev) => toggleInList(prev, n))}
           onRemove={(n) => setBooks((prev) => removeFromList(prev, n))}
           onManualAdd={(n) => setBooks((prev) => appendToList(prev, n))}
+          onClose={() => setPicker(null)}
+        />
+      )}
+      {picker === 'workflow' && (
+        <PickerDialog
+          kind="workflow"
+          groups={workflowGroups}
+          selected={workflows}
+          loading={workflowLib.loading}
+          error={workflowLib.error}
+          onRetry={workflowLib.reload}
+          onToggle={(n) => setWorkflows((prev) => toggleInList(prev, n))}
+          onRemove={(n) => setWorkflows((prev) => removeFromList(prev, n))}
           onClose={() => setPicker(null)}
         />
       )}

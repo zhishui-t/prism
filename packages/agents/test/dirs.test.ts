@@ -52,25 +52,26 @@ describe('resolveDirs（prism.yaml 覆盖适配器默认；无配置 → 默认�
     expect(dirs).toEqual({
       rolesDir: join('K:/tmp/zcode', 'agents'),
       teamsDir: join('K:/tmp/zcode', 'teams'),
+      workflowsDir: join('K:/tmp/zcode', 'workflows'),
       skillsDir: join('K:/tmp/zcode', 'skills'),
-      provenance: { roles: 'default', teams: 'default', skills: 'default' },
+      provenance: { roles: 'default', teams: 'default', workflows: 'default', skills: 'default' },
       harness: 'zcode',
       harnessRoot: 'K:/tmp/zcode',
-      guard: { roles: true, teams: true, skills: true },
+      guard: { roles: true, teams: true, workflows: true, skills: true },
     })
     // 缺省 harnessRoot → ZCode 适配器默认根（仅路径推导，不触碰磁盘）
     expect(resolveDirs().harnessRoot).toBe(DEFAULT_ZCODE_DIR)
     // B6：默认链（未显式指定 harnessRoot）→ 全部需要写守卫
-    expect(resolveDirs(null).guard).toEqual({ roles: true, teams: true, skills: true })
+    expect(resolveDirs(null).guard).toEqual({ roles: true, teams: true, workflows: true, skills: true })
   })
 
   it('显式 harnessRoot → guard 全放行（B6：用户显式指定可直接写）；provenance=flag（不是 prism.yaml）', () => {
     const dirs = resolveDirs(null, { harnessRoot: 'K:/tmp/zcode', rootExplicit: true })
-    expect(dirs.guard).toEqual({ roles: false, teams: false, skills: false })
+    expect(dirs.guard).toEqual({ roles: false, teams: false, workflows: false, skills: false })
     // 关键回归：光有 flag、没有 prism.yaml，来源必须报 flag。
     // 旧字段 `source` 语义是「有没有配置文件」，此处会漏报为『适配器默认』——
     // 而「有 prism.yaml 但没写 roles_dir」时又会误报为 prism.yaml（实测踩中）。
-    expect(dirs.provenance).toEqual({ roles: 'flag', teams: 'flag', skills: 'flag' })
+    expect(dirs.provenance).toEqual({ roles: 'flag', teams: 'flag', workflows: 'flag', skills: 'flag' })
   })
 
   it('配置覆盖生效（临时 roles_dir 等）；~ 与相对路径正确解释', () => {
@@ -80,8 +81,9 @@ describe('resolveDirs（prism.yaml 覆盖适配器默认；无配置 → 默认�
     )
     expect(dirs.rolesDir).toBe('/tmp/custom-roles') // 绝对路径直用
     expect(dirs.teamsDir).toBe(join('/tmp', 'teams')) // teams 未配置 → 跟随 roles_dir 的**同级** teams/（B7：不进 agents 扫描路径）
+    expect(dirs.workflowsDir).toBe(join('/tmp', 'workflows')) // workflows 同一跟随口径
     expect(dirs.skillsDir).toBe(join(homedir(), 'custom-skills')) // ~ 展开
-    expect(dirs.provenance).toEqual({ roles: 'config', teams: 'config', skills: 'config' })
+    expect(dirs.provenance).toEqual({ roles: 'config', teams: 'config', workflows: 'config', skills: 'config' })
 
     const relative = resolveDirs({ roles_dir: 'custom/agents' }, { harnessRoot: 'K:/tmp/zcode' })
     expect(relative.rolesDir).toBe(join('K:/tmp/zcode', 'custom/agents')) // 相对路径相对 ZCode 根
@@ -89,24 +91,25 @@ describe('resolveDirs（prism.yaml 覆盖适配器默认；无配置 → 默认�
 
   it('B6 guard 逐键判定：配置键放行；teams 缺省跟随已配置的 roles_dir 也放行', () => {
     const partial = resolveDirs({ roles_dir: '/tmp/custom-roles' }, { harnessRoot: 'K:/tmp/zcode' })
-    expect(partial.guard).toEqual({ roles: false, teams: false, skills: true })
+    expect(partial.guard).toEqual({ roles: false, teams: false, workflows: false, skills: true })
     // 落点必须与 guard 口径一致：teams 缺省时跟随 roles_dir 的同级（qa 快审实测：不一致会导致守卫放行却写默认宿主）
     expect(partial.teamsDir).toBe(join('/tmp', 'teams'))
     // 逐目录来源：roles/teams 由 prism.yaml 定下，skills 回落适配器默认——单值字段表达不了这种混合
-    expect(partial.provenance).toEqual({ roles: 'config', teams: 'config', skills: 'default' })
+    expect(partial.provenance).toEqual({ roles: 'config', teams: 'config', workflows: 'config', skills: 'default' })
 
     const all = resolveDirs({ roles_dir: '/r', teams_dir: '/t', skills_dir: '/s' }, { harnessRoot: 'K:/tmp/zcode' })
-    expect(all.guard).toEqual({ roles: false, teams: false, skills: false })
+    expect(all.guard).toEqual({ roles: false, teams: false, workflows: false, skills: false })
     expect(all.teamsDir).toBe('/t') // teams_dir 显式时不被 roles_dir 联动覆盖
   })
 
   it('配置对象存在但无有效键 → 仍走默认值，provenance=default（旧 source 在此误标为 config）', () => {
     const dirs = resolveDirs({}, { harnessRoot: 'K:/tmp/zcode' })
     expect(dirs.rolesDir).toBe(join('K:/tmp/zcode', 'agents'))
-    expect(dirs.provenance).toEqual({ roles: 'default', teams: 'default', skills: 'default' })
+    expect(dirs.provenance).toEqual({ roles: 'default', teams: 'default', workflows: 'default', skills: 'default' })
     // 互补口径（可作为不变量断言）：provenance==='default' ⟺ guard===true
     expect(dirs.provenance.roles === 'default').toBe(dirs.guard.roles)
     expect(dirs.provenance.teams === 'default').toBe(dirs.guard.teams)
+    expect(dirs.provenance.workflows === 'default').toBe(dirs.guard.workflows)
     expect(dirs.provenance.skills === 'default').toBe(dirs.guard.skills)
   })
 })
@@ -136,6 +139,6 @@ describe('loadPrismConfig（<home>/prism.yaml 存在性）', () => {
     expect(dirs.rolesDir).toBe('/tmp/roles-x')
     expect(dirs.teamsDir).toBe('/tmp/teams-x')
     expect(dirs.skillsDir).toBe('/tmp/skills-x')
-    expect(dirs.provenance).toEqual({ roles: 'config', teams: 'config', skills: 'config' })
+    expect(dirs.provenance).toEqual({ roles: 'config', teams: 'config', workflows: 'config', skills: 'config' })
   })
 })

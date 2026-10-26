@@ -161,9 +161,9 @@ describe('v13 §5 契约链：MCP prism_kb_search 的 SearchResponse 形状', ()
     expect(Object.keys(parsed)).toEqual(['results'])
   })
 
-  it('工具描述补段级语义，且工具数为 49（v15 B-4 skill_rm 后 drift 同步）', () => {
+  it('工具描述补段级语义，且工具数为 53（v19.1 增 prism_team_runtime 后 drift 同步）', () => {
     const tools = createMcpTools({ home: 'X:/unused' })
-    expect(tools).toHaveLength(49)
+    expect(tools).toHaveLength(53)
     const search = tools.find((t) => t.name === 'prism_kb_search')
     expect(search?.description).toContain('hits')
     expect(search?.description).toContain('heading_path')

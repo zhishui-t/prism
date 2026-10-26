@@ -12,6 +12,7 @@ import { ProjectsPage } from './pages/Projects.tsx'
 import { RolesPage } from './pages/Roles.tsx'
 import { SkillsPage } from './pages/Skills.tsx'
 import { TeamsPage } from './pages/teams/TeamsPage.tsx'
+import { WorkflowsPage } from './pages/Workflows.tsx'
 import { hrefOf, navigate, queryOf, useRoute, withQuery } from './route.ts'
 import { toggleTheme, useTheme } from './theme.ts'
 import type { PageKey } from './nav.ts'
@@ -42,6 +43,7 @@ const NAV_GROUPS: ReadonlyArray<{
     items: [
       { key: 'roles', label: 'nav.roles', icon: 'user' },
       { key: 'teams', label: 'nav.teams', icon: 'users' },
+      { key: 'workflows', label: 'nav.workflows', icon: 'workflow' },
       { key: 'skills', label: 'nav.skills', icon: 'sparkles' },
     ],
   },
@@ -264,6 +266,12 @@ export function Shell() {
                 />
               )}
               {route.page === 'skills' && <SkillsPage sel={route.sel} />}
+              {route.page === 'workflows' && (
+                <WorkflowsPage
+                  sel={route.sel}
+                  onSelect={(id) => navigate({ page: 'workflows', sel: id })}
+                />
+              )}
             </div>
           </div>
         </main>

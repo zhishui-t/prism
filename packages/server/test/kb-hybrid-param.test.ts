@@ -193,7 +193,7 @@ describe('SPEC-3.2 MCP：hybrid 透传 + 非法值静默忽略（既有口径不
     expect(search!.description).toContain('hybrid')
 
     // SPEC-3.5：参数不是工具——加参数不改工具数
-    expect(tools).toHaveLength(49)
+    expect(tools).toHaveLength(53)
     expect(Object.keys(schema.properties ?? {})).toContain('hybrid')
   })
 })

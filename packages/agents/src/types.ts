@@ -21,6 +21,8 @@ export interface RoleDefinition {
   color?: RoleColor
   /** 能力白名单；**空数组 = 未声明能力**（校验给 warning，不是 error）。 */
   skills: string[]
+  /** 挂载的工作流单元 id（frontmatter 结构化，与 skills 同模式）；未声明 = undefined。 */
+  workflows?: string[]
   knowledge: KnowledgeBinding
   /** `## 核心契约` / `## 核心第一原则` 正文（决策层）。 */
   principle: string
@@ -150,6 +152,30 @@ export interface WorkflowSerializeInput {
   raw?: RawWorkflowTable
 }
 
+/** 步骤表序列化输入的一行（v2 图编辑器；镜像 WorkflowSerializeRow 的口径）。 */
+export interface StepSerializeRow {
+  /** 原 raw 行身份（`steps_raw.rowIds` 之一）；无 → 新行（未映射列空）。 */
+  rowId?: string
+  order: number
+  step: string
+  owner: string[]
+  skills: string
+  input: string
+  output: string
+  done: string
+  reflow: string
+  /** 未映射列值（列名 → 值）；缺省回落到 raw 中该 rowId 的原值。 */
+  extra?: Record<string, string>
+}
+
+/** 步骤表序列化输入（v2 图编辑器）。 */
+export interface StepSerializeInput {
+  /** 列集（含未映射列，保持列序）。缺省：取 `raw.columns`；再无 → 标准八列。 */
+  columns?: string[]
+  rows: StepSerializeRow[]
+  raw?: RawWorkflowTable
+}
+
 /** 沉淀规则：按内容特征覆盖默认落点（P4）。 */
 export interface DepositRule {
   /**
@@ -198,6 +224,49 @@ export interface ValidationIssue {
   code: string
   message: string
   where?: string
+}
+
+/**
+ * 工作流单元的步骤（`## 步骤表` 表格行的语义投影）。
+ * `owner`（承接）**不做角色存在性强校验**——合法值含「队长 / 人 / 独立实例」等编排语义；
+ * 角色绑定由 frontmatter `binds` 显式声明并强校验（见 workflow/validate.ts）。
+ */
+export interface WorkflowStep {
+  order: number
+  step: string
+  /** 承接（多值，`+` 分隔）；可为角色名或编排语义词。 */
+  owner: string[]
+  /** 该步骤用的 skill（原样文本，通常单值）。 */
+  skills: string
+  input: string
+  output: string
+  done: string
+  reflow: string
+}
+
+/**
+ * 工作流单元定义（一等资产，workflow-asset.md）。
+ * 文件形态：`<workflows_dir>/<id>.md`，frontmatter 五键 + 正文 `## 步骤表` + 自由正文。
+ */
+export interface WorkflowDefinition {
+  /** kebab-case，= 文件名（不含扩展名）。 */
+  workflow: string
+  name: string
+  /** 角色级（绑定单一/少数角色）/ 团队级（供团队编排引用）。 */
+  level: 'role' | 'team'
+  /** 绑定的角色名（level=role 时必填非空；强校验存在性）。 */
+  binds: string[]
+  /** 步骤用到的 skill 白名单（声明性）。 */
+  skills: string[]
+  steps: WorkflowStep[]
+  /** 步骤表原始底账（v2 图编辑器：保自定义列与行身份，写回对齐用；无表格时缺省）。 */
+  steps_raw?: RawWorkflowTable
+  /** 完整正文（frontmatter 之后）。 */
+  body: string
+  /** 来源文件（导入时记录）。 */
+  sourcePath?: string
+  /** 校验结果（server 返回时携带，供 Web 展示）。 */
+  issues?: ValidationIssue[]
 }
 
 export interface ValidationResult {

@@ -22,6 +22,8 @@ export interface ValidateRoleOptions {
   dirname?: string
   /** 提供时校验 skills 引用是否已存在（未命中 → warning）。 */
   knownSkills?: string[]
+  /** 提供时校验挂载的工作流单元是否存在（未命中 → warning，workflow-asset.md）。 */
+  knownWorkflows?: string[]
 }
 
 /** 校验单个角色。ok = 无 error 级 issue（warning 不影响 ok）。 */
@@ -73,6 +75,16 @@ export function validateRole(role: RoleDefinition, opts: ValidateRoleOptions = {
     for (const skill of role.skills) {
       if (!known.has(skill)) {
         issues.push({ level: 'warning', code: 'skill_unknown', message: `引用的 skill 未安装：${skill}` })
+      }
+    }
+  }
+
+  // workflows：挂载的工作流单元存在性（提供 knownWorkflows 时；小写不敏感比对）
+  if (role.workflows !== undefined && role.workflows.length > 0 && opts.knownWorkflows !== undefined) {
+    const knownWf = new Set(opts.knownWorkflows.map((w) => w.toLowerCase()))
+    for (const wf of role.workflows) {
+      if (!knownWf.has(wf.toLowerCase())) {
+        issues.push({ level: 'warning', code: 'workflow_unknown', message: `挂载的工作流单元不存在：${wf}` })
       }
     }
   }

@@ -27,6 +27,10 @@ export type {
   TeamRegistry,
   TeamActivation,
   RoleWriteResult,
+  WorkflowStep,
+  WorkflowDefinition,
+  StepSerializeRow,
+  StepSerializeInput,
 } from './types.js'
 
 // frontmatter（独立 YAML 子集，§3.1.1）
@@ -43,7 +47,7 @@ export {
 export type { FrontmatterData, FrontmatterValue } from './frontmatter.js'
 
 // 角色
-export { RoleParseError, parseRoleMarkdown, extractPrinciple, extractSection, toRoleParseError } from './role/parse.js'
+export { RoleParseError, parseRoleMarkdown, extractPrinciple, extractSection, toRoleParseError, extractOverlayWorkflows } from './role/parse.js'
 export {
   injectAgentsBlock,
   removeAgentsBlock,
@@ -62,7 +66,15 @@ export {
 } from './role/consistency.js'
 export { validateRole, validateRoleUniqueness, ROLE_COLORS, THOUGHT_LEVELS, DESCRIPTION_MAX } from './role/validate.js'
 export type { ValidateRoleOptions } from './role/validate.js'
-export { renderZcodeRole, roleMarker, hasPrismMarker } from './role/render.js'
+// 工作流单元（一等资产，workflow-asset.md）
+export { WorkflowParseError, parseWorkflowMarkdown, STEP_TABLE_HEADING, STEP_CORE_FIELDS } from './workflow/parse.js'
+export type { ParseWorkflowOptions, StepCoreField } from './workflow/parse.js'
+export { validateWorkflow, validateWorkflowUniqueness, STEP_OWNER_WORDS } from './workflow/validate.js'
+export type { ValidateWorkflowOptions } from './workflow/validate.js'
+export { serializeStepTable, serializeStepSection, StepsSectionMissingError } from './workflow/serialize.js'
+export { editWorkflow, patchWorkflowRaw, resolveWorkflowFile, WorkflowWriteError } from './workflow/write.js'
+export type { WorkflowPatch, EditWorkflowInput, WorkflowEditResult } from './workflow/write.js'
+export { renderZcodeRole, roleMarker, hasPrismMarker, OVERLAY_SKILLS_HEADING, OVERLAY_KNOWLEDGE_HEADING, OVERLAY_WORKFLOWS_HEADING } from './role/render.js'
 export type { RenderEnv } from './role/render.js'
 
 // 团队
@@ -253,3 +265,51 @@ export type { PrismDirConfig, PrismDirKey, ResolvedDirs, DirProvenance } from '.
 
 // 内置模板
 export { ROLE_BODY_SKELETON, ROLE_TEMPLATE_NAME_PLACEHOLDER } from './templates.js'
+
+// 团队运行时看板（只读解析 `.agent-team/` 黑板——Prism 不调度，只读实况做监控）
+export {
+  BLACKBOARD_DIR,
+  readTeamRuntime,
+  parseAgentsMd,
+  parseContextMd,
+  roleMatches,
+} from './runtime/blackboard.js'
+export { parseTaskContract, listTeamRuns } from './runtime/blackboard.js'
+export type {
+  RuntimeTaskStatus,
+  RuntimeTask,
+  RuntimeDispatchEntry,
+  RuntimeGap,
+  RuntimeSnapshotRow,
+  RuntimeGate,
+  RuntimeFileInfo,
+  TeamRuntime,
+  TeamRunInfo,
+} from './runtime/blackboard.js'
+
+// 任务契约（机械可判定：完成证据 / 审核结论 / 写域审计 / 并行冲突 / 交付门禁）
+export {
+  TASK_KINDS,
+  EMPTY_CONTRACT,
+  normalizeRelPath,
+  isDefaultExcluded,
+  pathInScope,
+  auditChangedPaths,
+  validateTaskContract,
+  detectReadyScopeCollisions,
+  evaluateDeliveryGate,
+  DEFAULT_EXCLUDED_PREFIXES,
+  DEFAULT_EXCLUDED_FILES,
+  DEFAULT_EXCLUDED_SUFFIXES,
+} from './runtime/task-contract.js'
+export type {
+  TaskKind,
+  TaskFinding,
+  TaskAcceptanceResult,
+  TaskCommandRun,
+  TaskContract,
+  ContractIssue,
+  ContractTaskView,
+  ScopeAudit,
+  DeliveryGate,
+} from './runtime/task-contract.js'
