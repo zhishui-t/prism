@@ -13,7 +13,8 @@
 
 | 路径 | 内容 | 装配到 |
 | :--- | :--- | :--- |
-| `teams/delivery.md` | 交付团队定义：7 编制（dev×2 / frontend-dev / tester-whitebox / tester-blackbox / reviewer / junior-dev）、9 阶段工作流、派发约定（按独立性分桶 + 实例复用登记）、前端三技能流水线、双路测试流水线、门禁；frontmatter `skills: [prism]` 绑定队长手册并声明「严格执行」 | `~/.zcode/teams/delivery/AGENTS.md`（或宿主 teams 目录） |
+| `dev-team.md` | **推荐配置总纲**：编制/工具/技能挂载/调度协议/阶段参与矩阵 | 文档 |
+| `teams/delivery.md` | 交付团队定义：7 编制（dev×2 / frontend-dev / tester-whitebox / tester-blackbox / reviewer / junior-dev）、十阶段工作流、派发约定（按独立性分桶 + 实例复用登记）、前端三技能流水线、双路测试流水线、门禁；frontmatter `skills: [prism]` 绑定队长手册并声明「严格执行」 | `~/.zcode/teams/delivery/AGENTS.md`（或宿主 teams 目录） |
 | `roles/` | 六个角色契约文件（全部宿主原生执行，不经外部引擎） | `~/.zcode/agents/`（或宿主 roles 目录） |
 
 ## 角色一览

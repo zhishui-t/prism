@@ -466,7 +466,7 @@ uploaded → converting → converted → previewing → active
 
 | 顺序 | 过滤 | 说明 |
 | :--- | :--- | :--- |
-| 0 | 目录级：内置目录名 + `ignoreDirs` | `DEFAULT_IGNORE_DIRS` 18 个通用名（`.git` / `.prism` / `node_modules` / `dist` / `build` / `out` / `target` / `.next` / `.nuxt` / `coverage` / `.venv` / `venv` / `__pycache__` / `graphify-out` / `.cache` / `.idea` / `.vscode` / `vendor`），**任意层级**生效；命中即不再往下走（该目录不计账） |
+| 0 | 目录级：内置目录名 + `ignoreDirs` | `DEFAULT_IGNORE_DIRS` 20 个通用名（`.git` / `.prism` / `.agent-team` / `node_modules` / `3rd` / `dist` / `build` / `out` / `target` / `.next` / `.nuxt` / `coverage` / `.venv` / `venv` / `__pycache__` / `graphify-out` / `.cache` / `.idea` / `.vscode` / `vendor`），**任意层级**生效；命中即不再往下走（该目录不计账）。v20.1 增 `.agent-team`（团队运行时黑板=工作区临时态）与 `3rd`（三方 submodule——实测一次 sync 灌进 100+ 条夹具垃圾） |
 | 1 | **文件名级跳过表** → `by_skip_reason.build_file` | `isBuildFileName()`：`CMakeLists.txt` 的扩展名恰好是 `.txt`（在默认集里）、`Makefile` 连扩展名都没有——**扩展门拦不住**，所以本表**先于**扩展门。判定**大小写不敏感**（`CMakeLists.TXT` 同样命中）。表见 `packages/server/src/kb/scan.ts` 的 `BUILD_FILE_NAMES` / `BUILD_FILE_SUFFIXES` / `BUILD_CONFIG_*` |
 | 2 | **扩展门** → `by_skip_reason.ext_not_included` | 生效集 = `DOC_ONLY_EXTENSIONS`（= anydoc 支持集 **− {html, htm}**，即 html/h5 **默认不扫**）**∪** `--include-ext` / `include_ext`（归一化：trim + 小写 + 去前导点，如 `' H '`/`.c`/`'CPP'` → `.h`/`.c`/`.cpp`）。不在集内即挡下 |
 | 3 | `.gitignore` | 逐层读**根 + 各级子目录**并叠加。见下 |

@@ -33,6 +33,15 @@ import type { RoleDefinition, TeamDefinition } from '../src/api-team.ts'
 /** 受控假数据：`vi.mock` 工厂被提升，故经 `vi.hoisted` 共享可变引用。 */
 const data = vi.hoisted(() => ({ teams: [] as unknown[], roles: [] as unknown[] }))
 
+vi.mock('../src/api.ts', async (importOriginal) => ({
+  // 只 mock 团队详情会用到的方法（graphProjects——运行时看板的项目选择器数据源）
+  ...(await importOriginal<typeof import('../src/api.ts')>()),
+  api: {
+    ...(await importOriginal<typeof import('../src/api.ts')>()).api,
+    graphProjects: () => Promise.resolve([]),
+  },
+}))
+
 vi.mock('../src/api-team.ts', async (importOriginal) => ({
   // 部分 mock（同 `teams-page-drawer.test.ts`）：只换 `teamApi`，常量走真身。
   ...(await importOriginal<typeof import('../src/api-team.ts')>()),
@@ -55,6 +64,14 @@ vi.mock('../src/api-team.ts', async (importOriginal) => ({
         warnings: [],
       }),
     create: () => Promise.resolve({ ok: true, path: '/tmp/prism-teams/new.md', issues: [] }),
+    updateTeam: (() => {
+      const calls: unknown[] = []
+      const fn = async (id: string, input: unknown): Promise<{ path: string }> => {
+        calls.push({ id, input })
+        return { path: `/tmp/prism-teams/${id}.md` }
+      }
+      return Object.assign(fn, { calls })
+    })(),
     /**
      * v19.1：团队详情新增「运行时」Pane（读 `.agent-team/` 黑板）。
      * 本文件锁的是层级结构，不测黑板内容——给一个「无黑板」的最小形状即可。
@@ -504,5 +521,73 @@ describe('v11 F2：工作流 Pane 的三态与缺列降级（渲染码一字未�
     expect(one('.flow-scroll .workflow-flow')).not.toBeNull()
     expect(one('.wf-prose-body')).toBeNull()
     expect(one('.swap-in')!.textContent).not.toContain(t('teams.wf.missing.title'))
+  })
+})
+
+describe('v3 团队工作流图编辑（拖阶段 → PATCH 团队定义）', () => {
+  /** 指针事件（happy-dom 构造器不读坐标——建完手工赋参，同 workflow-graph-dom 口径）。 */
+  function pointer(type: string, x: number, y: number): Event {
+    const e = new Event(type, { bubbles: true, cancelable: true })
+    Object.assign(e, { clientX: x, clientY: y, button: 0, pointerId: 1 })
+    return e
+  }
+
+  it('编辑 → 拖第 3 阶段到第 1 位 → 保存载荷按新序带 rowId 与 if_match/teams_dir', async () => {
+    // 夹具带 raw 底账（rowId 对齐）与 mtime
+    data.teams = [
+      (() => {
+        const base = team('t-a')
+        return {
+          ...base,
+          workflow: [
+            { order: 1, stage: '需求', roles: ['队长'], mode: '串行', input: '', output: '', done: '', reflow: '' },
+            { order: 2, stage: '开发', roles: ['dev'], mode: '并行', input: '', output: '', done: '', reflow: '' },
+            { order: 3, stage: '测试', roles: ['tester'], mode: '串行', input: '', output: '', done: '', reflow: '未过 → 回 2' },
+          ],
+          workflow_raw: {
+            columns: ['#', '阶段', '负责角色', '串/并行', '输入', '输出', '完成判定', '回流路径'],
+            rows: [
+              ['1', '需求', '队长', '串行', '', '', '', ''],
+              ['2', '开发', 'dev', '并行', '', '', '', ''],
+              ['3', '测试', 'tester', '串行', '', '', '', '未过 → 回 2'],
+            ],
+            rowIds: ['r0', 'r1', 'r2'],
+            unmapped: [],
+          },
+          source_mtime: 123456,
+        } as TeamDefinition
+      })(),
+    ]
+    await render('t-a')
+    // 图视图是默认 → 出现「编辑」钮（表格态才有）
+    const editBtn = [...container.querySelectorAll('button')].find((b) => b.textContent?.trim() === t('workflows.graph.edit'))
+    expect(editBtn, '图视图应有编辑钮').toBeDefined()
+    await click(editBtn as Element)
+    // 拖第 3 个节点（测试）到第 1 位：同泳道内 x 拖到第一格
+    const node = all('.wf-node')[2]!
+    const startX = 110 + 2 * (224 + 56)
+    await act(async () => {
+      node.dispatchEvent(pointer('pointerdown', startX, 24))
+    })
+    await act(async () => {
+      node.dispatchEvent(pointer('pointermove', 110, 24))
+    })
+    await act(async () => {
+      node.dispatchEvent(pointer('pointerup', 110, 24))
+    })
+    // 草稿已改序：保存钮可点
+    const saveBtn = [...container.querySelectorAll('button')].find((b) => b.textContent?.trim() === t('common.save')) as HTMLButtonElement
+    expect(saveBtn.disabled).toBe(false)
+    await click(saveBtn)
+    const mod = (vi.mocked(await import('../src/api-team.ts')) as unknown as { teamApi: { updateTeam: { calls: Array<{ id: string; input: unknown }> } } })
+    const call = mod.teamApi.updateTeam.calls.at(-1)!
+    expect(call.id).toBe('t-a')
+    const input = call.input as { workflow: { stages: Array<{ order: number; stage: string; rowId?: string; reflow: string }> }; if_match: number; teams_dir: string }
+    expect(input.teams_dir).toBe('/tmp/prism-teams')
+    expect(input.if_match).toBe(123456)
+    // 新序：测试被拖到第 1 位，rowId 跟行走；回流「回 2」按新序重编为「回 3」
+    expect(input.workflow.stages.map((s) => s.stage)).toEqual(['测试', '需求', '开发'])
+    expect(input.workflow.stages[0]!.rowId).toBe('r2')
+    expect(input.workflow.stages[0]!.reflow).toContain(String.fromCharCode(22238)) // 回
   })
 })

@@ -107,8 +107,8 @@ describe('引用型索引 kb.index()（A3）', () => {
 })
 
 describe('扫描辅助函数（A3）', () => {
-  it('moduleFromRel 压平多层目录为单段名', () => {
-    expect(moduleFromRel('README.md')).toBe('')
+  it('moduleFromRel 压平多层目录为单段名（根文件 → root，不再落 _inbox）', () => {
+    expect(moduleFromRel('README.md')).toBe('root')
     expect(moduleFromRel('docs/rules.md')).toBe('docs')
     expect(moduleFromRel('docs/order/rules.md')).toBe('docs-order')
     expect(moduleFromRel('a.b/c.md')).toBe('a_b')

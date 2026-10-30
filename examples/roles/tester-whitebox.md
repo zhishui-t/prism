@@ -41,3 +41,12 @@ injectAgentsMd: true
 - 白盒测试证据：测试清单 + 运行结果（命令与输出摘要）
 - 缺陷清单：每条带最小复现与严重度
 - 回流口径：MISSING/DEVIATED → dev 修复 → 复验（计入 rework_limit）
+
+## 能力（Skill 白名单）
+
+- spec-vs-impl-checker
+- spec-verify
+
+## 工作流绑定
+
+- tester-dual-track

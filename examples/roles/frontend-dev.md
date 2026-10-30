@@ -57,3 +57,7 @@ injectAgentsMd: true
 - frontend-design
 - baoyu-design
 - design-taste-frontend
+
+## 工作流绑定
+
+- frontend-pipeline

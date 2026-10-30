@@ -86,6 +86,47 @@ export interface RuntimeGate {
   present: boolean
 }
 
+/** 产物分类（与 examples/dev-team.md §4 的产物表同源；unknown = 未识别的杂项，照样列出）。 */
+export type ArtifactKind =
+  | 'state'      // 断点三件套（dag/agents/context）
+  | 'brief'      // 任务书
+  | 'manifest'   // 花名册
+  | 'design'     // 需求/软件设计
+  | 'spec'       // 规格
+  | 'tasks'      // 任务卡
+  | 'review'     // 审核意见
+  | 'test'       // 测试与对账证据
+  | 'gate'       // 门禁文件
+  | 'delivery'   // 交付报告
+  | 'other'
+
+/** run 目录里的一个产物文件。 */
+export interface RuntimeArtifact {
+  name: string
+  kind: ArtifactKind
+  /** epoch 毫秒。 */
+  mtime: number
+  /** 目录产物（如 e2e-evidence/）标记。 */
+  dir: boolean
+}
+
+/** 产物分类规则（按前缀/模式匹配，vN 版次后缀天然兼容）。 */
+export function classifyArtifact(name: string): ArtifactKind {
+  const n = name.toLowerCase()
+  if (name.startsWith('.')) return 'gate'
+  if (/^dag\.json$/.test(n) || /^agents(-v\d+)?\.md$/.test(n) || /^context(-v\d+)?\.md$/.test(n)) return 'state'
+  if (n.startsWith('delivery')) return 'delivery'
+  if (n.startsWith('task-brief')) return 'brief'
+  if (n.startsWith('team-manifest')) return 'manifest'
+  if (n.startsWith('requirements') || n.startsWith('software-design') || n.startsWith('design-brief') || n.startsWith('design.md')) return 'design'
+  if (n.startsWith('spec') && !n.startsWith('spec-verify')) return 'spec'
+  if (n.startsWith('spec-verify')) return 'test'
+  if (n.startsWith('tasks')) return 'tasks'
+  if (n.startsWith('code-review') || n.startsWith('design-review') || n.startsWith('review')) return 'review'
+  if (n.startsWith('test-report') || n.startsWith('test-plan') || n.startsWith('test-baseline') || n.startsWith('e2e') || n.startsWith('visual-audit') || n.startsWith('qa-') || n.startsWith('自测') || n.includes('-report')) return 'test'
+  return 'other'
+}
+
 /** 黑板文件存在性（「我到底看到了什么」——不猜）。 */
 export interface RuntimeFileInfo {
   name: string
@@ -115,6 +156,8 @@ export interface TeamRuntime {
   /** 最新交付报告（文件名 + mtime）；没有则 null。 */
   delivery: { file: string; mtime: number } | null
   files: RuntimeFileInfo[]
+  /** run 目录产物清单（全量盘点，按 mtime 倒序——「文件为真相」的可见面）。 */
+  artifacts: RuntimeArtifact[]
   gaps: RuntimeGap[]
   /** 已解析的 dag 标题行（dag.json title 缺失时为空串）。 */
   dagTitle: string
@@ -446,6 +489,16 @@ async function readRunDir(root: string, project: string, dir: string): Promise<R
   gaps.push(...detectReadyScopeCollisions(contractViews))
   const deliveryGate = evaluateDeliveryGate(contractViews)
 
+  /* ---- 产物清单（全量盘点 run 目录；含 vN 版次，按 mtime 倒序） ---- */
+  const artifacts: RuntimeArtifact[] = []
+  for (const name of dirEntries ?? []) {
+    if (name === 'dag.html') continue // 派生视图不算产物
+    const mtime = await statSafe(join(dir, name))
+    if (mtime === undefined) continue
+    artifacts.push({ name, kind: classifyArtifact(name), mtime, dir: !/\.[a-z0-9]+$/i.test(name) && !name.startsWith('.') })
+  }
+  artifacts.sort((a, b) => b.mtime - a.mtime)
+
   /* ---- 对账（缺口） ---- */
   // 1) 运行中/可派发任务的角色没有会话登记 → 不知道谁在做
   for (const t of tasks) {
@@ -521,6 +574,7 @@ async function readRunDir(root: string, project: string, dir: string): Promise<R
     gates,
     delivery,
     files,
+    artifacts,
     gaps,
     deliveryGate,
   }

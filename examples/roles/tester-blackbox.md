@@ -42,3 +42,14 @@ injectAgentsMd: true
 - 黑盒测试证据 + E2E 证据（截图/日志落 `.agent-team/e2e-evidence/`）
 - 视觉审计清单（界面任务；落 `.agent-team/visual-audit.md`）
 - 缺陷清单：每条带最小复现与严重度
+
+## 能力（Skill 白名单）
+
+- spec-verify
+- e2e-testing
+- playwright-cli
+- design-consistency-auditor
+
+## 工作流绑定
+
+- tester-dual-track

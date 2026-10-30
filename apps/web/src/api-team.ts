@@ -506,6 +506,8 @@ export interface TeamRuntimeView {
   gates: Array<{ name: string; present: boolean }>
   delivery: { file: string; mtime: number } | null
   files: Array<{ name: string; present: boolean; mtime?: number }>
+  /** run 目录产物清单（按 mtime 倒序）。 */
+  artifacts: Array<{ name: string; kind: string; mtime: number; dir: boolean }>
   gaps: RuntimeGapView[]
   /** 交付门禁（机械判定：全部完成 + 审核 pass + 无失败）。 */
   deliveryGate: { ok: boolean; blockers: RuntimeGapView[] }

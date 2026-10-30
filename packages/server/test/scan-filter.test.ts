@@ -383,3 +383,81 @@ describe('MAJ-2 对账恒等式（候选内失败不得双计）', () => {
     expect(gateSum(report.by_skip_reason)).toBe(2) // .gitignore（ext）+ Makefile（build）
   })
 })
+
+describe('目录忽略与归类（v20.1：根文件 root 模块 + 黑板/三方目录默认不扫 + 跨项目 id 撞车）', () => {
+  it('根级文件归 module=root（不再落 _inbox「未归类」）', async () => {
+    const root = await makeProject({ 'AGENTS.md': '# Agents', 'README.md': '# R' })
+    const report = await scan(root)
+    const ag = report.files.find((f) => f.rel === 'AGENTS.md')
+    expect(ag?.module).toBe('root')
+    const rd = report.files.find((f) => f.rel === 'README.md')
+    expect(rd?.module).toBe('root')
+  })
+
+  it('子目录压平成模块（doc/requirements → doc-requirements）', async () => {
+    const root = await makeProject({ 'doc/requirements/a.md': '# A' })
+    const report = await scan(root)
+    expect(report.files.find((f) => f.rel === 'doc/requirements/a.md')?.module).toBe('doc-requirements')
+  })
+
+  it('.agent-team 与 3rd 默认不扫（黑板是工作区临时态；三方 submodule 全是夹具与上游文档）', async () => {
+    const root = await makeProject({
+      'doc/a.md': '# A',
+      '.agent-team/report.md': '# 黑板',
+      '3rd/upstream/doc.md': '# 上游',
+    })
+    const report = await scan(root)
+    const rels = report.files.map((f) => f.rel)
+    expect(rels).toContain('doc/a.md')
+    expect(rels).not.toContain('.agent-team/report.md')
+    expect(rels).not.toContain('3rd/upstream/doc.md')
+  })
+
+  it('跨项目同相对路径（各自根 README.md）→ id_conflict 回退带归属前缀的 id', async () => {
+    const root = await makeProject({ 'README.md': '# 本项目 README' })
+    /** 首个项目已占用 IDX-README（真实服务的 id_conflict 形态）。 */
+    class ConflictKb extends MemoryKb {
+      override async index(input: Parameters<MemoryKb['index']>[0]): Promise<{ id: string; action: 'created' | 'updated' | 'unchanged' }> {
+        if (input.id === 'IDX-README') {
+          throw Object.assign(new Error('条目 id 已存在于其他位置: IDX-README'), { code: 'id_conflict' })
+        }
+        return await super.index(input)
+      }
+    }
+    const kb = new ConflictKb()
+    const report = await scanProject(kb, { root, owner: 'p', book: 'p' })
+    const rd = report.files.find((f) => f.rel === 'README.md')
+    expect(rd?.status).toBe('indexed')
+    const created = await kb.get('IDX-README-p')
+    expect(created).not.toBeNull()
+  })
+
+  it('module 推导修正后：hash 未变但 module 不同 → 不走 unchanged 短路（存量迁移一次）', async () => {
+    const root = await makeProject({ 'AGENTS.md': '# Agents' })
+    const kb = new MemoryKb()
+    // 旧规则落库：module ''（_inbox）
+    await kb.index({
+      id: 'IDX-AGENTS',
+      title: 'Agents',
+      layer: 'project',
+      owner: 'p',
+      book: 'p',
+      module: '',
+      path: join(root, 'AGENTS.md'),
+      source_hash: (await import('node:crypto')).createHash('sha256').update('# Agents').digest('hex'),
+      content: '# Agents',
+    })
+    // MemoryKb 对 hash 相同返回 unchanged 且不更新 module（与真实服务在此分歧），
+    // 故断言改锁「短路未发生」：module 不一致必须走到 kb.index（真实服务在那里重落 module）
+    let indexCalls = 0
+    const rawIndex = kb.index.bind(kb)
+    kb.index = (async (input: Parameters<MemoryKb['index']>[0]) => {
+      indexCalls++
+      return await rawIndex(input)
+    }) as MemoryKb['index']
+    await scanProject(kb, { root, owner: 'p', book: 'p' })
+    expect(indexCalls).toBe(1) // 短路了就是 0
+    // 注：「迁移后恢复短路」依赖真实服务在重落时更新 module（MemoryKb 桩不改写 module，
+    // 测不了第二跳）；真实库已实测：迁移一次后再次 sync 全部 unchanged
+  })
+})

@@ -15,7 +15,7 @@
  * - 缺口分级：error（数据坏了，会算错）> warning（能跑但会误导）> info（提示）。
  */
 
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 
 import { teamApi, type RuntimeGapView, type RuntimeTaskView, type TeamRuntimeView } from '../../../api-team.ts'
 import { CountLine } from '../../../components/CountLine.tsx'
@@ -37,6 +37,24 @@ const STATUS_KIND: Record<RuntimeTaskView['status'], 'ok' | 'info' | 'warn' | 'e
   blocked: 'err',
 }
 
+/** 产物分类的展示顺序（state → 流程产物 → 门禁 → 交付 → 杂项）。 */
+const KIND_ORDER = ['state', 'brief', 'manifest', 'design', 'spec', 'tasks', 'review', 'test', 'gate', 'delivery', 'other'] as const
+
+/** 分类 → 词条（静态映射，禁动态拼 key）。 */
+const KIND_LABEL: Record<(typeof KIND_ORDER)[number], DictKey> = {
+  state: 'runtime.kind.state',
+  brief: 'runtime.kind.brief',
+  manifest: 'runtime.kind.manifest',
+  design: 'runtime.kind.design',
+  spec: 'runtime.kind.spec',
+  tasks: 'runtime.kind.tasks',
+  review: 'runtime.kind.review',
+  test: 'runtime.kind.test',
+  gate: 'runtime.kind.gate',
+  delivery: 'runtime.kind.delivery',
+  other: 'runtime.kind.other',
+}
+
 const GAP_KIND: Record<RuntimeGapView['level'], 'err' | 'warn' | 'info'> = {
   error: 'err',
   warning: 'warn',
@@ -51,6 +69,8 @@ export function TeamRuntimePane({ teamId, projects }: { teamId: string; projects
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [openGaps, setOpenGaps] = useState(false)
+  /** 任务下钻（点行展开契约与证据明细）。 */
+  const [openTask, setOpenTask] = useState<string | null>(null)
 
   /**
    * 首次自动选项目：依次探测已注册项目，选**第一个有黑板的**——否则默认落在空项目
@@ -112,9 +132,9 @@ export function TeamRuntimePane({ teamId, projects }: { teamId: string; projects
   }, [teamId, project, runSel])
 
   const gaps: RuntimeGapView[] = data?.gaps ?? []
+  const artifactList: Array<{ name: string; kind: string; mtime: number; dir: boolean }> = data?.artifacts ?? []
   const snapshot: Array<{ key: string; value: string }> = data?.snapshot ?? []
   const gateList: Array<{ name: string; present: boolean }> = data?.gates ?? []
-  const fileList: Array<{ name: string; present: boolean; mtime?: number }> = data?.files ?? []
   const errs = gaps.filter((g) => g.level === 'error').length
   const warns = gaps.filter((g) => g.level === 'warning').length
 
@@ -232,8 +252,14 @@ export function TeamRuntimePane({ teamId, projects }: { teamId: string; projects
             <tbody>
               {data.tasks.map((task) => {
                 const reg = data.dispatch.find((d) => d.taskIds.includes(task.id))
+                const open = openTask === task.id
                 return (
-                  <tr key={task.id} className={task.ready ? 'is-ready' : undefined}>
+                  <Fragment key={task.id}>
+                  <tr
+                    className={task.ready ? 'is-ready' : undefined}
+                    onClick={() => setOpenTask(open ? null : task.id)}
+                    aria-expanded={open}
+                  >
                     <td>
                       <StatusTag kind={task.ready ? 'ok' : STATUS_KIND[task.status]}>
                         {task.ready ? t('runtime.status.ready') : t(STATUS_LABEL[task.status])}
@@ -289,6 +315,54 @@ export function TeamRuntimePane({ teamId, projects }: { teamId: string; projects
                       )}
                     </td>
                   </tr>
+                  {open && (
+                    <tr className="runtime-task-detail">
+                      <td colSpan={5}>
+                        <dl className="kv">
+                          <div className="runtime-kv-row"><dt>{t('runtime.contract.objective')}</dt><dd className="small">{task.contract.objective !== '' ? task.contract.objective : t('common.unset')}</dd></div>
+                          {task.contract.acceptance.length > 0 && (
+                            <div className="runtime-kv-row"><dt>{t('runtime.contract.acceptance')}</dt><dd className="small">
+                              {task.contract.acceptance.map((a) => {
+                                const hit = task.contract.acceptanceResults.find((r) => r.acceptance === a)
+                                return (
+                                  <div key={a}>
+                                    <StatusTag kind={hit === undefined ? 'info' : hit.status === 'pass' ? 'ok' : 'err'}>
+                                      {hit === undefined ? '—' : hit.status}
+                                    </StatusTag>{' '}
+                                    {a}
+                                    {hit?.evidence !== undefined && hit.evidence !== '' && <span className="small muted"> {'·'} {hit.evidence}</span>}
+                                  </div>
+                                )
+                              })}
+                            </dd></div>
+                          )}
+                          {task.contract.verify.length > 0 && (
+                            <div className="runtime-kv-row"><dt>{t('runtime.contract.verify')}</dt><dd className="small mono">
+                              {task.contract.verify.map((v) => {
+                                const hit = task.contract.commandsRun.find((r) => r.command === v)
+                                return (
+                                  <div key={v}>
+                                    <StatusTag kind={hit === undefined ? 'info' : hit.status === 'pass' ? 'ok' : 'err'}>
+                                      {hit === undefined ? '—' : hit.status}
+                                    </StatusTag>{' '}{v}
+                                  </div>
+                                )
+                              })}
+                            </dd></div>
+                          )}
+                          {task.contract.changedPaths.length > 0 && (
+                            <div className="runtime-kv-row"><dt>{t('runtime.contract.changed')}</dt><dd className="small mono">{task.contract.changedPaths.join(String.fromCharCode(65307))}</dd></div>
+                          )}
+                          {task.contract.findings.length > 0 && (
+                            <div className="runtime-kv-row"><dt>findings</dt><dd className="small">
+                              {task.contract.findings.map((f, i) => <div key={i}>[{f.severity}] {f.text}</div>)}
+                            </dd></div>
+                          )}
+                        </dl>
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 )
               })}
             </tbody>
@@ -340,15 +414,21 @@ export function TeamRuntimePane({ teamId, projects }: { teamId: string; projects
                 ))
               )}
             </div>
-            <div className="runtime-gates">
-              <span className="small muted">{t('runtime.files')}</span>
-              {fileList.map((f) => (
-                <span key={f.name} className={`tag mono small${f.present ? '' : ' is-missing'}`}>
-                  {f.name}
-                  {f.present ? '' : ` (${t('runtime.fileMissing')})`}
-                </span>
+            {/* 产物清单：run 目录全量盘点，按类别分组（dev-team.md §4 的可见面） */}
+            <div className="runtime-artifacts">
+              <span className="small muted">{t('runtime.artifacts', { n: artifactList.length })}</span>
+              {KIND_ORDER.filter((k) => artifactList.some((a) => a.kind === k)).map((k) => (
+                <div key={k} className="runtime-artifact-group">
+                  <span className="tag">{t(KIND_LABEL[k])}</span>
+                  <span className="runtime-artifact-files">
+                    {artifactList.filter((a) => a.kind === k).map((a) => (
+                      <span key={a.name} className="mono small runtime-artifact-file" title={new Date(a.mtime).toLocaleString()}>
+                        {a.name}
+                      </span>
+                    ))}
+                  </span>
+                </div>
               ))}
-              {data.delivery !== null && <span className="tag mono small">{data.delivery.file}</span>}
             </div>
           </details>
         </div>

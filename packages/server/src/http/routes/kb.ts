@@ -7,6 +7,7 @@ import { exportKnowledgeGraph } from '../../kb/graph-export.js'
 import { ScanHistory } from '../../kb/scan-history.js'
 import { buildContextPack } from '../../kb/context-pack.js'
 import { depositWithPolicy, type DepositRequest } from '../../kb/deposit-entry.js'
+import { runKbImport } from '../../kb/import-run.js'
 import { loadRole, loadTeam, teamNotFoundMessage } from '../../roles/index.js'
 
 /** `limit` 上限，逐个对齐 MCP schema 的 `maximum`（search=1000、catalog=5000）。 */
@@ -43,7 +44,37 @@ export function kbRoutes(
   versions: (ctx: RouteContext) => Promise<Envelope>
   bookStructure: (ctx: RouteContext) => Promise<Envelope>
   bookStructureAction: (ctx: RouteContext) => Promise<Envelope>
+  importDocs: (ctx: RouteContext) => Promise<Envelope>
 } {
+  /**
+   * 知识导入（`POST /api/kb/import`）：控制台面——把项目文档目录扫描成引用型索引。
+   *
+   * - 实现单点 `kb/import-run.ts`（MCP `prism_kb_import` / CLI `prism kb sync` 同口径）；
+   * - body 形状与 MCP 同：`{ path, owner, book?, module?, dry_run?, respect_gitignore?, include_ext? }`；
+   * - `dry_run` 只报告不落库（控制台「先预览再导入」的两步用法）。
+   */
+  const importDocs = async (ctx: RouteContext): Promise<Envelope> => {
+    const body = (await ctx.body()) as Record<string, unknown>
+    const path = typeof body['path'] === 'string' ? body['path'].trim() : ''
+    const owner = typeof body['owner'] === 'string' ? body['owner'].trim() : ''
+    if (path === '' || owner === '') {
+      throw new PrismError('bad_request', '需要 { path, owner }（path 从项目注册表取——GET /api/graph/projects 有各项目 root）')
+    }
+    return ok(
+      await runKbImport(getKb, home, {
+        path,
+        owner,
+        ...(typeof body['book'] === 'string' && body['book'] !== '' ? { book: body['book'] } : {}),
+        ...(typeof body['module'] === 'string' && body['module'] !== '' ? { module: body['module'] } : {}),
+        ...(body['dry_run'] === true ? { dry_run: true } : {}),
+        ...(typeof body['respect_gitignore'] === 'boolean' ? { respect_gitignore: body['respect_gitignore'] } : {}),
+        ...(Array.isArray(body['include_ext'])
+          ? { include_ext: body['include_ext'].filter((v): v is string => typeof v === 'string') }
+          : {}),
+      }),
+    )
+  }
+
   const search = async (ctx: RouteContext): Promise<Envelope> => {
     const q = ctx.query.get('q')?.trim() ?? ''
     if (q === '') {
@@ -386,7 +417,7 @@ export function kbRoutes(
     return ok(found)
   }
 
-  return { search, get, tree, stats, catalog, deposit, graph, path, exportGraph, remove, restore, conflicts, resolveConflict, scanHistory, contextPack, versions, bookStructure, bookStructureAction }
+  return { search, get, tree, stats, catalog, deposit, graph, path, exportGraph, remove, restore, conflicts, resolveConflict, scanHistory, contextPack, versions, bookStructure, bookStructureAction, importDocs }
 }
 
 /** 关系类型查询参数（`relations=references,overrides`；非法 → bad_request）。 */

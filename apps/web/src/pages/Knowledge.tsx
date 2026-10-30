@@ -7,6 +7,7 @@ import { Icon } from '../components/Icon.tsx'
 import { MarkdownBlocks } from '../components/Markdown.tsx'
 import { Ref } from '../components/ref.tsx'
 import { SearchField } from '../components/SearchField.tsx'
+import { KnowledgeImportModal } from './KnowledgeImport.tsx'
 import { State } from '../components/State.tsx'
 import { CopyButton, EmptyBlock, PageHead } from '../components/ui.tsx'
 import { useAsync } from '../components/useAsync.ts'
@@ -175,6 +176,8 @@ export function KnowledgePage({
   const archLoadingRef = useRef<Set<string>>(new Set())
   /** 根级虚拟组「全局图集」的展开态：**默认收起**（与书默认收起同口径）。 */
   const [atlasOpen, setAtlasOpen] = useState(false)
+  /** 知识导入弹窗（POST /api/kb/import——两步：dry-run 预览再真导）。 */
+  const [importOpen, setImportOpen] = useState(false)
   const [viewVersion, setViewVersion] = useState<number | undefined>(undefined)
   const [showVersions, setShowVersions] = useState(false)
   const [busyRemove, setBusyRemove] = useState(false)
@@ -667,6 +670,13 @@ export function KnowledgePage({
       onClick={() => select(entry.id)}
     >
       <span className="toc-title">{entry.title}</span>
+      {/* 文件名附注（引用型条目按文件归类——认得出是哪个文件；与标题相同则不重复）。
+          H1 标题仍是主标签（检索/详情面），版本条目等无 path 的保持只有标题。 */}
+      {entry.path !== undefined && entry.path !== '' && entry.path.split(/[\\/]/).pop() !== entry.title && (
+        <span className="toc-file" title={entry.path}>
+          {entry.path.split(/[\\/]/).pop()}
+        </span>
+      )}
       {/* 仅 status ≠ active 时画状态点 + 文字（K11） */}
       {entry.status !== 'active' && (
         <span className={`toc-status ${statusKind(entry.status)}`}>
@@ -1006,6 +1016,13 @@ export function KnowledgePage({
       <div className="page-fill">
         {/* B1：页标题走 `<PageHead>`（`--fs-600`/600）——手写 `<h1>` 是 UA 默认 28px/700，§2.4 只认 20px。 */}
         <PageHead title={t('knowledge.title')} sub={t('knowledge.desc')} />
+
+        <div className="kb-toolbar">
+          <button type="button" className="tool-btn" onClick={() => setImportOpen(true)}>
+            {t('knowledge.import.title')}
+          </button>
+        </div>
+        {importOpen && <KnowledgeImportModal onClose={() => setImportOpen(false)} />}
 
         <State loading={tree.loading} error={tree.error ?? undefined}>
           {/* F2/design-v9 E-4：整页空态的唯一开关是 `showLayout` —— 条目为零但**图集有图、

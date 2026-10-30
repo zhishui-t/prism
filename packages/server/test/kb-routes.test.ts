@@ -323,3 +323,76 @@ describe('kb 治理路由（B1/B2）', () => {
     }
   })
 })
+
+describe('POST /api/kb/import（控制台导入——实现单点 kb/import-run.ts，与 MCP 同口径）', () => {
+  let app2: AppHandle
+  let base2: string
+  const kb2 = new MemoryKb()
+  let projDir: string
+
+  beforeAll(async () => {
+    const home2 = await makeTempDir('prism-kb-import-home-')
+    app2 = await startServer({ home: home2, kb: kb2, port: 0 })
+    base2 = `http://127.0.0.1:${app2.port}`
+  })
+
+  afterAll(async () => {
+    await app2.close()
+  })
+
+  beforeAll(async () => {
+    projDir = await makeTempDir('prism-kb-import-')
+    const { writeFile, mkdir } = await import('node:fs/promises')
+    const { join } = await import('node:path')
+    await mkdir(join(projDir, 'doc'), { recursive: true })
+    await mkdir(join(projDir, '.agent-team'), { recursive: true })
+    await mkdir(join(projDir, '3rd'), { recursive: true })
+    await writeFile(join(projDir, 'README.md'), '# Proj', 'utf8')
+    await writeFile(join(projDir, 'doc', 'guide.md'), '# Guide', 'utf8')
+    await writeFile(join(projDir, '.agent-team', 'report.md'), '# board', 'utf8')
+    await writeFile(join(projDir, '3rd', 'up.md'), '# up', 'utf8')
+    await writeFile(join(projDir, 'app.js'), 'x', 'utf8') // 扩展不在扫描集
+  })
+
+  it('缺 path/owner → bad_request', async () => {
+    const res = await fetch(`${base2}/api/kb/import`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ owner: 'x' }),
+    })
+    expect(res.status).toBe(400)
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('bad_request')
+  })
+
+  it('dry_run：只报告不落库；默认忽略 .agent-team/3rd，根文件归 root 模块', async () => {
+    const res = await fetch(`${base2}/api/kb/import`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: projDir, owner: 'demo-proj', dry_run: true }),
+    })
+    const body = (await res.json()) as { ok: boolean; value: { created: number; dry_run: boolean; by_skip_reason: Record<string, number> } }
+    expect(body.ok).toBe(true)
+    expect(body.value.dry_run).toBe(true)
+    expect(body.value.created).toBe(2) // README.md + doc/guide.md
+    expect(body.value.by_skip_reason['ext_not_included']).toBeGreaterThanOrEqual(1) // app.js
+    // 桩里没有新条目（没落库）
+    expect(await kb2.get('IDX-README-demo-proj')).toBeNull()
+  })
+
+  it('真导入：落库可读回，模块按目录归类（doc → doc，根 → root）', async () => {
+    const res = await fetch(`${base2}/api/kb/import`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: projDir, owner: 'demo-proj' }),
+    })
+    const body = (await res.json()) as { ok: boolean; value: { created: number; dry_run: boolean } }
+    expect(body.ok).toBe(true)
+    expect(body.value.created).toBe(2)
+    expect(body.value.dry_run).toBe(false)
+    const rd = await kb2.get('IDX-README')
+    expect(rd).not.toBeNull()
+    expect(rd?.module).toBe('root')
+    const guide = await kb2.get('IDX-doc-guide')
+    expect(guide?.module).toBe('doc')
+  })
+})

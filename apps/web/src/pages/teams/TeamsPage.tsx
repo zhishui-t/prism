@@ -16,7 +16,7 @@
  * 表单里的 name 输入保留（`nameRequired` 校验依赖它，SPEC-3.2 数据面零改动）。
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { teamApi } from '../../api-team.ts'
 import { ConfirmModal } from '../../components/ConfirmModal.tsx'
@@ -44,6 +44,8 @@ export function TeamsPage({
 } = {}) {
   const t = useT()
   const teams = useAsync(() => teamApi.teams(), [])
+  /** 详情弹窗关闭守卫（图编辑脏草稿先确认再关——同工作流单元页契约）。 */
+  const wfCloseGuard = useRef<(() => boolean) | null>(null)
   const [filter, setFilter] = useState('')
   /**
    * 抽屉**意图**（R-8-4）：`create` / `edit` 分状态，`null` = 抽屉关闭。
@@ -266,7 +268,10 @@ export function TeamsPage({
               size="lg"
               title={<span className="mono">{selected}</span>}
               ariaLabel={selected}
-              onClose={() => onSelect?.('')}
+              onClose={() => {
+                if (wfCloseGuard.current !== null && !wfCloseGuard.current()) return
+                onSelect?.('')
+              }}
             >
               <div className="swap-in" key={selected}>
                 <TeamDetail
@@ -279,6 +284,8 @@ export function TeamsPage({
                   onOpenUsage={onOpenUsageSkills}
                   onEdit={() => openForm('edit')}
                   onDeleted={(text) => afterWrite('ok', text, { close: true })}
+                  onRefresh={() => detail.reload()}
+                  closeGuard={wfCloseGuard}
                 />
               </div>
             </Modal>

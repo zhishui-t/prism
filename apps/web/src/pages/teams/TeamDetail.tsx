@@ -37,7 +37,8 @@ import { describeFailure } from './errors.ts'
 import { TeamEffectiveSkills } from './parts/TeamEffectiveSkills.tsx'
 import { TeamRuntimePane } from './parts/TeamRuntimePane.tsx'
 import { WorkflowFlow } from './parts/WorkflowFlow.tsx'
-import { toFlowStages, workflowStateOf } from './workflow-model.ts'
+import { toFlowStages, workflowStateOf, draftFromParse, workflowInput, type WorkflowDraft } from './workflow-model.ts'
+import type { WfGraphNode } from '../graph-logic.ts'
 import { WorkflowGraph } from '../WorkflowGraph.tsx'
 
 /** 层 → 字典键（静态映射，避免模板串拼 key）。 */
@@ -56,6 +57,8 @@ export function TeamDetail({
   onOpenUsage,
   onEdit,
   onDeleted,
+  onRefresh,
+  closeGuard,
 }: {
   id: string
   detail: TeamDefinition | undefined
@@ -65,12 +68,24 @@ export function TeamDetail({
   onOpenUsage?: () => void
   onEdit: () => void
   onDeleted: (text: string) => void
+  /** 图编辑保存成功后刷新详情（含 workflow_raw/source_mtime）。 */
+  onRefresh?: () => void
+  /** 弹窗关闭守卫（图编辑有未保存改动时先确认再关——与工作流单元页同一契约）。 */
+  closeGuard?: { current: (() => boolean) | null }
 }) {
   const t = useT()
   /** 装配状态：只有点过「启用团队」才有——避免把「未装配」误读成「坏了」。 */
   const [activation, setActivation] = useState<TeamActivation | null>(null)
-  /** 工作流 Pane 的视图（图 | 卡片——图只读，编辑仍走既有表单；默认图：它是更完整的一眼视图）。 */
+  /** 工作流 Pane 的视图（图 | 卡片）。图视图可编辑（v3：拖阶段/换承接/回流边 → PATCH）。 */
   const [wfView, setWfView] = useState<'cards' | 'graph'>('graph')
+  /** 图编辑草稿（WorkflowDraft——与表单编辑器同一数据模型，保存走 workflowInput 单点）。 */
+  const [wfEditing, setWfEditing] = useState(false)
+  const [wfDraft, setWfDraft] = useState<WorkflowDraft | null>(null)
+  const [wfSaving, setWfSaving] = useState(false)
+  const [wfSaveError, setWfSaveError] = useState('')
+  const [wfSavedAt, setWfSavedAt] = useState(0)
+  /** 关闭守卫的确认弹窗。 */
+  const [wfDiscard, setWfDiscard] = useState(false)
   const [activating, setActivating] = useState(false)
   const [actError, setActError] = useState('')
   /** 启用结果条默认收成一行摘要（T3：一屏内可见，展开才看清单）。 */
@@ -130,6 +145,80 @@ export function TeamDetail({
       setDelError(describeFailure(t, e instanceof Error ? e.message : String(e), id))
     } finally {
       setDeleting(false)
+    }
+  }
+
+  /** 图编辑脏判定：与初始载荷逐字节比（workflowInput 是唯一提交形态）。 */
+  const wfDirty =
+    wfEditing && wfDraft !== null && detail !== undefined
+      ? JSON.stringify(workflowInput(wfDraft)) !== JSON.stringify(workflowInput(draftFromParse(adaptWorkflowParse(detail))))
+      : false
+
+  // 弹窗关闭守卫：脏草稿先确认（Esc/遮罩/关闭钮同一条路——与工作流单元页同契约）
+  useEffect(() => {
+    if (closeGuard === undefined) return
+    closeGuard.current = wfDirty
+      ? () => {
+          setWfDiscard(true)
+          return false
+        }
+      : null
+    return () => {
+      closeGuard.current = null
+    }
+  }, [wfDirty, closeGuard])
+
+  /** 图编辑：从详情建草稿（表格式才可编——prose/missing 走表单编辑器）。 */
+  const wfStartEdit = (): void => {
+    if (detail === undefined) return
+    setWfDraft(draftFromParse(adaptWorkflowParse(detail)))
+    setWfEditing(true)
+    setWfSaveError('')
+    setWfSavedAt(0)
+  }
+
+  const wfCancel = (): void => {
+    setWfEditing(false)
+    setWfDraft(null)
+    setWfSaveError('')
+  }
+
+  /** 图上改序/换承接/回流 → 写回草稿卡片（rowId/mode/输入输出等随 data 原样保留）。 */
+  const wfGraphChange = (next: WfGraphNode[]): void => {
+    setWfDraft((cur) => {
+      if (cur === null) return cur
+      const cards = next.map((n) => {
+        const card = (n.data ?? {}) as Partial<WorkflowDraft['cards'][number]>
+        return {
+          ...(card as object),
+          ...(card.rowId !== undefined ? { rowId: card.rowId } : {}),
+          stage: n.label,
+          roles: [...n.owner],
+          reflow: n.reflow,
+        } as WorkflowDraft['cards'][number]
+      })
+      return { ...cur, cards }
+    })
+  }
+
+  const wfSave = async (): Promise<void> => {
+    if (wfDraft === null || teamsDir === undefined || teamsDir === '') return
+    setWfSaving(true)
+    setWfSaveError('')
+    try {
+      await teamApi.updateTeam(id, {
+        workflow: workflowInput(wfDraft),
+        ...(detail?.source_mtime !== undefined ? { if_match: detail.source_mtime } : {}),
+        teams_dir: teamsDir,
+      })
+      setWfSavedAt(Date.now())
+      setWfEditing(false)
+      setWfDraft(null)
+      onRefresh?.()
+    } catch (e) {
+      setWfSaveError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setWfSaving(false)
     }
   }
 
@@ -258,7 +347,29 @@ export function TeamDetail({
               head={
                 <div className="pane-head">
                   <CountLine size="section" bare label={t('teams.workflow')} count={detail.workflow.length} />
+                  {wfEditing && wfDirty && <StatusTag kind="warn">{t('workflows.graph.dirty')}</StatusTag>}
                   <span className="flex-1" />
+                  {wfView === 'graph' && workflowStateOf(adaptWorkflowParse(detail)) === 'table' ? (
+                    wfEditing ? (
+                      <>
+                        <button type="button" className="tool-btn" onClick={wfCancel} disabled={wfSaving}>
+                          {t('common.cancel')}
+                        </button>
+                        <button
+                          type="button"
+                          className="primary"
+                          onClick={() => void wfSave()}
+                          disabled={wfSaving || !wfDirty || wfSaving}
+                        >
+                          {t('common.save')}
+                        </button>
+                      </>
+                    ) : (
+                      <button type="button" className="tool-btn" onClick={wfStartEdit} disabled={wfSaving}>
+                        {t('workflows.graph.edit')}
+                      </button>
+                    )
+                  ) : null}
                   <button
                     type="button"
                     className="rel-link"
@@ -305,14 +416,36 @@ export function TeamDetail({
               ) : state === 'missing' ? (
                 <div className="small muted">{t('teams.wf.missing.title')}</div>
               ) : wfView === 'graph' ? (
-                <WorkflowGraph
-                  nodes={toFlowStages(detail.workflow).map((s) => ({
-                    order: s.order,
-                    label: s.stage,
-                    owner: s.roles,
-                    reflow: s.reflow,
-                  }))}
-                />
+                <>
+                  {(wfSaveError !== '' || (wfSavedAt > 0 && !wfEditing)) && (
+                    <div className={wfSaveError !== '' ? 'banner' : 'banner'}>
+                      <StatusTag kind={wfSaveError !== '' ? 'err' : 'ok'}>
+                        {wfSaveError !== '' ? t('status.failed') : t('common.save')}
+                      </StatusTag>
+                      <span className="small">{wfSaveError !== '' ? wfSaveError : t('workflows.graph.saved')}</span>
+                    </div>
+                  )}
+                  <WorkflowGraph
+                    nodes={
+                      wfEditing && wfDraft !== null
+                        ? wfDraft.cards.map((c, i) => ({
+                            order: i + 1,
+                            label: c.stage,
+                            owner: [...c.roles],
+                            reflow: c.reflow,
+                            data: c,
+                          }))
+                        : toFlowStages(detail.workflow).map((s) => ({
+                            order: s.order,
+                            label: s.stage,
+                            owner: s.roles,
+                            reflow: s.reflow,
+                          }))
+                    }
+                    editable={wfEditing}
+                    onChange={wfEditing ? wfGraphChange : undefined}
+                  />
+                </>
               ) : (
                 <WorkflowFlow workflow={toFlowStages(detail.workflow)} />
               )}
@@ -430,6 +563,22 @@ export function TeamDetail({
             )}
           </dl>
         </details>
+      )}
+
+      {/* 图编辑脏草稿被关闭弹窗拦下 → 丢弃确认（与工作流单元页同一条守卫契约） */}
+      {wfDiscard && (
+        <ConfirmModal
+          title={t('common.discardTitle')}
+          body={t('common.discardBody')}
+          confirmLabel={t('common.discard')}
+          cancelLabel={t('common.keepEditing')}
+          onCancel={() => setWfDiscard(false)}
+          onConfirm={() => {
+            setWfDiscard(false)
+            if (closeGuard !== undefined) closeGuard.current = null
+            wfCancel()
+          }}
+        />
       )}
 
       {/* T2：硬删确认走统一模态（B5：Esc / 遮罩 / 滚动锁 / 焦点 / `--err` 危险色全站一套）。

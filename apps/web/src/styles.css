@@ -2247,3 +2247,47 @@ tbody tr:hover td { background: color-mix(in srgb, var(--sheet-2) 56%, transpare
   background: color-mix(in srgb, var(--ok) 8%, var(--sheet-2));
   border-left-color: var(--ok);
 }
+
+/* 工作流详情：元信息一行（原 5 行 kv 占满首屏）+ 正文折叠 */
+.wf-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+  font-size: var(--fs-200);
+}
+.wf-meta-name { font-weight: 650; }
+.wf-meta-chips { display: inline-flex; gap: var(--s-1); flex-wrap: wrap; }
+.wf-meta-skills { color: var(--mute); }
+.wf-meta-path { color: var(--mute); }
+.wf-body-detail > summary {
+  cursor: pointer;
+  font-size: var(--fs-200);
+  font-weight: 600;
+  color: var(--mute);
+  margin: var(--s-3) 0 var(--s-2);
+}
+/* 目录树叶子：文件名附注（引用型条目按文件归类——认得出是哪个文件） */
+.toc-file {
+  margin-left: auto;
+  padding-left: var(--s-2);
+  color: var(--mute);
+  font-family: var(--font-code);
+  font-size: var(--fs-100);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 45%;
+  flex-shrink: 1;
+}
+/* 运行时：任务下钻行 + 产物清单分组 */
+.runtime-table tbody tr[aria-expanded] { cursor: pointer; }
+.runtime-task-detail > td { background: var(--sheet-2); padding: var(--s-2) var(--s-3); }
+.runtime-task-detail .kv { margin: 0; }
+.runtime-artifacts { display: flex; flex-direction: column; gap: var(--s-1); margin-top: var(--s-2); }
+.runtime-artifact-group { display: flex; align-items: baseline; gap: var(--s-2); flex-wrap: wrap; }
+.runtime-artifact-files { display: inline-flex; gap: var(--s-1) var(--s-2); flex-wrap: wrap; min-width: 0; }
+.runtime-artifact-file { color: var(--mute); }
+/* 知识页：导入工具行 + 导入结果面板 */
+.kb-toolbar { display: flex; justify-content: flex-end; margin-bottom: var(--s-2); }
+.kb-import-result { display: flex; flex-direction: column; gap: var(--s-2); margin-top: var(--s-3); }

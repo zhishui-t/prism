@@ -23,14 +23,9 @@ import type { PointerEvent as ReactPointerEvent } from 'react'
 import { useT } from '../i18n.ts'
 import { useZoom } from './CallChainGraph.tsx'
 import {
-  WF_LANE_LABEL_W,
   WF_NODE_H,
   WF_NODE_W,
   WF_ROW_GAP,
-  WF_ROW_LEN,
-  WF_STEP_GAP,
-  wfBandStartCol,
-  wfCapacity,
   wfDropTarget,
   wfEdgePath,
   wfEdges,
@@ -102,6 +97,8 @@ export function WorkflowGraph({
   const [focus, setFocus] = useState<Set<number> | null>(null)
   const [drag, setDrag] = useState<DragState | null>(null)
   const [drop, setDrop] = useState<DropState | null>(null)
+  /** 拖动中的指针用户坐标（幽灵框跟随用）。 */
+  const [ghostXY, setGhostXY] = useState<{ x: number; y: number } | null>(null)
   const [rubber, setRubber] = useState<RubberState | null>(null)
   const [hint, setHint] = useState('')
   const svgRef = useRef<SVGSVGElement | null>(null)
@@ -161,6 +158,7 @@ export function WorkflowGraph({
     const origin = layout.positions.get(drag.i) ?? { x: 0, y: 0 }
     setDrag({ ...drag, dx: p.x - origin.x, dy: p.y - origin.y })
     setDrop(wfDropTarget(nodes, layout, p.x, p.y))
+    setGhostXY(p)
   }
   const onNodePointerUp = (): void => {
     if (drag === null) return
@@ -182,6 +180,7 @@ export function WorkflowGraph({
     }
     setDrag(null)
     setDrop(null)
+    setGhostXY(null)
   }
 
   const onHandlePointerDown = (e: ReactPointerEvent<SVGCircleElement>, i: number): void => {
@@ -242,28 +241,10 @@ export function WorkflowGraph({
     setFocus(focus === null ? wfRelated(edges, i) : null)
   }
 
-  /** 拖动落点的虚线占位框（插入位换算回泳道内行列）。 */
-  const ghost = useMemo(() => {
-    if (drag === null || drop === null) return null
-    const laneIndex = layout.lanes.indexOf(drop.lane)
-    if (laneIndex < 0) return null
-    const members: number[] = []
-    nodes.forEach((n, i) => {
-      if ((n.owner[0] ?? '—') === drop.lane) members.push(i)
-    })
-    const before = members.filter((i) => i < drop.insertAt && i !== drag.i).length
-    const count = members.length
-    const capacity = wfCapacity(nodes)
-    const j = Math.min(before, count)
-    const row = Math.floor(j / WF_ROW_LEN)
-    const m = j % WF_ROW_LEN
-    const start = wfBandStartCol(count, capacity)
-    const col = row % 2 === 0 ? start + m : start + WF_ROW_LEN - 1 - m
-    return {
-      x: WF_LANE_LABEL_W + col * (WF_NODE_W + WF_STEP_GAP),
-      y: (layout.laneTops[laneIndex] ?? 0) + row * (WF_NODE_H + WF_ROW_GAP),
-    }
-  }, [drag, drop, nodes, layout])
+  /** 幽灵框 = 落点居中（半透明节点框），只作「松手会落在哪条带」的视觉提示。 */
+  const ghost = drag !== null && drop !== null && ghostXY !== null
+    ? { x: ghostXY.x - WF_NODE_W / 2, y: ghostXY.y - WF_NODE_H / 2 }
+    : null
 
   return (
     <div className="wf-graph-wrap">

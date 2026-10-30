@@ -80,11 +80,27 @@ describe('wfLayout（蛇形折行）', () => {
     expect(l.laneTops[1]!).toBeGreaterThan(l.laneTops[0]!)
     expect(l.laneTops[2]!).toBeGreaterThan(l.laneTops[1]!)
   })
-  it('窄带（单节点泳道）在画布内水平居中，画布宽按容量收缩', () => {
-    const l = wfLayout(nodes) // 三泳道各 1 节点 → 容量 2，start = 0.5（半列居中）
-    const capacity = 2
-    expect(l.width).toBe(WF_LANE_LABEL_W + capacity * WF_NODE_W + (capacity - 1) * WF_STEP_GAP + WF_PAD)
-    expect(l.positions.get(0)!.x).toBe(WF_LANE_LABEL_W + 0.5 * (WF_NODE_W + WF_STEP_GAP))
+  it('多泳道（v20.2）：全局列 = 数组序——x 随阶段严格递增，画布宽按总步骤数', () => {
+    // 曾按泳道内局部蛇行：阶段 4 排在阶段 2 正下方、阶段 8 在 7 左边——阅读顺序全乱
+    const l = wfLayout(nodes) // 三泳道各 1 节点（reviewer/dev/tester）
+    const xs = nodes.map((_, i) => l.positions.get(i)!.x)
+    expect(xs, '全局列随数组序严格递增').toEqual([...xs].sort((a, b) => a - b))
+    expect(l.width).toBe(WF_LANE_LABEL_W + 3 * WF_NODE_W + 2 * WF_STEP_GAP + WF_PAD)
+    // 各泳道一行；y 只随泳道走
+    expect(l.laneRows).toEqual([1, 1, 1])
+    expect(l.positions.get(1)!.y).toBeGreaterThan(l.positions.get(0)!.y)
+  })
+
+  it('多泳道跨道排序：节点 x 按全局序而非泳道内序', () => {
+    const l = wfLayout([
+      { order: 1, label: 'a', owner: ['队长'], reflow: '' },
+      { order: 2, label: 'b', owner: ['dev'], reflow: '' },
+      { order: 3, label: 'c', owner: ['队长'], reflow: '' },
+    ])
+    // 队长的两个节点（a、c）分列 0 和 2；dev 的 b 在列 1 —— 列=阶段序
+    expect(l.positions.get(0)!.x).toBeLessThan(l.positions.get(1)!.x)
+    expect(l.positions.get(1)!.x).toBeLessThan(l.positions.get(2)!.x)
+    expect(l.positions.get(2)!.y).toBe(l.positions.get(0)!.y) // 同泳道同行
   })
 })
 
@@ -135,12 +151,13 @@ describe('wfDropTarget（拖动落点）', () => {
     const p = l.positions.get(1)!
     expect(wfDropTarget(nodes, l, p.x, p.y)).toEqual({ lane: 'dev', insertAt: 1 })
   })
-  it('落到带下方空白 → 夹到最近带；带内越位 → 夹到带尾', () => {
+  it('落到带下方空白 → 夹到最近带；远右落点 → 插到最右节点之后（全局序末尾）', () => {
     const l = wfLayout(nodes)
     const bottom = { x: WF_LANE_LABEL_W, y: l.height + 200 }
     expect(wfDropTarget(nodes, l, bottom.x, bottom.y).lane).toBe('tester')
+    // v20.2 落点按最近节点结算：远右 → 最近 = 全局最后一列的节点 → 插到数组末尾
     const far = wfDropTarget(nodes, l, WF_LANE_LABEL_W + 5000, WF_PAD)
-    expect(far).toEqual({ lane: 'reviewer', insertAt: 1 })
+    expect(far).toEqual({ lane: 'reviewer', insertAt: nodes.length })
   })
 })
 

@@ -386,50 +386,34 @@ function WorkflowDetailBody({
   const shownSteps: WorkflowStep[] = editing ? draft : wf.steps
 
   return (
+    /* 根容器沿用 .wf-detail；元信息一行（曾 5 行 kv 占满首屏）：名称 · 级别 · 绑定 · 技能 · 源文件 */
     <div className="wf-detail">
-      <div className="flow-detail">
-        <div className="flow-detail-row">
-          <span className="scope-label">{t('workflows.name')}</span>
-          <span className="scope-leader" />
-          <span className="flow-detail-val">{wf.name}</span>
-        </div>
-        <div className="flow-detail-row">
-          <span className="scope-label">{t('workflows.level')}</span>
-          <span className="scope-leader" />
-          <span className="flow-detail-val">
-            {wf.level === 'team' ? t('workflows.levelTeam') : t('workflows.levelRole')}
-          </span>
-        </div>
-        <div className="flow-detail-row">
-          <span className="scope-label">{t('workflows.binds')}</span>
-          <span className="scope-leader" />
-          <span className="flow-detail-val">
-            {wf.binds.length === 0 ? (
-              <span className="muted">{t('common.unset')}</span>
-            ) : (
-              wf.binds.map((b) => (
-                <a key={b} className="ref" href={`#/roles/${encodeURIComponent(b)}`}>
-                  {b}
-                </a>
-              ))
-            )}
-          </span>
-        </div>
-        <div className="flow-detail-row">
-          <span className="scope-label">{t('workflows.skills')}</span>
-          <span className="scope-leader" />
-          <span className="flow-detail-val mono small">
-            {wf.skills.length === 0 ? t('common.unset') : wf.skills.join(', ')}
-          </span>
-        </div>
-        {wf.sourcePath !== undefined && (
-          <div className="flow-detail-row">
-            <span className="scope-label">{t('workflows.source')}</span>
-            <span className="scope-leader" />
-            <span className="flow-detail-val mono small">{wf.sourcePath}</span>
-          </div>
-        )}
-      </div>
+      <div className="wf-meta">
+      <span className="wf-meta-name">{wf.name}</span>
+      <StatusTag kind={wf.level === 'team' ? 'info' : 'ok'} title={t('workflows.level')}>
+        {wf.level === 'team' ? t('workflows.levelTeam') : t('workflows.levelRole')}
+      </StatusTag>
+      {wf.binds.length > 0 && (
+        <span className="wf-meta-chips" title={t('workflows.binds')}>
+          {wf.binds.map((b) => (
+            <a key={b} className="ref" href={`#/roles/${encodeURIComponent(b)}`}>
+              {b}
+            </a>
+          ))}
+        </span>
+      )}
+      {wf.skills.length > 0 && (
+        <span className="mono small wf-meta-skills" title={t('workflows.skills')}>
+          {wf.skills.join(', ')}
+        </span>
+      )}
+      <span className="flex-1" />
+      {wf.sourcePath !== undefined && (
+        <span className="mono small muted wf-meta-path" title={wf.sourcePath}>
+          {t('workflows.source')}: {wf.sourcePath.split(/[\\/]/).pop()}
+        </span>
+      )}
+    </div>
 
       {errors.length > 0 && (
         <div className="banner">
@@ -651,15 +635,11 @@ function WorkflowDetailBody({
           </div>
         ))}
 
-      <h4>{t('workflows.bodyTitle')}</h4>
-      <Markdown src={wf.body} />
-
-      {!editing && (
-        <div className="banner lamp">
-          <span className="scope-lamp" />
-          <span className="small">{t('workflows.editHint')}</span>
-        </div>
-      )}
+      {/* 正文默认折叠：看图/改步骤是主场景，散文正文偶尔才查（title 仍是 H1 检索面） */}
+      <details className="wf-body-detail">
+        <summary>{t('workflows.bodyTitle')}</summary>
+        <Markdown src={wf.body} />
+      </details>
 
       {confirmDiscard && (
         <ConfirmModal

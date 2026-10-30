@@ -593,6 +593,30 @@ export const api = {
 
   graphProjects: () => request<GraphProject[]>('/api/graph/projects'),
 
+  /** 知识导入（POST /api/kb/import；与 MCP prism_kb_import 同实现——先 dry_run 预览再真导）。 */
+  kbImport: (input: {
+    path: string
+    owner: string
+    book?: string
+    dry_run?: boolean
+    respect_gitignore?: boolean
+    include_ext?: string[]
+  }): Promise<{
+    root: string
+    discovered: number
+    created: number
+    updated: number
+    unchanged: number
+    skipped: number
+    by_skip_reason: Record<string, number>
+    truncated: boolean
+    missing: string[]
+    ignored_dirs: string[]
+    ignored_files: number
+    dry_run: boolean
+  }> =>
+    request('/api/kb/import', { method: 'POST', body: JSON.stringify(input) }),
+
   /**
    * 调用链关系查询（v8 F4）：`GET /api/graph/relations`。
    *

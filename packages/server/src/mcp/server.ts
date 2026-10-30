@@ -70,7 +70,7 @@ import { assertProjectRoot, resolveArchPlacement, sanitizeArtifactName } from '.
 import { inspectGraphStatus, ProjectRegistry } from '../graph/registry.js'
 import { mergeProjectGraphs, type MergeProjectInput } from '../graph/merge.js'
 import { convertFileToMarkdown } from '../kb/convert-file.js'
-import { makeDryRunKb, scanProject } from '../kb/scan.js'
+import { runKbImport } from '../kb/import-run.js'
 import type { GraphQuery, KnowledgeService, Layer, SearchQuery, SearchResponse } from '../kb/port.js'
 import { depositWithPolicy, type DepositRequest } from '../kb/deposit-entry.js'
 import { loadKnowledgeService, resolveOcrWiringConfigForHome } from '../kb/wiring.js'
@@ -1101,42 +1101,18 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
         if (root === undefined || owner === undefined) {
           throw new Error('prism_kb_import 需要 { path, owner }')
         }
-        const dryRun = args.dry_run === true
-        const includeExt = Array.isArray(args.include_ext)
-          ? args.include_ext.filter((v): v is string => typeof v === 'string')
-          : undefined
-        const service = await kb()
-        const target = dryRun ? makeDryRunKb(service) : service
-        // v17 §A-0：OCR 表格/版面增强开关（prism.yaml 的 ocr_table/ocr_layout；缺省开，
-        // 模型未装 → enabled=false → 回旧输出）
-        const ocrEnabled = resolveOcrWiringConfigForHome(deps.home)
-        const report = await scanProject(target, {
-          root,
-          layer: 'project',
+        // 实现单点 kb/import-run.ts（与 HTTP `POST /api/kb/import` 同一实现，三入口同口径）
+        return await runKbImport(kb, deps.home, {
+          path: root,
           owner,
           ...(asString(args.book) !== undefined ? { book: asString(args.book)! } : {}),
           ...(asString(args.module) !== undefined ? { module: asString(args.module)! } : {}),
-          ...(typeof args.respect_gitignore === 'boolean'
-            ? { respectGitignore: args.respect_gitignore }
+          ...(args.dry_run === true ? { dry_run: true } : {}),
+          ...(typeof args.respect_gitignore === 'boolean' ? { respect_gitignore: args.respect_gitignore } : {}),
+          ...(Array.isArray(args.include_ext)
+            ? { include_ext: args.include_ext.filter((v): v is string => typeof v === 'string') }
             : {}),
-          ...(includeExt !== undefined && includeExt.length > 0 ? { includeExt } : {}),
-          ocr: ocrEnabled.ocr,
         })
-        return {
-          root: report.root,
-          discovered: report.discovered,
-          created: report.created,
-          updated: report.updated,
-          unchanged: report.unchanged,
-          skipped: report.skipped,
-          // 未纳入分列（design-v8 §4：纳入/跳过对账物，含被扩展门/文件名表挡掉的）
-          by_skip_reason: report.by_skip_reason,
-          truncated: report.truncated,
-          missing: report.missing,
-          ignored_dirs: report.ignored_dirs,
-          ignored_files: report.ignored_files,
-          dry_run: dryRun,
-        }
       },
     },
     {

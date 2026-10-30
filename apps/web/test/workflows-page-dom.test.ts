@@ -123,7 +123,7 @@ describe('编辑流程', () => {
   it('默认只读：有「编辑」钮、无字段面板；点编辑后出现字段面板与保存/取消', async () => {
     await render()
     expect(all('.wf-inspector')).toHaveLength(0)
-    await click(buttonByText('编辑'))
+    await click(buttonByText('编辑图'))
     expect(all('.wf-inspector')).toHaveLength(1)
     expect(buttonByText('保存').disabled).toBe(true) // 未改动
     expect(buttonByText('取消')).toBeDefined()
@@ -131,7 +131,7 @@ describe('编辑流程', () => {
 
   it('改步骤名 → 图上节点标签同步；保存 PATCH 带上 rowId 与新内容', async () => {
     await render()
-    await click(buttonByText('编辑'))
+    await click(buttonByText('编辑图'))
     const nameInput = all('.wf-inspector input')[0] as HTMLInputElement
     expect(nameInput.value).toBe('受理')
     await fill(nameInput, '受理（改）')
@@ -151,7 +151,7 @@ describe('编辑流程', () => {
 
   it('保存成功后弹窗仍在（不被列表 reload 卸载）且给出成功提示', async () => {
     await render()
-    await click(buttonByText('编辑'))
+    await click(buttonByText('编辑图'))
     await fill(all('.wf-inspector input')[0] as HTMLInputElement, '受理2')
     await click(buttonByText('保存'))
     await act(async () => {})
@@ -163,7 +163,7 @@ describe('编辑流程', () => {
 
   it('脏草稿点取消 → 直接退出编辑（取消是显式丢弃，不弹确认）', async () => {
     await render()
-    await click(buttonByText('编辑'))
+    await click(buttonByText('编辑图'))
     await fill(all('.wf-inspector input')[0] as HTMLInputElement, 'x')
     await click(buttonByText('取消'))
     expect(all('.wf-inspector')).toHaveLength(0)
@@ -172,7 +172,7 @@ describe('编辑流程', () => {
 
   it('新增步骤 → 节点数 +1、选中新行；删除步骤 → 恢复', async () => {
     await render()
-    await click(buttonByText('编辑'))
+    await click(buttonByText('编辑图'))
     const before = all('.wf-node').length
     await click(buttonByText('新增步骤'))
     expect(all('.wf-node').length).toBe(before + 1)
@@ -187,7 +187,7 @@ describe('编辑流程', () => {
 
   it('步骤表视图也能编辑（字段表单与图共用草稿）', async () => {
     await render()
-    await click(buttonByText('编辑'))
+    await click(buttonByText('编辑图'))
     await click(buttonByText('步骤表'))
     const rows = all('.wf-step-edit')
     expect(rows).toHaveLength(DETAIL.steps.length)

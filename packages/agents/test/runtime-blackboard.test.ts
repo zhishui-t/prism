@@ -17,6 +17,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import {
+  classifyArtifact,
   listTeamRuns,
   parseAgentsMd,
   parseContextMd,
@@ -453,5 +454,55 @@ describe('任务分目录（同项目多团队并行）', () => {
     const runs = await listTeamRuns(root)
     expect(runs[0]!.title).toBe('任务A：修OCR')
     expect(runs[0]!.dagMtime).toBeGreaterThan(0)
+  })
+})
+
+describe('产物清单（run 目录全量盘点）', () => {
+  it('按类别盘点全部产物，mtime 倒序，vN 版次归同类', async () => {
+    await writeBoard({
+      'dag.json': JSON.stringify({ nodes: [{ id: 'a', label: 'A', role: 'dev', status: 'done', deps: [] }] }),
+      'task-brief.md': '# 书',
+      'task-brief-v2.md': '# 书2',
+      'requirements.md': '# 求',
+      'software-design-v3.md': '# 设',
+      'spec.md': '# 规',
+      'tasks.md': '# 任',
+      'design-review.md': '# 审',
+      'test-report-blackbox-v9.md': '# 测',
+      'spec-verify-matrix.md': '# 矩',
+      '.design_ok': '',
+      '.code_ok_v18': '',
+      'DELIVERY-v18.md': '# 交',
+      'notes-random.md': '# 杂',
+    })
+    // 目录产物（e2e-evidence/）单独建
+    await mkdir(join(root, '.agent-team', 'e2e-evidence'), { recursive: true })
+    const rt = await readTeamRuntime(root, 'demo')
+    const kindOf = (name: string) => rt.artifacts.find((a) => a.name === name)?.kind
+    expect(kindOf('task-brief.md')).toBe('brief')
+    expect(kindOf('task-brief-v2.md')).toBe('brief')
+    expect(kindOf('requirements.md')).toBe('design')
+    expect(kindOf('software-design-v3.md')).toBe('design')
+    expect(kindOf('spec.md')).toBe('spec')
+    expect(kindOf('spec-verify-matrix.md')).toBe('test')
+    expect(kindOf('tasks.md')).toBe('tasks')
+    expect(kindOf('design-review.md')).toBe('review')
+    expect(kindOf('test-report-blackbox-v9.md')).toBe('test')
+    expect(kindOf('.design_ok')).toBe('gate')
+    expect(kindOf('DELIVERY-v18.md')).toBe('delivery')
+    expect(kindOf('notes-random.md')).toBe('other')
+    expect(kindOf('e2e-evidence')).toBe('test')
+    // mtime 倒序
+    const times = rt.artifacts.map((a) => a.mtime)
+    expect([...times].sort((a, b) => b - a)).toEqual(times)
+  })
+
+  it('classifyArtifact 纯函数：状态三件套与未知扩展', () => {
+    expect(classifyArtifact('dag.json')).toBe('state')
+    expect(classifyArtifact('agents.md')).toBe('state')
+    expect(classifyArtifact('context-v5.md')).toBe('state')
+    expect(classifyArtifact('dag.html')).toBe('other') // 派生视图不盘点，但分类函数不特判
+    expect(classifyArtifact('visual-audit-v7.md')).toBe('test')
+    expect(classifyArtifact('f1-build-report.md')).toBe('test')
   })
 })

@@ -647,12 +647,19 @@ export function wfRowCol(j: number, count: number, capacity: number): { row: num
   return { row, col: row % 2 === 0 ? start + m : start + WF_ROW_LEN - 1 - m }
 }
 
-/** 泳道×蛇行布局：数组下标 → 节点左上角（用户坐标）+ 画布内容尺寸 + 各带行数。 */
+/** 泳道布局：数组下标 → 节点左上角（用户坐标）+ 画布内容尺寸 + 各带行数。
+ *
+ * 两种形态（按泳道数自动切换）：
+ * - **单泳道**（工作流单元的常态）：带内**蛇形折行**（每 WF_ROW_LEN 个一行，偶行左→右、
+ *   奇行右→左）——解决「6 步摊成 2000px 宽扁条、缩放后字不可读」；
+ * - **多泳道**（团队工作流的常态）：**全局列 = 数组序（阶段序）**，x 随全局步骤走、y 随泳道走。
+ *   曾沿用泳道内局部蛇行——阶段 4 会排在阶段 2 正下方、阶段 8 在阶段 7 左边，整张图
+ *   的阅读顺序完全乱了（流程图最重要的「先后」信息丢失）。宽图交给缩放/平移，顺序不能丢。 */
 export interface WfLayout {
   lanes: string[]
   /** 数组下标 → 节点左上角（用户坐标）。 */
   positions: Map<number, { x: number; y: number }>
-  /** 各泳道的折行行数（与 lanes 同序）。 */
+  /** 各泳道的折行行数（与 lanes 同序；多泳道形态恒为 1）。 */
   laneRows: number[]
   /** 各泳道带的纵向区间起点（内容坐标，含 PAD；与 lanes 同序）。 */
   laneTops: number[]
@@ -662,13 +669,15 @@ export interface WfLayout {
 
 export function wfLayout(nodes: readonly WfGraphNode[]): WfLayout {
   const lanes = wfLanes(nodes)
+  const multi = lanes.length > 1
   const laneRows: number[] = []
   const laneTops: number[] = []
-  const capacity = wfCapacity(nodes)
+  /** 列容量：单泳道 = 各带行宽上限（蛇形折行用）；多泳道 = 总步骤数（一列一步）。 */
+  const capacity = multi ? Math.max(nodes.length, 2) : wfCapacity(nodes)
   let top = WF_PAD
   for (const lane of lanes) {
     const count = nodes.filter((m) => (m.owner[0] ?? '—') === lane).length
-    const rows = Math.max(1, Math.ceil(count / WF_ROW_LEN))
+    const rows = multi ? 1 : Math.max(1, Math.ceil(count / WF_ROW_LEN))
     laneRows.push(rows)
     laneTops.push(top)
     top += rows * (WF_NODE_H + WF_ROW_GAP) - WF_ROW_GAP + WF_LANE_GAP
@@ -678,13 +687,22 @@ export function wfLayout(nodes: readonly WfGraphNode[]): WfLayout {
   nodes.forEach((n, i) => {
     const lane = n.owner[0] ?? '—'
     const laneIndex = Math.max(0, lanes.indexOf(lane))
+    const laneTop = laneTops[laneIndex] ?? WF_PAD
+    if (multi) {
+      // 全局列 = 数组序：阶段先后沿 x 严格单调，泳道只决定 y
+      positions.set(i, {
+        x: WF_LANE_LABEL_W + i * (WF_NODE_W + WF_STEP_GAP),
+        y: laneTop,
+      })
+      return
+    }
     const j = laneSeen.get(lane) ?? 0
     laneSeen.set(lane, j + 1)
     const count = nodes.filter((m) => (m.owner[0] ?? '—') === lane).length
     const { row, col } = wfRowCol(j, count, capacity)
     positions.set(i, {
       x: WF_LANE_LABEL_W + col * (WF_NODE_W + WF_STEP_GAP),
-      y: (laneTops[laneIndex] ?? WF_PAD) + row * (WF_NODE_H + WF_ROW_GAP),
+      y: laneTop + row * (WF_NODE_H + WF_ROW_GAP),
     })
   })
   const contentH =
@@ -791,14 +809,18 @@ export function wfReflowPath(
   return `M${a.x} ${a.y}C${x} ${a.y},${x} ${b.y},${b.x} ${b.y}`
 }
 
-/** 拖动落点：用户坐标 → 泳道与数组插入下标（移除拖动项前的下标口径）。 */
+/** 拖动落点：用户坐标 → 泊道与数组插入下标（移除拖动项前的下标口径）。
+ *
+ * 布局无关的实现（单泳道蛇行 / 多泳道全局列都不用特判）：
+ * - 泳道 = 纵向带区间包含 y（越界夹最近带）；
+ * - 插入位 = **距离最近的节点**（欧氏距离，含跨泳道）——落点在其左半 → 插它前，右半 → 插它后。
+ *   序是全局数组序：无论节点被布局到哪，插入位都按数组位置结算。 */
 export function wfDropTarget(
   nodes: readonly WfGraphNode[],
   layout: WfLayout,
   x: number,
   y: number,
 ): { lane: string; insertAt: number } {
-  // 泳道：取带区间包含 y 的；越界夹到最近带
   let laneIndex = layout.lanes.length - 1
   for (let i = 0; i < layout.lanes.length; i++) {
     const top = layout.laneTops[i] ?? 0
@@ -809,26 +831,22 @@ export function wfDropTarget(
     }
   }
   const lane = layout.lanes[laneIndex] ?? '—'
-  const laneTop = layout.laneTops[laneIndex] ?? 0
-  const memberIdx: number[] = []
-  nodes.forEach((n, i) => {
-    if ((n.owner[0] ?? '—') === lane) memberIdx.push(i)
+  let best = -1
+  let bestDist = Number.POSITIVE_INFINITY
+  nodes.forEach((_, i) => {
+    const p = layout.positions.get(i) ?? { x: 0, y: 0 }
+    const dx = p.x + WF_NODE_W / 2 - x
+    const dy = p.y + WF_NODE_H / 2 - y
+    const d = dx * dx + dy * dy
+    if (d < bestDist) {
+      bestDist = d
+      best = i
+    }
   })
-  // 行列反推（与 wfRowCol 对称：行内位 m 由列号按行方向解出，再夹到该行实际节点数）
-  const row = Math.max(0, Math.floor((y - laneTop + WF_ROW_GAP / 2) / (WF_NODE_H + WF_ROW_GAP)))
-  const count = memberIdx.length
-  const k = Math.max(1, Math.min(WF_ROW_LEN, count - row * WF_ROW_LEN))
-  const start = wfBandStartCol(count, wfCapacity(nodes))
-  const col = Math.max(0, Math.floor((x - WF_LANE_LABEL_W + WF_STEP_GAP / 2) / (WF_NODE_W + WF_STEP_GAP)))
-  const m = row % 2 === 0 ? col - start : start + WF_ROW_LEN - 1 - col
-  // 半列边界取整；左侧越界归行首、右侧越界给 k（落行尾之后）
-  const mClamped = Math.max(0, Math.min(Math.round(m), k))
-  const j = row * WF_ROW_LEN + mClamped
-  const clamped = Math.min(j, count)
-  const insertAt = clamped === count
-    ? (memberIdx[memberIdx.length - 1] ?? -1) + 1
-    : (memberIdx[clamped] ?? 0)
-  return { lane, insertAt }
+  if (best === -1) return { lane, insertAt: nodes.length }
+  const p = layout.positions.get(best)!
+  const before = x < p.x + WF_NODE_W / 2
+  return { lane, insertAt: before ? best : best + 1 }
 }
 
 /** 改序后重编回流号：旧序 → 新序映射，规范形「回 N」按映射重写；非规范原样保留。

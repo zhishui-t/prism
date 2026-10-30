@@ -151,10 +151,11 @@
 
 | 路径 | 内容 | 装配到 |
 | :-- | :-- | :-- |
+| `dev-team.md` | **推荐开发团队工作流总纲**（编制/工具/技能挂载/调度协议/阶段参与矩阵——拿来即用） | 文档，不装配 |
 | （prism 内置技能） | 队长手册《Prism Agent Team》+ 澄清/派发/异常细则 + 任务书等模板 + DAG 脚本 | `prism skill install prism`——源在 `packages/skills/src/builtin/assets/agent-team/`，不再放 examples |
 | `design-verify/` + `design-verify-README.md` | 设计验证 skill（六步 + 3 脚本） | `<技能目录>/design-verify/` |
 | `workflows/` | 工作流单元库（本文 §1 的工作流层） | `~/.zcode/workflows/`（或宿主约定目录） |
-| `roles/` | 角色契约 | `~/.zcode/agents/` |
+| `roles/` | 角色契约（**含技能白名单与工作流挂载**——推荐配置见 `dev-team.md` §1） | `~/.zcode/agents/` |
 | `teams/` | delivery（严格执行）+ vuln-response（独立 intake 示例） | `~/.zcode/teams/<id>/AGENTS.md` |
 
 > 装配后把角色/团队文件里的 workflows 引用路径改为实际装配位置（同绝对路径提醒）。

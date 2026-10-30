@@ -48,11 +48,16 @@ import {
 
 import { createGitignoreMatcher, type GitignoreMatcher } from './gitignore.js'
 
-/** 默认忽略的目录名（构建产物、依赖、版本控制内部等）。 */
+/** 默认忽略的目录名（构建产物、依赖、版本控制内部等）。
+ * `3rd`：Prism 约定的三方 submodule 目录（anydoc/archify——里面全是测试夹具与上游文档，
+ * 实测一次 kb sync 灌进 100+ 条垃圾）；`.agent-team`：团队运行时黑板（工作区临时态，
+ * 不是知识源；被 .gitignore 覆盖的项目本来也不会扫到，这里兜未忽略的项目）。 */
 export const DEFAULT_IGNORE_DIRS = [
   '.git',
   '.prism',
+  '.agent-team',
   'node_modules',
+  '3rd',
   'dist',
   'build',
   'out',
@@ -378,6 +383,9 @@ async function findMissingSources(
  */
 export function moduleFromRel(rel: string): string {
   const dir = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : ''
+  // 根级文件（AGENTS.md / README.md）有明确归类——返回 'root' 而不是 ''（'' 落 `_inbox`
+  // 「未归类」，与「路径说得清却进待归类」的直觉相反）
+  if (dir === '') return 'root'
   return dir.replace(/[/\\]/g, '-').replace(/[.]/g, '_')
 }
 
@@ -418,6 +426,9 @@ export function makeDryRunKb(real: KnowledgeService): KnowledgeService {
    * 包装对象会抛「Receiver must be an instance of class」。故显式转发到真服务。
    */
   wrapper.get = (id, version) => real.get(id, version)
+  // 同因：孤儿检测（findMissingIndexed）会读 `catalog`——原型方法里摸私有字段
+  // （MemoryKb 的 #entries / 真服务的 #toEntry），包装对象作接收者同样炸，一并转发
+  wrapper.catalog = (...args: Parameters<KnowledgeService['catalog']>) => real.catalog(...args)
   wrapper.index = async (input) => {
     const existing = await real.get(input.id)
     if (existing !== null) {
@@ -640,7 +651,9 @@ export async function scanProject(kb: KnowledgeService, options: ScanOptions): P
      */
     const id = idFromRel(rel)
     const existing = await kb.get(id)
-    if (existing !== null && existing.source_hash === sourceHash) {
+    // unchanged 短路要求 hash **与 module 都没变**：module 推导规则修正后（如根文件 ''→'root'）
+    // 存量条目要重落一次，否则旧归类永远留着（迁移只发生一次，之后恢复纯 hash 短路）
+    if (existing !== null && existing.source_hash === sourceHash && existing.module === module) {
       report.unchanged++
       report.files.push({ rel, abs, source_hash: sourceHash, status: 'unchanged', module, bytes: info.size })
       continue
@@ -748,18 +761,36 @@ export async function scanProject(kb: KnowledgeService, options: ScanOptions): P
 
     const title = extractTitle(markdown, basename(rel, extname(rel)))
     try {
-      const result = await kb.index({
-        id,
-        title,
-        type: 'doc',
-        layer: layer as 'global' | 'project' | 'role',
-        ...(effectiveOwner !== undefined ? { owner: effectiveOwner } : {}),
-        book,
-        module,
-        path: abs,
-        source_hash: sourceHash,
-        content: markdown,
-      })
+      /** 归属前缀（id_conflict 回退用）：项目名或书名压成 id 安全段。 */
+      const ownerKey = (effectiveOwner ?? book).replace(/[^A-Za-z0-9_-]/g, '-')
+      // 绑定后捕获：kb.index 是可选方法（守卫的收窄不跨闭包），且**必须 bind**——
+      // 提取调用丢 this 会 TypeError（service 入口读 this 上的标志）
+      const indexEntry = kb.index.bind(kb)
+      const indexWith = (idToUse: string) =>
+        indexEntry({
+          id: idToUse,
+          title,
+          type: 'doc',
+          layer: layer as 'global' | 'project' | 'role',
+          ...(effectiveOwner !== undefined ? { owner: effectiveOwner } : {}),
+          book,
+          module,
+          path: abs,
+          source_hash: sourceHash,
+          content: markdown,
+        })
+      let result: Awaited<ReturnType<typeof indexEntry>>
+      try {
+        result = await indexWith(id)
+      } catch (conflict) {
+        // 跨项目同相对路径（两个项目都有根 README.md → 同 id）：回退到带归属前缀的 id
+        // 重试——本项目内仍然稳定（重扫同 id），只是不再与别的项目抢同一个槽位
+        if (typeof conflict === 'object' && conflict !== null && (conflict as { code?: string }).code === 'id_conflict') {
+          result = await indexWith(`${id}-${ownerKey}`.slice(0, 120))
+        } else {
+          throw conflict
+        }
+      }
       if (result.action === 'created') report.created++
       else if (result.action === 'updated') report.updated++
       else report.unchanged++

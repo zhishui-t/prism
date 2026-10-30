@@ -137,6 +137,7 @@ export async function createApp(options: AppOptions = {}): Promise<{
   router.add('GET', '/api/kb/conflicts', kb.conflicts)
   router.add('POST', '/api/kb/conflicts/:id/resolve', kb.resolveConflict)
   router.add('GET', '/api/kb/scan-history', kb.scanHistory)
+  router.add('POST', '/api/kb/import', kb.importDocs)
   router.add('GET', '/api/kb/context-pack', kb.contextPack)
   router.add('GET', '/api/kb/versions/:id', kb.versions)
   // 书结构（F-A1/F-A2，design-v4 §3.4）：只读写 knowledgeDir（R5/R6：不接目录参数）

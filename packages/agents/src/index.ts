@@ -274,7 +274,7 @@ export {
   parseContextMd,
   roleMatches,
 } from './runtime/blackboard.js'
-export { parseTaskContract, listTeamRuns } from './runtime/blackboard.js'
+export { parseTaskContract, listTeamRuns, classifyArtifact } from './runtime/blackboard.js'
 export type {
   RuntimeTaskStatus,
   RuntimeTask,
@@ -283,6 +283,8 @@ export type {
   RuntimeSnapshotRow,
   RuntimeGate,
   RuntimeFileInfo,
+  RuntimeArtifact,
+  ArtifactKind,
   TeamRuntime,
   TeamRunInfo,
 } from './runtime/blackboard.js'
