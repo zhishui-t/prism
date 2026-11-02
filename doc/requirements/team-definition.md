@@ -243,8 +243,9 @@ rework_limit: 2                    # 返工上限（轮）
 - `ready` = 自身 `pending` ∧ 依赖全 `done`（这就是「现在该派谁」）；其余 `pending` 归 `waiting`；
 - 依赖并集 = `nodes[].deps` ∪ `edges`（与 `scripts/dag.mjs` 同口径，去重 + 稳定排序）；
 - **缺口**分三级：`error`（坏 JSON / 依赖缺失 / 依赖成环 / 未知状态）> `warning`（可派发任务的角色
-  没有会话登记 → 会重复派遣；快照比 dag 旧；**任务全完成但最新交付报告比 dag 旧**）> `info`（无门禁 /
-  归档实例无对应任务）；
+  没有会话登记 → 会重复派遣；**同角色登记实例数超过 team-manifest「编制」表上限 → 超编派遣
+  `runtime_roster_over`**——编制表是基准，没写就不判，同任务契约口径；快照比 dag 旧；
+  **任务全完成但最新交付报告比 dag 旧**）> `info`（无门禁 / 归档实例无对应任务）；
 - 状态别名归一：`completed|closed → done`、`active|in_progress → running`、`failed|stuck → blocked`；
   未知值按 `pending` 处理但**保留原文并告警**（不静默吞）。
 
@@ -518,7 +519,7 @@ Prism **不做权限裁决**（那属于宿主）。
 | 新建 `prism team init <id>` | **脚手架**：从内置模板（`minimal` / `core-dev`）或 `--from <既有团队>` 渲染新团队定义 → 自动 `validateTeam`（有 error 不落盘）→ 写守卫 → 落 `<teams_dir>/<id>.md`（只渲染不落盘的实现：`@prism/agents` 的 `renderTeamScaffold`） |
 | 装配 `prism team install` | 读团队定义 → 装配全部成员角色到 `~/.zcode/agents/` |
 | 启用 `prism team activate` | 返回团队运行时配置（成员 + 工作流 + 沉淀规则 + 装配状态） |
-| 注入 | 团队约定写入项目 `AGENTS.md` 标记块 |
+| 注入 | 团队约定写入项目 `AGENTS.md` 标记块（`prism inject <项目根> --team <id>`；实现单点 `injectTeamConvention`——`loadTeam` → `resolveHarness(repoDir)` → 适配器 `renderTeamInstructions` → 标记块合并，重跑即更新）。**含编制表**（角色 × count 与「同角色并发实例上限」约束——2026-11-02 超编派发的根因之一是注入块没有 members，队长在派发时刻看不到数量约束；该块此前**无生产调用方**，本轮接线） |
 
 > `prism team init` 的写守卫口径 = `--harness-root` / `prism.yaml`（与其它写命令一致）：目标是默认宿主
 > `teams_dir` 且未显式指定时需 `--yes`。**不存在 `--teams-dir`**（`PRISM_TEAMS_DIR` 亦不存在），

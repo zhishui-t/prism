@@ -445,7 +445,20 @@ export {
   removeAgentsBlock,
   hasPrismBlock,
   findPrismBlock,
+  injectTeamBlock,
+  removeTeamBlocks,
+  teamBlockStart,
+  teamBlockEnd,
+  type InjectResult,
+  type TeamBlockResult,
 } from '@prism/agents'
+
+// 团队约定块注入（team-definition.md §7「注入」；CLI `prism inject --team` 的实现单点）
+export {
+  injectTeamConvention,
+  type InjectTeamConventionInput,
+  type InjectTeamConventionResult,
+} from './roles/wiring.js'
 
 // Harness 适配器插件（<PRISM_HOME>/harnesses/ 运行期自动注册）
 export {

@@ -219,11 +219,20 @@ export default function createAdapter(opts = {}) {
       if (opts.repoDir === undefined) return null
       const start = `<!-- prism:team:${team.team_id}:start -->`
       const end = `<!-- prism:team:${team.team_id}:end -->`
+      const rosterLines = team.members.map((m) => `| ${m.role} | ${m.count} |`).join('\n')
       const content = [
         start,
         `# 团队约定：${team.name}（${team.team_id}）`,
         '',
         team.description,
+        '',
+        '## 编制（同角色并发实例上限）',
+        '',
+        '| 角色 | 实例上限 |',
+        '| :--- | :--- |',
+        rosterLines,
+        '',
+        '任何时刻同一角色**同时在场的实例数不得超过上表**（同角色多行上限相加）；分桶并行时任务桶多于实例的，排队复用空闲实例（SendMessage 续用），**不新开**。确需超出编制：先向用户报批变更编制，批准前一律不超编派遣。',
         '',
         '## 工作流',
         '',

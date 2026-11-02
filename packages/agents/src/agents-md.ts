@@ -12,8 +12,20 @@
 
 import { readFile, writeFile } from 'node:fs/promises'
 
+import { PrismError } from '@prism/core'
+
 export const PRISM_BLOCK_BEGIN = '<!-- prism:begin -->'
 export const PRISM_BLOCK_END = '<!-- prism:end -->'
+
+/** 团队约定块的起止标记（各适配器 `renderTeamInstructions` 的标记契约**单点**——防镜像漂移）。 */
+export function teamBlockStart(teamId: string): string {
+  return `<!-- prism:team:${teamId}:start -->`
+}
+
+/** 团队约定块的结束标记（与 {@link teamBlockStart} 成对）。 */
+export function teamBlockEnd(teamId: string): string {
+  return `<!-- prism:team:${teamId}:end -->`
+}
 
 /** 生成的块内容（不带 begin/end 标记）。 */
 function blockContent(options: { teamId?: string; mcpHint?: boolean }): string {
@@ -108,4 +120,77 @@ export async function removeAgentsBlock(path: string): Promise<boolean> {
   next = next.replace(/\n{3,}/g, '\n\n')
   await writeFile(path, next, 'utf-8')
   return true
+}
+
+export interface TeamBlockResult {
+  path: string
+  teamId: string
+  action: 'created' | 'appended' | 'updated'
+}
+
+/**
+ * 注入/更新**团队约定块**（`<!-- prism:team:<id>:start/end -->`）。
+ *
+ * 内容由适配器 `renderTeamInstructions` 渲染（编制表 + 工作流 + 仲裁链 + 返工上限），
+ * 本函数只做标记块合并——与 `prism:begin/end` 知识块同一套纪律：
+ * - 已有块 → 只替换块内（含该团队 id 的标记区间），块外用户手写内容一字不动；
+ * - 无块 → 追加到末尾；文件不存在 → 创建；
+ * - **不同团队各自独立标记块、可共存**（切团队 = 各自注入各自更新，互不覆盖）；
+ * - 半截块自愈：start 在而 end 被人手删了 → 从 start 到文末整段替换。
+ *
+ * `rendered` 必须含该团队的起止标记（适配器契约），否则拒绝写盘（不写无标记的裸内容）。
+ */
+export async function injectTeamBlock(path: string, teamId: string, rendered: string): Promise<TeamBlockResult> {
+  const start = teamBlockStart(teamId)
+  const end = teamBlockEnd(teamId)
+  if (!rendered.includes(start) || !rendered.includes(end)) {
+    throw new PrismError('bad_request', `团队约定块渲染结果缺起止标记（${start} … ${end}）——适配器 renderTeamInstructions 契约破坏`)
+  }
+  const block = rendered.trimEnd()
+  let text: string
+  try {
+    text = await readFile(path, 'utf-8')
+  } catch {
+    await writeFile(path, `${block}\n`, 'utf-8')
+    return { path, teamId, action: 'created' }
+  }
+  const s = text.indexOf(start)
+  if (s === -1) {
+    const separator = text.endsWith('\n') || text === '' ? '' : '\n'
+    await writeFile(path, `${text}${separator}\n${block}\n`, 'utf-8')
+    return { path, teamId, action: 'appended' }
+  }
+  const e = text.indexOf(end, s)
+  const spanEnd = e === -1 ? text.length : e + end.length
+  await writeFile(path, text.slice(0, s) + block + text.slice(spanEnd), 'utf-8')
+  return { path, teamId, action: 'updated' }
+}
+
+/**
+ * 移除**全部**团队约定块（卸载用；`<!-- prism:team:<id>:start -->…<!-- prism:team:<id>:end -->`）。
+ * 团队块整体是 Prism 管辖面（同 `prism:begin/end` 纪律）——卸载即全部摘除，不残留过期约束。
+ * 返回移除的块数（半截块——start 在 end 缺——同样从 start 摘到文末）。
+ */
+export async function removeTeamBlocks(path: string): Promise<number> {
+  let text: string
+  try {
+    text = await readFile(path, 'utf-8')
+  } catch {
+    return 0
+  }
+  const startRe = /<!-- prism:team:[^\s>]*:start -->[^\n]*\n?/g
+  const matches = [...text.matchAll(startRe)]
+  if (matches.length === 0) return 0
+  let next = text
+  for (const m of matches.reverse()) {
+    const s = m.index ?? 0
+    const endMarkerRe = /<!-- prism:team:[^\s>]*:end -->/
+    const rest = next.slice(s + m[0].length)
+    const endMatch = endMarkerRe.exec(rest)
+    const spanEnd = endMatch === null ? next.length : s + m[0].length + endMatch.index + endMatch[0].length
+    next = next.slice(0, s) + next.slice(spanEnd)
+  }
+  next = next.replace(/\n{3,}/g, '\n\n')
+  await writeFile(path, next, 'utf-8')
+  return matches.length
 }

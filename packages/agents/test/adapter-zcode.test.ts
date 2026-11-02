@@ -138,6 +138,10 @@ describe('ZCode 适配器（HarnessAdapter 实现）', () => {
     expect(file?.path).toBe(join(repoDir, 'AGENTS.md'))
     expect(file?.content).toContain('<!-- prism:team:core-dev:start -->')
     expect(file?.content).toContain('safety > quality')
+    // 编制表必须注入（2026-11-02 超编反馈：派发时刻看不到 count → 队长多开实例）
+    expect(file?.content).toContain('## 编制（同角色并发实例上限）')
+    expect(file?.content).toContain('| dev-1 | 2 |')
+    expect(file?.content).toContain('同时在场的实例数不得超过上表')
     expect(createZcodeAdapter({ zcodeDir }).renderTeamInstructions(team)).toBeNull()
   })
 })

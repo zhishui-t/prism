@@ -11,9 +11,10 @@ import { dirProvenanceLabel, guardWriteTarget, resolveTargetDirs } from '../argv
 import { skillCategory } from './skill-category.js'
 
 /**
- * `prism skill list/install`（design-v3 §3.5 F10；本期裁剪 update/uninstall/uninit）。
+ * `prism skill list/install/update/uninstall/validate/...`（design-v3 §3.5 F10）。
  * 安装目标 = resolveDirs().skillsDir（prism.yaml 可覆盖；默认 `<harnessRoot>/skills/`，
- * adapter.skill.nativeDir 约定），不硬编码。
+ * adapter.skill.nativeDir 约定），不硬编码；update = install --force（幂等覆盖 Prism
+ * 产物，人写的 Skill 一律不动）——重新部署后刷新内置技能就走它，不必重跑 init。
  */
 export async function runSkill(ctx: CommandContext, args: string[], values: ArgValues): Promise<number> {
   const [sub, ...rest] = args

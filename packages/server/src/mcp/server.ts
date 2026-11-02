@@ -1802,7 +1802,7 @@ export function createMcpTools(deps: McpDeps): McpToolSet {
     {
       name: 'prism_team_runtime',
       description:
-        '读团队运行时看板（**只读**，Prism 不调度）：解析项目 `.agent-team/` 黑板（dag.json / agents.md / context.md / 门禁 / DELIVERY）→ 返回任务四态计数、**可派发集**（ready，依赖已就绪）、受阻集（waiting）、会话登记（角色→agentId/sessionId）、每条任务的**结构化契约**（kind/objective/acceptance/inScope/verify/verdict/changedPaths）与对账 gaps。契约校验是机械的：标 done 但验收项无结果、验证命令没跑、改动了写域外文件、并行任务写域重叠、review 非 pass 结案——全都报出来。另有 **deliveryGate**（全部完成 + 审核 pass + 无失败才能交付）。project 必填且须为已注册项目（不猜项目根）。回答「现在该派谁、派什么、谁在做、完成是不是真的」。',
+        '读团队运行时看板（**只读**，Prism 不调度）：解析项目 `.agent-team/` 黑板（dag.json / agents.md / context.md / 门禁 / DELIVERY）→ 返回任务四态计数、**可派发集**（ready，依赖已就绪）、受阻集（waiting）、会话登记（角色→agentId/sessionId）、每条任务的**结构化契约**（kind/objective/acceptance/inScope/verify/verdict/changedPaths）与对账 gaps。契约校验是机械的：标 done 但验收项无结果、验证命令没跑、改动了写域外文件、并行任务写域重叠、review 非 pass 结案——全都报出来。另有 **deliveryGate**（全部完成 + 审核 pass + 无失败才能交付）与**编制对账**（同角色登记实例数超过 team-manifest「编制」表上限 → `runtime_roster_over` 超编告警；缺编制表不判）。project 必填且须为已注册项目（不猜项目根）。回答「现在该派谁、派什么、谁在做、完成是不是真的、有没有超编」。',
       inputSchema: {
         type: 'object',
         properties: {

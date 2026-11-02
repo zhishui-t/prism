@@ -195,7 +195,7 @@ export async function runTeam(ctx: CommandContext, args: string[], values: ArgVa
         } else {
           ctx.stdout('图谱: 未指定项目（加 --project <名> 只读查看；--build-project <名> 显式建图；缺省不动手）')
         }
-        ctx.stdout(`提示: prism inject <项目根> 可把 Prism 指引写进项目 AGENTS.md（标记块，不动手写内容）`)
+        ctx.stdout(`提示: prism inject <项目根> --team <id> 可把团队约定（编制/工作流/仲裁链）与 Prism 指引写进项目 AGENTS.md（标记块，不动手写内容；重跑 = 更新）`)
       }
       return 0
     }

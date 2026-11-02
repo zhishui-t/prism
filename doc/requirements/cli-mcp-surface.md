@@ -283,7 +283,7 @@ prism
 | `prism_team_rm` | 删除团队文件本体（**搬进回收站**，可 `prism trash restore <trash_id>` 还原；默认 3 天后彻底清除、自动清除需 serve 运行；`teams_dir` 必填；v6 新增） |
 | `prism_team_render` | 渲染宿主格式团队文件（v6 新增） |
 | `prism_team_activate` | 拉取团队运行时配置（含装配状态） |
-| `prism_team_runtime` | 读团队**运行时看板**（只读）：解析项目 `.agent-team/` 黑板 → 任务四态计数、`ready`（依赖已就绪的可派发集）、`waiting`、会话登记（角色→agentId/sessionId）、门禁文件、断点快照与对账 `gaps`（任务无登记 / 依赖缺失 / 依赖成环 / 快照过期 / 全部完成却缺交付报告）。`project` 必填且须为已注册项目（不猜项目根）。**Prism 不调度**——只显示文件里的事实 |
+| `prism_team_runtime` | 读团队**运行时看板**（只读）：解析项目 `.agent-team/` 黑板 → 任务四态计数、`ready`（依赖已就绪的可派发集）、`waiting`、会话登记（角色→agentId/sessionId）、门禁文件、断点快照与对账 `gaps`（任务无登记 / 依赖缺失 / 依赖成环 / 快照过期 / 全部完成却缺交付报告 / **同角色登记实例数超 team-manifest 编制表 → 超编 `runtime_roster_over`**）。`project` 必填且须为已注册项目（不猜项目根）。**Prism 不调度**——只显示文件里的事实 |
 | `prism_workflow_list` | 列出工作流单元库（一等资产：角色级/团队级过程单元，含 steps 与校验 issues；数据源 = workflows_dir，只读；workflow-asset v1） |
 | `prism_workflow_get` | 取单个工作流单元（frontmatter 元信息 + steps 步骤表 + 完整正文 + issues；只读） |
 | `prism_workflow_edit` | 改步骤表（v2 图编辑器写路径）：steps 行数组（rowId 对齐 `steps_raw` 保未映射列）、可选 columns / if_match（GET 的 source_mtime，不符 → 409 stale_write）；写前校验 error 拒落盘；workflows_dir 必填 |

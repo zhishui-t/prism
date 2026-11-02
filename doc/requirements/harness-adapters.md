@@ -98,7 +98,7 @@ interface HarnessAdapter {
   /** 把该 harness 的原生文件解析回 Prism 角色定义（导入） */
   parseRole(content: string, filename: string): RoleDefinition
 
-  /** 团队约定的注入方式 */
+  /** 团队约定的注入方式（标记块 `<!-- prism:team:<id>:start/end -->`；由 `prism inject <repo> --team <id>` 驱动，见 team-definition.md §7） */
   renderTeamInstructions(team: TeamDefinition): RenderedFile | null
 }
 ```

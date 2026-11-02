@@ -16,6 +16,7 @@ import type { HarnessAdapter, HarnessPresence, HarnessRenderOptions, RenderedFil
 import { parseRoleMarkdown } from '../role/parse.js'
 import { renderZcodeRole } from '../role/render.js'
 import { renderZcodeTeam } from '../team/render.js'
+import { teamBlockEnd, teamBlockStart } from '../agents-md.js'
 import type { RoleDefinition, TeamDefinition } from '../types.js'
 
 export const ZCODE_ADAPTER_ID = 'zcode'
@@ -133,16 +134,27 @@ export function createZcodeAdapter(opts: ZcodeAdapterOptions = {}): HarnessAdapt
 
     renderTeamInstructions(team: TeamDefinition): RenderedFile | null {
       if (opts.repoDir === undefined) return null
-      const start = `<!-- prism:team:${team.team_id}:start -->`
-      const end = `<!-- prism:team:${team.team_id}:end -->`
+      const start = teamBlockStart(team.team_id)
+      const end = teamBlockEnd(team.team_id)
       const workflowLines = team.workflow
         .map((s) => `| ${s.order} | ${s.stage} | ${s.roles.join(' + ')} | ${s.mode} | ${s.input} | ${s.output} | ${s.done} | ${s.reflow} |`)
+        .join('\n')
+      const rosterLines = team.members
+        .map((m) => `| ${m.role} | ${m.count} |`)
         .join('\n')
       const content = [
         start,
         `# 团队约定：${team.name}（${team.team_id}）`,
         '',
         team.description,
+        '',
+        '## 编制（同角色并发实例上限）',
+        '',
+        '| 角色 | 实例上限 |',
+        '| :--- | :--- |',
+        rosterLines,
+        '',
+        '任何时刻同一角色**同时在场的实例数不得超过上表**（同角色多行上限相加）；分桶并行时任务桶多于实例的，排队复用空闲实例（SendMessage 续用），**不新开**。确需超出编制：先向用户报批变更编制，批准前一律不超编派遣。',
         '',
         '## 工作流',
         '',

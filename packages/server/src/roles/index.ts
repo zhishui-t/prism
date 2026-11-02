@@ -159,8 +159,11 @@ export {
   loadEffectiveSkills,
   teamNotFoundMessage,
   roleNotFoundMessage,
+  injectTeamConvention,
   type HarnessPaths,
   type LoadEffectiveSkillsInput,
+  type InjectTeamConventionInput,
+  type InjectTeamConventionResult,
 } from './wiring.js'
 
 // 角色写盘（HTTP `/api/roles` 与 MCP `prism_role_new|edit|rm` 共用写路径）

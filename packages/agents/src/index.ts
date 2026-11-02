@@ -55,7 +55,12 @@ export {
   findPrismBlock,
   PRISM_BLOCK_BEGIN,
   PRISM_BLOCK_END,
+  injectTeamBlock,
+  removeTeamBlocks,
+  teamBlockStart,
+  teamBlockEnd,
   type InjectResult,
+  type TeamBlockResult,
 } from './agents-md.js'
 export type { ParseRoleOptions } from './role/parse.js'
 export {

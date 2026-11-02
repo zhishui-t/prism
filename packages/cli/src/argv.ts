@@ -158,6 +158,7 @@ export const USAGE = `prism — 企业级智能研发效能平台 CLI
   prism graph export <格式> --project <项目名>               导出（obsidian/wiki/svg/graphml/…）
   prism graph status <项目名>
   prism inject <项目根> [--team <团队id>] [--remove]  把 Prism 指引写进项目 AGENTS.md 标记块
+                         （--team 同时注入/更新团队约定块：编制/工作流/仲裁链；重跑 = 更新）
   prism project add <项目根目录> [--name <项目名>]   登记项目台账（不建图、不扫描）
   prism project list | show <名> | remove <名> [--yes]
   prism embedding status | install | start | stop | reindex   本地向量化（BGE-M3，Prism 自理）

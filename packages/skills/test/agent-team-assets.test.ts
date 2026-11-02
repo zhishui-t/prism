@@ -30,11 +30,23 @@ describe('prism 技能内置 Prism Agent Team 手册', () => {
     }
   })
 
-  it('手册含关键治理条款（模式判定/严格执行/分桶/六要素/队长纪律/完成≠关闭/压缩恢复）', () => {
+  it('手册含关键治理条款（模式判定/严格执行/分桶/六要素/队长纪律/完成≠关闭/压缩恢复/编制上限）', () => {
     const manual = prismSkill.assets?.find((a) => a.path === 'references/agent-team.md')?.content ?? ''
-    for (const kw of ['执行模式', '严格执行', '按独立性分桶', '任务单六要素', '队长纪律', '完成 ≠ 关闭', '上下文压缩', '断点快照']) {
+    for (const kw of ['执行模式', '严格执行', '按独立性分桶', '任务单六要素', '队长纪律', '完成 ≠ 关闭', '上下文压缩', '断点快照', '编制上限', 'runtime_roster_over']) {
       expect(manual, `手册缺关键词: ${kw}`).toContain(kw)
     }
+  })
+
+  it('配套件含编制上限语义（manifest 数量列=并发上限；登记表先数再开；派发原则不超编）', () => {
+    // 2026-11-02 反馈：队长不按团队配置派发、超编多开——三处配套件都要把上限说死
+    const manifest = prismSkill.assets?.find((a) => a.path === 'templates/team-manifest.md')?.content ?? ''
+    const agents = prismSkill.assets?.find((a) => a.path === 'templates/agents.md')?.content ?? ''
+    const roles = prismSkill.assets?.find((a) => a.path === 'references/agent-team/roles.md')?.content ?? ''
+    for (const kw of ['并发实例上限', 'runtime_roster_over']) {
+      expect(manifest, `team-manifest 缺: ${kw}`).toContain(kw)
+    }
+    expect(agents).toContain('编制上限')
+    expect(roles).toContain('实例数以编制为上限')
   })
 
   it('description 与正文含组队触发词与手册入口', () => {

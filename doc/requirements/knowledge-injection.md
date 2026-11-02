@@ -175,7 +175,8 @@ HTTP 等价面：`GET /api/kb/context-pack?role=&task=&budget_tokens=&layers=&bo
 
 | 目标 | 内容 | 作用 |
 | :--- | :--- | :--- |
-| 项目 `AGENTS.md` | 团队约定、可用 MCP 工具清单、"先查图谱再改代码"等指引 | 让宿主 agent 知道有什么 |
+| 项目 `AGENTS.md`（`prism:begin/end` 块） | 团队约定、可用 MCP 工具清单、"先查图谱再改代码"等指引 | 让宿主 agent 知道有什么 |
+| 项目 `AGENTS.md`（`prism:team:<id>:start/end` 块，`--team <id>` 时） | **团队约定块**：编制表【同角色并发实例上限】+ 工作流 + 仲裁链 + 返工上限（适配器 `renderTeamInstructions` 渲染） | 团队约束在宿主会话里**可见**（2026-11-02 超编反馈的落点）；重跑 `prism inject <repo> --team <id>` 即更新 |
 | 角色文件正文 | 该角色的知识绑定（层/书） | 角色自带范围声明 |
 | Skill 文件 | Prism 的能力封装（如"如何用 Prism 查知识"） | 可触发的技能 |
 
@@ -207,6 +208,9 @@ HTTP 等价面：`GET /api/kb/context-pack?role=&task=&budget_tokens=&layers=&bo
 | AGENTS.md 无 prism 块 | 追加到末尾 |
 | AGENTS.md 不存在 | 创建 |
 | 用户手改块内内容 | 下次更新会覆盖（块内视为 Prism 管辖） |
+| 多个团队的约定块 | 各自独立标记块、可共存；重注各自团队只更新各自的块 |
+| 团队块半截（end 被手删） | 从 start 到文末整段替换自愈（其后内容无法界定归属，一并重建） |
+| `prism uninject`（`--remove`） | 知识块 + 全部团队块一并摘除（团队块整体是 Prism 管辖面，不残留过期约束） |
 
 ---
 

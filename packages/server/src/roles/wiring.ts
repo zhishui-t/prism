@@ -22,6 +22,7 @@ import {
   computeEffectiveSkills,
   createRoleRegistry,
   createTeamRegistry,
+  injectTeamBlock,
   loadPrismConfig,
   parseRoleMarkdown,
   parseTeamMarkdown,
@@ -268,6 +269,58 @@ export function teamNotFoundMessage(teamsDir: string, teamId: string): string {
  */
 export function roleNotFoundMessage(rolesDir: string, roleId: string): string {
   return `角色不存在: ${roleId}（数据源 ${rolesDir}/<name>.md，兼容 <name>/AGENTS.md 双形态）`
+}
+
+// ---------------------------------------------------------------------------
+// 团队约定块注入（team-definition.md §7「注入」：团队约定写进 <repo>/AGENTS.md 标记块）
+// ---------------------------------------------------------------------------
+
+export interface InjectTeamConventionInput {
+  /** 项目根（团队约定块写进 `<repoRoot>/AGENTS.md` 的 `prism:team:<id>` 标记块）。 */
+  repoRoot: string
+  teamId: string
+  /** 团队定义目录（resolveDirs().teamsDir）。 */
+  teamsDir: string
+  /** 角色目录（团队校验用，可选）。 */
+  rolesDir?: string
+  /** harness 根覆盖（测试/CI）；缺省 = 激活适配器 defaultRoot（prism.yaml/PRISM_HARNESS 决定哪个）。 */
+  harnessRoot?: string
+  /** PRISM_HOME（读 prism.yaml 的 harness 键）。 */
+  home?: string
+}
+
+export interface InjectTeamConventionResult {
+  path: string
+  teamId: string
+  action: 'created' | 'appended' | 'updated'
+}
+
+/**
+ * 把**团队约定块**（适配器 `renderTeamInstructions`：编制表【同角色并发实例上限】+
+ * 工作流 + 仲裁链 + 返工上限）注入/更新到 `<repo>/AGENTS.md`——团队约束在宿主会话里的
+ * **可见面**。`prism inject <项目根> --team <id>` 即本函数（重跑 = 更新，块外手写内容不动）。
+ *
+ * 组合单点：`loadTeam`（不存在 → not_found）→ `resolveHarness`（repoDir 进适配器）→
+ * `adapter.renderTeamInstructions`（null → bad_request，用户点名了 --team 不静默跳过）→
+ * `injectTeamBlock`（标记块合并）。适配器渲染的标记串与 `teamBlockStart/End` 同源。
+ */
+export async function injectTeamConvention(input: InjectTeamConventionInput): Promise<InjectTeamConventionResult> {
+  const team = await loadTeam(input.teamsDir, input.teamId, {
+    ...(input.rolesDir !== undefined ? { rolesDir: input.rolesDir } : {}),
+  })
+  if (team === null) {
+    throw new PrismError('not_found', teamNotFoundMessage(input.teamsDir, input.teamId))
+  }
+  const { adapter } = resolveHarness({
+    ...(input.harnessRoot !== undefined ? { root: input.harnessRoot } : {}),
+    repoDir: input.repoRoot,
+    configuredId: loadPrismConfig(input.home)?.harness,
+  })
+  const file = adapter.renderTeamInstructions(team)
+  if (file === null) {
+    throw new PrismError('bad_request', `当前 harness（${adapter.id}）不支持团队约定注入（renderTeamInstructions 返回 null）`)
+  }
+  return await injectTeamBlock(file.path, team.team_id, file.content)
 }
 
 /** 不做 extends/校验的原样加载（extends 链的父级解析用，避免递归校验）。 */

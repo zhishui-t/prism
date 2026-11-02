@@ -21,6 +21,7 @@ import {
   listTeamRuns,
   parseAgentsMd,
   parseContextMd,
+  parseRosterMd,
   readTeamRuntime,
   roleMatches,
 } from '../src/runtime/blackboard.js'
@@ -504,5 +505,133 @@ describe('产物清单（run 目录全量盘点）', () => {
     expect(classifyArtifact('dag.html')).toBe('other') // 派生视图不盘点，但分类函数不特判
     expect(classifyArtifact('visual-audit-v7.md')).toBe('test')
     expect(classifyArtifact('f1-build-report.md')).toBe('test')
+  })
+})
+
+describe('编制对账（超编派遣，2026-11-02 反馈：队长派发超过团队配置数量）', () => {
+  const MANIFEST = [
+    '# 团队花名册（team-manifest）',
+    '',
+    '## 编制',
+    '| 岗位 | 承担角色 | 来源 | 数量 | 负责（F-ID/事项） | 输入文件 | 输出文件 |',
+    '|------|----------|------|------|-------------------|----------|----------|',
+    '| 开发流1 | dev | 库内 | 1 | F01 | task-brief.md | streams/stream-1.md |',
+    '| 开发流2 | dev | 库内 | 1 | F02 | task-brief.md | streams/stream-2.md |',
+    '| 测试 | tester | 库内 | 1 | F01~F02 | 任务书 | test-report.md |',
+    '',
+    '## 工作流',
+    '',
+    '| # | 阶段 | 负责角色 |',
+    '|---|------|----------|',
+    '| 1 | 开发 | dev |',
+  ].join('\n')
+
+  function agentsMd(rows: string[], archived: string[] = []): string {
+    return [
+      '# 会话登记表',
+      '',
+      '| 岗位/角色 | 子代理 agentId | 最后动作/状态 |',
+      '|-----------|----------------|----------------|',
+      ...rows,
+      ...(archived.length > 0 ? ['', '## 已归档（本轮之前）', '', '| 岗位 | 会话线 | 备注 |', '| :--- | :--- | :--- |', ...archived] : []),
+      '',
+    ].join('\n')
+  }
+
+  it('同角色登记实例数超过编制（dev 上限 1+1=2 却登记 3 个）→ runtime_roster_over warning', async () => {
+    await writeBoard({
+      'dag.json': JSON.stringify({ nodes: [{ id: 'a', label: '开发', role: 'dev', status: 'running' }] }),
+      'team-manifest.md': MANIFEST,
+      'agents.md': agentsMd([
+        '| 开发流1 / dev | agent_111 | 开发中 |',
+        '| 开发流2 / dev | agent_222 | 开发中 |',
+        '| 开发流3 / dev | agent_333 | 开发中 |',
+      ]),
+    })
+    const rt = await readTeamRuntime(root, 'demo')
+    const gap = rt.gaps.find((g) => g.code === 'runtime_roster_over')
+    expect(gap?.level).toBe('warning')
+    expect(gap?.message).toContain('dev')
+    expect(gap?.message).toContain('3 个实例')
+    expect(gap?.message).toContain('上限 2')
+    // tester 未超 → 不报它
+    expect(rt.gaps.filter((g) => g.code === 'runtime_roster_over')).toHaveLength(1)
+  })
+
+  it('登记数 = 编制上限（多岗位同角色数量相加）→ 不报', async () => {
+    await writeBoard({
+      'dag.json': JSON.stringify({ nodes: [{ id: 'a', label: '开发', role: 'dev', status: 'running' }] }),
+      'team-manifest.md': MANIFEST,
+      'agents.md': agentsMd([
+        '| 开发流1 / dev | agent_111 | 开发中 |',
+        '| 开发流2 / dev | agent_222 | 开发中 |',
+      ]),
+    })
+    const rt = await readTeamRuntime(root, 'demo')
+    expect(rt.gaps.some((g) => g.code === 'runtime_roster_over')).toBe(false)
+  })
+
+  it('归档实例不计入在场数（2 在场 + 1 归档 = 未超编）', async () => {
+    await writeBoard({
+      'dag.json': JSON.stringify({ nodes: [{ id: 'a', label: '开发', role: 'dev', status: 'running' }] }),
+      'team-manifest.md': MANIFEST,
+      'agents.md': agentsMd(
+        ['| 开发流1 / dev | agent_111 | 开发中 |', '| 开发流2 / dev | agent_222 | 开发中 |'],
+        ['| 开发流0 / dev | agent_000 | 已失效 |'],
+      ),
+    })
+    const rt = await readTeamRuntime(root, 'demo')
+    expect(rt.gaps.some((g) => g.code === 'runtime_roster_over')).toBe(false)
+  })
+
+  it('没有 team-manifest → 不判（不误报，同任务契约口径）', async () => {
+    await writeBoard({
+      'dag.json': JSON.stringify({ nodes: [{ id: 'a', label: '开发', role: 'dev', status: 'running' }] }),
+      'agents.md': agentsMd([
+        '| dev | agent_111 | 开发中 |',
+        '| dev | agent_222 | 开发中 |',
+        '| dev | agent_333 | 开发中 |',
+      ]),
+    })
+    const rt = await readTeamRuntime(root, 'demo')
+    expect(rt.gaps.some((g) => g.code === 'runtime_roster_over')).toBe(false)
+  })
+
+  it('有 team-manifest 但编制表解析不出（自由文本）→ 不判、不 error', async () => {
+    await writeBoard({
+      'dag.json': JSON.stringify({ nodes: [{ id: 'a', label: '开发', role: 'dev', status: 'running' }] }),
+      'team-manifest.md': '# 花名册\n\n## 编制\n\n（自由文本，没有表）\n',
+      'agents.md': agentsMd(['| dev | agent_111 | 开发中 |']),
+    })
+    const rt = await readTeamRuntime(root, 'demo')
+    expect(rt.gaps.some((g) => g.code === 'runtime_roster_over')).toBe(false)
+    expect(rt.gaps.some((g) => g.code.startsWith('runtime_roster'))).toBe(false)
+  })
+
+  it('parseRosterMd：同角色多行分别成条（对账时相加）；严格团队两列形态（角色/数量）也认', () => {
+    const roster = parseRosterMd(MANIFEST)
+    expect(roster.filter((r) => r.role === 'dev')).toEqual([
+      { role: 'dev', count: 1 },
+      { role: 'dev', count: 1 },
+    ])
+    expect(roster.some((r) => r.role === 'tester' && r.count === 1)).toBe(true)
+    // 工作流表不在「编制」小节 → 不误入
+    expect(roster.some((r) => r.role === '阶段')).toBe(false)
+
+    const strict = parseRosterMd(['## 编制', '| 角色 | 数量 |', '|---|---|', '| dev-1 | 2 |', '| qa | 1 |'].join('\n'))
+    expect(strict).toEqual([
+      { role: 'dev-1', count: 2 },
+      { role: 'qa', count: 1 },
+    ])
+
+    // 缺小节 / 缺角色列 / 缺数量列 → []
+    expect(parseRosterMd('# x\n\n## 工作流\n\n| a | b |\n|---|---|\n| 1 | 2 |')).toEqual([])
+    expect(parseRosterMd('## 编制\n| 岗位 | 备注 |\n|---|---|\n| x | y |')).toEqual([])
+    expect(parseRosterMd('## 编制\n| 角色 | 备注 |\n|---|---|\n| x | y |')).toEqual([])
+    // 数量缺省 1；×2 形态也认
+    expect(parseRosterMd('## 编制\n| 角色 | 数量 |\n|---|---|\n| dev | |\n| qa | ×3 |')).toEqual([
+      { role: 'dev', count: 1 },
+      { role: 'qa', count: 3 },
+    ])
   })
 })

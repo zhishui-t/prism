@@ -7,7 +7,7 @@
  *
  * 1. **解析**：把黑板读成结构化快照（容错优先——缺文件/坏 JSON 不抛，落 `gaps`）；
  * 2. **推导**：按「依赖全 done 且自己 pending」算**可派发集**，其余 pending 算受阻；
- * 3. **对账**：任务角色 × 名册 × 会话登记 × 门禁文件的一致性缺口（`gaps`）。
+ * 3. **对账**：任务角色 × 名册 × 会话登记 × 门禁文件 × **编制上限**的一致性缺口（`gaps`）。
  *
  * 口径：
  * - 文件为真相（R7）：不缓存、不改写、不生成黑板文件；
@@ -84,6 +84,53 @@ export interface RuntimeSnapshotRow {
 export interface RuntimeGate {
   name: string
   present: boolean
+}
+
+/** 编制条目（team-manifest「编制」表的一行：承担角色 × 数量）。 */
+export interface RosterEntry {
+  role: string
+  count: number
+}
+
+/**
+ * 解析 team-manifest.md 的「编制」表——超编对账（runtime_roster_over）的基准。
+ *
+ * 口径同任务契约：**没写就不判**——缺 `## 编制` 小节、小节内没有含
+ * 「承担角色/角色」+「数量/实例」两列的表 → 返回 `[]`（对账跳过，不误报）。
+ * 只扫 `## 编制` 到下一个 `#`/`##` 标题之间（`###` 属小节内，同 team/parse 口径）；
+ * 数量列取首个整数（`×2`/`2 个` 均认），缺省 1。
+ */
+export function parseRosterMd(markdown: string): RosterEntry[] {
+  const out: RosterEntry[] = []
+  let inSection = false
+  let headerSeen = false
+  let roleCol = -1
+  let countCol = -1
+  for (const line of markdown.replace(/\r\n/g, '\n').split('\n')) {
+    const trimmed = line.trim()
+    if (trimmed.startsWith('#')) {
+      if (/^#{1,2}\s/.test(trimmed)) {
+        if (inSection) break
+        inSection = /^##\s*编制/.test(trimmed)
+      }
+      continue
+    }
+    if (!inSection || !trimmed.startsWith('|')) continue
+    const cells = splitRow(trimmed)
+    if (!headerSeen) {
+      roleCol = cells.findIndex((c) => c.includes('承担角色') || c.trim() === '角色' || /role/i.test(c))
+      countCol = cells.findIndex((c) => c.includes('数量') || c.includes('实例') || /count/i.test(c))
+      if (roleCol >= 0 && countCol >= 0 && roleCol !== countCol) headerSeen = true
+      continue
+    }
+    if (cells.every((c) => /^:?-{2,}:?$/.test(c) || c === '')) continue // 分隔行
+    // 模板占位（<如 dev>）去尖括号后按分隔符分词；「如」这类残词不会命中任何登记，无害
+    const roleCell = (cells[roleCol] ?? '').replace(/[<>]/g, ' ')
+    const m = /(\d+)/.exec((cells[countCol] ?? '').replace(/[×x]/gi, ' '))
+    const count = m !== null ? Math.max(1, Number.parseInt(m[1]!, 10)) : 1
+    for (const token of splitRoleTokens(roleCell)) out.push({ role: token, count })
+  }
+  return out
 }
 
 /** 产物分类（与 examples/dev-team.md §4 的产物表同源；unknown = 未识别的杂项，照样列出）。 */
@@ -556,6 +603,33 @@ async function readRunDir(root: string, project: string, dir: string): Promise<R
           : `任务全部完成，但最新的交付报告 ${delivery.file} 比 dag.json 旧——本轮的交付报告可能还没写`,
       where: 'DELIVERY*.md',
     })
+  }
+  // 6) 编制对账：同角色登记实例数 > team-manifest「编制」表上限 → 超编派遣
+  //    基准 = run 目录最新 team-manifest*.md 的编制表（缺表/解析不出 → 不判，同任务契约口径）
+  let manifest: { name: string; mtime: number } | null = null
+  for (const name of dirEntries ?? []) {
+    if (!name.startsWith('team-manifest')) continue
+    const mtime = await statSafe(join(dir, name))
+    if (mtime !== undefined && (manifest === null || mtime > manifest.mtime)) manifest = { name, mtime }
+  }
+  if (manifest !== null) {
+    const manifestRaw = await readText(join(dir, manifest.name))
+    const roster = manifestRaw === null ? [] : parseRosterMd(manifestRaw)
+    if (roster.length > 0) {
+      const caps = new Map<string, number>()
+      for (const r of roster) caps.set(r.role, (caps.get(r.role) ?? 0) + r.count)
+      for (const [role, cap] of caps) {
+        const live = dispatch.filter((d) => d.agentId !== null && splitRoleTokens(d.role).includes(role)).length
+        if (live > cap) {
+          gaps.push({
+            level: 'warning',
+            code: 'runtime_roster_over',
+            message: `角色「${role}」在 agents.md 登记 ${live} 个实例，编制上限 ${cap}（${manifest.name}）——队长超编派遣：回收超编实例改 SendMessage 续用，或先经用户批准变更编制`,
+            where: 'agents.md',
+          })
+        }
+      }
+    }
   }
 
   return {
