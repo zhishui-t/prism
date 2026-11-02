@@ -10,6 +10,13 @@ import {
 } from '../src/frontmatter.js'
 
 describe('frontmatter 独立解析器（design-v3 §3.1.1 十类语法）', () => {
+  it('0. UTF-8 BOM 剥除（Windows 编辑器 / PowerShell UTF8 写入常带；实测曾报「缺少 frontmatter」）', () => {
+    const { data, body } = splitFrontmatter('\uFEFF---\nteam_id: core-dev\n---\n\n正文\n')
+    expect(data).not.toBeNull()
+    expect(data?.['team_id']).toBe('core-dev')
+    expect(body).toContain('正文')
+  })
+
   it('1. 顶层标量（含数字/布尔/null 类型化）', () => {
     const data = parseFrontmatter('team_id: core-dev\nrework_limit: 2\ndefault: true\nnote: null\nratio: 1.5')
     expect(data).toEqual({ team_id: 'core-dev', rework_limit: 2, default: true, note: null, ratio: 1.5 })

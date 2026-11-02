@@ -82,7 +82,10 @@ export function stripAllMarkerTails(body: string): string {
 
 /** 拆开 `---\n...\n---` 头与正文；无 frontmatter 时 data 为 null。 */
 export function splitFrontmatter(raw: string): { data: FrontmatterData | null; body: string } {
-  const normalized = raw.replace(/\r\n/g, '\n')
+  // 剥 UTF-8 BOM（Windows 编辑器 / PowerShell `Set-Content -Encoding UTF8` 常写；
+  // 实测带 BOM 的团队文件报「缺少 frontmatter」。knowledge 侧同坑已各自处理，此处是
+  // agents 包的单点）。CRLF 一并归一。
+  const normalized = raw.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n')
   if (!normalized.startsWith('---\n')) {
     return { data: null, body: normalized }
   }
