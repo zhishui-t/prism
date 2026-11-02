@@ -19,6 +19,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   classifyArtifact,
   listTeamRuns,
+  readTaskOverview,
   parseAgentsMd,
   parseContextMd,
   parseRosterMd,
@@ -505,6 +506,44 @@ describe('产物清单（run 目录全量盘点）', () => {
     expect(classifyArtifact('dag.html')).toBe('other') // 派生视图不盘点，但分类函数不特判
     expect(classifyArtifact('visual-audit-v7.md')).toBe('test')
     expect(classifyArtifact('f1-build-report.md')).toBe('test')
+  })
+})
+
+describe('项目任务总览（台账视角：规划出来之后，进度一眼可读）', () => {
+  it('跨 run 聚合计数与门禁；无黑板项目返回空 runs', async () => {
+    // 两个 run 目录 + 一个空项目根
+    await writeBoard({
+      'dag.json': JSON.stringify({ title: '平铺旧任务', nodes: [{ id: 'a', label: 'A', role: 'dev', status: 'done', deps: [] }] }),
+    })
+    const runDir = join(root, '.agent-team', '20261031-fix')
+    await mkdir(runDir, { recursive: true })
+    await writeFile(
+      join(runDir, 'dag.json'),
+      JSON.stringify({
+        title: '修复任务',
+        nodes: [
+          { id: 'f1', label: '修复', role: 'dev', status: 'running', deps: [] },
+          { id: 'f2', label: '复验', role: 'tester', status: 'pending', deps: ['f1'] },
+        ],
+      }),
+      'utf8',
+    )
+    const ov = await readTaskOverview(root, 'demo')
+    expect(ov.hasBlackboard).toBe(true)
+    expect(ov.runs.map((r) => r.id)).toEqual(['20261031-fix', '']) // 子目录按名序在前、平铺在后
+    expect(ov.totals).toEqual({ done: 1, running: 1, pending: 1, blocked: 0, tasks: 3 })
+    const fix = ov.runs.find((r) => r.id === '20261031-fix')!
+    expect(fix.gate.ok).toBe(false) // 有未完成任务
+    expect(fix.ready).toBe(0) // f2 依赖 f1(running) 未就绪
+    const legacy = ov.runs.find((r) => r.id === '')!
+    expect(legacy.gate.ok).toBe(true) // 单任务已完成
+  })
+
+  it('无黑板 → hasBlackboard=false、runs 空、totals 全零', async () => {
+    const ov = await readTaskOverview(root, 'demo')
+    expect(ov.hasBlackboard).toBe(false)
+    expect(ov.runs).toEqual([])
+    expect(ov.totals).toEqual({ done: 0, running: 0, pending: 0, blocked: 0, tasks: 0 })
   })
 })
 

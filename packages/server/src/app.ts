@@ -198,6 +198,8 @@ export async function createApp(options: AppOptions = {}): Promise<{
       const job = jobs.submit(project, target.root, target.root, runner, {})
       return { job_id: job.job_id }
     },
+    // 项目任务总览（台账视角）：全部已注册项目；未注入则路由给空列表（不猜目录）
+    listProjects: async () => (await registry.list()).map((p) => ({ project: p.project, root: p.root })),
     // 团队运行时看板：项目名 → 已注册项（含 root）。未注册 → null → 404（不猜项目根）
     resolveProject: async (project) => {
       try {
@@ -219,6 +221,7 @@ export async function createApp(options: AppOptions = {}): Promise<{
   router.add('POST', '/api/teams', people.createTeam)
   // ⚠ 顺序：`/api/teams/:id/runtime` 与 `/activate` 都是两段，`:id` 单段不会吞它们；
   // 但为可读性与将来加 `/api/teams/:id/*` 子路由，仍把子路由紧跟列表放在 `:id` 之前。
+  router.add('GET', '/api/teams/task-overview', people.teamTaskOverview)
   router.add('GET', '/api/teams/:id/runtime', people.teamRuntime)
   router.add('GET', '/api/teams/:id/activate', people.teamActivate)
   router.add('GET', '/api/teams/:id', people.team)

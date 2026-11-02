@@ -2291,3 +2291,25 @@ tbody tr:hover td { background: color-mix(in srgb, var(--sheet-2) 56%, transpare
 /* 知识页：导入工具行 + 导入结果面板 */
 .kb-toolbar { display: flex; justify-content: flex-end; margin-bottom: var(--s-2); }
 .kb-import-result { display: flex; flex-direction: column; gap: var(--s-2); margin-top: var(--s-3); }
+/* 项目台账：任务总览（紧凑进度条 + 分 run 面板） */
+.task-cell { display: flex; flex-direction: column; gap: 4px; min-width: 120px; }
+.task-bar {
+  display: flex;
+  height: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--rule);
+  min-width: 110px;
+  flex: 0 1 160px;
+}
+.task-bar .seg.done { background: var(--ok); }
+.task-bar .seg.running { background: var(--buckram); }
+.task-bar .seg.blocked { background: var(--err); }
+.task-bar .seg.pending { background: var(--mute); opacity: .5; }
+.task-overview-project { display: flex; flex-direction: column; gap: var(--s-1); padding: var(--s-2) 0; border-bottom: 1px solid var(--rule); }
+.task-overview-project:last-child { border-bottom: none; }
+.task-overview-runs { display: flex; flex-direction: column; gap: var(--s-2); padding-left: var(--s-3); }
+.task-overview-run { display: flex; flex-direction: column; gap: 4px; }
+.task-run-id { color: var(--mute); max-width: 22ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-run-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nowrap { white-space: nowrap; }

@@ -69,6 +69,8 @@ export function TeamRuntimePane({ teamId, projects }: { teamId: string; projects
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [openGaps, setOpenGaps] = useState(false)
+  /** 最近一次成功拉取的本地时间（显示「更新于」）。 */
+  const [fetchedAt, setFetchedAt] = useState(0)
   /** 任务下钻（点行展开契约与证据明细）。 */
   const [openTask, setOpenTask] = useState<string | null>(null)
 
@@ -107,6 +109,24 @@ export function TeamRuntimePane({ teamId, projects }: { teamId: string; projects
     }
   }, [autoPicked, project, projects, teamId])
 
+  /** 拉一次（手动刷新与轮询共用；不置 loading——轮询闪骨架反而打断阅读）。 */
+  const refresh = (): void => {
+    if (project === '') return
+    const alive = true
+    teamApi
+      .runtime(teamId, project, runSel === null ? undefined : runSel === '__root__' ? '' : runSel)
+      .then((value) => {
+        if (alive) {
+          setData(value)
+          setError('')
+          setFetchedAt(Date.now())
+        }
+      })
+      .catch((e: unknown) => {
+        if (alive) setError(e instanceof Error ? e.message : String(e))
+      })
+  }
+
   useEffect(() => {
     if (project === '') return
     let alive = true
@@ -115,7 +135,10 @@ export function TeamRuntimePane({ teamId, projects }: { teamId: string; projects
     teamApi
       .runtime(teamId, project, runSel === null ? undefined : runSel === '__root__' ? '' : runSel)
       .then((value) => {
-        if (alive) setData(value)
+        if (alive) {
+          setData(value)
+          setFetchedAt(Date.now())
+        }
       })
       .catch((e: unknown) => {
         if (alive) {
@@ -126,9 +149,16 @@ export function TeamRuntimePane({ teamId, projects }: { teamId: string; projects
       .finally(() => {
         if (alive) setLoading(false)
       })
+    // 轮询：黑板是活文档（队长随时改 dag.json）——看板每 10s 重读；页面不可见时暂停
+    const timer = window.setInterval(() => {
+      if (!alive || document.hidden) return
+      refresh()
+    }, 10_000)
     return () => {
       alive = false
+      window.clearInterval(timer)
     }
+    // refresh 闭包只读 state，无需进依赖（本仓无 eslint-plugin-react-hooks，不做 disable）
   }, [teamId, project, runSel])
 
   const gaps: RuntimeGapView[] = data?.gaps ?? []
@@ -169,6 +199,12 @@ export function TeamRuntimePane({ teamId, projects }: { teamId: string; projects
               </select>
             </label>
           )}
+          <button type="button" className="tool-btn" onClick={refresh} title={t('runtime.autoPoll')}>
+            {t('common.refresh')}
+            {fetchedAt > 0 && (
+              <span className="small muted"> {new Date(fetchedAt).toLocaleTimeString()}</span>
+            )}
+          </button>
           {/* 同项目多团队并行：黑板按任务分目录（.agent-team/<run>/），这里切换看哪支 */}
           {data !== null && data.runs.length > 1 && (
             <label className="runtime-project">

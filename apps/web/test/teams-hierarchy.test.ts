@@ -32,13 +32,14 @@ import type { RoleDefinition, TeamDefinition } from '../src/api-team.ts'
 
 /** 受控假数据：`vi.mock` 工厂被提升，故经 `vi.hoisted` 共享可变引用。 */
 const data = vi.hoisted(() => ({ teams: [] as unknown[], roles: [] as unknown[] }))
+const runtimeCalls = vi.hoisted(() => [] as Array<{ id: string; project: string }>)
 
 vi.mock('../src/api.ts', async (importOriginal) => ({
   // 只 mock 团队详情会用到的方法（graphProjects——运行时看板的项目选择器数据源）
   ...(await importOriginal<typeof import('../src/api.ts')>()),
   api: {
     ...(await importOriginal<typeof import('../src/api.ts')>()).api,
-    graphProjects: () => Promise.resolve([]),
+    graphProjects: () => Promise.resolve([{ project: 'p1', root: '/tmp/p1' }]),
   },
 }))
 
@@ -76,8 +77,9 @@ vi.mock('../src/api-team.ts', async (importOriginal) => ({
      * v19.1：团队详情新增「运行时」Pane（读 `.agent-team/` 黑板）。
      * 本文件锁的是层级结构，不测黑板内容——给一个「无黑板」的最小形状即可。
      */
-    runtime: (id: string, project: string) =>
-      Promise.resolve({
+    runtime: (id: string, project: string) => {
+      runtimeCalls.push({ id, project })
+      return Promise.resolve({
         team_id: id,
         project,
         root: `/tmp/${project}`,
@@ -95,7 +97,12 @@ vi.mock('../src/api-team.ts', async (importOriginal) => ({
         delivery: null,
         files: [],
         gaps: [],
-      }),
+        deliveryGate: { ok: true, blockers: [] },
+        run: '',
+        runs: [],
+        artifacts: [],
+      })
+    },
   },
 }))
 
@@ -590,4 +597,21 @@ describe('v3 团队工作流图编辑（拖阶段 → PATCH 团队定义）', ()
     expect(input.workflow.stages[0]!.rowId).toBe('r2')
     expect(input.workflow.stages[0]!.reflow).toContain(String.fromCharCode(22238)) // 回
   })
+})
+
+describe('运行时看板刷新（黑板是活文档——看板不能 fetch 一次就死）', () => {
+  it('手动刷新按钮触发重读（runtime 被再次调用）', async () => {
+    data.teams = [team('t-a')]
+    await render('t-a')
+    await tabRuntimeCalls()
+    const callsBefore = runtimeCalls.length
+    const btn = [...container.querySelectorAll('button')].find((b) => b.textContent?.includes(t('common.refresh')))
+    expect(btn, '应显示刷新按钮').toBeDefined()
+    await click(btn as Element)
+    expect(runtimeCalls.length).toBeGreaterThan(callsBefore)
+  })
+
+  async function tabRuntimeCalls(): Promise<void> {
+    /* runtimeCalls 由下方 mock 记账 */
+  }
 })

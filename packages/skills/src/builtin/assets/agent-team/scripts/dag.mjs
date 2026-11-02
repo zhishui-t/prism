@@ -1,10 +1,15 @@
 #!/usr/bin/env node
 /**
  * agent-team DAG 生成器（weave 同款紧凑布局）
- * 读取 <项目>/.agent-team/dag.json，生成同目录 dag.html：
+ * 读取 <项目>/.agent-team/[<run>/]dag.json，生成同目录 dag.html：
  * 纯 SVG 无外部依赖（离线可用）、左→右分层（层=最长依赖路径深度）、贝塞尔边、
- * 点击节点聚焦其完整上下游链（其余变暗，Esc 解除）、8 秒自动刷新。
- * 布局数学与 weave 的 src/plugins/weave/ui/dag-panel.tsx（compactDagLayout/computeLevels/relatedTaskIds）同构。
+ * 点击节点聚焦其完整上下游链（其余变暗，Esc 解除）。
+ *
+ * **真刷新（v20.2）**：页面内嵌生成时的数据快照（首屏零等待），加载后每 8 秒
+ * `fetch` 重读同目录 dag.json——队长改了任务态，打开着的页面自动跟上。此前用
+ * `<meta refresh>` 重载页面但数据拼死在 HTML 里，重载一百次还是旧数据（假刷新）。
+ * `file://` 协议下浏览器拦截本地 fetch → 自动降级为快照 + 明示提示（重跑脚本更新）。
+ * 布局与交互在页面内完成，与 weave 的 dag-panel（compactDagLayout/computeLevels/relatedTaskIds）同构。
  *
  * 用法：node dag.mjs [项目目录] [任务目录名]（项目目录缺省为当前目录；任务目录名 = .agent-team/<run>/，
  * 同项目多支团队并行时各自一个目录，互不覆盖。省略时：有旧版平铺 dag.json（.agent-team/dag.json）
@@ -76,121 +81,185 @@ if (!existsSync(jsonPath)) {
 
 const dag = JSON.parse(readFileSync(jsonPath, "utf8"));
 const nodes = Array.isArray(dag.nodes) ? dag.nodes.filter((n) => n && n.id) : [];
-const edgePairs = (Array.isArray(dag.edges) ? dag.edges : [])
-  .filter((e) => Array.isArray(e) && e.length >= 2 && e[0] && e[1])
-  .map((e) => ({ from: e[0], to: e[1] }));
-
-/* ---------- 状态配色（对齐 weave STATUS_COLORS） ---------- */
-const STATUS = {
-  done:    { color: "#52c41a", label: "完成" },
-  running: { color: "#1677ff", label: "进行中" },
-  pending: { color: "#8c8c8c", label: "待开始" },
-  blocked: { color: "#f5222d", label: "受阻/打回" },
-};
-const st = (s) => STATUS[s] ?? STATUS.pending;
-
-/* ---------- 有效边：edges 优先，nodes[].deps 并入去重（weave effectiveDagEdges 语义） ---------- */
-const seen = new Set();
-const edges = [];
-for (const e of edgePairs) {
-  const k = `${e.from}->${e.to}`;
-  if (e.from === e.to || seen.has(k)) continue;
-  seen.add(k);
-  edges.push(e);
-}
-for (const n of nodes) {
-  for (const d of Array.isArray(n.deps) ? n.deps : []) {
-    const k = `${d}->${n.id}`;
-    if (!d || d === n.id || seen.has(k)) continue;
-    seen.add(k);
-    edges.push({ from: d, to: n.id });
-  }
-}
-
-/* ---------- 层级 = 最长依赖路径深度（环安全，weave computeLevels 同构） ---------- */
-const upstream = new Map(); // to -> [from]
-for (const e of edges) {
-  const arr = upstream.get(e.to) ?? [];
-  arr.push(e.from);
-  upstream.set(e.to, arr);
-}
-const level = new Map();
-const visit = (id) => {
-  const c = level.get(id);
-  if (c !== undefined) return c;
-  level.set(id, 0); // 先置 0：含环也能终止
-  const ups = upstream.get(id) ?? [];
-  const lv = ups.length === 0 ? 0 : Math.max(...ups.map(visit)) + 1;
-  level.set(id, lv);
-  return lv;
-};
-for (const n of nodes) visit(n.id);
-
-/* ---------- 紧凑布局：列=层级，行=层内 id 稳定排序（weave compactDagLayout 同构） ---------- */
-const NODE_W = 150, NODE_H = 36, COL_GAP = 26, ROW_GAP = 10, HANDLE = 14;
-const byLevel = new Map();
-for (const n of nodes) {
-  const lv = level.get(n.id) ?? 0;
-  const g = byLevel.get(lv) ?? [];
-  g.push(n);
-  byLevel.set(lv, g);
-}
-const stages = [...byLevel.entries()].sort((a, b) => a[0] - b[0]);
-const pos = new Map();
-const laid = [];
-for (const [col, [, group]] of stages.entries()) {
-  const ordered = group.slice().sort((a, b) => a.id.localeCompare(b.id, "en", { numeric: true }));
-  for (const [row, n] of ordered.entries()) {
-    const x = col * (NODE_W + COL_GAP);
-    const y = row * (NODE_H + ROW_GAP);
-    pos.set(n.id, { x, y });
-    laid.push({ n, x, y });
-  }
-}
-const rows = Math.max(1, ...stages.map(([, g]) => g.length));
-const width = stages.length ? stages.length * NODE_W + (stages.length - 1) * COL_GAP : 0;
-const height = stages.length ? rows * NODE_H + (rows - 1) * ROW_GAP : 0;
-
-/* ---------- 边：短柄三次贝塞尔（水平出入节点中线，weave 同款） ---------- */
-const paths = [];
-for (const e of edges) {
-  const s = pos.get(e.from), t = pos.get(e.to);
-  if (!s || !t) continue;
-  const x1 = s.x + NODE_W, y1 = s.y + NODE_H / 2, x2 = t.x, y2 = t.y + NODE_H / 2;
-  paths.push({ from: e.from, to: e.to, d: `M${x1} ${y1}C${x1 + HANDLE} ${y1},${x2 - HANDLE} ${y2},${x2} ${y2}` });
-}
-
-/* ---------- SVG 节点/图例 ---------- */
-const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-const trunc = (s, n) => (String(s ?? "").length > n ? String(s).slice(0, n) + "…" : String(s ?? ""));
-
-const nodeSvg = laid.map(({ n, x, y }) => {
-  const c = st(n.status).color;
-  const label = trunc(n.label ?? n.id, 20);
-  const role = n.role ? trunc(n.role, 18) : "";
-  return `<g class="node" data-id="${esc(n.id)}" transform="translate(${x},${y})" tabindex="0">
-  <rect width="${NODE_W}" height="${NODE_H}" rx="6" fill="#ffffff" stroke="#d9d9d9"/>
-  <path d="M0.5 6 A5.5 5.5 0 0 1 6 0.5 L3 0.5 L3 ${NODE_H - 0.5} L6 ${NODE_H - 0.5} A5.5 5.5 0 0 1 0.5 ${NODE_H - 6} Z" fill="${c}"/>
-  <text x="10" y="15" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="10" font-weight="700" fill="#262626">${esc(label)}${role ? ` <tspan fill="#8c8c8c" font-weight="400">(${esc(role)})</tspan>` : ""}</text>
-  <circle cx="13" cy="26" r="2.5" fill="${c}"/>
-  <text x="20" y="29" font-size="8.5" font-weight="600" fill="${c}">${esc(st(n.status).label)}</text>
-  ${n.note ? `<text x="${NODE_W - 6}" y="29" text-anchor="end" font-size="8.5" fill="#8c8c8c">${esc(trunc(n.note, 14))}</text>` : ""}
-</g>`;
-}).join("\n");
-
 const counts = {};
 for (const n of nodes) { const s = n.status ?? "pending"; counts[s] = (counts[s] ?? 0) + 1; }
-const legend = Object.entries(STATUS)
-  .map(([k, v]) => `<span class="chip"><i style="background:${v.color}"></i>${v.label} ${counts[k] ?? 0}</span>`)
-  .join("");
-const now = new Date().toISOString().replace("T", " ").slice(0, 19);
+const edgeCount = (Array.isArray(dag.edges) ? dag.edges : []).filter((e) => Array.isArray(e) && e.length >= 2 && e[0] && e[1]).length
+  + nodes.reduce((a, n) => a + (Array.isArray(n.deps) ? n.deps.filter(Boolean).length : 0), 0);
 
+/** 页面内渲染器 + 轮询（数据快照作首屏，fetch 成功后重渲染）。 */
+const CLIENT = String.raw`
+(function () {
+  var STATUS = {
+    done:    { color: "#52c41a", label: "完成" },
+    running: { color: "#1677ff", label: "进行中" },
+    pending: { color: "#8c8c8c", label: "待开始" },
+    blocked: { color: "#f5222d", label: "受阻/打回" }
+  };
+  var NODE_W = 150, NODE_H = 36, COL_GAP = 26, ROW_GAP = 10, HANDLE = 14;
+  function st(s) { return STATUS[s] || STATUS.pending; }
+  function esc(s) { return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+  function trunc(s, n) { s = String(s == null ? "" : s); return s.length > n ? s.slice(0, n) + "…" : s; }
+
+  // 有效边：edges ∪ nodes[].deps 去重（weave effectiveDagEdges 同构）
+  function effectiveEdges(dag) {
+    var nodes = (Array.isArray(dag.nodes) ? dag.nodes : []).filter(function (n) { return n && n.id; });
+    var seen = {}, edges = [];
+    function add(from, to) {
+      if (!from || !to || from === to) return;
+      var k = from + "->" + to;
+      if (seen[k]) return;
+      seen[k] = 1;
+      edges.push({ from: from, to: to });
+    }
+    (Array.isArray(dag.edges) ? dag.edges : []).forEach(function (e) {
+      if (Array.isArray(e) && e.length >= 2 && e[0] && e[1]) add(e[0], e[1]);
+    });
+    nodes.forEach(function (n) {
+      (Array.isArray(n.deps) ? n.deps : []).forEach(function (d) { add(d, n.id); });
+    });
+    return { nodes: nodes, edges: edges };
+  }
+
+  // 层级 = 最长依赖路径深度（环安全），列=层级、行=层内 id 稳定排序（weave compactDagLayout 同构）
+  function layout(dag) {
+    var g = effectiveEdges(dag);
+    var upstream = {};
+    g.edges.forEach(function (e) { (upstream[e.to] = upstream[e.to] || []).push(e.from); });
+    var level = {};
+    function visit(id) {
+      if (level[id] !== undefined) return level[id];
+      level[id] = 0;
+      var ups = upstream[id] || [];
+      var lv = ups.length === 0 ? 0 : Math.max.apply(null, ups.map(visit)) + 1;
+      level[id] = lv;
+      return lv;
+    }
+    g.nodes.forEach(function (n) { visit(n.id); });
+    var byLevel = {};
+    g.nodes.forEach(function (n) {
+      var lv = level[n.id] || 0;
+      (byLevel[lv] = byLevel[lv] || []).push(n);
+    });
+    var stages = Object.keys(byLevel).map(Number).sort(function (a, b) { return a - b; });
+    var pos = {}, laid = [];
+    stages.forEach(function (col) {
+      var group = byLevel[col].slice().sort(function (a, b) { return a.id.localeCompare(b.id, "en", { numeric: true }); });
+      group.forEach(function (n, row) {
+        var x = col * (NODE_W + COL_GAP), y = row * (NODE_H + ROW_GAP);
+        pos[n.id] = { x: x, y: y };
+        laid.push({ n: n, x: x, y: y });
+      });
+    });
+    var rows = Math.max.apply(null, [1].concat(stages.map(function (lv) { return byLevel[lv].length; })));
+    var w = stages.length ? stages.length * NODE_W + (stages.length - 1) * COL_GAP : 0;
+    var h = stages.length ? rows * NODE_H + (rows - 1) * ROW_GAP : 0;
+    var paths = [];
+    g.edges.forEach(function (e) {
+      var s = pos[e.from], t = pos[e.to];
+      if (!s || !t) return;
+      var x1 = s.x + NODE_W, y1 = s.y + NODE_H / 2, x2 = t.x, y2 = t.y + NODE_H / 2;
+      paths.push({ from: e.from, to: e.to, d: "M" + x1 + " " + y1 + "C" + (x1 + HANDLE) + " " + y1 + "," + (x2 - HANDLE) + " " + y2 + "," + x2 + " " + y2 });
+    });
+    return { laid: laid, paths: paths, w: w, h: h, nodes: g.nodes };
+  }
+
+  var focused = null;
+
+  function render(dag, source) {
+    var L = layout(dag);
+    var counts = {};
+    L.nodes.forEach(function (n) { var s = n.status || "pending"; counts[s] = (counts[s] || 0) + 1; });
+    var legend = Object.keys(STATUS).map(function (k) {
+      return '<span class="chip"><i style="background:' + STATUS[k].color + '"></i>' + STATUS[k].label + ' ' + (counts[k] || 0) + '</span>';
+    }).join("");
+    var nodeSvg = L.laid.map(function (p) {
+      var n = p.n, c = st(n.status).color;
+      var label = trunc(n.label || n.id, 20), role = n.role ? trunc(n.role, 18) : "";
+      return '<g class="node" data-id="' + esc(n.id) + '" transform="translate(' + p.x + ',' + p.y + ')" tabindex="0">' +
+        '<rect width="' + NODE_W + '" height="' + NODE_H + '" rx="6" fill="#ffffff" stroke="#d9d9d9"/>' +
+        '<path d="M0.5 6 A5.5 5.5 0 0 1 6 0.5 L3 0.5 L3 ' + (NODE_H - 0.5) + ' L6 ' + (NODE_H - 0.5) + ' A5.5 5.5 0 0 1 0.5 ' + (NODE_H - 6) + ' Z" fill="' + c + '"/>' +
+        '<text x="10" y="15" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="10" font-weight="700" fill="#262626">' + esc(label) + (role ? ' <tspan fill="#8c8c8c" font-weight="400">(' + esc(role) + ')</tspan>' : '') + '</text>' +
+        '<circle cx="13" cy="26" r="2.5" fill="' + c + '"/>' +
+        '<text x="20" y="29" font-size="8.5" font-weight="600" fill="' + c + '">' + esc(st(n.status).label) + '</text>' +
+        (n.note ? '<text x="' + (NODE_W - 6) + '" y="29" text-anchor="end" font-size="8.5" fill="#8c8c8c">' + esc(trunc(n.note, 14)) + '</text>' : '') +
+        '</g>';
+    }).join("\n");
+    document.getElementById("title").textContent = dag.title || "Agent Team DAG";
+    document.getElementById("legend").innerHTML = legend;
+    var svg = document.getElementById("dag");
+    svg.setAttribute("width", Math.max(L.w, 100));
+    svg.setAttribute("height", Math.max(L.h, 60));
+    svg.innerHTML = L.paths.map(function (p) { return '<path data-from="' + esc(p.from) + '" data-to="' + esc(p.to) + '" d="' + p.d + '"/>'; }).join("\n") + "\n" + nodeSvg;
+    bindFocus();
+    applyFocus();
+    document.getElementById("meta").textContent =
+      "更新于 " + new Date().toLocaleTimeString() + " · " + source + " · 每 8 秒重读 dag.json";
+  }
+
+  // 聚焦：点节点亮上下游链（weave relatedTaskIds 同构——两侧独立 seen）
+  function relatedMap() {
+    var edges = [].map.call(document.querySelectorAll("path[data-from]"), function (p) {
+      return { from: p.dataset.from, to: p.dataset.to, el: p };
+    });
+    var nodes = [].map.call(document.querySelectorAll("g.node"), function (g) { return { id: g.dataset.id, el: g }; });
+    var upstream = {}, downstream = {};
+    edges.forEach(function (e) {
+      (downstream[e.from] = downstream[e.from] || []).push(e.to);
+      (upstream[e.to] = upstream[e.to] || []).push(e.from);
+    });
+    return { edges: edges, nodes: nodes };
+  }
+  function applyFocus() {
+    var r = relatedMap();
+    var related = null;
+    if (focused) {
+      related = {};
+      (function up(id, seen) { if (seen[id]) return; seen[id] = 1; related[id] = 1; (upstreamOf(r, id)).forEach(function (x) { up(x, seen); }); })(focused, {});
+      (function dn(id, seen) { if (seen[id]) return; seen[id] = 1; related[id] = 1; (downstreamOf(r, id)).forEach(function (x) { dn(x, seen); }); })(focused, {});
+    }
+    r.nodes.forEach(function (n) { n.el.classList.toggle("dimmed", !!related && !related[n.id]); });
+    r.edges.forEach(function (e) {
+      var active = !!related && !!related[e.from] && !!related[e.to];
+      e.el.classList.toggle("active", active);
+      e.el.classList.toggle("dimmed", !!related && !active);
+    });
+  }
+  function upstreamOf(r, id) { var o = []; r.edges.forEach(function (e) { if (e.to === id) o.push(e.from); }); return o; }
+  function downstreamOf(r, id) { var o = []; r.edges.forEach(function (e) { if (e.from === id) o.push(e.to); }); return o; }
+  function bindFocus() {
+    [].forEach.call(document.querySelectorAll("g.node"), function (g) {
+      g.addEventListener("click", function () { focused = focused === g.dataset.id ? null : g.dataset.id; applyFocus(); });
+      g.addEventListener("keydown", function (ev) {
+        if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); focused = focused === g.dataset.id ? null : g.dataset.id; applyFocus(); }
+      });
+    });
+  }
+  window.addEventListener("keydown", function (ev) { if (ev.key === "Escape") { focused = null; applyFocus(); } });
+
+  // 真刷新：每 8 秒重读同目录 dag.json（file:// 被拦则明示降级为快照）
+  render(window.DATA, "生成时快照");
+  var polling = true;
+  function poll() {
+    if (!polling) return;
+    fetch("dag.json", { cache: "no-store" })
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+      .then(function (dag) { render(dag, "dag.json 实时"); })
+      .catch(function () {
+        polling = false;
+        document.getElementById("meta").textContent +=
+          " · 此环境无法自动重读 dag.json（file:// 限制）——数据为生成时快照，重跑脚本可更新";
+      });
+  }
+  setInterval(poll, 8000);
+})();
+`;
+
+const now = new Date().toISOString().replace("T", " ").slice(0, 19);
 const html = `<!doctype html>
 <html lang="zh">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="refresh" content="8">
-<title>${esc(dag.title ?? "Agent Team DAG")}</title>
+<title>${dag.title ?? "Agent Team DAG"}</title>
 <style>
   body { font-family: system-ui, sans-serif; margin: 24px; background: #fafafa; }
   h1 { font-size: 18px; margin: 0 0 4px; }
@@ -207,54 +276,16 @@ const html = `<!doctype html>
 </style>
 </head>
 <body>
-<h1>${esc(dag.title ?? "Agent Team DAG")}</h1>
-<div class="meta">更新于 ${now} UTC · 每 8 秒自动刷新 · 布局与交互对齐 weave DagPanel</div>
-<div>${legend}</div>
+<h1 id="title"></h1>
+<div class="meta" id="meta">生成于 ${now} UTC</div>
+<div id="legend"></div>
 <div class="viewport">
-<svg width="${Math.max(width, 100)}" height="${Math.max(height, 60)}" style="display:block;overflow:visible">
-${paths.map((p) => `<path data-from="${esc(p.from)}" data-to="${esc(p.to)}" d="${p.d}"/>`).join("\n")}
-${nodeSvg}
-</svg>
+<svg id="dag" width="100" height="60" style="display:block;overflow:visible"></svg>
 </div>
 <div class="hint">点击节点：聚焦它的完整上下游链（其余变暗）；Esc 或再点一次：解除。</div>
 <script>
-(function () {
-  var edges = [].map.call(document.querySelectorAll("path[data-from]"), function (p) {
-    return { from: p.dataset.from, to: p.dataset.to, el: p };
-  });
-  var nodes = [].map.call(document.querySelectorAll("g.node"), function (g) {
-    return { id: g.dataset.id, el: g };
-  });
-  var upstream = {}, downstream = {};
-  edges.forEach(function (e) {
-    (downstream[e.from] = downstream[e.from] || []).push(e.to);
-    (upstream[e.to] = upstream[e.to] || []).push(e.from);
-  });
-  var focused = null;
-  function apply() {
-    var related = null;
-    if (focused) {
-      related = {};
-      // 上下游各用独立 seen 集（weave relatedTaskIds 同构）：起点会被两侧都标记，
-      // 共用 seen 会让后跑的一侧在起点处提前 return、整条链丢失。
-      (function up(id, seen) { if (seen[id]) return; seen[id] = 1; related[id] = 1; (upstream[id] || []).forEach(function (x) { up(x, seen); }); })(focused, {});
-      (function dn(id, seen) { if (seen[id]) return; seen[id] = 1; related[id] = 1; (downstream[id] || []).forEach(function (x) { dn(x, seen); }); })(focused, {});
-    }
-    nodes.forEach(function (n) { n.el.classList.toggle("dimmed", !!related && !related[n.id]); });
-    edges.forEach(function (e) {
-      var active = !!related && !!related[e.from] && !!related[e.to];
-      e.el.classList.toggle("active", active);
-      e.el.classList.toggle("dimmed", !!related && !active);
-    });
-  }
-  nodes.forEach(function (n) {
-    n.el.addEventListener("click", function () { focused = focused === n.id ? null : n.id; apply(); });
-    n.el.addEventListener("keydown", function (ev) {
-      if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); focused = focused === n.id ? null : n.id; apply(); }
-    });
-  });
-  window.addEventListener("keydown", function (ev) { if (ev.key === "Escape") { focused = null; apply(); } });
-})();
+window.DATA = ${JSON.stringify(dag).replace(/</g, "\\u003c")};
+${CLIENT}
 </script>
 </body>
 </html>
@@ -262,4 +293,4 @@ ${nodeSvg}
 
 writeFileSync(htmlPath, html, "utf8");
 console.log(`DAG 已生成：${htmlPath}`);
-console.log(`节点 ${nodes.length}（完成 ${counts.done ?? 0} / 进行中 ${counts.running ?? 0} / 待开始 ${counts.pending ?? 0} / 受阻 ${counts.blocked ?? 0}），边 ${paths.length}`);
+console.log(`节点 ${nodes.length}（完成 ${counts.done ?? 0} / 进行中 ${counts.running ?? 0} / 待开始 ${counts.pending ?? 0} / 受阻 ${counts.blocked ?? 0}），边（含 deps 并入）约 ${edgeCount}`);

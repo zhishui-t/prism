@@ -1,4 +1,7 @@
 import { api, type GraphProject, type ScanRecord } from '../api.ts'
+
+/** 项目任务总览条目（api.taskOverview 的元素形状）。 */
+type ProjectTaskOverviewView = Awaited<ReturnType<typeof api.taskOverview>>['projects'][number]
 import { Icon } from '../components/Icon.tsx'
 import { State } from '../components/State.tsx'
 import { useAsync } from '../components/useAsync.ts'
@@ -17,6 +20,9 @@ import { fmtTime } from '../time.ts'
 export function ProjectsPage() {
   const t = useT()
   const projects = useAsync(() => api.graphProjects(), [])
+  /** 任务总览（各项目跨任务目录聚合——规划出来之后，进度一眼可读）。 */
+  const overview = useAsync(() => api.taskOverview(), [])
+  const taskOf = new Map((overview.data?.projects ?? []).map((p) => [p.project, p]))
 
   /** 常用命令：与文档同一口径，一行一条，可一键复制（命令文本也走字典，R-4 破口补齐）。 */
   const commands: Array<{ cmd: string; comment: string }> = [
@@ -59,6 +65,7 @@ export function ProjectsPage() {
                   <th style={{ width: 160 }}>{t('projects.col.project')}</th>
                   <th>{t('projects.col.root')}</th>
                   <th style={{ width: 110 }}>{t('projects.col.graph')}</th>
+                  <th style={{ width: 190 }}>{t('projects.col.tasks')}</th>
                   <th style={{ width: 170 }}>{t('projects.col.scan')}</th>
                 </tr>
               </thead>
@@ -69,6 +76,9 @@ export function ProjectsPage() {
                     <td className="mono small muted">{p.root}</td>
                     <td className="small">
                       <GraphBadge project={p} />
+                    </td>
+                    <td className="small">
+                      <TaskCell overview={taskOf.get(p.project)} />
                     </td>
                     <td className="small muted">
                       {p.last_scan_at !== undefined ? (
@@ -90,6 +100,8 @@ export function ProjectsPage() {
           </div>
         </State>
       </Pane>
+
+      <TaskOverviewPane overview={overview} />
 
       <ScanHistoryCard />
 
@@ -234,3 +246,115 @@ function GraphBadge({ project }: { project: GraphProject }) {
   )
 }
 
+
+
+/* ===== 任务总览（台账视角：任务规划出来之后，进度一眼可读） ===== */
+
+/** 表内紧凑单元格：无黑板 → 「—」；有 → 进度条 + 一行计数。 */
+function TaskCell({ overview }: { overview: ProjectTaskOverviewView | undefined }) {
+  const t = useT()
+  if (overview === undefined || !overview.hasBlackboard) {
+    return <span className="muted">{t('projects.tasks.none')}</span>
+  }
+  const { totals } = overview
+  return (
+    <div className="task-cell" title={t('projects.tasks.tip', { n: overview.runs.length })}>
+      <TaskBar done={totals.done} running={totals.running} pending={totals.pending} blocked={totals.blocked} />
+      <span className="small muted">
+        {t('projects.tasks.line', {
+          done: totals.done,
+          running: totals.running,
+          pending: totals.pending,
+          total: totals.tasks,
+        })}
+      </span>
+    </div>
+  )
+}
+
+/** 四态比例条（完成=ok / 进行中=主色 / 待开始=灰 / 受阻=err）。 */
+function TaskBar({ done, running, pending, blocked }: { done: number; running: number; pending: number; blocked: number }) {
+  const total = Math.max(1, done + running + pending + blocked)
+  const seg = (n: number): string => `${(n / total) * 100}%`
+  return (
+    <div className="task-bar" role="img" aria-label={`done ${done} / running ${running} / pending ${pending} / blocked ${blocked}`}>
+      {done > 0 && <span className="seg done" style={{ width: seg(done) }} />}
+      {running > 0 && <span className="seg running" style={{ width: seg(running) }} />}
+      {blocked > 0 && <span className="seg blocked" style={{ width: seg(blocked) }} />}
+      {pending > 0 && <span className="seg pending" style={{ width: seg(pending) }} />}
+    </div>
+  )
+}
+
+/** 总览面板：逐项目 × 逐任务目录（run）的进度与交付门禁。 */
+function TaskOverviewPane({
+  overview,
+}: {
+  overview: { data: { projects: ProjectTaskOverviewView[] } | undefined; loading: boolean; error: string | undefined; reload: () => void }
+}) {
+  const t = useT()
+  const list = overview.data?.projects.filter((p) => p.hasBlackboard) ?? []
+  return (
+    <Pane
+      head={
+        <div className="pane-head">
+          <h3>{t('projects.tasks.title')}</h3>
+          <span className="spacer">
+            <button onClick={overview.reload} disabled={overview.loading} aria-busy={overview.loading}>
+              <Icon name="refresh" size={14} />
+              {t('common.refresh')}
+            </button>
+          </span>
+        </div>
+      }
+    >
+      <State
+        loading={overview.loading}
+        error={overview.error}
+        empty={!overview.loading && !overview.error && list.length === 0}
+        emptyText={t('projects.tasks.empty')}
+      >
+        {list.map((p) => (
+          <div key={p.project} className="task-overview-project">
+            <div className="row">
+              <a className="ref mono" href={hrefOf({ page: 'projects' })}>
+                {p.project}
+              </a>
+              <span className="small muted">{t('projects.tasks.runsCount', { n: p.runs.length })}</span>
+            </div>
+            <div className="task-overview-runs">
+              {p.runs.map((r) => (
+                <div key={r.id === '' ? '__root__' : r.id} className="task-overview-run">
+                  <div className="row" style={{ gap: 'var(--s-2)', flexWrap: 'nowrap', minWidth: 0 }}>
+                    <span className="mono small task-run-id" title={r.id}>
+                      {r.legacy ? t('runtime.runRoot') : r.id}
+                    </span>
+                    <span className="small task-run-title" title={r.title}>
+                      {r.title}
+                    </span>
+                    <span className="spacer" />
+                    <StatusTag kind={r.gate.ok ? 'ok' : 'warn'}>
+                      {r.gate.ok ? t('runtime.gate.pass') : t('runtime.gate.blocked')}
+                    </StatusTag>
+                  </div>
+                  <div className="row" style={{ gap: 'var(--s-2)', alignItems: 'center' }}>
+                    <TaskBar done={r.counts.done} running={r.counts.running} pending={r.counts.pending} blocked={r.counts.blocked} />
+                    <span className="small muted nowrap">
+                      {t('projects.tasks.line', {
+                        done: r.counts.done,
+                        running: r.counts.running,
+                        pending: r.counts.pending,
+                        total: r.counts.done + r.counts.running + r.counts.pending + r.counts.blocked,
+                      })}
+                      {r.ready > 0 ? ` · ${t('runtime.readyCount', { n: r.ready })}` : ''}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </State>
+    </Pane>
+  )
+}

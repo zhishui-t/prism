@@ -1,5 +1,5 @@
 import { listBuiltinSkills } from '@prism/skills'
-import { readTeamRuntime } from '@prism/agents'
+import { readTaskOverview, readTeamRuntime } from '@prism/agents'
 import { PrismError } from '@prism/core'
 import type { TrashStore } from '@prism/core'
 import { existsSync } from 'node:fs'
@@ -62,6 +62,11 @@ export interface PeopleDeps {
    * 未注册返回 null/undefined → 404。**不注入**时该路由 404（不猜项目根，守 R1/R6）。
    */
   resolveProject?: (project: string) => Promise<{ project: string; root: string } | null>
+  /**
+   * 项目任务总览（`GET /api/teams/task-overview`）：全部已注册项目（含 root）。
+   * **不注入**时返回空列表（页面显示「无项目」），不猜任何目录。
+   */
+  listProjects?: () => Promise<Array<{ project: string; root: string }>>
 }
 
 /**
@@ -92,6 +97,7 @@ export function peopleRoutes(deps: PeopleDeps): {
   team: (ctx: RouteContext) => Promise<Envelope>
   teamActivate: (ctx: RouteContext) => Promise<Envelope>
   teamRuntime: (ctx: RouteContext) => Promise<Envelope>
+  teamTaskOverview: (ctx: RouteContext) => Promise<Envelope>
   skills: (ctx: RouteContext) => Promise<Envelope>
   skillCategories: (ctx: RouteContext) => Promise<Envelope>
   skillCategoryCreate: (ctx: RouteContext) => Promise<Envelope>
@@ -277,6 +283,24 @@ export function peopleRoutes(deps: PeopleDeps): {
     }
     const runtime = await readTeamRuntime(info.root, project, run)
     return ok({ team_id: id, ...runtime })
+  }
+
+  /**
+   * 项目任务总览（`GET /api/teams/task-overview`）——**项目台账视角**：
+   * 任务规划（dag.json）出来之后，各任务目录（run）的四态计数、可派发数、交付门禁，
+   * 一次拉全（台账页不逐项目 N+1）。只读；单项目失败跳过不拖垮整表。
+   */
+  const teamTaskOverview = async (_ctx: RouteContext): Promise<Envelope> => {
+    const projects = (await deps.listProjects?.()) ?? []
+    const out = []
+    for (const p of projects) {
+      try {
+        out.push(await readTaskOverview(p.root, p.project))
+      } catch {
+        /* 单项目失败跳过（总览是聚合面，明细去团队运行时看板看） */
+      }
+    }
+    return ok({ projects: out })
   }
 
   /**
@@ -542,6 +566,7 @@ export function peopleRoutes(deps: PeopleDeps): {
     team,
     teamActivate,
     teamRuntime,
+    teamTaskOverview,
     skills,
     skillCategories,
     skillCategoryCreate,

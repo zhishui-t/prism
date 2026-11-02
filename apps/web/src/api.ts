@@ -593,6 +593,26 @@ export const api = {
 
   graphProjects: () => request<GraphProject[]>('/api/graph/projects'),
 
+  /** 项目任务总览（GET /api/teams/task-overview：各项目跨任务目录的四态聚合——台账视角）。 */
+  taskOverview: (): Promise<{
+    projects: Array<{
+      project: string
+      root: string
+      hasBlackboard: boolean
+      runs: Array<{
+        id: string
+        title: string
+        legacy: boolean
+        dagMtime?: number
+        counts: { done: number; running: number; pending: number; blocked: number }
+        ready: number
+        waiting: number
+        gate: { ok: boolean; blockers: number }
+      }>
+      totals: { done: number; running: number; pending: number; blocked: number; tasks: number }
+    }>
+  }> => request('/api/teams/task-overview'),
+
   /** 知识导入（POST /api/kb/import；与 MCP prism_kb_import 同实现——先 dry_run 预览再真导）。 */
   kbImport: (input: {
     path: string

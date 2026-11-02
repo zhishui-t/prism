@@ -279,7 +279,7 @@ export {
   parseContextMd,
   roleMatches,
 } from './runtime/blackboard.js'
-export { parseTaskContract, listTeamRuns, classifyArtifact } from './runtime/blackboard.js'
+export { parseTaskContract, listTeamRuns, classifyArtifact, readTaskOverview } from './runtime/blackboard.js'
 export type {
   RuntimeTaskStatus,
   RuntimeTask,
@@ -292,6 +292,8 @@ export type {
   ArtifactKind,
   TeamRuntime,
   TeamRunInfo,
+  TaskOverviewRun,
+  ProjectTaskOverview,
 } from './runtime/blackboard.js'
 
 // 任务契约（机械可判定：完成证据 / 审核结论 / 写域审计 / 并行冲突 / 交付门禁）

@@ -854,3 +854,63 @@ export function parseTaskContract(raw: Record<string, unknown>): TaskContract {
     attempt: typeof attemptRaw === 'number' && Number.isFinite(attemptRaw) ? attemptRaw : null,
   }
 }
+
+/* ===== 任务总览（项目台账视角：规划出来之后，进度一眼可读） ===== */
+
+/** 总览里一个任务目录（run）的汇总（不含任务明细——台账要的是进度不是清单）。 */
+export interface TaskOverviewRun {
+  id: string
+  title: string
+  legacy: boolean
+  dagMtime?: number
+  counts: Record<RuntimeTaskStatus, number>
+  /** 可派发任务数（依赖就绪待开始）。 */
+  ready: number
+  /** 受阻任务数。 */
+  waiting: number
+  /** 交付门禁（机械判定）。 */
+  gate: { ok: boolean; blockers: number }
+}
+
+/** 一个项目的任务总览（跨全部任务目录聚合）。 */
+export interface ProjectTaskOverview {
+  project: string
+  root: string
+  hasBlackboard: boolean
+  runs: TaskOverviewRun[]
+  /** 各 run 计数之和（tasks = 四态总和）。 */
+  totals: Record<RuntimeTaskStatus, number> & { tasks: number }
+}
+
+const ZERO_COUNTS = (): Record<RuntimeTaskStatus, number> => ({ done: 0, running: 0, pending: 0, blocked: 0 })
+
+/**
+ * 项目任务总览：逐任务目录读运行时快照、聚合成台账口径。
+ * 单个 run 读失败（坏 JSON 等）不拖垮整个总览——跳过该 run 并继续（readTeamRuntime
+ * 自身对坏文件降级为 gaps，这里挡的是意外异常）。
+ */
+export async function readTaskOverview(root: string, project: string): Promise<ProjectTaskOverview> {
+  const runs = await listTeamRuns(root)
+  const out: TaskOverviewRun[] = []
+  const totals: Record<RuntimeTaskStatus, number> & { tasks: number } = { ...ZERO_COUNTS(), tasks: 0 }
+  for (const r of runs) {
+    try {
+      const rt = await readTeamRuntime(root, project, r.id === '' ? '' : r.id)
+      for (const k of ['done', 'running', 'pending', 'blocked'] as const) totals[k] += rt.counts[k]
+      totals.tasks += rt.tasks.length
+      out.push({
+        id: r.id,
+        title: r.title !== '' ? r.title : r.id,
+        legacy: r.legacy,
+        ...(r.dagMtime !== undefined ? { dagMtime: r.dagMtime } : {}),
+        counts: { ...rt.counts },
+        ready: rt.ready.length,
+        waiting: rt.waiting.length,
+        gate: { ok: rt.deliveryGate.ok, blockers: rt.deliveryGate.blockers.length },
+      })
+    } catch {
+      /* 该 run 意外失败：总览里不出现（明细去团队运行时看板看，那里有具体报错） */
+    }
+  }
+  return { project, root, hasBlackboard: runs.length > 0, runs: out, totals }
+}
